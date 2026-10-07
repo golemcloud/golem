@@ -46,15 +46,17 @@ passes do not confer completion on the reduced implementation.
 | M2 | Reliable runtime-idle evidence | DONE | Policy-free observer and queued-work accounting; 3 unit/3 integration tests pass; Oracle APPROVED/ON TRACK; bug-finder post-fix clean |
 | M3 | First end-to-end suspension slice | DONE | 9 unit tests and 5 final integration races/controls pass; Oracle APPROVED/ON TRACK; bug-finder run 2 clean |
 | M4 | Complete supported participant and wait coverage | DONE | M4a–c and M4e–l verified; A1–A7 evidence reconciled; Oracle APPROVED/ON TRACK; checkpoint bug-finder gates clean |
-| M5 | Final regression, scope and reproduction gate | ACTIVE | Original six regressions pass three runs; 2653 executor units pass; shared SQLite scheduler regression passes; broader suites and final reviews outstanding |
-| M6 | Deliver reviewed change | ACTIVE (draft checkpoint) | User authorized committing/pushing current work to draft PRs while M5 investigation continues; final delivery approval remains open |
+| M5 | Final regression, scope and reproduction gate | DONE | Broad correctness evidence and unchanged published-pin isolated controls pass; full group4 timeout retained as residual risk; Oracle explicitly approves closure, final bug-finder clean |
+| M6 | Deliver reviewed change | DONE | Published locked pin/build, aligned docs, reviewed implementation pushed to existing drafts; exact results and residual risk recorded; merge/release remain separate |
 
-Current position: M0–M4 complete under the approved RPC contract; M5 active. The user
-requested a published draft checkpoint before continuing the investigation. Runtime
-changes are committed in [the companion draft PR](https://github.com/golemcloud/wasmtime/pull/9)
-and the root manifest/lock pin that exact published revision. The Golem checkpoint is
-published in [draft PR #4062](https://github.com/golemcloud/golem/pull/4062);
-this does not close M5/M6 verification. Golem baseline is
+Current position: M0–M6 complete for authorized draft delivery under the approved
+RPC contract and disclosed final verification caveat below. The runtime
+is published at [4ff92c67](https://github.com/golemcloud/wasmtime/commit/4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf)
+in [the companion draft PR](https://github.com/golemcloud/wasmtime/pull/9).
+The root manifest/lock pin that revision without local overrides or version drift.
+Golem implementation [afa31b101](https://github.com/golemcloud/golem/commit/afa31b101)
+is pushed to [draft PR #4062](https://github.com/golemcloud/golem/pull/4062).
+Merge/release remain unauthorized. Golem baseline is
 [`accae0e4`](https://github.com/golemcloud/golem/commit/accae0e435b5097cd1d7940a5c1f568bde8a055a).
 Prototype recovery files are in `tmp/gol706-reduction-20261005/`. Ignored binaries
 and WASMs may be stale; they are not baseline evidence.
@@ -141,6 +143,20 @@ retain ordinary readiness behavior. Account creation sites, not guessed call cou
 
 ## M5 — prove completion on the final source
 
+**Current scope decision (2026-10-07): correctness first.** The user explicitly
+removed memory attribution from GOL706 completion gates. The observed test-process
+memory excess and proposed cache experiment are deferred to
+[GOL-761](https://linear.app/golem-cloud/issue/GOL-761/investigate-higher-worker-executor-test-memory-after-gol-706)
+after the suspension fix is merged. Historical resource pauses below are superseded;
+do not run further memory-attribution probes here. Resume correctness verification.
+The user subsequently approved temporarily ignoring the short-sleep scalability
+latency test. Its original p95 < 6000ms and total < 10s assertions remain unchanged;
+[GOL-769](https://linear.app/golem-cloud/issue/GOL-769/restore-short-sleep-scalability-latency-test-after-investigating)
+in Golem 1.6 finalization records the evidence and restoration instructions (remove
+only the ignore attribute). This exception does not waive replay/suspension defects
+or incomplete runs caused by resource exhaustion, and does not authorize merge or
+lifecycle refactoring. Do not reopen either performance investigation here.
+
 The original baseline obligations include these archived regression names:
 - `p3_short_timer_blocks_suspension_with_long_watchdog`
 - `p3_short_timer_blocks_suspension_with_multiple_long_watchdogs`
@@ -189,9 +205,10 @@ No artifact under tmp may be required for a clean checkout to build or pass test
 - [x] Runtime evidence survives executed counterexamples (M2).
 - [x] Real timer decision → unload → wake → replay → follow-up passes (M3).
 - [x] A1–A7 all pass; one authority; approved borrowed-RPC boundary (M4).
-- [ ] Original report resolved or explicitly split by user; final-source acceptance
-      and broader checks pass; Oracle and bug-finder gates closed (M5).
-- [ ] Clean-checkout reproducibility, docs and local commits ready (M6).
+- [x] Original suspension report resolved; final-source acceptance and broad evidence
+      reviewed; Oracle and bug-finder gates closed, with group4 caveat below (M5).
+- [x] Published dependency pin builds without local overrides; docs verified;
+      reviewed implementation committed and pushed to existing drafts (M6).
 - [x] Authorized draft publication complete; merge/release remain unauthorized.
 
 At every implementation checkpoint, including sub-checkpoints within a milestone,
@@ -323,7 +340,296 @@ groups are running again on the corrected binary with `fixed-*` logs. M5 remains
 open for resource attribution, full final-source coverage and final review; no
 acceptance obligation has been waived.
 
-M6 documentation checkpoint: Oracle APPROVED, bug-finder `gol706-m6-docs` run 1
+The corrected group1 common cohort now passes: 265 passed, 4 ignored in 380.009s;
+the added cohort passes 13/13 in 50.577s. A continuously monitored baseline repeat
+also passes 265/4 in 349.128s (`baseline-group1-monitored.log`). Peak sampled RSS
+is 27,847,284 KiB corrected versus 25,888,060 KiB baseline, with 3021 versus 2991
+threads. Neither run adds an OOM. The endpoints differ, but matched completed-test
+sets still show an excess; starting cgroup pressure also differs substantially.
+Oracle judges AT RISK, not DERAILED, and requests one controlled baseline-to-final
+pair with initial anon/file accounting, one-second samples and exit-time maximum
+RSS. Compare growth at matched progress, not only peaks. A persistent unexplained
+excess blocks closure and requires a narrowly localized follow-up/scope decision;
+it does not authorize lifecycle work. No further production changes were made.
+
+Group2 initially finished 59 passed/33 failed (`fixed-group2.log`). The generated
+update-v1/v2 WASMs were identical, as were v3/v4; the earlier shared-target build
+reused same-named packages without compiling the differing sources. Rebuilt all
+four via an isolated target, cleaning `it_agent_update` between versions, then
+forced Golem build and copy. Logs confirm each correct source was compiled;
+copied v2/v4 now contain `revision_two_only` and have distinct hashes. Build log:
+`rebuild-update-fixtures.log`. No source/migration changes resulted. Groups2–4
+are rerunning unchanged (`fixed-fixtures-*`); individual timeouts are not declared
+fixture-caused until the rerun verifies that. Retry/quota/misc and final review
+remain outstanding, along with the bounded resource comparison.
+
+The repaired-fixture group2 rerun finished 91 passed/1 failed: the unchanged
+snapshot-promotion count assertion observed 2 versus 1; it subsequently passed
+alone on both baseline and current code. It remains an intermittent comparison
+obligation. Group3 finished 187 passed/5 ignored/1 failed. Its unchanged
+`caller_recovery_restarts_input_drain_after_rpc_result_commit` passes alone on
+baseline and fails alone on current code: the caller remains Running with retry
+count zero. Diagnostic snapshots show valid blocked evidence in both Stores,
+the caller promise classified OnActivation and input drains SourceWait, but a
+non-root transfer remains Unknown in each Store. Logs: `fixed-input-drain.log`,
+`baseline-input-drain.log`, `input-drain-diagnostic.log`.
+
+Oracle identifies a missing durable-source read classification after the RPC
+result has already completed. The bounded candidate exposes the existing transfer
+ID during Wasmtime producer/consumer polling (initial pre-admission polls return
+None), then classifies only the established `reader.next()` source observation.
+Use ordinary wait grace and persisted RPC-style timed rechecks; do not infer
+cross-owner input/output dependency or assume attachment activation starts a
+producer. Mapping/activation, consumer journaling and delivery remain blockers.
+The initial candidate incorrectly parked after Stop; Oracle rejected it because
+the driver requires an existing wait to propagate typed Suspend. The revised
+candidate preserves that typed interruption through a local receive-error variant,
+without adding a stream terminal or changing lifecycle. Initial diagnostics are
+removed. New acceptance covers both owners unloading, autonomous consumer rechecks,
+independent output, exact values and a follow-up. Fork identity tests passed 5+1;
+executor verification, additional race/phase coverage, bug-finder and follow-up
+Oracle approval are pending. These uncommitted candidates are not published or
+accepted. Oracle trajectory remains AT RISK, not DERAILED.
+
+Revised stream-read checkpoint: the typed-interrupt candidate compiles and passes
+121 selected session/suspension unit tests plus both unchanged caller/callee
+recovery controls (`stream-read-typed-stop-build-fix.log`). The new independent
+output acceptance case initially failed because its test promise belonged to the
+caller rather than the waiting target; corrected only the test setup. Oracle
+requested phase attribution: observe the matching committed RPC End and first
+consumer item before counting unload, then require autonomous reload while the
+promise remains closed. The strengthened test passes both input and independent
+output cases, exact results, contiguous consumer ordinals and a successful terminal
+in three runs (`stream-read-phase-check{,-2,-3}.log`, 9.538s/9.686s/9.585s).
+Oracle source review finds no confirmed production defect and approves the bounded
+approach, but holds checkpoint approval for evidence; trajectory remains AT RISK,
+not DERAILED. Current fork observation suite passes all six tests, including the
+new consumer identity/drop case (`bug-finder-fork-current-run2.log`). Bug-finder
+run 2 resolves the undeclared-dependency finding but identifies a compile error
+in the new adapter interruption test (`Interrupt` requires a timestamp). Corrected
+the test constructor/patterns; its rerun and final bug-finder approval remain open.
+No new production lifecycle work is introduced and this correction is not published.
+
+The subsequent seven-test byte/nested control run found 5 passes and 2 failures
+(`stream-read-byte-nested-controls.log`): the candidate incorrectly classified
+open external input as suspendable. Existing resident assertions remain unchanged.
+Oracle rejects an Attached-only shortcut because same-owner agent/tool streams
+also use local readers. The bounded correction resolves local persisted source
+registration: ExternalInlineInput and its actual Nested descendants veto; local
+AgentHostedInput/InvocationOutput and their descendants may contribute a timed
+recheck. Forwarded handles retain their original registration. Attached downstream
+consumers may recheck committed producer history; this grants no suspension
+permission to the upstream ingress owner. Missing/invalid ancestry is an existing
+typed history error, never eligibility. No handle, wire or persisted format changes.
+Metadata resolution precedes the classified read. Receive-path unit cases cover
+roots, two nested levels, foreign-binding forwarding and reconstructed metadata;
+the first combined build found two older direct reader constructors missing the
+derived field; updated them using the same metadata query. Validation is running
+in `stream-read-provenance-final.log`. The new interruption unit also exposed
+missing test session mapping; it now uses the existing open-local-session helper.
+Oracle explicitly accepts the actual nested-registration/receive matrix plus the
+existing end-to-end controls instead of requiring new guest fixture APIs: isolated
+descendant activity proves a parent cannot mask the negative decision, and local
+reader positives reject an Attached-only shortcut. This is not a claim of a new
+same-owner tool/entity consumer-read unload demonstration. Oracle finds no source
+blocker and rates this classifier ON TRACK; current-candidate test results and
+bug-finder approval remain required. Overall M5 resource/regression gates stay open.
+
+**Historical mandatory pause — bug-finder run 3:** provenance-corrected code passed
+125 selected session/suspension units, including all three provenance matrices,
+and seven unchanged integration controls (`stream-read-provenance-controls.log`).
+The interruption test still fails before its adapter assertions: opening resident
+bindings does not persist a Mapping; `endpoint` correctly requires its durable
+reader identity. Bug-finder confirms this new test-setup regression and resolves
+the earlier tuple-variant compile finding. Its three successive findings trigger
+the mandatory checkpoint; no override or further implementation has occurred.
+Oracle rates the checkpoint AT RISK, not DERAILED: the shared cause is insufficient
+verification of local dependency/API/fixture contracts, not demonstrated production
+architecture failure. Proposed human-approved continuation is fixture-only: use
+existing `persist_local_mapping`, open the same session with that returned binding,
+preserve every assertion and take the no-write baseline after setup. Run the isolated
+test, then the selected units, then three positive two-owner E2E runs on this exact
+provenance-corrected candidate and obtain both reviews. Any unexpected failure or
+need for production changes stops that bounded attempt. The earlier three positive
+runs predate provenance correction. Broader M5/resource/pinned-delivery gates remain
+open. This candidate remains local and uncommitted; existing draft PRs are unchanged.
+
+**Human-approved continuation complete:** the user approved the explained fixture-only
+repair. The test now persists the exact local mapping with `persist_local_mapping`
+and opens the session with the same key and returned binding. All interruption,
+consumer-state, no-write and no-terminal assertions remain unchanged; production
+code did not change during this continuation. Isolated test passes
+(`approved-fixture-isolated.log`); selected durable-session/suspension suite passes
+126/126 (`bug-finder-approved-controls-run4.log`); the prior failing reproducer
+passes (`bug-finder-interrupt-binding-run4.log`). Current provenance-corrected
+two-owner E2E passes three runs (`approved-provenance-e2e-{1,2,3}.log`, total test-run
+times 9.741s/9.944s/9.836s). Those E2E runs used the existing current-production
+binary while the fixture-only unit rebuild ran, not strict sequential ordering.
+Oracle explicitly accepts that ordering, APPROVES this bounded checkpoint and
+rates its trajectory ON TRACK. Bug-finder run 4, with the human-authorized override,
+marks the missing-binding finding RESOLVED and reports no new/recurring findings.
+Its cumulative historical `designCheckpoint=true`/`clean=false` flags remain;
+do not call that an unqualified clean result or start another unchanged review loop.
+Plan/Linear record updated. This does not close broader M5 or authorize merge;
+the stream correction and fixture repair remain local/uncommitted.
+
+Controlled resource comparison completed on the provenance-corrected candidate:
+baseline and current each pass 265 tests with 4 ignored, in 361.574s and 385.826s.
+Exit maximum RSS is 26,238,516 versus 27,919,792 KiB; peak threads 3018 versus 3010;
+neither adds an OOM. At 65 exact matching started-and-finished sets, late current
+RSS remains approximately 1.2–1.7 GiB higher. Initial anonymous memory is comparable,
+but file cache differs. Evidence: `controlled-{baseline,final}.log`, corresponding
+`-resources.jsonl`, and `controlled-resource-comparison.txt` under `tmp/gol706-m5/`.
+The initial disk-full attempt is preserved as `controlled-baseline-disk-full*`;
+obsolete build outputs were removed before the successful pair, not source or tests.
+
+Oracle rates M5 AT RISK, not DERAILED: this is actionable unexplained excess, not
+proof of a suspension leak. Approximately 1 GiB divergence already precedes the
+first test-start line, making dependency/component prewarming the first attribution
+target. Proceed with an observation-only reduced cohort retaining the same tagged
+component-prewarm inventory plus the service-release sentinel; capture process
+anonymous/file RSS, smaps rollup, thread names and component/cache phase logs.
+Run once cold/as-found and once warm per binary, without shared-cache clearing,
+allocator tuning, suspension changes or lifecycle edits. Cap investigation at half
+a working day plus build time. If the signal disappears or attribution remains
+inconclusive, stop for a specific next-experiment decision. No new implementation
+checkpoint or bug-finder run is claimed for this measurement-only work. All broader
+M5 obligations and final published-pin verification remain open.
+
+Reduced attribution experiment completed: 11 common tests covering all 15 tagged
+component dependencies, including the service-release sentinel, pass in each of
+four runs (baseline twice, current twice; approximately 25s each). Inventory and
+evidence: `prewarm-cohort.json`, `prewarm-{baseline,final}-{1,2}.{log,jsonl}` and
+`prewarm-comparison.txt`. The GiB-scale signal is absent; anonymous-memory peaks
+overlap. These are as-found/repeat runs, not certified cold/warm comparisons, and
+last-live samples precede completion of every test, not post-teardown measurements.
+Oracle found the requested cache log target ineffective: this runtime requires
+`wasmtime_internal_cache=trace`, not `wasmtime_cache=debug`. Golem's analysis/compile
+messages alone do not establish Wasmtime cache misses. No production defect or
+resource-gate closure follows from this experiment.
+
+**Historical pause, superseded by the user's correctness-first decision above.**
+Oracle's verdict at this checkpoint was AT RISK, not DERAILED.
+Proposed follow-up, now deferred to GOL-761: exactly four invocations of the same
+11-test cohort, each binary with its own initially empty absolute `XDG_CACHE_HOME`
+then reusing that cache. Verify actual Wasmtime cache paths/computation events,
+capture named prewarm boundary timestamps and process anonymous/file RSS, with
+100–200ms lightweight startup samples and one-second smaps. No shared-cache clearing,
+binary rebuild, allocator tuning or production/lifecycle changes. Cap at 10 minutes
+per invocation and three hours total; stop after four runs or earlier on missing
+cache evidence, failure, pressure or timeout. Positive evidence can narrow startup
+cache contribution but cannot by itself close the broad resource gate. No automatic
+retry, cohort expansion, heap profiling or lifecycle work is authorized by this proposal.
+
+Group4 is incomplete: the short-sleep scalability p95 exceeded its bound before
+Docker Ignite setup exhausted disk and the monitor failed. No complete result is
+claimed. Disposable fixture build output and abandoned test databases were removed;
+the logs remain. Baseline latency comparison and a full rerun remain obligations.
+The completed resource comparison above uses the provenance-corrected candidate;
+its attribution is deferred to GOL-761 and no longer gates GOL706.
+
+Correctness-first verification resumed on the same current-source binary. Group2
+passes 92/92 (71.307s); group3 passes 189 with 5 ignored (356.880s). The five ignores
+require privileged managed-XFS or the dedicated filesystem benchmark runner.
+The added group1 cohort passes 13/13; in-function retry 57/57; untagged 25/25;
+sequential storage 583/583; oplog archive 2/2; RDBMS service 15/15; Ignite service
+6/6. The configured `:tag:storage_quota` selects zero tests in this checkout and is
+not claimed as coverage. Executor library tests pass 2658 with 8 ignored. The six
+original regressions plus shared-scheduler scenario pass three final-source runs,
+7/7 each (101.626s, 99.551s, 101.730s). Runtime observation tests pass 6/6 and host
+dispatch 3/3. Evidence is in `tmp/gol706-m5/correctness-*.log`; scoped executor
+formatting and diff whitespace checks pass. Final lint/published-pin checks remain.
+
+Group4's parallel attempt again exhausted Docker VFS disk, causing harness shutdown
+and secondary actor errors. Its failed log is preserved. After removing abandoned
+test containers and obsolete build artifacts, a complete sequential run finishes
+121 passed/1 failed in 725.532s (`correctness-group4-sequential.log`). The only
+remaining failure is the unchanged short-sleep p95 bound: 7515ms against 6000ms.
+Isolated comparisons fail on both baseline (6897ms) and current (8111ms). All 99
+measured invocations return successfully before this assertion; the test does not
+validate their payloads, and the later total-duration assertion does not execute.
+Both isolated logs have a shared post-result deserialization-task cancellation panic;
+do not claim the logs contain no errors or that its cause is proved. The baseline
+uses the previously documented patched runtime, not an unmodified-upstream claim.
+
+Oracle rates M5 AT RISK for incomplete closure, not DERAILED, and recommends an
+explicitly accepted performance exception for this baseline-reproduced latency
+failure. Candidate-specific latency overhead remains unresolved. **Historical pause,
+superseded by the user's explicit approval of GOL-769 and the temporary ignore:**
+memory deferral alone did not waive latency assertions. The original failure remains
+evidence; the new run must report the ignore honestly.
+No new production implementation checkpoint or historical bug-finder rerun was
+created by these measurements. Existing final-review obligations remain.
+
+The subsequent lint checkpoint changes only the nested activity-binding `if let`
+to an equivalent let-chain in `DurableInputProducer`. Scoped clippy auto-fix passes;
+formatting is applied and the full file is compared to its saved pre-fix snapshot,
+confirming exactly that one hunk. Bug-finder `gol706-m5-clippy-let-chain` run 1 is
+clean; five extracted-source executable cases cover absent binding/activity, first
+set, same-ID repeat and different-ID rejection (`clippy-probe.log`). Oracle APPROVES
+the mechanical equivalence and explicitly retains the preceding broad tests as
+pre-fix functional evidence without requiring full-suite reruns for this expression.
+The final nonmutating executor library/integration clippy command passes with
+`--no-deps -- -D warnings` (7m44s, `correctness-clippy-final.log`); dependency warnings
+remain visible. Shared-engine compatibility passes 1/1 and component extraction 5/5
+against the current local fork (`correctness-engine-compatibility.log`,
+`correctness-agent-extraction.log`). Final scoped formatting and diff checks pass.
+**Historical state before the final delivery checkpoint below:** the latest stream-read
+correction, mechanical lint fix and runtime activity API remain local/uncommitted;
+the tracked lockfile contains scratch path-override drift that must not be published.
+M5 closure awaits explicit latency disposition; M6 still requires final publication
+of the corrected fork, matching root dependency pin/clean-checkout verification,
+documentation alignment and final delivery review. No merge/release is authorized.
+
+#### Final delivery checkpoint
+
+The user approved GOL-769 and temporarily ignoring only
+`scalability::spawning_many_workers_that_sleep`. Both original timing assertions
+remain unchanged; the long-sleep suspension control remains enabled. GOL-761 and
+GOL-769 are accepted follow-ups, not open suspension-fix gates.
+
+The fork activity API is published as
+[4ff92c67](https://github.com/golemcloud/wasmtime/commit/4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf).
+All four manifest patches and all 35 lockfile source records match; no package
+version or dependency drift remains. `cargo test --locked -p golem-worker-executor
+--test integration --no-run` with debug information/incremental disabled and four
+build jobs succeeds in 16m58s (`delivery-published-build.log`), without scratch
+overrides. The full sequential group4 rerun finishes **120 passed / 1 failed /
+1 ignored** in 853.167s (`delivery-group4.log`). Dynamic-memory allocation hits
+its unchanged 240-second timeout; short-sleep is the authorized ignore. The
+long-sleep suspension control passes in 46.346s. This is not a green group run.
+
+One bounded isolated execution of the same published-pin binary passes both
+`scalability::dynamic_large_memory_allocation` (234.668s) and
+`rpc::durable_rpc_stream_reads_unload_and_recheck_both_owners` (9.528s), with
+unchanged assertions/timeouts (`delivery-isolated-controls.log`, 2/2 in 244.597s).
+Commands, from `golem-worker-executor/` after the locked build:
+
+```shell
+../target/debug/deps/integration-b68337a3ad7ce006 ':tag:group4' --test-threads=1 --report-time
+../target/debug/deps/integration-b68337a3ad7ce006 'scalability::dynamic_large_memory_allocation' 'rpc::durable_rpc_stream_reads_unload_and_recheck_both_owners' --exact --test-threads=1 --report-time --nocapture
+```
+
+Oracle explicitly approves M5 correctness closure and draft delivery, ON TRACK,
+revising the earlier expectation of a clean single group4 run. The timeout is not
+proved environmental: suite-order, scheduling/retry sensitivity and intermittent
+liveness remain possible. The isolated pass has only 5.332s headroom. Keep this
+residual verification risk visible in GOL-761/GOL-769 and the draft; no second ignore,
+assertion relaxation, CI bypass or lifecycle work is approved. No additional
+repeat-until-green run is required. The reviewed implementation is now committed
+and pushed as [afa31b101](https://github.com/golemcloud/golem/commit/afa31b101), with
+both draft PR descriptions updated to these exact results. Merge/release remain
+unauthorized, and required CI gates are not bypassed.
+
+Final incremental bug-finder `gol706-final-delivery` run 1 is clean. Oracle approves
+the current production diff and suspension-only scope, rates progress ON TRACK,
+and requires only record/publication updates after the executions above. Prior
+reviewed broad suites are source-equivalent evidence, not falsely
+relabeled as executions against the new Git source. Documentation now records
+exact stream transfer attribution and the external-input veto; desktop and narrow
+Chromium captures were inspected, all three cards readable without overflow.
+
+Historical M6 documentation checkpoint: Oracle APPROVED, bug-finder `gol706-m6-docs` run 1
 clean. Desktop and narrow Chromium captures were inspected; all three narrow
 owner-suspension cards are complete and readable. Oracle trajectory remains
 AT RISK for unresolved M5 verification, not DERAILED. Final M6 delivery remains open.
