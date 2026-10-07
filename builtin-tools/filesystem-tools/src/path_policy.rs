@@ -308,7 +308,7 @@ pub(crate) fn apply_path_policy(
 /// Restricts the built-in filesystem tools to operator-configured owner-filesystem roots.
 #[universal_tool_middleware(
     name = "path-policy",
-    version = "0.1.0",
+    version = "0.1.1",
     parameters = PathPolicyParameters
 )]
 async fn path_policy(

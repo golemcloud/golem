@@ -17,7 +17,9 @@ mod api;
 mod capabilities;
 mod custom_api;
 mod fork;
+mod gol40_chunk_g_environment_resolution_acceptance;
 mod otlp_plugin;
+mod owner_environment_resolution;
 mod permissions;
 mod plugins;
 mod quota;
@@ -46,6 +48,8 @@ tag_suite!(otlp_plugin, group7);
 tag_suite!(plugins, group7);
 
 tag_suite!(custom_api, group10);
+tag_suite!(gol40_chunk_g_environment_resolution_acceptance, group10);
+tag_suite!(owner_environment_resolution, group10);
 tag_suite!(permissions, group10);
 tag_suite!(quota, group10);
 tag_suite!(rich_types, group10);
@@ -72,6 +76,12 @@ matrix_suite!(fork, db, EnvBasedTestDependencies);
 matrix_suite!(api, db, EnvBasedTestDependencies);
 matrix_suite!(agent_config, db, EnvBasedTestDependencies);
 matrix_suite!(custom_api, db, EnvBasedTestDependencies);
+matrix_suite!(
+    gol40_chunk_g_environment_resolution_acceptance,
+    db,
+    EnvBasedTestDependencies
+);
+matrix_suite!(owner_environment_resolution, db, EnvBasedTestDependencies);
 matrix_suite!(permissions, db, EnvBasedTestDependencies);
 matrix_suite!(quota, db, EnvBasedTestDependencies);
 matrix_suite!(rich_types, db, EnvBasedTestDependencies);

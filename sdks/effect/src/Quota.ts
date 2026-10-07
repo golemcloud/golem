@@ -7,12 +7,20 @@ import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
 import {
   createGuestQuotaTokenHandle,
   GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   peekGuestQuotaTokenHandle,
   takeGuestQuotaTokenHandle,
 } from "./internal/schema-model/quotaTokenHandle.js"
-import { witQuotaTokenAnnotationKey } from "./WitTypes.js"
+import {
+  WIT_QUOTA_TOKEN_ANNOTATION_KEY,
+  WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY,
+} from "./internal/schema-model/annotations.js"
 
-const handles = new WeakMap<QuotaToken, GuestQuotaTokenHandle>()
+const handlesKey = Symbol.for("@effect-golem/quota-token-wrapper-registry")
+const globals = globalThis as typeof globalThis & {
+  [handlesKey]?: WeakMap<object, GuestQuotaTokenHandle>
+}
+const handles = (globals[handlesKey] ??= new WeakMap<object, GuestQuotaTokenHandle>())
 const handleOf = (token: QuotaToken): GuestQuotaTokenHandle => {
   const handle = handles.get(token)
   if (handle === undefined) throw new Error("invalid quota token")
@@ -39,20 +47,24 @@ export class QuotaToken {
   }
 }
 
-const QuotaTokenHandleSchema = Schema.declare(
-  (u): u is GuestQuotaTokenHandle => u instanceof GuestQuotaTokenHandle,
-).pipe(Schema.annotate({ [witQuotaTokenAnnotationKey]: true }))
-
-export const QuotaTokenSchema: Schema.Codec<QuotaToken, GuestQuotaTokenHandle> =
-  QuotaTokenHandleSchema.pipe(
+export const quotaTokenSchema = (
+  options: { readonly resourceName?: string } = {},
+): Schema.Codec<QuotaToken, GuestQuotaTokenHandle> =>
+  Schema.declare(isGuestQuotaTokenHandle).pipe(
+    Schema.annotate({
+      [WIT_QUOTA_TOKEN_ANNOTATION_KEY]: true,
+      [WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY]: options.resourceName,
+    }),
     Schema.decodeTo(
-      Schema.declare((u): u is QuotaToken => u instanceof QuotaToken),
+      Schema.declare((u): u is QuotaToken => typeof u === "object" && u !== null && handles.has(u)),
       {
         decode: SchemaGetter.transform(wrapHandle),
         encode: SchemaGetter.transform(handleOf),
       },
     ),
   )
+
+export const QuotaTokenSchema: Schema.Codec<QuotaToken, GuestQuotaTokenHandle> = quotaTokenSchema()
 
 export interface Reservation {
   readonly [ReservationTypeId]: typeof ReservationTypeId

@@ -140,6 +140,7 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         status: status.status,
         last_error_kind: status.last_error_kind,
         skipped_regions: DeletedRegions::new(),
+        atomic_rollback: status.atomic_rollback.clone(),
         overridden_retry_config: status.overridden_retry_config.clone(),
         pending_invocations: status.pending_invocations.clone(),
         pending_card_events: status.pending_card_events.clone(),
@@ -3135,6 +3136,20 @@ mod tests {
             component_revision: ComponentRevision::new(3).unwrap(),
             ..AgentStatusRecord::default()
         };
+        status
+            .atomic_rollback
+            .regions
+            .insert(OplogIndex::from_u64(31), None);
+        status
+            .atomic_rollback
+            .regions
+            .insert(OplogIndex::from_u64(32), Some(OplogIndex::from_u64(39)));
+        status
+            .atomic_rollback
+            .open_cut_scopes
+            .insert(OplogIndex::from_u64(33), ());
+        status.atomic_rollback.last_work = OplogIndex::from_u64(42);
+        status.atomic_rollback.retired_through = OplogIndex::from_u64(29);
         status
             .invocation_results
             .insert(idempotency_key("k1"), OplogIndex::from_u64(10));

@@ -5262,6 +5262,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         webhook_suffix: vec![],
         static_bindings,
         filesystem_bindings,
+        file_response_headers: vec![],
         openapi_provider_method,
     };
     let endpoint = |http_method| HttpEndpointDetails {
@@ -9831,6 +9832,7 @@ pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
                             size: 556,
                         }]
                     },
+                    file_response_headers: vec![],
                 }),
                 security: if protected {
                     UnboundRouteSecurity::SecurityScheme(UnboundSecuritySchemeRouteSecurity {

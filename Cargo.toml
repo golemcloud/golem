@@ -5,6 +5,7 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
+    "test-components/human-approval-service",
     "golem-mcp-import",
     "golem-native-tool",
     "golem-rust-macro",
@@ -39,6 +40,7 @@ golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-human-approval = { version = "=0.0.0", path = "test-components/human-approval-service" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
@@ -219,6 +221,7 @@ rand = "0.9.0"
 range-set-blaze = "0.1.16"
 rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
+reedline = { version = "0.51", default-features = false }
 regex = "1.11.1"
 reqwest = { version = "0.13.1", features = ["gzip", "json", "multipart", "stream", "query"] }
 reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
@@ -313,13 +316,14 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.8", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.9", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
 wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wizer = { version = "=46.0.1", features = ["component-model", "wasmtime"] }
 wat = "1.248.0"
 wax = "0.7.0"
 webbrowser = "1.0.4"

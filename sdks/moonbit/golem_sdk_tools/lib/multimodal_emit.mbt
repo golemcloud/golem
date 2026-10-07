@@ -94,6 +94,8 @@ fn emit_multimodal_impls(
     buf,
     name,
     id,
-    variants.map(variant => (variant.0, Single(variant.1))),
+    variants.map(variant => {
+      ({ source_name: variant.0, name: variant.0, }, Single(variant.1))
+    }),
   )
 }

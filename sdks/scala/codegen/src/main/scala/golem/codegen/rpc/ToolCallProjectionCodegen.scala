@@ -89,7 +89,7 @@ object ToolCallProjectionCodegen {
     private def decode(leaf: FlattenedLeaf): String =
       leaf.codec.projectedOkType match {
         case Some(ok) =>
-          s"__result => _root_.golem.tool.ToolCallPreparation.decodeValue(__result, _root_.scala.Predef.implicitly[_root_.golem.schema.FromSchema[$ok]], _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[$ok]].graph)"
+          s"__result => _root_.golem.tool.ToolCallPreparation.decodeConcreteValue(__result, _root_.golem.schema.wire.ConcreteCodec.derived[$ok])"
         case None => "_root_.golem.tool.ToolCallPreparation.decodeUnit"
       }
 

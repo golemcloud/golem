@@ -61,20 +61,20 @@ export function settleToolResult<Result>(
 
 export function mapSettledToolResult<Input, Result>(
   settledResult: SettledToolResult<Input> | PromiseLike<SettledToolResult<Input>>,
-  mapValue: (value: Input) => Result,
+  mapValue: (value: Input) => Result | PromiseLike<Result>,
   mapReason: (reason: unknown) => unknown = (reason) => reason,
 ): Promise<SettledToolResult<Result>> {
   return Promise.resolve(settledResult).then(
-    (outcome): SettledToolResult<Result> => {
+    async (outcome): Promise<SettledToolResult<Result>> => {
       if (outcome.status === 'rejected') {
         try {
-          return { status: 'rejected', reason: mapReason(outcome.reason) };
+          return { status: 'rejected', reason: await mapReason(outcome.reason) };
         } catch (reason) {
           return { status: 'rejected', reason };
         }
       }
       try {
-        return { status: 'fulfilled', value: mapValue(outcome.value) };
+        return { status: 'fulfilled', value: await mapValue(outcome.value) };
       } catch (reason) {
         return { status: 'rejected', reason };
       }
@@ -128,6 +128,59 @@ export function startedToolInvocation<Result>(
       };
     },
   };
+}
+
+export function deferredStartedToolInvocation<Result>(
+  invocation: Promise<StartedToolInvocation<Result>>,
+  hasStdout: boolean,
+  hasStderr: boolean,
+): StartedToolInvocation<Result> {
+  let cancelled = false;
+  let started: StartedToolInvocation<Result> | undefined;
+  void invocation.then(
+    (value) => {
+      started = value;
+      if (cancelled) value.cancel();
+    },
+    () => {},
+  );
+  return {
+    stdout: hasStdout ? deferredReadableStream(invocation, 'stdout') : undefined,
+    stderr: hasStderr ? deferredReadableStream(invocation, 'stderr') : undefined,
+    get result() {
+      return invocation.then((started) => started.result);
+    },
+    cancel() {
+      if (started) started.cancel();
+      else cancelled = true;
+    },
+    collect() {
+      return invocation.then((started) => started.collect());
+    },
+  };
+}
+
+function deferredReadableStream<Result>(
+  invocation: Promise<StartedToolInvocation<Result>>,
+  channel: 'stdout' | 'stderr',
+): ReadableStream<Uint8Array> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const getReader = async () => {
+    if (reader) return reader;
+    const stream = (await invocation)[channel];
+    if (!stream) throw new TypeError(`required ${channel} stream is missing`);
+    return (reader = stream.getReader());
+  };
+  return new ReadableStream({
+    async pull(controller) {
+      const next = await (await getReader()).read();
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+    async cancel(reason) {
+      await (await getReader()).cancel(reason);
+    },
+  });
 }
 
 function readableToolOutput(

@@ -102,7 +102,9 @@ impl From<http::Response<AgentStream<Vec<u8>>>> for HttpResponse {
     }
 }
 
-/// Implement with `#[http_router(name = "Site", mount = "/site")]`.
+/// Implement with `#[http_router(name = "Site", mount = "/site")]`. Static
+/// files can specify ordered response headers with
+/// `file_response_headers = [("referrer-policy", "no-referrer")]`.
 ///
 /// Only explicitly implemented `handle` and `openapi` methods are registered.
 /// Omitting `handle` supports static-only/provider-only routers without a fake

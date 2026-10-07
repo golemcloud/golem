@@ -67,12 +67,16 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 mod blob;
 mod compressed;
 mod ephemeral;
+mod fenced_stream;
 mod multilayer;
 pub mod plugin;
 mod primary;
 pub mod rate_limited;
 mod raw_session;
 mod reader;
+
+#[cfg(test)]
+pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
 
 #[cfg(test)]
 pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
@@ -536,6 +540,7 @@ pub(crate) async fn record_owning_epoch(
 ) -> Option<OplogFence> {
     let (svc_name, metric_op) = match namespace {
         IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
+        IndexedStorageNamespace::BlobOplogManifest { .. } => ("blob_oplog", "archive_record"),
         _ => ("oplog", "record"),
     };
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {

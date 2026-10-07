@@ -17,6 +17,7 @@ use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -103,6 +104,7 @@ pub struct AgentConfig {
     pub last_snapshot_source: Option<SnapshotSource>,
     pub snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
     pub agent_effective_surface: EffectiveSurface,
+    pub authority_wallet: Option<Vec<StoredCard>>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
@@ -118,6 +120,7 @@ impl AgentConfig {
         last_snapshot_source: Option<SnapshotSource>,
         snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
         agent_effective_surface: EffectiveSurface,
+        authority_wallet: Option<Vec<StoredCard>>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -131,6 +134,7 @@ impl AgentConfig {
             last_snapshot_source,
             snapshot_assisted_source_revision_start_index,
             agent_effective_surface,
+            authority_wallet,
             owner_component_metadata,
         }
     }
@@ -481,6 +485,9 @@ impl TrapType {
                             host_function: host_function.clone(),
                         })),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            Some(WorkerExecutorError::Interrupted { kind }) => {
+                                TrapType::Interrupt(*kind)
+                            }
                             // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
                             // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
@@ -995,6 +1002,22 @@ mod tests {
             SnapshotReplayPurpose::for_reconstruction(true, Some(SnapshotSource::ManualUpdate)),
             SnapshotReplayPurpose::None
         );
+    }
+
+    #[test]
+    fn wrapped_replay_jump_remains_an_interrupt() {
+        let error = anyhow::Error::new(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        })
+        .context("durable call recovery");
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &error,
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+        assert!(matches!(trap, TrapType::Interrupt(InterruptKind::Jump)));
     }
 
     #[test]

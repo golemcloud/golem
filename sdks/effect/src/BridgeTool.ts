@@ -5,7 +5,7 @@ import { Effect, Option, Result, Scope, Stream } from "effect"
 import * as Bridge from "./Bridge.js"
 import { ToolClient } from "./host/ToolClient.js"
 import { liveToolStart, ToolClientError, ToolTransport } from "./Tool.js"
-import { deepEqual, type TypedSchemaValue } from "./internal/schema-model/model.js"
+import { schemaGraphsEquivalent, type TypedSchemaValue } from "./internal/schema-model/model.js"
 import { schemaValueMatches } from "./internal/reflection/schemaValidation.js"
 import {
   schemaGraphFromWit,
@@ -202,7 +202,8 @@ const concatBytes = (chunks: ReadonlyArray<Uint8Array>): Uint8Array => {
 
 /** Check the exact graph shape before generated decoding. @since 1.6.0 @category codecs */
 export const typedSchemaValueConforms = (expected: Bridge.SchemaGraph, actual: TypedSchemaValue) =>
-  deepEqual(expected, actual.graph) && schemaValueMatches(expected, expected.root, actual.value)
+  schemaGraphsEquivalent(expected, actual.graph) &&
+  schemaValueMatches(expected, expected.root, actual.value)
 
 /** Lift and decode a typed wire value under one capability transaction. @since 1.6.0 @category codecs */
 export const decodeTypedSchemaValue = <A>(

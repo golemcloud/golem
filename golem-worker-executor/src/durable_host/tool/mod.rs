@@ -2660,6 +2660,7 @@ async fn invoke_native_tool<Ctx: WorkerCtx>(
             executable,
             scope.activation().clone(),
             owner_component_metadata,
+            scope.authority_wallet().to_vec(),
         ),
     )
     .await
@@ -3313,11 +3314,16 @@ where
 {
     let replaying_completed = accepted.durability.scope().mode()
         == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted;
+    let replaying_reconstruction = matches!(
+        accepted.durability.scope().mode(),
+        golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
+            | golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete
+    );
     let mut reconstruction_hold = replaying_completed
         .then(|| accepted.durability.historical_reconstruction_hold())
         .flatten();
-    let completed_supervisor = replaying_completed.then(oneshot::channel);
-    let (inner_supervisor_started, mut inner_supervisor_ready) = match completed_supervisor {
+    let reconstruction_supervisor = replaying_reconstruction.then(oneshot::channel);
+    let (inner_supervisor_started, mut inner_supervisor_ready) = match reconstruction_supervisor {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
@@ -3468,7 +3474,7 @@ async fn execute_accepted_tool_call_inner<U, Ctx>(
     stderr: Option<Resource<ToolOutputEntry>>,
     execution: Option<&ToolExecution>,
     failed_resources: Arc<Mutex<Option<FailedRetainedEntityResources>>>,
-    completed_supervisor_started: Option<oneshot::Sender<()>>,
+    mut completed_supervisor_started: Option<oneshot::Sender<()>>,
 ) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
@@ -3513,24 +3519,21 @@ where
         )
         .await;
     }
-    let pre_body_live_admission_cancelled =
-        if filesystem == golem_common::model::entity::FilesystemCapability::Capable {
-            match durability
-                .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
-                .await?
-            {
-                IncompleteLiveRepairBeforeBody::Ready(ready) => {
-                    durability = ready;
-                    false
-                }
-                IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
-                    durability = cancelled;
-                    true
-                }
-            }
-        } else {
+    let replaying_incomplete = durability.scope().mode()
+        == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
+    let pre_body_live_admission_cancelled = match durability
+        .enter_incomplete_live_repair_before_body_access(accessor, accessor.getter())
+        .await?
+    {
+        IncompleteLiveRepairBeforeBody::Ready(ready) => {
+            durability = ready;
             false
-        };
+        }
+        IncompleteLiveRepairBeforeBody::Cancelled(cancelled) => {
+            durability = cancelled;
+            true
+        }
+    };
     let execution_mode = durability.scope().mode();
     let discard_stdout = call_mode == EntityCallMode::FireAndForget
         && matches!(
@@ -4161,6 +4164,9 @@ where
             return Err(error.into());
         }
     };
+    if replaying_incomplete && let Some(started) = completed_supervisor_started.take() {
+        let _ = started.send(());
+    }
     let outcome = durability
         .drive_access(
             accessor,
@@ -5006,6 +5012,30 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
     }
 }
 
+pub async fn fence_tool_operations_for_jump<Ctx: WorkerCtx>(
+    store: &mut wasmtime::StoreContextMut<'_, Ctx>,
+) -> Result<(), WorkerExecutorError> {
+    let operations = store.data().durable_ctx().owner_execution.tool_operations();
+    let worker = store.data().durable_ctx().public_state.worker();
+    let mut shard_lost = false;
+    operations.fence_for_jump(store, |error| {
+        let failure = error.root_cause().downcast_ref::<WorkerExecutorError>().cloned()
+            .or_else(|| error.root_cause().downcast_ref::<crate::services::oplog::OplogError>()
+                .cloned().map(WorkerExecutorError::from));
+        if let Some(failure) = failure {
+            shard_lost |= worker.retire_if_shard_lost(&failure);
+        }
+        tracing::debug!(error = %error, "Abandoned Store task failed while draining Jump fence");
+    }).await;
+    if shard_lost {
+        Err(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     store: &mut wasmtime::StoreContextMut<'_, Ctx>,
     parent: crate::worker::owner_lane::OwnerInvocationId,
@@ -5089,12 +5119,27 @@ where
     register_tool_admission(accessor, &mut accepted)?;
     let inherited_cancellation = accessor.with(|mut access| access.get().entity_cancellation());
     let execution = ToolExecution::new(&accepted, inherited_cancellation);
-    let completed_supervisor = (accepted.durability.scope().mode()
-        == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
-        && accepted.operation.context().activation.filesystem()
-            == golem_common::model::entity::FilesystemCapability::Incapable)
+    let replaying_incomplete = accepted.durability.scope().mode()
+        == golem_common::model::entity::InvocationExecutionMode::ReplayingIncomplete;
+    let incomplete_body_started = if replaying_incomplete {
+        let (replay, start) = accessor.with(|mut access| {
+            (
+                access.get().state.replay_state.clone(),
+                accepted.durability.scope().invocation_id().start_index(),
+            )
+        });
+        replay.has_visible_scope_descendant(start).await
+    } else {
+        false
+    };
+    let reconstruction_supervisor = (accepted.operation.context().activation.filesystem()
+        == golem_common::model::entity::FilesystemCapability::Incapable
+        && (accepted.durability.scope().mode()
+            == golem_common::model::entity::InvocationExecutionMode::ReplayingCompleted
+            || incomplete_body_started))
         .then(oneshot::channel);
-    let (completed_supervisor_started, completed_supervisor_ready) = match completed_supervisor {
+    let (completed_supervisor_started, completed_supervisor_ready) = match reconstruction_supervisor
+    {
         Some((started, ready)) => (Some(started), Some(ready)),
         None => (None, None),
     };
@@ -5111,12 +5156,15 @@ where
     if let Some(ready) = completed_supervisor_ready
         && ready.await.is_err()
     {
-        return match execution.result().await {
-            Err(error) => Err(error),
-            Ok(_) => Err(anyhow!(
-                "completed reconstruction finished without starting its owner supervisor"
-            )),
-        };
+        match execution.result().await {
+            Err(error) => return Err(error),
+            Ok(_) if replaying_incomplete => return Ok(execution),
+            Ok(_) => {
+                return Err(anyhow!(
+                    "completed reconstruction finished without starting its entity body"
+                ));
+            }
+        }
     }
     Ok(execution)
 }
@@ -6449,13 +6497,14 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 mod tests {
     use super::{
         ResolvedToolCommand, SkippedToolAttachmentEndpoints, ToolOutputEntry,
-        ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, WitRegisteredTool,
-        await_native_entity_body, caller_tool_owner, classify_tool_discovery_error,
-        cleanup_tool_endpoints, first_output_limit_error, materialize_output_writer,
-        merge_discovered_tools, native_output_handles, option_args, output_limit_error,
-        publish_output_completions, recorded_tool_body_is_skipped, resolve_tool_command,
-        select_native_body_result, terminal_tool_discovery_error, validate_declared_tool_error,
-        validate_declared_tool_result, validate_native_tool_output, validate_stream_attachments,
+        ToolOutputWriterEntry, ToolStdinEntry, ToolStdinStreamConsumer, UnderlyingToolEntry,
+        WitRegisteredTool, await_native_entity_body, caller_tool_owner,
+        classify_tool_discovery_error, cleanup_tool_endpoints, first_output_limit_error,
+        materialize_output_writer, merge_discovered_tools, native_output_handles, option_args,
+        output_limit_error, publish_output_completions, recorded_tool_body_is_skipped,
+        resolve_tool_command, select_native_body_result, terminal_tool_discovery_error,
+        validate_declared_tool_error, validate_declared_tool_result, validate_native_tool_output,
+        validate_stream_attachments,
     };
     use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
     use crate::durable_host::entity::RecordedEntityTerminal;
@@ -6513,8 +6562,26 @@ mod tests {
     use test_r::test;
     use test_r::timeout;
     use tokio::sync::mpsc;
-    use wasmtime::component::{Component, Linker, StreamReader};
+    use wasmtime::component::{Component, Linker, Resource, ResourceTable, StreamReader};
     use wasmtime::{Config, Engine, Store};
+
+    #[test]
+    fn underlying_capability_rejects_missing_and_wrong_type_resource_handles() {
+        let mut table = ResourceTable::new();
+        let missing = Resource::<UnderlyingToolEntry>::new_borrow(42);
+        assert!(table.get(&missing).is_err());
+
+        let occupied = table
+            .push("not an underlying capability".to_string())
+            .unwrap();
+        let wrong_type = Resource::<UnderlyingToolEntry>::new_borrow(occupied.rep());
+        assert!(table.get(&wrong_type).is_err());
+        assert_eq!(
+            table.get(&occupied).unwrap(),
+            "not an underlying capability",
+            "a failed forged lookup must not consume or replace the actual table entry"
+        );
+    }
 
     #[test]
     #[timeout("10s")]

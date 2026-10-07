@@ -5286,6 +5286,27 @@ mod tests {
             num.numeric_restrictions().unwrap().unit.as_deref(),
             Some("ms")
         );
+        let path = refine_path(
+            SchemaType::Path {
+                spec: PathSpec {
+                    direction: PathDirection::Input,
+                    kind: PathKind::File,
+                    allowed_mime_types: None,
+                    allowed_extensions: None,
+                },
+                metadata: Default::default(),
+            },
+            None,
+            None,
+            None,
+            Some(vec!["wasm".into(), "wat".into()]),
+        )
+        .unwrap();
+        assert!(matches!(
+            path,
+            SchemaType::Path { spec, .. }
+                if spec.allowed_extensions == Some(vec!["wasm".into(), "wat".into()])
+        ));
 
         // Refinements reject schema kinds that cannot carry their restrictions
         // (the runtime backstop for macro-opaque types).
@@ -5297,7 +5318,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            refine_path(SchemaType::string(), None, None, None),
+            refine_path(SchemaType::string(), None, None, None, None),
             Err(ToolBuildError::RefinementTypeMismatch {
                 refinement: "path",
                 ..

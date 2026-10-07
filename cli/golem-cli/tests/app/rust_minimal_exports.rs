@@ -22,6 +22,7 @@ const AGENT_GUEST: &str = "golem:agent/guest@2.0.0";
 const TOOL_GUEST: &str = "golem:tool/guest@0.1.0";
 const TOOL_HOST: &str = "golem:tool/host@0.1.0";
 const TOOL_MIDDLEWARE_GUEST: &str = "golem:tool/tool-middleware-guest@0.1.0";
+const TOOL_UNDERLYING: &str = "golem:tool/underlying@0.1.0";
 const LOAD_SNAPSHOT: &str = "golem:api/load-snapshot@1.5.0";
 const SAVE_SNAPSHOT: &str = "golem:api/save-snapshot@1.5.0";
 const CONSTRUCTOR_DIAGNOSTIC: &str = "tool middleware `constructor` must be synchronous, infallible, zero-argument, and return the middleware implementation type (`fn() -> Self`)";
@@ -190,6 +191,10 @@ async fn tool_middleware_cross_crate_components_and_compile_failures() {
             &["__golem_tool_middleware_annotation"][..],
         ),
         (
+            "forged-underlying-constructor",
+            &["no associated function or constant named `new`"][..],
+        ),
+        (
             "generic-impl",
             &["requires a concrete, non-generic implementation"][..],
         ),
@@ -350,7 +355,13 @@ fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
     let (imports, exports) = root_world_interfaces(wit);
     assert!(exports.iter().any(|export| export == LOAD_SNAPSHOT));
     assert!(exports.iter().any(|export| export == SAVE_SNAPSHOT));
-    let relevant = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST, TOOL_HOST];
+    let relevant = [
+        AGENT_GUEST,
+        TOOL_GUEST,
+        TOOL_MIDDLEWARE_GUEST,
+        TOOL_HOST,
+        TOOL_UNDERLYING,
+    ];
     let actual_imports = imports
         .into_iter()
         .filter(|interface| relevant.contains(&interface.as_str()))
@@ -360,11 +371,13 @@ fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
         .filter(|interface| relevant.contains(&interface.as_str()))
         .collect::<Vec<_>>();
     assert!(
-        actual_imports.is_empty() || actual_imports == [TOOL_HOST],
+        actual_imports
+            .iter()
+            .all(|import| import == TOOL_HOST || import == TOOL_UNDERLYING),
         "unexpected relevant root-world imports in component contract:\n{wit}"
     );
     if invokes_tool_host {
-        assert_eq!(actual_imports, [TOOL_HOST]);
+        assert!(actual_imports.iter().any(|import| import == TOOL_HOST));
     }
     let mut expected_exports = [AGENT_GUEST, TOOL_GUEST, TOOL_MIDDLEWARE_GUEST]
         .into_iter()
@@ -388,6 +401,47 @@ fn assert_component_contract(wit: &str, invokes_tool_host: bool) {
             "component contract unexpectedly retains ambient tool RPC:\n{wit}"
         );
     }
+    let underlying = interface_body(wit, "underlying");
+    let functions = interface_functions(underlying);
+    let allowed = ["cancel", "get", "invoke"].into_iter().collect();
+    assert!(
+        functions.is_subset(&allowed),
+        "component contract exposes an unexpected underlying capability operation: {functions:?}"
+    );
+    assert!(!underlying.contains("constructor("));
+    assert!(!underlying.contains("static func"));
+}
+
+fn interface_body<'a>(wit: &'a str, name: &str) -> &'a str {
+    let marker = format!("interface {name} {{");
+    let start = wit
+        .find(&marker)
+        .unwrap_or_else(|| panic!("component contract has no `{name}` interface:\n{wit}"));
+    let body_start = start + marker.len();
+    let mut depth = 1_u32;
+    for (offset, character) in wit[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &wit[body_start..body_start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("component contract has an unterminated `{name}` interface:\n{wit}")
+}
+
+fn interface_functions(interface: &str) -> BTreeSet<&str> {
+    interface
+        .lines()
+        .filter_map(|line| {
+            let (name, declaration) = line.trim().split_once(':')?;
+            declaration.contains("func(").then_some(name.trim())
+        })
+        .collect()
 }
 
 fn root_world_interfaces(wit: &str) -> (Vec<String>, Vec<String>) {

@@ -441,9 +441,9 @@ pub trait IndexedStorage: Debug + Sync {
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
     /// Primary oplog keys remain present even when every entry is removed, preserving the creation
-    /// fence. Compressed archive keys are removed atomically when trimming leaves them empty, so a
-    /// later retry may append the same final chunk id; their epoch record stays. Missing keys stay
-    /// missing.
+    /// fence. Archive level keys (compressed chunks and blob manifests) are removed atomically
+    /// when trimming leaves them empty, so a later retry may append the same final chunk id; their
+    /// epoch record stays. Missing keys stay missing.
     ///
     /// Fenced on the writer generation as an append is, checked in the same atomic step as the
     /// trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when `expected_epoch`
@@ -1048,6 +1048,13 @@ pub enum IndexedStorageNamespace {
         agent_mode: AgentMode,
         level: usize,
     },
+    /// The chunks a blob archive level holds for an agent: the chunk bytes live in blob storage,
+    /// and only the chunks listed here are part of the oplog.
+    BlobOplogManifest {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        level: usize,
+    },
 }
 
 /// Various namespaces for operations working on multiple indexed storage namespaces such as scan
@@ -1055,6 +1062,7 @@ pub enum IndexedStorageNamespace {
 pub enum IndexedStorageMetaNamespace {
     Oplog { agent_mode: AgentMode },
     CompressedOplog { agent_mode: AgentMode, level: usize },
+    BlobOplogManifest { agent_mode: AgentMode, level: usize },
 }
 
 /// The resume token for a page of an ordered walk: the last key handed back, or `None` once a

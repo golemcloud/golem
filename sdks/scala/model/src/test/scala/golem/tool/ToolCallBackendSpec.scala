@@ -16,7 +16,15 @@
 
 package golem.tool
 
-import golem.schema.{FromSchema, IntoSchema, SchemaValue, TypedSchemaValue}
+import golem.schema.wire.{
+  ConcreteCodec,
+  WitNamedFieldType,
+  WitSchemaGraph,
+  WitSchemaTypeBody,
+  WitSchemaTypeNode,
+  WitSchemaValueNode
+}
+import golem.schema.{FromSchema, GuestSecretHandle, IntoSchema, MetadataEnvelope, SchemaValue, TypedSchemaValue}
 import golem.tool.ToolDeclaredErrorDecoder.{DeclaredErrors, NoDeclaredErrors}
 import zio.ZIO
 import zio.test._
@@ -169,6 +177,31 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
         case other => assertNever(s"expected local protocol error, got $other")
       }
     },
+    test("concrete result schema rejection releases an owned capability") {
+      val handle = GuestSecretHandle.fromRaw(new Object)
+      val result = ToolCallPreparation.decodeConcreteValue(
+        Some(TypedSchemaValue(IntoSchema[Int].graph, SchemaValue.SecretValue(handle))),
+        ConcreteCodec.derived[GuestSecretHandle]
+      )
+
+      assertTrue(result.isLeft, !handle.isPresent)
+    },
+    test("concrete result schema rejection releases an aliased owned capability") {
+      val handle = GuestSecretHandle.fromRaw(new Object)
+      val result = scala.util.Try(
+        ToolCallPreparation.decodeConcreteValue(
+          Some(
+            TypedSchemaValue(
+              IntoSchema[Int].graph,
+              SchemaValue.TupleValue(List(SchemaValue.SecretValue(handle), SchemaValue.SecretValue(handle)))
+            )
+          ),
+          ConcreteCodec.derived[GuestSecretHandle]
+        )
+      )
+
+      assertTrue(result.toOption.exists(_.isLeft), !handle.isPresent)
+    },
     test("nested inherited values follow descriptor canonical order") {
       val descriptor   = Right(nestedDescriptor)
       val stringSchema = implicitly[IntoSchema[String]]
@@ -187,6 +220,43 @@ object ToolCallBackendSpec extends ZIOSpecDefault {
           )
         case other => assertNever(s"expected canonical record, got $other")
       }
+    },
+    test("wire fields wrap authored subtree options to match the canonical input graph") {
+      val metadata = MetadataEnvelope.empty
+      val graph    = WitSchemaGraph(
+        Vector(
+          WitSchemaTypeNode(WitSchemaTypeBody.StringType, metadata),
+          WitSchemaTypeNode(WitSchemaTypeBody.OptionType(0), metadata),
+          WitSchemaTypeNode(
+            WitSchemaTypeBody.RecordType(
+              Vector(
+                WitNamedFieldType("prefix", 1, metadata),
+                WitNamedFieldType("input", 0, metadata)
+              )
+            ),
+            metadata
+          )
+        ),
+        Vector.empty,
+        2
+      )
+      val encoded = WireToolClientRuntime
+        .inputFields(
+          graph,
+          List(
+            WireToolInputField("prefix", ConcreteCodec.string.asInstanceOf[ConcreteCodec[Any]], "shared"),
+            WireToolInputField("input", ConcreteCodec.string.asInstanceOf[ConcreteCodec[Any]], "payload")
+          )
+        )
+        .toOption
+        .get
+        .value
+      val fields = encoded.valueNodes(encoded.root).asInstanceOf[WitSchemaValueNode.RecordValue].fields
+
+      assertTrue(
+        encoded.valueNodes(fields.head) == WitSchemaValueNode.OptionValue(Some(0)),
+        encoded.valueNodes(fields(1)) == WitSchemaValueNode.StringValue("payload")
+      )
     }
   )
 }

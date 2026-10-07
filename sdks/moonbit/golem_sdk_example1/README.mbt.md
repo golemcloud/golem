@@ -67,13 +67,17 @@ chain ordering.
 
 * `Site`: `#derive.http_router` with `#derive.mount("/site")`. Repeated
   `#derive.static_file("/assets/*", "/preferred/$1")` declarations preserve order;
-  only a missing file falls through to the next mapping, then the handler.
+  only a missing file falls through to the next mapping, then the handler. Repeated
+  `#derive.file_response_header("name", "value")` declarations add ordered response
+  headers to files served by the mount.
 * `StaticSite`: immutable files without a synthetic handler. Routers may also
   register only a provider, both roles, or neither role.
 * `FileOwner`: an ordinary durable `#derive.agent` with
   `#derive.expose_files("/value", "/value.txt")`. Its mount binds the complete
   constructor identity. GET initializes the owner and reads its current file;
-  the typed PUT endpoint updates that same owner's file.
+  the typed PUT endpoint updates that same owner's file. The same repeated
+  `#derive.file_response_header("name", "value")` annotation configures live file
+  responses. Omitting it produces an empty header list.
 
 `#derive.http_handler` and `#derive.openapi_provider` designate ordinary public
 instance methods with arbitrary names. A router has at most one of each, no

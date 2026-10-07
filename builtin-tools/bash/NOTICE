@@ -14,4 +14,3 @@ recorded in Cargo.toml and Cargo.lock, under their respective licenses.
 sed is uutils sed (https://github.com/uutils/sed, MIT) and jq's engine is jaq
 (https://github.com/01mf02/jaq, MIT), used at the forked revisions recorded in Cargo.toml and
 Cargo.lock under their respective licenses.
-

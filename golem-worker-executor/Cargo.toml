@@ -142,6 +142,7 @@ name = "oplog_read"
 harness = false
 
 [dev-dependencies]
+golem-human-approval = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
@@ -158,6 +159,7 @@ proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-subscriber = { workspace = true }

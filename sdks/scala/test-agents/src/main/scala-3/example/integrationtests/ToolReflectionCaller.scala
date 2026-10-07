@@ -15,7 +15,9 @@ import golem.reflection.{AgentClientDefinition, DynamicAgentClient, DynamicToolC
 import golem.runtime.annotations.*
 import golem.runtime.{InputRecordCodec, OutputCodec}
 import golem.schema.{Quantity, QuantityUnit, SchemaValue, TypedSchemaValue}
+import golem.tool.{ByteStreamFailure, ToolOutputStream}
 import zio.blocks.schema.json.Json
+import zio.blocks.schema.Schema
 import zio.blocks.typeid.TypeId
 
 import java.time.{Duration => JDuration}
@@ -31,6 +33,39 @@ object ReflectionMeters {
   }
 }
 
+final case class ScalaConformanceInput(primary: String, nested: Map[String, Seq[Long]])
+object ScalaConformanceInput {
+  implicit val schema: Schema[ScalaConformanceInput] = Schema.derived
+}
+
+final case class ScalaConformanceOutput(summary: String, counts: Seq[Long])
+object ScalaConformanceOutput {
+  implicit val schema: Schema[ScalaConformanceOutput] = Schema.derived
+}
+
+final case class ScalaConformanceFailurePayload(field: String, reason: String)
+object ScalaConformanceFailurePayload {
+  implicit val schema: Schema[ScalaConformanceFailurePayload] = Schema.derived
+}
+
+enum ScalaConformanceFailure {
+  @error(kind = "usage-error", exitCode = 2)
+  case Invalid(payload: ScalaConformanceFailurePayload)
+}
+
+@toolDefinition(name = "nested")
+trait ScalaReflectionNestedTool {
+  def inspect(input: ScalaConformanceInput): ScalaConformanceOutput
+}
+
+final class ScalaReflectionNestedToolImpl(prefix: String) extends ScalaReflectionNestedTool {
+  override def inspect(input: ScalaConformanceInput): ScalaConformanceOutput =
+    ScalaConformanceOutput(
+      s"$prefix:${input.primary}:${input.nested.keys.toSeq.sorted.mkString(",")}",
+      input.nested.toSeq.sortBy(_._1).map(_._2.sum)
+    )
+}
+
 @toolDefinition(name = "scala-reflection-test")
 trait ScalaReflectionTestTool {
   def echo(label: String): String
@@ -44,6 +79,11 @@ trait ScalaReflectionTestTool {
     quantity: Quantity[ReflectionMeters],
     maybe: Option[String]
   ): String
+  def asymmetric(input: ScalaConformanceInput): ScalaConformanceOutput
+  def nested(prefix: String): ScalaReflectionNestedTool
+  def typedFailure(message: String): Either[ScalaConformanceFailure, String]
+  def principal(label: String, principal: Principal): String
+  def streaming(label: String, stdout: ToolOutputStream): Future[String]
 }
 
 @toolImplementation()
@@ -65,6 +105,36 @@ final class ScalaReflectionTestToolImpl extends ScalaReflectionTestTool {
       maybe.isEmpty
     ) "scala-canonical-ok"
     else "scala-canonical-mismatch"
+
+  override def asymmetric(input: ScalaConformanceInput): ScalaConformanceOutput =
+    ScalaConformanceOutput(
+      s"${input.primary}:${input.nested.keys.toSeq.sorted.mkString(",")}",
+      input.nested.toSeq.sortBy(_._1).map(_._2.sum)
+    )
+
+  override def nested(prefix: String): ScalaReflectionNestedTool =
+    new ScalaReflectionNestedToolImpl(prefix)
+
+  override def typedFailure(message: String): Either[ScalaConformanceFailure, String] =
+    Left(ScalaConformanceFailure.Invalid(ScalaConformanceFailurePayload("message", message)))
+
+  override def principal(label: String, principal: Principal): String =
+    s"$label:${principalLabel(principal)}"
+
+  override def streaming(label: String, stdout: ToolOutputStream): Future[String] =
+    stdout
+      .write(s"scala:$label".getBytes("UTF-8"))
+      .flatMap {
+        case Right(_)    => Future.successful(s"streamed:$label")
+        case Left(error) => Future.failed(new IllegalStateException(s"stream write failed: $error"))
+      }(ExecutionContext.global)
+
+  private def principalLabel(principal: Principal): String = principal match {
+    case Principal.Anonymous                            => "anonymous"
+    case Principal.Agent(_, name)                       => s"agent:$name"
+    case Principal.GolemUser(_)                         => "golem-user"
+    case Principal.Oidc(sub, _, _, _, _, _, _, _, _, _) => s"oidc:$sub"
+  }
 }
 
 @agentDefinition()
@@ -86,6 +156,7 @@ trait ScalaToolReflectionCaller extends BaseAgent {
   def canonicalRoundTrip(): Future[String]
   def principalRoundTrip(): Future[String]
   def agentRoundTrip(): Future[String]
+  def toolConformanceRoundTrip(principal: Principal): Future[String]
 }
 
 @agentImplementation()
@@ -206,6 +277,118 @@ final class ScalaToolReflectionCallerImpl(name: String) extends ScalaToolReflect
           s"$native|$encoded|$invalid|$decodedDynamic"
         }
     }
+  }
+
+  override def toolConformanceRoundTrip(principal: Principal): Future[String] = {
+    val input    = ScalaConformanceInput("left", Map("z" -> Seq(8L, 1L), "a" -> Seq(3L)))
+    val direct   = new ScalaReflectionTestToolImpl
+    val captured = new CapturingOutput
+    val definition = for {
+      streamed <- direct.streaming("definition", captured)
+      _        <- captured.finish()
+    } yield (
+      direct.asymmetric(input),
+      direct.nested("definition-nested").inspect(input),
+      direct.typedFailure("definition-error"),
+      direct.principal("definition", principal),
+      streamed,
+      captured.text,
+      captured.terminal
+    )
+
+    val generated = for {
+      asymmetric <- ScalaReflectionTestToolClient().asymmetric(input)
+      nested     <- ScalaReflectionTestToolClient().nested("generated-nested").inspect(input)
+      failure    <- ScalaReflectionTestToolClient().typedFailure("generated-error")
+      identity   <- ScalaReflectionTestToolClient().principal("generated")
+      stream     <- ScalaReflectionTestToolClient().streaming("generated") match {
+                  case Left(error)       => Future.failed(new IllegalStateException(error.toString))
+                  case Right(invocation) => invocation.collect()
+                }
+    } yield (asymmetric, nested, failure, identity, stream)
+
+    val reflected = for {
+      tool <- Future.fromTry(
+                scala.util.Try(
+                  Reflection
+                    .getToolType("scala-reflection-test")
+                    .fold(error => throw new IllegalStateException(error.toString), identity)
+                )
+              )
+      asymmetric <- tool
+                      .command(List("asymmetric"))
+                      .fold(
+                        error => Future.failed(new IllegalStateException(error.toString)),
+                        command =>
+                          command.invokeJson(
+                            Json.Object(
+                              "input" -> Json.Object(
+                                "primary" -> Json.String("left"),
+                                "nested"  -> Json.Object(
+                                  "z" -> Json.Array(Json.Number(BigDecimal(8)), Json.Number(BigDecimal(1))),
+                                  "a" -> Json.Array(Json.Number(BigDecimal(3)))
+                                )
+                              )
+                            )
+                          )
+                      )
+      nested <- tool
+                  .command(List("nested", "inspect"))
+                  .fold(
+                    error => Future.failed(new IllegalStateException(error.toString)),
+                    command =>
+                      command.invokeJson(
+                        Json.Object(
+                          "prefix" -> Json.String("reflected-nested"),
+                          "input"  -> Json.Object(
+                            "primary" -> Json.String("left"),
+                            "nested"  -> Json.Object(
+                              "z" -> Json.Array(Json.Number(BigDecimal(8)), Json.Number(BigDecimal(1))),
+                              "a" -> Json.Array(Json.Number(BigDecimal(3)))
+                            )
+                          )
+                        )
+                      )
+                  )
+      failure <- tool
+                   .command(List("typed-failure"))
+                   .fold(
+                     error => Future.failed(new IllegalStateException(error.toString)),
+                     command => command.invokeJson(Json.Object("message" -> Json.String("reflected-error")))
+                   )
+      identity <- tool
+                    .command(List("principal"))
+                    .fold(
+                      error => Future.failed(new IllegalStateException(error.toString)),
+                      command => command.invokeJson(Json.Object("label" -> Json.String("reflected")))
+                    )
+      stream <- tool
+                  .command(List("streaming"))
+                  .fold(
+                    error => Future.failed(new IllegalStateException(error.toString)),
+                    command =>
+                      command.startJson(Json.Object("label" -> Json.String("reflected"))) match {
+                        case Left(error)       => Future.failed(new IllegalStateException(error.toString))
+                        case Right(invocation) => invocation.collect()
+                      }
+                  )
+    } yield (asymmetric, nested, failure, identity, stream)
+
+    for {
+      definitionResult <- definition
+      generatedResult <- generated
+      reflectedResult <- reflected
+    } yield s"definition=$definitionResult|generated=$generatedResult|reflected=$reflectedResult"
+  }
+
+  private final class CapturingOutput extends ToolOutputStream {
+    private var bytes                            = Vector.empty[Byte]
+    private var terminalState                    = "open"
+    def text: String                             = new String(bytes.toArray, "UTF-8")
+    def terminal: String                         = terminalState
+    override def write(chunk: Array[Byte])       = { bytes ++= chunk; Future.successful(Right(())) }
+    override def finish()                        = { terminalState = "ended"; Future.successful(Right(())) }
+    override def fail(reason: ByteStreamFailure) = { terminalState = s"failed:$reason"; Future.successful(Right(())) }
   }
 
   override def agentRoundTrip(): Future[String] = {

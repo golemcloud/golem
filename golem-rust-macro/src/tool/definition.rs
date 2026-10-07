@@ -25,7 +25,7 @@ use crate::tool::command::{CommandAttr, parse_command_into};
 use crate::tool::constraint::parse_constraint;
 use crate::tool::doc::parse_doc_full;
 use crate::tool::helpers::{
-    SeenKeys, StreamKind, fresh_internal_ident, normalize_sdk_paths_in_item_trait,
+    SeenKeys, StreamKind, expr_str_array, fresh_internal_ident, normalize_sdk_paths_in_item_trait,
     resolve_generated_sdk_paths, stream_type, to_kebab_case,
 };
 use crate::tool::ir::{ArgIr, ArgPlacement, CommandIr, OutputChannelIr, ParamIr, ToolDefinitionIr};
@@ -74,18 +74,19 @@ pub fn tool_definition_impl(
         )
     };
 
-    let (version, requires_filesystem) = match parse_version(attrs.into()) {
+    let options = match parse_tool_definition_options(attrs.into()) {
         Ok(v) => v,
         Err(err) => return err.to_compile_error().into(),
     };
 
     // Building the IR validates every tool authoring attribute and surfaces
     // parse errors at compile time.
-    let mut ir = match build_tool_definition_ir(&ir_item_trait, version) {
+    let mut ir = match build_tool_definition_ir(&ir_item_trait, options.version) {
         Ok(ir) => ir,
         Err(err) => return err.to_compile_error().into(),
     };
-    ir.requires_filesystem = requires_filesystem;
+    ir.requires_filesystem = options.requires_filesystem;
+    ir.aliases = options.aliases;
 
     // Metadata synthesis: the hidden free descriptor function that builds the
     // runtime `ExtendedToolType`. It is emitted as a module-level free function
@@ -323,11 +324,13 @@ fn param_surfaces_intersect(
 }
 
 fn is_global_param(cmd: &CommandIr, param: &ParamIr) -> bool {
-    cmd.args
-        .iter()
-        .find(|arg| arg.param == param.ident)
-        .and_then(|arg| arg.placement)
-        == Some(ArgPlacement::Global)
+    matches!(
+        cmd.args
+            .iter()
+            .find(|arg| arg.param == param.ident)
+            .and_then(|arg| arg.placement),
+        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+    )
 }
 
 fn param_aliases(cmd: &CommandIr, param: &ParamIr) -> Vec<String> {
@@ -934,6 +937,7 @@ pub(crate) fn build_tool_definition_ir(
         trait_ident: item_trait.ident.clone(),
         version,
         requires_filesystem: false,
+        aliases: Vec::new(),
         doc: parse_doc_full(&item_trait.attrs)?,
         commands,
     })
@@ -1117,19 +1121,25 @@ pub(crate) fn strip_helper_attrs(item_trait: &mut ItemTrait) {
     }
 }
 
-/// Parses the optional `#[tool_definition(version = "...")]` attribute argument.
-pub(crate) fn parse_version(
+#[derive(Default)]
+pub(crate) struct ToolDefinitionOptions {
+    pub version: Option<String>,
+    pub requires_filesystem: bool,
+    pub aliases: Vec<String>,
+}
+
+/// Parses the optional `#[tool_definition(...)]` attribute arguments.
+pub(crate) fn parse_tool_definition_options(
     attrs: proc_macro2::TokenStream,
-) -> Result<(Option<String>, bool), Error> {
+) -> Result<ToolDefinitionOptions, Error> {
     if attrs.is_empty() {
-        return Ok((None, false));
+        return Ok(ToolDefinitionOptions::default());
     }
     use syn::parse::Parser;
     use syn::punctuated::Punctuated;
     let parser = Punctuated::<Expr, syn::Token![,]>::parse_terminated;
     let exprs = parser.parse2(attrs)?;
-    let mut version = None;
-    let mut requires_filesystem = false;
+    let mut options = ToolDefinitionOptions::default();
     let mut seen = SeenKeys::default();
     for expr in exprs.iter() {
         let Expr::Assign(assign) = expr else {
@@ -1147,10 +1157,10 @@ pub(crate) fn parse_version(
                 ));
             }
         };
-        if key != "version" && key != "requires_filesystem" {
+        if key != "version" && key != "requires_filesystem" && key != "aliases" {
             return Err(Error::new(
                 key.span(),
-                "the only supported #[tool_definition] arguments are `version` and `requires_filesystem`",
+                "the only supported #[tool_definition] arguments are `version`, `requires_filesystem`, and `aliases`",
             ));
         }
         seen.insert(&key)?;
@@ -1160,14 +1170,15 @@ pub(crate) fn parse_version(
                 Expr::Lit(syn::ExprLit {
                     lit: Lit::Str(s), ..
                 }),
-            ) => version = Some(s.value()),
+            ) => options.version = Some(s.value()),
             (
                 "requires_filesystem",
                 Expr::Lit(syn::ExprLit {
                     lit: Lit::Bool(value),
                     ..
                 }),
-            ) => requires_filesystem = value.value,
+            ) => options.requires_filesystem = value.value,
+            ("aliases", value) => options.aliases = expr_str_array(value, "aliases")?,
             ("requires_filesystem", other) => {
                 return Err(Error::new(
                     other.span(),
@@ -1182,7 +1193,7 @@ pub(crate) fn parse_version(
             }
         }
     }
-    Ok((version, requires_filesystem))
+    Ok(options)
 }
 
 #[cfg(test)]
@@ -1197,7 +1208,7 @@ mod tests {
 
     fn version(src: &str) -> Result<Option<String>, Error> {
         let attrs: proc_macro2::TokenStream = src.parse().unwrap();
-        parse_version(attrs).map(|value| value.0)
+        parse_tool_definition_options(attrs).map(|value| value.version)
     }
 
     #[test]
@@ -1207,6 +1218,15 @@ mod tests {
             version(r#"version = "1.2.3""#).unwrap(),
             Some("1.2.3".to_string())
         );
+    }
+
+    #[test]
+    fn root_aliases_are_parsed() {
+        let attrs: proc_macro2::TokenStream =
+            r#"aliases = ["art", "artifact-build"]"#.parse().unwrap();
+        let options = parse_tool_definition_options(attrs).unwrap();
+
+        assert_eq!(options.aliases, ["art", "artifact-build"]);
     }
 
     #[test]

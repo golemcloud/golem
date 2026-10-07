@@ -83,7 +83,7 @@ impl InMemoryIndexedStorage {
         key: &str,
         pairs: &[(u64, Vec<u8>)],
         expected_epoch: Option<ShardEpoch>,
-        primary_oplog_insert: bool,
+        conflict_on_held_index: bool,
     ) -> Result<(), IndexedStorageError> {
         let _record = match expected_epoch {
             None => None,
@@ -96,7 +96,7 @@ impl InMemoryIndexedStorage {
 
         let mut entry = self.data.entry_async(composite_key).await.or_default();
         if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
-            return Err(if primary_oplog_insert {
+            return Err(if conflict_on_held_index {
                 IndexedStorageError::Conflict("Key already exists".to_string())
             } else {
                 IndexedStorageError::Other("Key already exists".to_string())
@@ -149,6 +149,18 @@ impl InMemoryIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/compressed-oplog/{level}/{component_id}/{agent_name}/{key}")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id:
+                    AgentId {
+                        component_id,
+                        agent_id: agent_name,
+                    },
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/blob-oplog/{level}/{component_id}/{agent_name}/{key}")
+            }
         }
     }
 
@@ -177,6 +189,20 @@ impl InMemoryIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 let pattern: String = format!(
                     r"^{mode}/compressed-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
+                    regex::escape(prefix)
+                );
+                let regex = Regex::new(&pattern).unwrap();
+
+                Box::new(move |key| {
+                    regex
+                        .captures(key)
+                        .map(|caps| caps.get(3).unwrap().as_str().to_string())
+                })
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                let pattern: String = format!(
+                    r"^{mode}/blob-oplog/{level}/([^/]+)/([^/]+)/({}.*)$",
                     regex::escape(prefix)
                 );
                 let regex = Regex::new(&pattern).unwrap();
@@ -273,9 +299,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let primary_oplog_insert = matches!(
+        let conflict_on_held_index = matches!(
             &namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
         let composite_key = Self::composite_key(namespace, key);
         self.append_checked(
@@ -283,7 +311,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             key,
             &[(id, value)],
             expected_epoch,
-            primary_oplog_insert,
+            conflict_on_held_index,
         )
         .await
     }
@@ -302,9 +330,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         if pairs.is_empty() {
             return Ok(());
         }
-        let primary_oplog_insert = matches!(
+        let conflict_on_held_index = matches!(
             namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
         let composite_key = Self::composite_key(namespace.clone(), key);
         let pairs: Vec<(u64, Vec<u8>)> = pairs
@@ -316,7 +346,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             key,
             &pairs,
             expected_epoch,
-            primary_oplog_insert,
+            conflict_on_held_index,
         )
         .await
     }
@@ -561,7 +591,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let composite_key = Self::composite_key(namespace, key);
         // The record's guard is held across the trim, in the order an append takes them, so
         // nobody can record a new generation between the check and the trim.

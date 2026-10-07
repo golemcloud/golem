@@ -19,11 +19,9 @@ import golem.schema.SchemaValue._
 import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire._
-import zio.blocks.async.*
 import zio.blocks.schema.json.Json
 
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.Success
 import scala.util.control.NonFatal
 
 private[reflection] object ToolReflectionFailures {
@@ -37,25 +35,20 @@ private[reflection] object ToolReflectionFailures {
   def recover[A](future: Future[Either[ToolError[NamedToolError], A]])(implicit
     ec: ExecutionContext
   ): Future[Either[ToolError[NamedToolError], A]] =
-    future.recover { case NonFatal(error) =>
-      Left(ToolError.Rpc(RpcError.Protocol(Option(error.getMessage).getOrElse(error.toString))))
-    }
+    ToolCollectionFailures.result(future)
 
   def collect[A](
     stdout: Option[ToolInputStream],
     stderr: Option[ToolInputStream],
     result: Future[Either[ToolError[NamedToolError], A]]
-  )(implicit ec: ExecutionContext): Future[CollectedToolInvocation[NamedToolError, A]] = {
-    def collectOutput(output: Option[ToolInputStream]): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-      output
-        .fold(Future.successful(Right(Option.empty[Array[Byte]]): Either[ByteStreamFailure, Option[Array[Byte]]]))(
-          stream => stream.stream.runCollectAsync.toFuture.map(_.map(bytes => Some(bytes.toArray)))
-        )
-
-    result.transform(Success(_)).zip(collectOutput(stdout)).zip(collectOutput(stderr)).map {
-      case ((result, stdout), stderr) => CollectedToolInvocation(result.get, stdout, stderr)
-    }
-  }
+  )(implicit ec: ExecutionContext): Future[CollectedToolInvocation[NamedToolError, A]] =
+    ToolCollectionFailures
+      .result(result)
+      .zip(ToolCollectionFailures.output(stdout))
+      .zip(ToolCollectionFailures.output(stderr))
+      .map { case ((result, stdout), stderr) =>
+        CollectedToolInvocation(result, stdout, stderr)
+      }
 
   def resultOf[A](collected: CollectedToolInvocation[NamedToolError, A]): Either[ToolError[NamedToolError], A] =
     collected.result.flatMap { result =>

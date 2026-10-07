@@ -608,37 +608,40 @@ mod filesystem_capability_tests {
     use test_r::test;
 
     #[test]
-    fn requiring_tool_allowed_binds_filesystem() {
-        assert_eq!(
-            filesystem_capability_for(ToolFilesystemAccess::Allowed, false, true),
-            Ok(FilesystemCapability::Capable)
-        );
-    }
+    fn filesystem_policy_matrix_covers_access_provisioning_and_requirement() {
+        use FilesystemCapability::{Capable, Incapable};
+        use ToolFilesystemAccess::{Allowed, Denied, Unset};
 
-    #[test]
-    fn requiring_tool_unset_with_provisioned_files_binds_filesystem() {
-        assert_eq!(
-            filesystem_capability_for(ToolFilesystemAccess::Unset, true, true),
-            Ok(FilesystemCapability::Capable)
-        );
-    }
+        let cases = [
+            (Allowed, false, false, Ok(Capable)),
+            (Allowed, false, true, Ok(Capable)),
+            (Allowed, true, false, Ok(Capable)),
+            (Allowed, true, true, Ok(Capable)),
+            (Unset, false, false, Ok(Incapable)),
+            (Unset, false, true, Err("set filesystemAccess: allowed")),
+            (Unset, true, false, Ok(Capable)),
+            (Unset, true, true, Ok(Capable)),
+            (Denied, false, false, Ok(Incapable)),
+            (Denied, false, true, Err("set filesystemAccess: allowed")),
+            (
+                Denied,
+                true,
+                false,
+                Err("filesystem-denied tool cannot provision files"),
+            ),
+            (Denied, true, true, Err("set filesystemAccess: allowed")),
+        ];
 
-    #[test]
-    fn requiring_tool_unset_without_files_is_rejected_actionably() {
-        assert!(
-            filesystem_capability_for(ToolFilesystemAccess::Unset, false, true)
-                .unwrap_err()
-                .contains("set filesystemAccess: allowed")
-        );
-    }
-
-    #[test]
-    fn requiring_tool_denied_is_rejected_even_with_files() {
-        assert!(
-            filesystem_capability_for(ToolFilesystemAccess::Denied, true, true)
-                .unwrap_err()
-                .contains("set filesystemAccess: allowed")
-        );
+        for (access, provisioned, required, expected) in cases {
+            let actual = filesystem_capability_for(access, provisioned, required);
+            match expected {
+                Ok(expected) => assert_eq!(actual, Ok(expected)),
+                Err(expected) => assert!(
+                    actual.is_err_and(|error| error.contains(expected)),
+                    "unexpected result for access={access:?}, provisioned={provisioned}, required={required}"
+                ),
+            }
+        }
     }
 }
 

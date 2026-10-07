@@ -69,10 +69,12 @@ pub fn standalone_wire_descriptor_fn_ident(trait_ident: &Ident) -> Ident {
 fn needs_composition(ir: &ToolDefinitionIr) -> bool {
     ir.commands.iter().any(|cmd| {
         cmd.subtree.is_some()
-            || cmd
-                .args
-                .iter()
-                .any(|arg| arg.placement == Some(ArgPlacement::Global))
+            || cmd.args.iter().any(|arg| {
+                matches!(
+                    arg.placement,
+                    Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+                )
+            })
             || cmd.constraints.iter().any(constraint_has_value_is)
     })
 }
@@ -285,6 +287,7 @@ fn schema_checks(ir: &ToolDefinitionIr) -> TokenStream {
                     || arg.path_kind.is_some()
                     || arg.direction.is_some()
                     || arg.mime.is_some()
+                    || arg.extensions.is_some()
                     || arg.schemes.is_some()
                     || arg.raw_min.is_some()
                     || arg.raw_max.is_some()
@@ -371,6 +374,20 @@ impl Plan {
             }
         }
 
+        if root_idx.is_some()
+            && ir.commands.iter().any(|command| {
+                command
+                    .args
+                    .iter()
+                    .any(|arg| arg.placement == Some(ArgPlacement::RootGlobal))
+            })
+        {
+            return Err(Error::new(
+                ir.trait_ident.span(),
+                "`root-global` arguments require a pure-dispatcher root (a tool without an implicit-body method)",
+            ));
+        }
+
         for (idx, cmd) in ir.commands.iter().enumerate() {
             if Some(idx) == root_idx {
                 continue;
@@ -406,12 +423,29 @@ impl Plan {
         if let Some(i) = root_idx {
             for param in &ir.commands[i].params {
                 let arg = arg_for(&ir.commands[i], &param.ident);
-                if arg.map(|a| a.placement) == Some(Some(ArgPlacement::Global)) {
+                if arg.is_some_and(|a| {
+                    matches!(
+                        a.placement,
+                        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+                    )
+                }) {
                     root_global_names.insert(to_kebab_case(&param.ident.to_string()));
                     if let Some(a) = arg {
                         for alias in &a.aliases {
                             root_global_names.insert(alias.clone());
                         }
+                    }
+                }
+            }
+        } else {
+            for command in &ir.commands {
+                for param in &command.params {
+                    let Some(arg) = arg_for(command, &param.ident) else {
+                        continue;
+                    };
+                    if arg.placement == Some(ArgPlacement::RootGlobal) {
+                        root_global_names.insert(to_kebab_case(&param.ident.to_string()));
+                        root_global_names.extend(arg.aliases.iter().cloned());
                     }
                 }
             }
@@ -470,16 +504,59 @@ fn build_root_node(
 ) -> Result<TokenStream, Error> {
     if let Some(i) = plan.root_idx {
         let cmd = &ir.commands[i];
-        build_command_node(cmd, &plan.tool_name, true, &BTreeSet::new(), repr)
+        let node = build_command_node(cmd, &plan.tool_name, true, &BTreeSet::new(), repr)?;
+        let aliases = ir.aliases.iter().map(|alias| quote! { #alias.to_string() });
+        Ok(quote! {{
+            let mut __root = #node;
+            __root.aliases.extend(::std::vec![ #(#aliases),* ]);
+            __root
+        }})
     } else {
         let name = &plan.tool_name;
         let doc = doc_tokens(&ir.doc);
+        let aliases = ir.aliases.iter().map(|alias| quote! { #alias.to_string() });
+        let mut options = Vec::new();
+        let mut flags = Vec::new();
+        let mut seen_root_globals: Vec<(String, BTreeSet<String>)> = Vec::new();
+        for command in &ir.commands {
+            for param in &command.params {
+                let Some(arg) = arg_for(command, &param.ident) else {
+                    continue;
+                };
+                if arg.placement != Some(ArgPlacement::RootGlobal) {
+                    continue;
+                }
+                let long = to_kebab_case(&param.ident.to_string());
+                let names = std::iter::once(long.clone())
+                    .chain(arg.aliases.iter().cloned())
+                    .collect::<BTreeSet<_>>();
+                if seen_root_globals.iter().any(|(seen_long, seen_names)| {
+                    names.contains(seen_long) || seen_names.contains(&long)
+                }) {
+                    continue;
+                }
+                seen_root_globals.push((long, names));
+                match classify(&param.ident, &param.ty, Some(arg), true, false, repr)? {
+                    Projection::Option(spec) => options.push(spec),
+                    Projection::Flag(spec) => flags.push(spec),
+                    _ => {
+                        return Err(Error::new(
+                            param.ident.span(),
+                            "a root-global argument must project to an option or flag",
+                        ));
+                    }
+                }
+            }
+        }
         Ok(quote! {
             golem_rust::agentic::ExtendedCommandNode {
                 name: #name.to_string(),
-                aliases: ::std::vec::Vec::new(),
+                aliases: ::std::vec![ #(#aliases),* ],
                 doc: #doc,
-                globals: golem_rust::agentic::ExtendedGlobals::default(),
+                globals: golem_rust::agentic::ExtendedGlobals {
+                    options: ::std::vec![ #(#options),* ],
+                    flags: ::std::vec![ #(#flags),* ],
+                },
                 subcommands: ::std::vec::Vec::new(),
                 body: ::std::option::Option::None,
             }
@@ -769,7 +846,12 @@ fn build_command_node(
         // from tail-position inference (see `is_positional_candidate`), because a
         // value the runtime will drop must not steal the tail slot from a
         // genuine `Vec<T>` body parameter.
-        let is_global = arg.map(|a| a.placement) == Some(Some(ArgPlacement::Global));
+        let is_global = arg.is_some_and(|a| {
+            matches!(
+                a.placement,
+                Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+            )
+        });
         // A parameter repeating a global inherited from the root command is
         // emitted in its natural projected form but will be removed (when
         // compatible) or rejected (when conflicting) by
@@ -1114,7 +1196,12 @@ fn is_positional_candidate(param: &crate::tool::ir::ParamIr, arg: Option<&ArgIr>
         return false;
     }
     match arg.and_then(|a| a.placement) {
-        Some(ArgPlacement::Global | ArgPlacement::Option | ArgPlacement::Flag) => false,
+        Some(
+            ArgPlacement::RootGlobal
+            | ArgPlacement::Global
+            | ArgPlacement::Option
+            | ArgPlacement::Flag,
+        ) => false,
         Some(ArgPlacement::Positional | ArgPlacement::Tail) => true,
         None => {
             // No explicit placement: replicate the type-based inference in
@@ -1154,7 +1241,12 @@ pub(crate) fn client_surface_order(
     let plan = Plan::analyze(ir)?;
     let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
     let arg = arg_for(cmd, &param.ident);
-    let global = arg.and_then(|arg| arg.placement) == Some(ArgPlacement::Global);
+    let global = arg.is_some_and(|arg| {
+        matches!(
+            arg.placement,
+            Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+        )
+    });
     let last = cmd
         .params
         .iter()
@@ -1202,7 +1294,12 @@ pub(crate) fn canonical_field_has_option_carrier(
     let plan = Plan::analyze(ir)?;
     let is_root = to_kebab_case(&cmd.method_ident.to_string()) == plan.tool_name;
     let arg = arg_for(cmd, &param.ident);
-    let global = arg.and_then(|arg| arg.placement) == Some(ArgPlacement::Global);
+    let global = arg.is_some_and(|arg| {
+        matches!(
+            arg.placement,
+            Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+        )
+    });
     let last = cmd
         .params
         .iter()
@@ -1412,9 +1509,9 @@ fn reject_unconsumed_structural_attrs(arg: &ArgIr, kind: SurfaceKind) -> Result<
     Ok(())
 }
 
-/// Rejects every `#[arg]` field other than documentation on a stdin/stdout
+/// Rejects every `#[arg]` field other than documentation and MIME types on a stdin/stdout
 /// stream parameter. A stream is projected purely from its required or optional
-/// `InputStream` / `OutputStream` type ([`stream_spec_tokens`] lowers only `doc`),
+/// `InputStream` / `OutputStream` type,
 /// so an explicit placement, `kind`, value-schema refinement, or any structural
 /// field would be silently dropped.
 fn reject_stream_attrs(arg: &ArgIr) -> Result<(), Error> {
@@ -1431,7 +1528,19 @@ fn reject_stream_attrs(arg: &ArgIr) -> Result<(), Error> {
             "`kind = \"flag\"` / `\"count-flag\"` is not valid on a stdin/stdout stream parameter",
         ));
     }
-    reject_text_path_url_refinements(arg, "a stdin/stdout stream")?;
+    if arg.regex.is_some()
+        || arg.min_length.is_some()
+        || arg.max_length.is_some()
+        || arg.path_kind.is_some()
+        || arg.direction.is_some()
+        || arg.extensions.is_some()
+        || arg.schemes.is_some()
+    {
+        return Err(Error::new(
+            span,
+            "text, path, and URL refinements other than `mime` are not valid on a stdin/stdout stream",
+        ));
+    }
     if arg.bounds.is_some() || arg.unit.is_some() || arg.raw_min.is_some() || arg.raw_max.is_some()
     {
         return Err(Error::new(
@@ -1522,7 +1631,7 @@ fn classify(
         ));
     }
     let surface = match placement {
-        Some(ArgPlacement::Global) => None,
+        Some(ArgPlacement::RootGlobal | ArgPlacement::Global) => None,
         other => other,
     };
 
@@ -1665,10 +1774,11 @@ fn classify(
 
 fn stream_spec_tokens(arg: Option<&ArgIr>, required: bool) -> TokenStream {
     let doc = arg_doc_tokens(arg);
+    let mime = opt_str_vec(arg.and_then(|arg| arg.mime.as_ref()));
     quote! {
         golem_rust::agentic::StreamSpec {
             doc: #doc,
-            mime: ::std::vec::Vec::new(),
+            mime: #mime.unwrap_or_default(),
             required: #required,
         }
     }
@@ -1735,10 +1845,16 @@ fn reject_text_path_url_refinements(arg: &ArgIr, context: &str) -> Result<(), Er
             ),
         ));
     }
-    if arg.path_kind.is_some() || arg.direction.is_some() || arg.mime.is_some() {
+    if arg.path_kind.is_some()
+        || arg.direction.is_some()
+        || arg.mime.is_some()
+        || arg.extensions.is_some()
+    {
         return Err(Error::new(
             span,
-            format!("path refinements (`kind`/`direction`/`mime`) are not valid on {context}"),
+            format!(
+                "path refinements (`kind`/`direction`/`mime`/`extensions`) are not valid on {context}"
+            ),
         ));
     }
     if arg.schemes.is_some() {
@@ -2162,26 +2278,31 @@ fn value_graph_tokens(
             }
         });
     }
-    if arg.path_kind.is_some() || arg.direction.is_some() || arg.mime.is_some() {
+    if arg.path_kind.is_some()
+        || arg.direction.is_some()
+        || arg.mime.is_some()
+        || arg.extensions.is_some()
+    {
         // Path refinements apply to a path-backed schema. A recognized non-path
         // type would be coerced to a `Path` schema, producing metadata that
         // disagrees with the implementation signature.
         if is_known_non_path(inner_ty) {
             return Err(Error::new(
                 arg.param.span(),
-                "path refinements (`kind`/`direction`/`mime`) require a path-typed parameter",
+                "path refinements (`kind`/`direction`/`mime`/`extensions`) require a path-typed parameter",
             ));
         }
         let direction = opt_direction(arg.direction);
         let kind = opt_path_kind(arg.path_kind);
         let mime = opt_str_vec(arg.mime.as_ref());
+        let extensions = opt_str_vec(arg.extensions.as_ref());
         steps.push(if repr == DescriptorRepr::Wire {
             quote! {
-                __g = __g.refine_path(#direction, #kind, #mime)?;
+                __g = __g.refine_path(#direction, #kind, #mime, #extensions)?;
             }
         } else {
             quote! {
-                __g.root = golem_rust::agentic::refine_path(__g.root, #direction, #kind, #mime)?;
+                __g.root = golem_rust::agentic::refine_path(__g.root, #direction, #kind, #mime, #extensions)?;
             }
         });
     }
@@ -2427,11 +2548,18 @@ fn build_result(
         Some(t) => {
             let graph = value_graph_tokens(t, None, MinMaxRole::Forbidden, "result", repr)?;
             let (formatters, default_formatter) = build_formatters(cmd.result.as_ref());
-            let empty_doc = doc_tokens(&DocIr::default());
+            let result_doc = doc_tokens(&DocIr {
+                summary: cmd
+                    .result
+                    .as_ref()
+                    .and_then(|result| result.doc.clone())
+                    .unwrap_or_default(),
+                ..DocIr::default()
+            });
             quote! {
                 ::std::option::Option::Some(golem_rust::agentic::ExtendedResultSpec {
                     type_: #graph,
-                    doc: #empty_doc,
+                    doc: #result_doc,
                     formatters: #formatters,
                     default_formatter: #default_formatter,
                 })
@@ -2459,7 +2587,7 @@ fn build_result(
 /// formatters gets a synthesized single `default` formatter so it always
 /// resolves.
 fn build_formatters(result: Option<&ResultIr>) -> (TokenStream, TokenStream) {
-    let formatters: Vec<String> = result.map(|r| r.formatters.clone()).unwrap_or_default();
+    let formatters = result.map(|r| r.formatters.clone()).unwrap_or_default();
     let explicit_default = result.and_then(|r| r.default_formatter.clone());
 
     if formatters.is_empty() {
@@ -2474,13 +2602,17 @@ fn build_formatters(result: Option<&ResultIr>) -> (TokenStream, TokenStream) {
         return (f, quote! { #d.to_string() });
     }
 
-    let default = explicit_default.unwrap_or_else(|| formatters[0].clone());
-    let items = formatters.iter().map(|name| {
-        let empty_doc = doc_tokens(&DocIr::default());
+    let default = explicit_default.unwrap_or_else(|| formatters[0].name.clone());
+    let items = formatters.iter().map(|formatter| {
+        let name = &formatter.name;
+        let doc = doc_tokens(&DocIr {
+            summary: formatter.doc.clone(),
+            ..DocIr::default()
+        });
         quote! {
             golem_rust::agentic::ToolFormatter {
                 name: #name.to_string(),
-                doc: #empty_doc,
+                doc: #doc,
             }
         }
     });
@@ -2606,9 +2738,10 @@ fn array_tokens(
 
 fn arg_doc_tokens(arg: Option<&ArgIr>) -> TokenStream {
     let summary = arg.and_then(|a| a.doc.clone()).unwrap_or_default();
+    let description = arg.and_then(|a| a.description.clone()).unwrap_or_default();
     let doc = DocIr {
         summary,
-        description: String::new(),
+        description,
         examples: Vec::new(),
     };
     doc_tokens(&doc)
@@ -2937,5 +3070,45 @@ mod tests {
         assert!(descriptor.contains("\"bare\""));
         assert!(descriptor.contains("\"qualified\""));
         assert!(descriptor.contains("\"explicit\""));
+    }
+
+    #[test]
+    fn rich_metadata_extensions_are_lowered() {
+        let item: syn::ItemTrait = syn::parse_quote! {
+            trait Artifact {
+                #[arg(region = "root-global", description = "Inherited region")]
+                #[arg(inputs = "tail", kind = "file", extensions = ["wasm", "wat"])]
+                #[arg(stdin, mime = ["application/wasm"], doc = "Module bytes")]
+                #[result(formatters = [("json", "JSON report")], default = "json", doc = "Report")]
+                fn render(
+                    &self,
+                    region: String,
+                    inputs: Vec<std::path::PathBuf>,
+                    stdin: InputStream,
+                ) -> String;
+            }
+        };
+        let descriptor = generated_body(item, "__golem_tool_descriptor");
+
+        assert!(descriptor.contains("Inherited region"));
+        assert!(descriptor.contains("application/wasm"));
+        assert!(descriptor.contains("wasm"));
+        assert!(descriptor.contains("wat"));
+        assert!(descriptor.contains("JSON report"));
+        assert!(descriptor.contains("Report"));
+    }
+
+    #[test]
+    fn stream_rejects_path_extensions() {
+        let item: syn::ItemTrait = syn::parse_quote! {
+            trait InvalidStream {
+                #[arg(stdin, extensions = ["wasm"])]
+                fn run(&self, stdin: InputStream);
+            }
+        };
+        let ir = build_tool_definition_ir(&item, None).unwrap();
+        let error = synthesize_descriptor_fn(&ir).unwrap_err();
+
+        assert!(error.to_string().contains("other than `mime`"));
     }
 }

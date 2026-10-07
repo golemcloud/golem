@@ -313,6 +313,26 @@ fn path_policy_remote_middleware(
     )
 }
 
+fn selective_path_policy_bindings(
+    remote_tools: &mut [RemoteToolDeployment],
+    remote_tool_hash_inputs: &mut [DiffRemoteToolDeployment],
+    installation: ToolMiddlewareInstallation,
+) {
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let index = remote_tools
+        .iter()
+        .position(|tool| tool.name.as_str() == "write-file")
+        .unwrap();
+    let binding = remote_tools[index]
+        .agent_bindings
+        .get_mut(&agent_type)
+        .unwrap();
+    binding.middleware = Some(vec![installation]);
+    remote_tool_hash_inputs[index]
+        .agent_middleware_bindings
+        .insert(agent_type, ToolMiddlewareBindingInput::from(&*binding));
+}
+
 fn entity_start_count(
     oplog: &[PublicOplogEntryWithIndex],
     kind: PublicAgentEntityKind,
@@ -1810,7 +1830,7 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
 #[test]
 #[timeout("12m")]
 #[tracing::instrument]
-async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
+async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
     let user = deps.user().await?.with_auto_deploy(false);
@@ -1840,7 +1860,7 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
                     release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
                         account: builtin_account.clone(),
                         name: ToolName::try_from(name).unwrap(),
-                        version: "0.4.0".to_string(),
+                        version: "0.4.1".to_string(),
                     }),
                     automatic: false,
                 },
@@ -1859,7 +1879,7 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
                     ToolMiddlewareReleaseByCoordinates {
                         account: builtin_account.clone(),
                         name: ToolMiddlewareName::try_from("path-policy").unwrap(),
-                        version: "0.1.0".to_string(),
+                        version: "0.1.1".to_string(),
                     },
                 ),
                 automatic: false,
@@ -1870,7 +1890,7 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
         path_policy_remote_middleware(&middleware_grant);
     let installation = ToolMiddlewareInstallation {
         name: ToolMiddlewareName::try_from("path-policy").unwrap(),
-        version: Some("0.1.0".to_string()),
+        version: Some("0.1.1".to_string()),
         parameters: NormalizedJsonValue::new(json!({
             "base": "/",
             "allowed_roots": [{
@@ -1886,16 +1906,14 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
 
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
     let mut hash_input = plan.to_diffable();
-    for (request, remote_hash_input) in remote_tools.iter().zip(remote_tool_hash_inputs) {
-        add_remote_tool_hash_input(&mut hash_input, request, remote_hash_input);
+    for (request, remote_hash_input) in remote_tools.iter().zip(&remote_tool_hash_inputs) {
+        add_remote_tool_hash_input(&mut hash_input, request, remote_hash_input.clone());
     }
     hash_input.remote_tool_middleware_deployments.insert(
         remote_middleware.name.to_string(),
         remote_middleware_hash_input.into(),
     );
-    hash_input
-        .universal_tool_middlewares
-        .push(installation.clone());
+    hash_input.universal_tool_middlewares = vec![installation.clone()];
     let deployment = client
         .deploy_environment(
             &env.id.0,
@@ -1924,6 +1942,70 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
     assert_eq!(summary.remote_tools.len(), 2);
     assert_eq!(summary.remote_tool_middlewares.len(), 1);
     assert_eq!(summary.universal_tool_middlewares.len(), 1);
+    let environment_agent = agent_id!("ToolStreamingCaller", "path-policy-environment-wide");
+    user.start_agent(&caller.id, environment_agent.clone())
+        .await?;
+    let stream_input = vec![0, 1, 255, 2, 3, 128, 4];
+    let streamed = user
+        .invoke_and_await_agent(
+            &caller,
+            &environment_agent,
+            "collect",
+            data_value!("echo", stream_input.clone(), 3_u32),
+        )
+        .await?
+        .into_typed::<StreamEvidence>()?;
+    assert_eq!(streamed.output, stream_input);
+    assert_eq!(streamed.chunks_read, 3);
+    assert_eq!(streamed.bytes_read, 7);
+    assert!(!streamed.output_closed);
+    assert_eq!(streamed.completion, "ok");
+    let environment_worker =
+        AgentId::from_agent_id(caller.id, &environment_agent).map_err(anyhow::Error::msg)?;
+    let environment_oplog = user
+        .get_oplog(&environment_worker, OplogIndex::INITIAL)
+        .await?;
+    assert!(entity_start_has_immediate_ancestor(
+        &environment_oplog,
+        PublicAgentEntityKind::Tool,
+        "streaming",
+        PublicAgentEntityKind::ToolMiddleware,
+        "path-policy",
+    ));
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+    let mut hash_input = plan.to_diffable();
+    selective_path_policy_bindings(
+        &mut remote_tools,
+        &mut remote_tool_hash_inputs,
+        installation.clone(),
+    );
+    hash_input.universal_tool_middlewares.clear();
+    for (request, remote_hash_input) in remote_tools.iter().zip(&remote_tool_hash_inputs) {
+        add_remote_tool_hash_input(&mut hash_input, request, remote_hash_input.clone());
+    }
+    client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: plan.current_revision,
+                expected_deployment_hash: hash_input.hash()?,
+                version: DeploymentVersion("path-policy-selective".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                publish_tools: Vec::new(),
+                remote_tools: remote_tools.clone(),
+                mcp_imports: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: vec![remote_middleware.clone()],
+                universal_tool_middlewares: Vec::new(),
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
+                replace_incompatible_agent_secrets: false,
+            },
+        )
+        .await?;
 
     let allowed_path = "workspace/path-policy/agent-a.txt";
     let content = "agent-a-content";
@@ -1979,17 +2061,17 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
     assert_eq!(
         entity_start_count(&before_denial, PublicAgentEntityKind::Tool, "streaming"),
         1,
-        "the shipped path-policy middleware must pass streams through to the leaf"
+        "the unselected streaming tool must still execute"
     );
     assert!(
-        entity_start_has_immediate_ancestor(
+        !entity_start_has_immediate_ancestor(
             &before_denial,
             PublicAgentEntityKind::Tool,
             "streaming",
             PublicAgentEntityKind::ToolMiddleware,
             "path-policy",
         ),
-        "the streaming leaf must be attributed to the shipped path-policy middleware"
+        "selective path-policy middleware must not wrap the streaming tool"
     );
 
     let denied = user
@@ -2055,14 +2137,22 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
             PublicAgentEntityKind::ToolMiddleware,
             "path-policy"
         ),
-        1
+        0,
+        "selective path-policy middleware must not wrap read-file"
     );
 
     let mut incapable_installation = installation;
     incapable_installation.filesystem_access = ToolFilesystemAccess::Unset;
+    selective_path_policy_bindings(
+        &mut remote_tools,
+        &mut remote_tool_hash_inputs,
+        incapable_installation,
+    );
     let plan = client.get_environment_deployment_plan(&env.id.0).await?;
     let mut hash_input = plan.to_diffable();
-    hash_input.universal_tool_middlewares = vec![incapable_installation.clone()];
+    for (request, remote_hash_input) in remote_tools.iter().zip(&remote_tool_hash_inputs) {
+        add_remote_tool_hash_input(&mut hash_input, request, remote_hash_input.clone());
+    }
     client
         .deploy_environment(
             &env.id.0,
@@ -2078,7 +2168,7 @@ async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
                 mcp_imports: Vec::new(),
                 publish_tool_middlewares: Vec::new(),
                 remote_tool_middlewares: vec![remote_middleware],
-                universal_tool_middlewares: vec![incapable_installation],
+                universal_tool_middlewares: Vec::new(),
                 environment_tool_middleware_bindings: Default::default(),
                 agent_tool_middleware_bindings: Default::default(),
                 replace_incompatible_agent_secrets: false,

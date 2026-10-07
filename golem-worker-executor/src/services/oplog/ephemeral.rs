@@ -41,7 +41,7 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 const MAX_QUEUED_WRITE_BATCHES: usize = 2;
 const MAX_RETAINED_RECEIPT_BATCHES: usize = 32;

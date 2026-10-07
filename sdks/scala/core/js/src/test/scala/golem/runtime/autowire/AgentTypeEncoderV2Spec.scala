@@ -20,7 +20,7 @@ import golem.host.SchemaWireInterop
 import golem.host.js.JsSnapshotting
 import golem.host.js.schema._
 import golem.runtime.{AgentMetadata, AgentTypeKind, ConstructorMetadata, InputMetadata, MethodMetadata, OutputMetadata}
-import golem.runtime.http.{FileMapping, HttpEndpointDetails, HttpMethod, HttpMountDetails}
+import golem.runtime.http.{FileMapping, FileResponseHeader, HttpEndpointDetails, HttpMethod, HttpMountDetails}
 import golem.schema.{IntoSchema, SchemaConflictError, SchemaGraph, SchemaType, SchemaTypeBody, SchemaTypeDef}
 import golem.schema.wire.SchemaWire
 import zio.blocks.schema.Schema
@@ -138,7 +138,11 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
             FileMapping.Exact(List("favicon.ico"), "/srv/favicon.ico")
           ),
           filesystemBindings = Nil,
-          openapiProviderMethod = Some("provider-text")
+          openapiProviderMethod = Some("provider-text"),
+          fileResponseHeaders = List(
+            FileResponseHeader("Content-Security-Policy", "default-src 'self'"),
+            FileResponseHeader("Referrer-Policy", "same-origin")
+          )
         )
         val endpoint = HttpEndpointDetails(
           HttpMethod.Any,
@@ -152,21 +156,36 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           methods = List(method.copy(httpEndpoints = List(endpoint)), provider),
           httpMount = Some(mount)
         )
-        val encoded      = AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(lowLevel, "ephemeral"))
-        val raw          = encoded.asInstanceOf[js.Dynamic]
-        val encodedMount = raw.selectDynamic("httpMount").asInstanceOf[js.Dynamic]
-        val static       = encodedMount.selectDynamic("staticBindings").asInstanceOf[js.Array[js.Dynamic]]
-        val filesystem   = encodedMount.selectDynamic("filesystemBindings").asInstanceOf[js.Array[js.Dynamic]]
-        val methods      = raw.selectDynamic("methods").asInstanceOf[js.Array[js.Dynamic]]
-        val endpoints    = methods(0).selectDynamic("httpEndpoint").asInstanceOf[js.Array[js.Dynamic]]
-        val regular      = lowLevel.copy(
+        val encoded       = AgentTypeEncoderV2.encode(AgentRequestBuilder.fromMetadata(lowLevel, "ephemeral"))
+        val raw           = encoded.asInstanceOf[js.Dynamic]
+        val encodedMount  = raw.selectDynamic("httpMount").asInstanceOf[js.Dynamic]
+        val static        = encodedMount.selectDynamic("staticBindings").asInstanceOf[js.Array[js.Dynamic]]
+        val filesystem    = encodedMount.selectDynamic("filesystemBindings").asInstanceOf[js.Array[js.Dynamic]]
+        val staticHeaders = encodedMount.selectDynamic("fileResponseHeaders").asInstanceOf[js.Array[js.Dynamic]]
+        val methods       = raw.selectDynamic("methods").asInstanceOf[js.Array[js.Dynamic]]
+        val endpoints     = methods(0).selectDynamic("httpEndpoint").asInstanceOf[js.Array[js.Dynamic]]
+        val regularMount  = mount.copy(
+          staticBindings = Nil,
+          filesystemBindings = List(FileMapping.Subtree(Nil, "/live")),
+          openapiProviderMethod = None,
+          fileResponseHeaders = List(
+            FileResponseHeader("Content-Security-Policy", "default-src 'none'"),
+            FileResponseHeader("Referrer-Policy", "no-referrer")
+          )
+        )
+        val regular = lowLevel.copy(
           kind = AgentTypeKind.Regular,
           methods = List(method.copy(httpEndpoints = List(endpoint.copy(httpMethod = HttpMethod.Custom("ANY"))))),
-          httpMount = Some(mount.copy(staticBindings = Nil, openapiProviderMethod = None))
+          httpMount = Some(regularMount)
         )
-        val custom = AgentTypeEncoderV2
+        val encodedRegular = AgentTypeEncoderV2
           .encode(AgentRequestBuilder.fromMetadata(regular, "durable"))
           .asInstanceOf[js.Dynamic]
+        val liveHeaders = encodedRegular
+          .selectDynamic("httpMount")
+          .selectDynamic("fileResponseHeaders")
+          .asInstanceOf[js.Array[js.Dynamic]]
+        val custom = encodedRegular
           .selectDynamic("methods")
           .asInstanceOf[js.Array[js.Dynamic]](0)
           .selectDynamic("httpEndpoint")
@@ -177,6 +196,22 @@ object AgentTypeEncoderV2Spec extends ZIOSpecDefault {
           static(0).selectDynamic("tag").asInstanceOf[String] == "subtree",
           static(1).selectDynamic("tag").asInstanceOf[String] == "exact",
           filesystem.isEmpty,
+          staticHeaders.map(_.selectDynamic("name").asInstanceOf[String]).toList == List(
+            "Content-Security-Policy",
+            "Referrer-Policy"
+          ),
+          staticHeaders.map(_.selectDynamic("value").asInstanceOf[String]).toList == List(
+            "default-src 'self'",
+            "same-origin"
+          ),
+          liveHeaders.map(_.selectDynamic("name").asInstanceOf[String]).toList == List(
+            "Content-Security-Policy",
+            "Referrer-Policy"
+          ),
+          liveHeaders.map(_.selectDynamic("value").asInstanceOf[String]).toList == List(
+            "default-src 'none'",
+            "no-referrer"
+          ),
           encodedMount.selectDynamic("openapiProviderMethod").asInstanceOf[String] == "provider-text",
           endpoints(0).selectDynamic("httpMethod").selectDynamic("tag").asInstanceOf[String] == "any",
           custom.selectDynamic("tag").asInstanceOf[String] == "custom",

@@ -81,7 +81,7 @@ pub struct GrepResult {
     pub next_cursor: Option<GrepCursor>,
 }
 
-#[tool_definition(version = "0.1.0", requires_filesystem = true)]
+#[tool_definition(version = "0.1.1", requires_filesystem = true)]
 pub trait Grep {
     /// Searches one UTF-8 file or a directory tree by complete logical lines without following
     /// symbolic links. Literal, case-sensitive matching is the default. Filters use globset

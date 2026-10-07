@@ -324,6 +324,7 @@ message RouteBehaviour {
     optional RouterMethod openapi_provider_method = 6;
     repeated golem.component.FileMapping static_bindings = 7;
     repeated RouterFileIndexEntry file_index = 8;
+    repeated golem.component.FileResponseHeader file_response_headers = 9;
   }
 
   message RouterMethod {
@@ -345,6 +346,7 @@ message RouteBehaviour {
     CompiledInputSchema constructor_input = 4;
     repeated ConstructorParameter constructor_parameters = 5;
     repeated golem.component.FileMapping filesystem_bindings = 6;
+    repeated golem.component.FileResponseHeader file_response_headers = 7;
   }
 }
 

@@ -184,7 +184,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, LazyLock, Mutex, RwLock, Weak};
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::runtime::Handle;
@@ -647,11 +647,39 @@ impl TestWorkerExecutor {
         principal: Principal,
         scope_card: Option<golem_common::model::card::ScopeCard>,
     ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
+        self.invoke_external_tool_in_environment(
+            self.context.default_environment_id,
+            agent_id,
+            expected_fingerprint,
+            idempotency_key,
+            tool_name,
+            command_path,
+            input,
+            invocation_context,
+            principal,
+            scope_card,
+        )
+        .await
+    }
+
+    pub async fn invoke_external_tool_in_environment(
+        &self,
+        environment_id: EnvironmentId,
+        agent_id: &AgentId,
+        expected_fingerprint: AgentFingerprint,
+        idempotency_key: IdempotencyKey,
+        tool_name: ToolName,
+        command_path: Vec<String>,
+        input: TypedSchemaValue,
+        invocation_context: InvocationContextStack,
+        principal: Principal,
+        scope_card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<AgentInvocationOutput, WorkerExecutorError> {
         let services = self
             .services
             .as_ref()
             .expect("test service graph is captured");
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
         let worker =
             Worker::get_exact_existing_suspended(services, &owned_agent_id, principal.clone())
                 .await?;
@@ -758,7 +786,7 @@ impl TestWorkerExecutor {
         .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok(worker
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .export_fork_admissions
             .clone())
@@ -887,7 +915,7 @@ impl TestWorkerExecutor {
         .await
         .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
-        Ok((*worker.get_attached_last_known_status().await).clone())
+        Ok((*worker.get_last_known_status().await).clone())
     }
 
     pub async fn external_end_payload_id(
@@ -2038,6 +2066,9 @@ pub struct TestExecutorOverrides {
     pub create_card_service: Option<Arc<CreateCardServiceFn>>,
     pub create_direct_invocation_auth: Option<Arc<CreateDirectInvocationAuthFn>>,
     pub environment_state_service: Option<Arc<dyn EnvironmentStateService>>,
+    /// Replaces the named quota service so tests can assert the owner environment used by
+    /// quota-token operations.
+    pub quota_service: Option<Arc<dyn QuotaService>>,
     /// Replaces configured account limits for the `TestWorkerCtx` bootstrap.
     pub resource_limits: Option<Arc<dyn ResourceLimits>>,
     pub native_tool_metadata: Option<golem_common::schema::tool::Tool>,
@@ -2442,6 +2473,46 @@ impl NativeTestTool for NativeTestToolImpl {
 
         if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        if let Some(key) = mode.strip_prefix("config:") {
+            let expected = golem_schema::schema::wit::encode_graph(
+                &golem_common::schema::SchemaGraph::anonymous(
+                    golem_common::schema::SchemaType::option(
+                        golem_common::schema::SchemaType::string(),
+                    ),
+                ),
+            )?;
+            let value =
+                golem_worker_executor::preview2::golem::agent::host::Host::get_config_value(
+                    ctx.durable_ctx_mut(),
+                    vec![key.to_string()],
+                    expected,
+                )
+                .await?;
+            let evidence = match value {
+                Ok(value) => match golem_schema::schema::wit::decode_value(&value)? {
+                    golem_common::schema::SchemaValue::Option { inner: Some(value) } => {
+                        match *value {
+                            golem_common::schema::SchemaValue::String(value) => value,
+                            other => format!("unexpected:{other:?}"),
+                        }
+                    }
+                    golem_common::schema::SchemaValue::Option { inner: None } => {
+                        "missing".to_string()
+                    }
+                    other => format!("unexpected:{other:?}"),
+                },
+                Err(_) => "denied".to_string(),
+            };
+            if let Some(mut stdout) = stdout {
+                stdout
+                    .write(evidence.into_bytes())
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+                stdout.finish().map_err(anyhow::Error::msg)?;
+            }
+            return Ok(());
         }
 
         if is_live && let Some(expected) = wait_for_count {
@@ -3417,7 +3488,9 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         _config: &golem_worker_executor::services::golem_config::QuotaServiceConfig,
         _shutdown_token: tokio_util::sync::CancellationToken,
     ) -> Arc<dyn golem_worker_executor::services::quota::QuotaService> {
-        Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
+        self.overrides.quota_service.clone().unwrap_or_else(|| {
+            Arc::new(golem_worker_executor::services::quota::UnlimitedQuotaService)
+        })
     }
 
     fn create_worker_proxy(&self, golem_config: &GolemConfig) -> Arc<dyn WorkerProxy> {
@@ -5455,7 +5528,7 @@ pub struct AdditionalTestDeps {
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
     /// resolution.
-    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     direct_replay_wait_signals:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
     agent_invocation_success_gates:
@@ -5715,7 +5788,9 @@ impl AdditionalTestDeps {
         self.replay_admission_gates
             .lock()
             .unwrap()
-            .insert(agent_id, gate.clone());
+            .entry(agent_id)
+            .or_default()
+            .push(gate.clone());
         ReplayAdmissionGateHandle { entered_rx, gate }
     }
 
@@ -6423,7 +6498,7 @@ impl DirectReplayWaitSignalHandle {
 
 struct TestReplayAdmissionHook {
     agent_id: AgentId,
-    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
 }
 
@@ -6436,10 +6511,19 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
     ) {
         let gate = {
             let mut gates = self.gates.lock().unwrap();
-            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
-                gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
-            });
-            matches.then(|| gates.remove(&self.agent_id)).flatten()
+            gates.get_mut(&self.agent_id).and_then(|gates| {
+                gates.retain(|gate| {
+                    gate.entered_tx
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|sender| !sender.is_closed())
+                });
+                let pos = gates.iter().position(|gate| {
+                    gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
+                })?;
+                Some(gates.remove(pos))
+            })
         };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
@@ -6476,6 +6560,57 @@ impl TestReplayAdmissionHook {
         {
             let _ = fired_tx.send((name.to_string(), start_index));
         }
+    }
+}
+
+#[cfg(test)]
+mod replay_admission_gate_tests {
+    use super::*;
+    use golem_worker_executor::workerctx::ReplayAdmissionHook;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn dropped_gate_does_not_steal_rearmed_matching_gate() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "gate-test".to_string(),
+        };
+        let gates = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let signals = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let deps = AdditionalTestDeps {
+            replay_admission_gates: gates.clone(),
+            direct_replay_wait_signals: signals.clone(),
+            ..Default::default()
+        };
+
+        let stale = deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            "monotonic-clock::now".to_string(),
+            ReplayAdmissionStage::BeforeDeferredStart,
+        );
+        drop(stale);
+        let mut current = deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            "monotonic-clock::now".to_string(),
+            ReplayAdmissionStage::BeforeDeferredStart,
+        );
+        let hook = TestReplayAdmissionHook {
+            agent_id,
+            gates,
+            signals,
+        };
+
+        tokio::join!(
+            hook.before_replay_access_start(
+                "golem:api/monotonic-clock::now",
+                ReplayAdmissionStage::BeforeDeferredStart,
+            ),
+            async {
+                current.entered().await;
+                current.release();
+            }
+        );
     }
 }
 
@@ -7673,6 +7808,9 @@ pub fn registry_test_card() -> StoredCard {
 
 pub struct TestCardService;
 
+static TEST_RUNTIME_CARDS: LazyLock<RwLock<HashMap<CardId, StoredCard>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
 fn default_test_host_permissions_card(card_id: CardId) -> StoredCard {
     let mut card =
         default_test_agent_initial_permissions(RecipientPattern::Any).to_polymorphic_card();
@@ -7689,7 +7827,18 @@ impl CardService for TestCardService {
         card: StoredCard,
         _provenance: CardManagedByRuntimeDerived,
     ) -> Result<StoredCard, WorkerExecutorError> {
-        Ok(card)
+        let mut cards = TEST_RUNTIME_CARDS.write().unwrap();
+        match cards.get(&card.card_id()) {
+            Some(existing) if existing != &card => Err(WorkerExecutorError::runtime(format!(
+                "conflicting test runtime permission card {}",
+                card.card_id()
+            ))),
+            Some(existing) => Ok(existing.clone()),
+            None => {
+                cards.insert(card.card_id(), card.clone());
+                Ok(card)
+            }
+        }
     }
 
     async fn check_cards(
@@ -7697,9 +7846,12 @@ impl CardService for TestCardService {
         card_ids: Vec<CardId>,
     ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
         let mut result = HashMap::new();
+        let runtime_cards = TEST_RUNTIME_CARDS.read().unwrap();
 
         for card_id in card_ids {
-            let card_state = if card_id == TEST_CARD_ID {
+            let card_state = if let Some(card) = runtime_cards.get(&card_id) {
+                CardState::Live(Box::new(card.clone()))
+            } else if card_id == TEST_CARD_ID {
                 CardState::Live(Box::new(registry_test_card()))
             } else {
                 CardState::Live(Box::new(default_test_host_permissions_card(card_id)))

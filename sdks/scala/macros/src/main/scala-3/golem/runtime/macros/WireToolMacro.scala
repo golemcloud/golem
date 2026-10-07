@@ -116,9 +116,16 @@ private[macros] final class WireToolAssembler(val core: ToolMacroCore) {
                     val names    = p.kebab :: p.arg.map(_.aliases).getOrElse(Nil)
                     val position = fields.indexWhere(f => names.exists(n => n == f.name || f.aliases.contains(n)))
                     if (position < 0) report.errorAndAbort(s"missing compiled input field ${p.kebab}")
-                    val field      = fields(position)
-                    val valueIndex = '{ $indices(${ Expr(position) }) }
-                    val root       = field.schema.root.body
+                    val field          = fields(position)
+                    val root           = field.schema.root.body
+                    val canonicalIndex = '{ $indices(${ Expr(position) }) }
+                    val valueIndex     =
+                      if (
+                        root.isInstanceOf[SchemaTypeBody.OptionType] &&
+                        core.optionArg(p.tpe).isEmpty
+                      )
+                        '{ WireToolImplementation.requiredOptionValue($reader, $canonicalIndex) }
+                      else canonicalIndex
                     if (core.isInt(p.tpe) && root.isInstanceOf[SchemaTypeBody.U32Type])
                       '{
                         $reader.at($valueIndex) {
