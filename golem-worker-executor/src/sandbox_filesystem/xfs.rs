@@ -682,18 +682,12 @@ impl ManagedProvisioning {
     fn project_quota(&self, project_id: u32) -> std::io::Result<FsDiskQuota> {
         let mut quota = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id, &mut quota) {
-            if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
-                quota.d_version = FS_DQUOT_VERSION;
-                quota.d_flags = FS_PROJ_QUOTA;
-                quota.d_id = project_id;
-                return Ok(quota);
+            if quota_record_is_missing(&error) {
+                return Ok(empty_project_quota(project_id));
             }
             return Err(error);
         }
-        if quota.d_version != FS_DQUOT_VERSION
-            || quota.d_flags != FS_PROJ_QUOTA
-            || quota.d_id != project_id
-        {
+        if !project_quota_record_is_valid(&quota, project_id) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "XFS returned an invalid project quota record",
@@ -714,27 +708,12 @@ impl ManagedProvisioning {
 
         let mut cleared = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id.get(), &mut cleared) {
-            if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
+            if quota_record_is_missing(&error) {
                 return Ok(());
             }
             return Err(error);
         }
-        if cleared.d_blk_hardlimit != 0
-            || cleared.d_blk_softlimit != 0
-            || cleared.d_ino_hardlimit != 0
-            || cleared.d_ino_softlimit != 0
-            || cleared.d_rtb_hardlimit != 0
-            || cleared.d_rtb_softlimit != 0
-            || cleared.d_itimer != 0
-            || cleared.d_btimer != 0
-            || cleared.d_rtbtimer != 0
-            || cleared.d_iwarns != 0
-            || cleared.d_bwarns != 0
-            || cleared.d_rtbwarns != 0
-            || cleared.d_itimer_hi != 0
-            || cleared.d_btimer_hi != 0
-            || cleared.d_rtbtimer_hi != 0
-        {
+        if project_quota_retains_state(&cleared) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("XFS project {project_id} retained quota limits or state"),
@@ -884,6 +863,47 @@ fn candidate_repeats(first: Option<NonZeroU32>, candidate: NonZeroU32) -> bool {
 /// Whether a project with `usage` holds nothing, so it can be given to a new owner.
 fn project_is_empty(usage: FilesystemAllocation) -> bool {
     usage.allocated_bytes == 0 && usage.filesystem_objects == 0
+}
+
+/// Whether a read of a project quota record failed because XFS has no record for the project.
+fn quota_record_is_missing(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH))
+}
+
+/// The quota record of a project for which XFS has no record: no limits, no usage.
+fn empty_project_quota(project_id: u32) -> FsDiskQuota {
+    FsDiskQuota {
+        d_version: FS_DQUOT_VERSION,
+        d_flags: FS_PROJ_QUOTA,
+        d_id: project_id,
+        ..FsDiskQuota::default()
+    }
+}
+
+/// Whether `quota` is a project quota record of the expected version for `project_id`.
+fn project_quota_record_is_valid(quota: &FsDiskQuota, project_id: u32) -> bool {
+    quota.d_version == FS_DQUOT_VERSION
+        && quota.d_flags == FS_PROJ_QUOTA
+        && quota.d_id == project_id
+}
+
+/// Whether `quota` still holds a limit, a timer or a warning count after its limits were cleared.
+fn project_quota_retains_state(quota: &FsDiskQuota) -> bool {
+    quota.d_blk_hardlimit != 0
+        || quota.d_blk_softlimit != 0
+        || quota.d_ino_hardlimit != 0
+        || quota.d_ino_softlimit != 0
+        || quota.d_rtb_hardlimit != 0
+        || quota.d_rtb_softlimit != 0
+        || quota.d_itimer != 0
+        || quota.d_btimer != 0
+        || quota.d_rtbtimer != 0
+        || quota.d_iwarns != 0
+        || quota.d_bwarns != 0
+        || quota.d_rtbwarns != 0
+        || quota.d_itimer_hi != 0
+        || quota.d_btimer_hi != 0
+        || quota.d_rtbtimer_hi != 0
 }
 
 fn no_reusable_projects() -> std::io::Error {
@@ -1239,18 +1259,12 @@ fn volume_root(volume: &FilesystemVolume) -> &File {
 fn project_quota(root: &File, project_id: u32) -> std::io::Result<FsDiskQuota> {
     let mut quota = FsDiskQuota::default();
     if let Err(error) = get_project_quota(root, project_id, &mut quota) {
-        if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
-            quota.d_version = FS_DQUOT_VERSION;
-            quota.d_flags = FS_PROJ_QUOTA;
-            quota.d_id = project_id;
-            return Ok(quota);
+        if quota_record_is_missing(&error) {
+            return Ok(empty_project_quota(project_id));
         }
         return Err(error);
     }
-    if quota.d_version != FS_DQUOT_VERSION
-        || quota.d_flags != FS_PROJ_QUOTA
-        || quota.d_id != project_id
-    {
+    if !project_quota_record_is_valid(&quota, project_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "XFS returned an invalid project quota record",
@@ -2029,6 +2043,97 @@ mod tests {
         assert!(!project_is_empty(usage(1, 0)));
         assert!(!project_is_empty(usage(0, 1)));
         assert!(!project_is_empty(usage(4096, 2)));
+    }
+
+    #[test]
+    fn a_quota_record_is_missing_only_for_enoent_and_esrch() {
+        assert_eq!(
+            [
+                libc::ENOENT,
+                libc::ESRCH,
+                libc::EPERM,
+                libc::EINVAL,
+                libc::ENOSYS,
+            ]
+            .map(|errno| quota_record_is_missing(&std::io::Error::from_raw_os_error(errno))),
+            [true, true, false, false, false]
+        );
+        assert!(!quota_record_is_missing(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not an OS error"
+        )));
+    }
+
+    #[test]
+    fn the_quota_record_of_a_missing_project_has_its_id_and_nothing_else() {
+        let quota = empty_project_quota(7);
+
+        assert_eq!(quota.d_version, FS_DQUOT_VERSION);
+        assert_eq!(quota.d_flags, FS_PROJ_QUOTA);
+        assert_eq!(quota.d_id, 7);
+        assert_eq!(quota.d_fieldmask, 0);
+        assert!(!project_quota_retains_state(&quota));
+        assert_eq!(
+            (quota.d_bcount, quota.d_icount, quota.d_rtbcount),
+            (0, 0, 0)
+        );
+        assert!(project_quota_record_is_valid(&quota, 7));
+    }
+
+    #[test]
+    fn a_project_quota_record_is_valid_only_with_its_version_flags_and_id() {
+        let valid = empty_project_quota(7);
+        let changed: [fn(&mut FsDiskQuota); 3] = [
+            |quota| quota.d_version = FS_DQUOT_VERSION + 1,
+            |quota| quota.d_flags = FS_PROJ_QUOTA << 1,
+            |quota| quota.d_id = 8,
+        ];
+
+        assert!(project_quota_record_is_valid(&valid, 7));
+        assert!(!project_quota_record_is_valid(&valid, 8));
+        changed.iter().for_each(|change| {
+            let mut quota = valid;
+            change(&mut quota);
+            assert!(!project_quota_record_is_valid(&quota, 7));
+        });
+    }
+
+    #[test]
+    fn a_project_quota_retains_state_when_any_limit_timer_or_warning_is_set() {
+        let set: [fn(&mut FsDiskQuota); 15] = [
+            |quota| quota.d_blk_hardlimit = 1,
+            |quota| quota.d_blk_softlimit = 1,
+            |quota| quota.d_ino_hardlimit = 1,
+            |quota| quota.d_ino_softlimit = 1,
+            |quota| quota.d_rtb_hardlimit = 1,
+            |quota| quota.d_rtb_softlimit = 1,
+            |quota| quota.d_itimer = 1,
+            |quota| quota.d_btimer = 1,
+            |quota| quota.d_rtbtimer = 1,
+            |quota| quota.d_iwarns = 1,
+            |quota| quota.d_bwarns = 1,
+            |quota| quota.d_rtbwarns = 1,
+            |quota| quota.d_itimer_hi = 1,
+            |quota| quota.d_btimer_hi = 1,
+            |quota| quota.d_rtbtimer_hi = 1,
+        ];
+        let usage_only = FsDiskQuota {
+            d_bcount: 8,
+            d_icount: 1,
+            d_rtbcount: 8,
+            ..FsDiskQuota::default()
+        };
+
+        assert!(!project_quota_retains_state(&FsDiskQuota::default()));
+        assert!(!project_quota_retains_state(&usage_only));
+        set.iter().enumerate().for_each(|(field, change)| {
+            let mut quota = FsDiskQuota::default();
+            change(&mut quota);
+            assert!(
+                project_quota_retains_state(&quota),
+                "field {field} of the table is not seen"
+            );
+        });
     }
 
     #[test]
