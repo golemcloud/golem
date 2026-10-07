@@ -3901,7 +3901,7 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
-async fn synchronous_clock_wait_releases_store_for_concurrent_http(
+async fn synchronous_clock_does_not_wait_for_wallet_reconciliation(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -3922,7 +3922,7 @@ async fn synchronous_clock_wait_releases_store_for_concurrent_http(
             let response_gate = response_gate.clone();
             async move {
                 response_gate.acquire().await.unwrap().forget();
-                "response while clock is gated"
+                "response after clock completed"
             }
         }),
     );
@@ -3934,40 +3934,47 @@ async fn synchronous_clock_wait_releases_store_for_concurrent_http(
         .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
         .store()
         .await?;
-    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let agent_id = agent_id!("Clocks", "synchronous-clock-wallet-contention");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
     executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
         .await?;
     let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
     let mut clock = executor.gate_next_wall_clock_now(&owner).await?;
 
     let invoke = async {
         executor
-            .invoke_and_await_agent(
-                &component,
-                &agent_id,
-                "p2_clock_during_request",
-                data_value!(),
-            )
-            .await?
-            .into_typed::<String>()
+            .invoke_and_await_agent(&component, &agent_id, "use_std_time_apis", data_value!())
+            .await
     };
     let control = async {
         clock.entered().await;
-        // The HTTP response cannot finish before the synchronous guest clock is waiting.
-        release_response.add_permits(1);
+        let boundary = tokio::time::timeout(
+            Duration::from_secs(5),
+            executor.hold_invalidated_card_boundary(&owner),
+        )
+        .await
+        .map_err(|_| anyhow!("wallet boundary was already held when clock gate fired"))??;
+        let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let clock_after = before.last().unwrap().oplog_index;
+        clock.release();
         loop {
+            // ReadLocal completion appends without committing; expose the buffered records to
+            // the public oplog query without requiring another guest host call to make progress.
+            executor.commit_oplog(&worker_id).await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let http_start = oplog.iter().find_map(|entry| match &entry.entry {
-                PublicOplogEntry::Start(start) if start.function_name == "http::client::send" => {
+            let clock_start = oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if entry.oplog_index > clock_after
+                        && start.function_name == "wall_clock::now" =>
+                {
                     Some(entry.oplog_index)
                 }
                 _ => None,
             });
-            if http_start.is_some_and(|start| {
+            if clock_start.is_some_and(|start| {
                 oplog.iter().any(|entry| {
                     matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
                 })
@@ -3976,16 +3983,59 @@ async fn synchronous_clock_wait_releases_store_for_concurrent_http(
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        // A Store-retaining clock binding prevents the HTTP host task from reaching End.
-        clock.release();
+        // The clock must record its value without acquiring the held wallet boundary.
+        drop(boundary);
         Ok::<_, anyhow::Error>(())
     };
-    let (result, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+    let (_, ()) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::try_join!(invoke, control)
     })
     .await
-    .map_err(|_| anyhow!("concurrent HTTP did not complete while the P2 clock was gated"))??;
-    assert_eq!(result, "response while clock is gated");
+    .map_err(|_| anyhow!("P2 clock did not complete while the wallet boundary was held"))??;
+
+    // Also run the real accessor/exclusive overlap, without a gate that itself retains the Store.
+    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    release_response.add_permits(1);
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_clock_during_request",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "response after clock completed");
+
+    // Completed replay must reuse both the clock value and the HTTP response with the peer gone.
+    let before_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    server.abort_all();
+    while server.join_next().await.is_some() {}
+    executor.simulated_crash(&worker_id).await?;
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    let after_replay = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let count_calls = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "wall_clock::now"
+                            || start.function_name == "http::client::send"
+                )
+            })
+            .count()
+    };
+    assert_eq!(count_calls(&after_replay), count_calls(&before_replay));
     Ok(())
 }
 

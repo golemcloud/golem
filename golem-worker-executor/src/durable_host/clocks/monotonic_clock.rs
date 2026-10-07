@@ -15,10 +15,10 @@
 use futures::{FutureExt, executor::block_on};
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
-use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
+use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::monotonic_clock::{
-    Duration, HostWithStore, Instant, Pollable,
+    Duration, Host, HostWithStore, Instant, Pollable,
 };
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
@@ -30,51 +30,38 @@ use golem_common::model::oplog::{
 use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host as WasiMonotonicClockHost;
 
-impl<Ctx: WorkerCtx> crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::monotonic_clock::Host
-    for DurableWorkerCtx<Ctx>
-{
-}
-
-impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn now(accessor: &Accessor<U, Self>) -> anyhow::Result<Instant> {
-        let mut handle =
-            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::start_access(
-                accessor,
-                accessor.getter(),
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn now(&mut self) -> anyhow::Result<Instant> {
+        let handle =
+            DurableCallSession::<host_functions::MonotonicClockNow, NotCancellable>::start(
+                self,
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
             )
             .await?;
         #[cfg(feature = "test-utils")]
-        if handle.is_live() {
-            let owner = accessor.with(|mut access| access.get().owner_execution.clone());
-            if let Err(interrupt) = owner.test_after_monotonic_clock_start().await {
-                handle.abandon_for_trap();
-                return Err(interrupt.into());
-            }
+        if handle.is_live()
+            && let Err(interrupt) = self
+                .owner_execution
+                .test_after_monotonic_clock_start()
+                .await
+        {
+            let mut handle = handle;
+            handle.abandon_for_trap();
+            return Err(interrupt.into());
         }
-        if !handle.is_live() {
-            handle = match handle.replay_access(accessor, accessor.getter()).await? {
-                CallReplayOutcome::Replayed(result) => return Ok(result.nanos),
-                CallReplayOutcome::Incomplete(handle) => handle,
-            };
-        }
-        let nanos = match current_monotonic_time(accessor) {
-            Ok(nanos) => nanos,
-            Err(err) => {
-                handle.abandon_for_trap();
-                return Err(err.into());
-            }
-        };
         let result = handle
-            .complete_access(
-                accessor,
-                accessor.getter(),
-                HostResponseMonotonicClockTimestamp { nanos },
-            )
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let mut view = ctx.as_wasi_view();
+                let nanos = WasiMonotonicClockHost::now(&mut view.clocks()).await?;
+                Ok(HostResponseMonotonicClockTimestamp { nanos })
+            })
             .await?;
         Ok(result.nanos)
     }
+}
+
+impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
     async fn resolution(accessor: &Accessor<U, Self>) -> anyhow::Result<Duration> {
         let result = DurableCallSession::<
             host_functions::MonotonicClockResolution,

@@ -117,8 +117,8 @@ pub mod p2_monotonic_clock {
         path: r"../wit",
         world: "wasi:clocks/imports@0.2.6",
         imports: {
+            "wasi:clocks/monotonic-clock.now": async | trappable,
             "wasi:clocks/monotonic-clock": store | async | trappable,
-            "wasi:clocks/wall-clock": store | async | trappable,
             default: async | trappable,
         },
         require_store_data_send: true,
@@ -126,6 +126,7 @@ pub mod p2_monotonic_clock {
         wasmtime_crate: ::wasmtime,
         with: {
             "wasi:io/poll@0.2.6": wasmtime_wasi::p2::bindings::io::poll,
+            "wasi:clocks/wall-clock@0.2.6": wasmtime_wasi::p2::bindings::clocks::wall_clock,
         },
     });
 }

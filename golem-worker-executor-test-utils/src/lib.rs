@@ -1524,6 +1524,20 @@ impl TestWorkerExecutor {
         Ok(worker.owner_execution().test_gate_next_wall_clock_now())
     }
 
+    /// Holds the wallet boundary with its authority cache invalidated, reproducing a pending
+    /// accessor reconciliation independently of card-service timing.
+    pub async fn hold_invalidated_card_boundary(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<tokio::sync::OwnedMutexGuard<()>> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker.test_hold_invalidated_card_boundary().await)
+    }
+
     /// Makes the current generation's next wall-clock `now` call return its live value
     /// without creating a durable record, so crash-tail tests can commit only earlier work.
     pub async fn skip_next_wall_clock_now_durability(

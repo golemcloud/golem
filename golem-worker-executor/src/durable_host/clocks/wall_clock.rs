@@ -14,28 +14,15 @@
 
 use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
-use crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::wall_clock::{Datetime, HostWithStore};
 use crate::workerctx::WorkerCtx;
-use futures::FutureExt;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseWallClock, host_functions,
 };
-use wasmtime::component::{Accessor, HasSelf};
 use wasmtime_wasi::clocks::WasiClocksView as _;
-use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime as WasiDatetime, Host};
+use wasmtime_wasi::p2::bindings::clocks::wall_clock::{Datetime, Host};
 
-impl From<golem_common::model::oplog::types::SerializableDateTime> for Datetime {
-    fn from(value: golem_common::model::oplog::types::SerializableDateTime) -> Self {
-        let value: WasiDatetime = value.into();
-        Self {
-            seconds: value.seconds,
-            nanoseconds: value.nanoseconds,
-        }
-    }
-}
-
-impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    pub(crate) async fn durable_wall_clock_now(&mut self) -> wasmtime::Result<WasiDatetime> {
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
+    async fn now(&mut self) -> wasmtime::Result<Datetime> {
         #[cfg(feature = "test-utils")]
         if self.test_should_skip_wall_clock_now_durability() {
             let mut view = self.as_wasi_view();
@@ -67,70 +54,23 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         Ok(result.time.into())
     }
-}
 
-impl<Ctx: WorkerCtx> crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::wall_clock::Host
-    for DurableWorkerCtx<Ctx>
-{
-}
-
-impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWorkerCtx<Ctx>> {
-    async fn now(accessor: &Accessor<U, Self>) -> anyhow::Result<Datetime> {
-        #[cfg(feature = "test-utils")]
-        {
-            if accessor.with(|mut access| access.get().test_should_skip_wall_clock_now_durability())
-            {
-                return accessor.with(|mut access| {
-                    let mut view = access.get().as_wasi_view();
-                    let value = Host::now(&mut view.clocks())
-                        .now_or_never()
-                        .expect("the WASI wall clock must be immediately ready")?;
-                    Ok(Datetime {
-                        seconds: value.seconds,
-                        nanoseconds: value.nanoseconds,
-                    })
-                });
-            }
-            let owner = accessor.with(|mut access| access.get().owner_execution.clone());
-            owner.test_before_wall_clock_now().await;
-        }
-
-        let result =
-            DurableCallSession::<host_functions::WallClockNow, NotCancellable>::invoke_access(
-                accessor,
-                accessor.getter(),
+    async fn resolution(&mut self) -> wasmtime::Result<Datetime> {
+        let handle =
+            DurableCallSession::<host_functions::WallClockResolution, NotCancellable>::start(
+                self,
                 HostRequestNoInput {},
                 DurableFunctionType::ReadLocal,
-                async || {
-                    let time = accessor.with(|mut access| {
-                        let mut view = access.get().as_wasi_view();
-                        Host::now(&mut view.clocks())
-                            .now_or_never()
-                            .expect("the WASI wall clock must be immediately ready")
-                    })?;
-                    Ok::<_, anyhow::Error>(HostResponseWallClock { time: time.into() })
-                },
             )
             .await?;
-        Ok(result.time.into())
-    }
 
-    async fn resolution(accessor: &Accessor<U, Self>) -> anyhow::Result<Datetime> {
-        let result = DurableCallSession::<host_functions::WallClockResolution, NotCancellable>::invoke_access(
-            accessor,
-            accessor.getter(),
-            HostRequestNoInput {},
-            DurableFunctionType::ReadLocal,
-            async || {
-                let time = accessor.with(|mut access| {
-                    let mut view = access.get().as_wasi_view();
-                    Host::resolution(&mut view.clocks())
-                        .now_or_never()
-                        .expect("the WASI wall clock must be immediately ready")
-                })?;
-                Ok::<_, anyhow::Error>(HostResponseWallClock { time: time.into() })
-            },
-        ).await?;
+        let result = handle
+            .run(self, async |ctx| -> wasmtime::Result<_> {
+                let mut view = ctx.as_wasi_view();
+                let time = Host::resolution(&mut view.clocks()).await?;
+                Ok(HostResponseWallClock { time: time.into() })
+            })
+            .await?;
         Ok(result.time.into())
     }
 }

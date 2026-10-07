@@ -908,13 +908,18 @@ host-call observation counter is still incremented on the successful fast path. 
 ## Concurrency and guest completion delivery
 
 `Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
-the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock and monotonic-clock calls and
-WebSocket connect/send/close use accessor bindings even when the guest calls synchronously.
-Boundary-lock acquisition and synchronization must run outside Store windows: an accessor
-holding `card_event_boundary_lock` may need the Store to finish synchronizing authority, so a
-direct call that waits for that lock while retaining the Store creates a lock inversion.
-The internal permission wall-clock helper remains direct; this is not a conversion of all
-direct host imports. WebSocket drop only removes local state and does not await boundary work.
+the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
+exclusive because concurrent bindings cannot run during synchronous core initialization.
+Fresh clock/random value reads in the primary Store skip live wallet synchronization: their
+results require no permissions, and waiting for an accessor holding `card_event_boundary_lock`
+would retain the Store that accessor needs. The explicit allowlist is in `call_coordinator.rs`;
+`ReadLocal` alone does not imply permission independence. Snapshotting, retained recorded Starts,
+entity Stores and replay still use the ordinary boundary. An automatic-update latch prevents
+the exemption until update success is committed, including after the pending description is taken.
+Clock-only execution does not guarantee pending card-transfer progress. Permission-sensitive calls
+still synchronize. Replay-transition/cleanup lock contention is not eliminated by this exemption.
+WebSocket connect/send/close use accessor bindings so their asynchronous work releases the Store.
+WebSocket drop only removes local state and does not await boundary work.
 Concurrent completions may finish in any host order, but the guest observes
 them in exactly one order per run, and that order is recorded by the `CompletionDelivered` markers.
 `ReplayDeliveryBarrier` transfers the cursor gate so replay releases each completion at its
