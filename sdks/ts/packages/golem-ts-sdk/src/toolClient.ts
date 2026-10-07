@@ -94,7 +94,7 @@ registerToolClientFactory(client);
 function mapToolClientFailure(
   error: unknown,
   { body, callName }: ToolClientFailureContext,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error instanceof ToolCallError) return error;
   const rpc = error as ToolRpcError | null | undefined;
   // Custom payload validation must run inside the terminal ownership boundary.
@@ -108,19 +108,26 @@ function mapToolRpcError(
   body: ToolClientFailureContext['body'],
   error: ToolRpcError,
   callName: string,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {
     return new ToolCallError({ tag: 'rpc', error });
   }
 
-  try {
-    const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
-    return declaredError.tag === 'unknown-error'
+  const decodedError = (declaredError: Awaited<ReturnType<typeof decodeDeclaredToolError>>) =>
+    declaredError.tag === 'unknown-error'
       ? new ToolCallError(declaredError)
       : new ToolCallError({ tag: 'tool', error: declaredError });
+  const invalidPayload = (decodeError: unknown) =>
+    decodeError instanceof ToolCallError
+      ? decodeError
+      : protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+  try {
+    const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
+    return declaredError instanceof Promise
+      ? declaredError.then(decodedError, invalidPayload)
+      : decodedError(declaredError);
   } catch (decodeError) {
-    if (decodeError instanceof ToolCallError) return decodeError;
-    return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+    return invalidPayload(decodeError);
   }
 }
 

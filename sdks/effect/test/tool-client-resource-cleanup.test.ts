@@ -2,7 +2,7 @@ import type * as Common from "golem:tool/common@0.1.0"
 import { describe, expect, it, vi } from "vitest"
 import { Deferred, Effect, Exit, Fiber, Schema, SchemaGetter } from "effect"
 import * as ToolSchema from "../src/Schema.js"
-import { client, toolDefinition } from "../src/Tool.js"
+import { client, ToolClientError, toolDefinition } from "../src/Tool.js"
 import { compile } from "../src/WitCodec.js"
 import { SchemaValueStream } from "golem:core/types@2.0.0"
 
@@ -13,6 +13,170 @@ const cases = [
 ] as const
 
 describe("tool client rejected payload ownership", () => {
+  it("cancels both result streams before joining their shared producer", async () => {
+    let release!: () => void
+    const bothCancelled = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let cancellations = 0
+    const close = vi.fn(async () => {
+      if (++cancellations === 2) release()
+      await bothCancelled
+      return { done: true as const, value: undefined }
+    })
+    const next = vi.fn()
+    const dispose = vi.fn()
+    const endpoints = await Promise.all(
+      [0, 1].map(async () => {
+        const raw = await SchemaValueStream.wrap({
+          [Symbol.asyncIterator]: () => ({ next, return: close }),
+        })
+        return Object.assign(raw, { [Symbol.dispose]: dispose })
+      }),
+    )
+    const schema = Schema.Struct({
+      first: ToolSchema.AgentStream(Schema.Number),
+      second: ToolSchema.AgentStream(Schema.Number),
+    })
+    const call = client(
+      toolDefinition("probe").body((body) => body.returns(schema).output()),
+      {
+        transport: {
+          start: () =>
+            Effect.succeed({
+              result: Effect.succeed({
+                result: {
+                  graph: Effect.runSync(compile(schema)).schemaGraph,
+                  value: {
+                    root: 2,
+                    valueNodes: [
+                      ...endpoints.map((val) => ({ tag: "stream-value" as const, val })),
+                      { tag: "record-value", val: [0, 1] },
+                    ],
+                  },
+                },
+              }),
+              stdout: (async function* () {})(),
+              cancel: Effect.void,
+            }),
+        },
+      },
+    )
+    const result = Effect.runPromiseExit(call({}, { stdout: () => Effect.fail("failed") }))
+    try {
+      await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2))
+      expect(Exit.isFailure(await result)).toBe(true)
+      expect(dispose).toHaveBeenCalledTimes(2)
+      expect(next).not.toHaveBeenCalled()
+    } finally {
+      release()
+      await result
+    }
+  })
+
+  it.each([...cases, { tag: "stream-value", schema: ToolSchema.AgentStream(Schema.Number) }])(
+    "releases a valid $tag result when stdout consumption fails",
+    async ({ tag, schema }) => {
+      const dispose = vi.fn()
+      const next = vi.fn()
+      const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+      const raw =
+        tag === "stream-value"
+          ? await SchemaValueStream.wrap({
+              [Symbol.asyncIterator]: () => ({ next, return: close }),
+            })
+          : {}
+      Object.assign(raw, { [Symbol.dispose]: dispose })
+      const payload: Common.TypedSchemaValue = {
+        graph: Effect.runSync(compile(schema)).schemaGraph,
+        value: { root: 0, valueNodes: [{ tag, val: raw } as never] },
+      }
+      const failure = new Error("stdout callback failed")
+      const call = client(
+        toolDefinition("probe").body((body) => body.returns(schema).output()),
+        {
+          transport: {
+            start: () =>
+              Effect.succeed({
+                result: Effect.succeed({ result: payload }),
+                stdout: (async function* () {})(),
+                cancel: Effect.void,
+              }),
+          },
+        },
+      )
+      await expect(
+        Effect.runPromise(call({}, { stdout: () => Effect.fail(failure) })),
+      ).rejects.toMatchObject(new ToolClientError("stream", failure))
+      expect(dispose).toHaveBeenCalledOnce()
+      expect(payload.value.valueNodes[0].val).toBeUndefined()
+      expect(next).not.toHaveBeenCalled()
+      if (tag === "stream-value") expect(close).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(["success", "interrupt"])(
+    "retains a result stream until output consumption completes: %s",
+    async (mode) => {
+      const dispose = vi.fn()
+      const next = vi.fn()
+      const close = vi.fn(async () => ({ done: true as const, value: undefined }))
+      const raw = await SchemaValueStream.wrap({
+        [Symbol.asyncIterator]: () => ({ next, return: close }),
+      })
+      Object.assign(raw, { [Symbol.dispose]: dispose })
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const arrived = yield* Deferred.make<void>()
+          const consumed = yield* Deferred.make<void>()
+          const schema = ToolSchema.AgentStream(Schema.Number)
+          const payload: Common.TypedSchemaValue = {
+            graph: (yield* compile(schema)).schemaGraph,
+            value: { root: 0, valueNodes: [{ tag: "stream-value", val: raw }] },
+          }
+          const call = client(
+            toolDefinition("probe").body((body) => body.returns(schema).stderr()),
+            {
+              transport: {
+                start: () =>
+                  Effect.succeed({
+                    result: Effect.succeed({ result: payload }).pipe(
+                      Effect.tap(() => Deferred.succeed(arrived, undefined)),
+                    ),
+                    stderr: (async function* () {})(),
+                    cancel: Effect.void,
+                  }),
+              },
+            },
+          )
+          const fiber = yield* Effect.forkChild(
+            call(
+              {},
+              {
+                stderr: () => Deferred.await(consumed),
+              },
+            ),
+          )
+          yield* Deferred.await(arrived)
+          yield* Effect.yieldNow
+          expect(dispose).not.toHaveBeenCalled()
+          expect(close).not.toHaveBeenCalled()
+          if (mode === "interrupt") {
+            yield* Fiber.interrupt(fiber)
+            expect(dispose).toHaveBeenCalledOnce()
+            expect(close).toHaveBeenCalledOnce()
+          } else {
+            yield* Deferred.succeed(consumed, undefined)
+            expect(yield* Fiber.join(fiber)).toBeDefined()
+            expect(dispose).not.toHaveBeenCalled()
+            expect(close).not.toHaveBeenCalled()
+          }
+          expect(next).not.toHaveBeenCalled()
+        }),
+      )
+    },
+  )
+
   it.each(cases)(
     "releases a rejected $tag sibling in results and declared errors",
     async ({ tag, schema }) => {
