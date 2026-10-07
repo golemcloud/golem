@@ -90,7 +90,7 @@ async fn context() -> TestContext {
                 release:
                   account: builtin-tool-owner@golem.cloud
                   name: bash
-                  version: "0.2.0"
+                  version: "0.2.1"
               fixture: {{}}
             agents:
               BashOwner:
