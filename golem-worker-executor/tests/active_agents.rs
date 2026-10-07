@@ -20,12 +20,16 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::model::OwnedAgentId;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::{HasActiveAgents, HasOplog};
+use golem_worker_executor::worker::EvictionClass;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start, start_with_overrides,
+    WorkerExecutorTestDependencies, start, start_with_concurrent_agent_limit_and_overrides,
+    start_with_overrides,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -41,6 +45,303 @@ inherit_test_dep!(
 );
 
 const TEST_TTL: Duration = Duration::from_millis(50);
+
+struct ComponentLoadGate {
+    armed: AtomicBool,
+    entered: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+impl ComponentLoadGate {
+    fn new() -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        }
+    }
+
+    fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    async fn entered(&self) {
+        self.entered.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
+struct GatedComponentService {
+    inner: Arc<dyn ComponentService>,
+    gate: Arc<ComponentLoadGate>,
+}
+
+#[async_trait::async_trait]
+impl ComponentService for GatedComponentService {
+    async fn get(
+        &self,
+        engine: &wasmtime::Engine,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: golem_common::model::component::ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        if self.gate.armed.swap(false, Ordering::AcqRel) {
+            self.gate.entered.add_permits(1);
+            self.gate.release.acquire().await.unwrap().forget();
+        }
+        self.inner
+            .get(engine, component_id, component_revision)
+            .await
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: golem_common::model::component::ComponentId,
+        forced_revision: Option<golem_common::model::component::ComponentRevision>,
+    ) -> Result<
+        golem_service_base::model::component::Component,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner.get_metadata(component_id, forced_revision).await
+    }
+
+    async fn resolve_component(
+        &self,
+        component_reference: String,
+        resolving_environment: golem_common::model::environment::EnvironmentId,
+        resolving_application: golem_common::model::application::ApplicationId,
+        resolving_account: golem_common::model::account::AccountId,
+    ) -> Result<
+        Option<golem_common::model::component::ComponentId>,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .resolve_component(
+                component_reference,
+                resolving_environment,
+                resolving_application,
+                resolving_account,
+            )
+            .await
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        self.inner.all_cached_metadata().await
+    }
+
+    async fn invalidate_current_deployed_metadata(&self) {
+        self.inner.invalidate_current_deployed_metadata().await;
+    }
+
+    async fn invalidate_current_deployed_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_all_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all(&self) {
+        self.inner.invalidate_all().await;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PostInterruptAction {
+    ExplicitResume,
+    SecondInvocation,
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn lifecycle_interrupt_is_handled_after_permit_before_reconstruction_finishes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let gate = Arc::new(ComponentLoadGate::new());
+    let wrapper_gate = gate.clone();
+    let executor = start_with_concurrent_agent_limit_and_overrides(
+        deps,
+        &context,
+        1,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(GatedComponentService {
+                    inner,
+                    gate: wrapper_gate.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let parsed_agent_id = agent_id!("Clock", "interrupt-after-permit-before-reconstruction");
+    let worker_id = executor
+        .start_agent(&component.id, parsed_agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?;
+    let old = executor
+        .production_active_agent(&owned_agent_id)
+        .await
+        .unwrap();
+    old.primary()
+        .set_interrupting(
+            golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                golem_common::model::Timestamp::now_utc(),
+            ),
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while old.primary().is_loaded().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("suspended worker did not unload"))?;
+
+    gate.arm();
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let parsed_agent_id = parsed_agent_id.clone();
+        async move {
+            executor
+                .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+                .await
+        }
+    });
+    gate.entered().await;
+    old.primary()
+        .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
+        .await?;
+    gate.release();
+
+    let healthy: bool = invocation.await??.into_typed()?;
+    assert!(healthy);
+    let oplog = executor
+        .get_oplog(&worker_id, golem_common::model::OplogIndex::INITIAL)
+        .await?;
+    assert!(oplog.iter().all(|entry| !matches!(
+        entry.entry,
+        golem_common::model::oplog::PublicOplogEntry::Error(_)
+            | golem_common::model::oplog::PublicOplogEntry::Interrupted(_)
+    )));
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.retry_count,
+        0
+    );
+    let follow_up: bool = executor
+        .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+        .await?
+        .into_typed()?;
+    assert!(follow_up);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn ordinary_interrupt_completes_only_after_owner_retirement(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for action in [
+        PostInterruptAction::ExplicitResume,
+        PostInterruptAction::SecondInvocation,
+    ] {
+        let context = TestContext::new(last_unique_id);
+        let executor =
+            start_with_overrides(deps, &context, TestExecutorOverrides::default()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .store()
+            .await?;
+        let parsed_agent_id = agent_id!("Clock", format!("interrupt-retirement-{action:?}"));
+        let worker_id = executor
+            .start_agent(&component.id, parsed_agent_id.clone())
+            .await?;
+        let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+        let old = executor.active_agent(&owned_agent_id).await.unwrap();
+
+        let mut invocation_gate = executor.gate_next_agent_invocation_success(&worker_id);
+        let invocation = tokio::spawn({
+            let executor = executor.clone();
+            let component = component.clone();
+            let parsed_agent_id = parsed_agent_id.clone();
+            async move {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &parsed_agent_id,
+                        "healthcheck",
+                        data_value!(),
+                    )
+                    .await
+            }
+        });
+        invocation_gate.entered().await;
+        let mut interrupt = tokio::spawn({
+            let executor = executor.clone();
+            let worker_id = worker_id.clone();
+            async move { executor.interrupt(&worker_id).await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut interrupt)
+                .await
+                .is_err(),
+            "interrupt completed while old execution was still held"
+        );
+        invocation_gate.release();
+        interrupt.await??;
+
+        assert!(!old.primary().is_loaded().await);
+        assert!(!executor.worker_is_cached(&owned_agent_id).await);
+        if matches!(action, PostInterruptAction::ExplicitResume) {
+            executor.resume(&worker_id, false).await?;
+        }
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
+        let _ = invocation.await?;
+        let replacement = executor.active_agent(&owned_agent_id).await.unwrap();
+        assert!(!Arc::ptr_eq(&old, &replacement));
+        assert!(replacement.entity_metadata().accepting_entities);
+    }
+    Ok(())
+}
 
 #[test]
 #[timeout("120s")]
@@ -316,14 +617,52 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
         assert!(!interests.is_empty());
         let old_worker = old.primary();
         assert!(replacement.entity_metadata().accepting_entities);
+        assert!(!old_worker.stop_if_idle().await);
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
+        assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
+        assert!(
+            !old_worker
+                .stop_if_evictable(EvictionClass::LoadedIdle)
+                .await
+        );
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
+        assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
         old_worker
             .set_interrupting(
                 golem_service_base::error::worker_executor::InterruptKind::Interrupt(
                     golem_common::model::Timestamp::now_utc(),
                 ),
             )
-            .await;
+            .await?;
+        assert!(Arc::ptr_eq(
+            &replacement,
+            &executor.active_agent(&owned_agent_id).await.unwrap()
+        ));
         assert!(replacement.entity_metadata().accepting_entities);
+        assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
         old_worker
             .active_agents()
             .remove_worker(&old_worker, false)
@@ -332,7 +671,13 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
             &replacement,
             &executor.active_agent(&owned_agent_id).await.unwrap()
         ));
+        assert!(replacement.entity_metadata().accepting_entities);
         assert_eq!(executor.tracked_card_ids().await, interests);
+        let healthy: bool = executor
+            .invoke_and_await_agent(&component, &parsed_agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed()?;
+        assert!(healthy);
     }
     Ok(())
 }

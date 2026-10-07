@@ -43,8 +43,6 @@ applying = { workspace = true }
 arc-swap = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
-async-recursion = { workspace = true }
-async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
@@ -144,6 +142,7 @@ name = "oplog_read"
 harness = false
 
 [dev-dependencies]
+golem-human-approval = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
@@ -160,6 +159,7 @@ proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
 tokio-tungstenite = { workspace = true }
 tracing-subscriber = { workspace = true }

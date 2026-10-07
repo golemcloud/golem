@@ -1,0 +1,173 @@
+{
+  "version": "1.0.0",
+  "contract": "GOL-40-CONTRACT-2",
+  "nativeContract": "test-data/gol-40/rich-tool-conformance-v1.json",
+  "principle": "Native metadata and MCP metadata are deliberately not losslessly equivalent. Assert each direction against this projection, never against native equality.",
+  "nativeToMcpExport": {
+    "sourceCommand": ["artifact", "render"],
+    "selection": { "include": ["render"], "note": "The nested status command is intentionally outside this projection fixture." },
+    "exportedTools": [
+      { "mcpName": "artifact_render", "canonicalCommandPath": ["render"], "surfacePath": ["artifact", "render"] },
+      { "mcpName": "artifact_build", "canonicalCommandPath": ["render"], "surfacePath": ["artifact", "build"] },
+      { "mcpName": "art_render", "canonicalCommandPath": ["render"], "surfacePath": ["art", "render"] },
+      { "mcpName": "art_build", "canonicalCommandPath": ["render"], "surfacePath": ["art", "build"] }
+    ],
+    "nameRule": "Expand every executable canonical/alias path, replace '-' with '_', lowercase each segment, and join root plus path with '_'. Collisions reject export.",
+    "description": {
+      "base": "Use command description, falling back to summary.",
+      "aliasSuffix": "Alias exports identify their canonical command path.",
+      "constraints": "Serialize native constraints into the description; MCP does not receive executable native constraint metadata.",
+      "streams": "If stdin or stdout is declared, document finite buffering with a 16 MiB per-direction limit."
+    },
+    "inputSchema": {
+      "dialect": "MCP JSON Schema object without a draft marker",
+      "properties": "Canonical native input fields in CONTRACT-1 order, including inherited globals and defaults.",
+      "requiredness": "A field is required only when native omission has no default or implicit value.",
+      "collectionBounds": "Tail/repeatable min/max bounds become minItems/maxItems; required repeatable maps use minProperties=1.",
+      "stdin": {
+        "property": "_stdin",
+        "reserved": true,
+        "textEncoding": "UTF-8 string when every declared MIME type starts with text/",
+        "binaryEncoding": "base64 string with contentEncoding=base64 otherwise",
+        "maxDecodedBytes": 16777216,
+        "required": "Matches the native stdin required bit."
+      },
+      "validation": "Unknown arguments, JSON/schema mismatch, collection bounds, and native command constraints are rejected before invocation."
+    },
+    "outputSchema": {
+      "recordResult": "The record fields are the MCP output object.",
+      "nonRecordResult": "Wrap under the object field 'value'.",
+      "noStructuredResult": null
+    },
+    "successfulResult": {
+      "structuredContent": "Validated native structured result, with non-record values wrapped as {\"value\": ...}.",
+      "contentOrder": ["structured result rendered as one text block when present", "stdout block when declared", "stderr block when declared"],
+      "channels": {
+        "text": "A text content block containing valid UTF-8.",
+        "image": "An image content block with base64 data and the first declared MIME type.",
+        "audio": "An audio content block with base64 data and the first declared MIME type.",
+        "otherBinary": "An embedded resource block at golem-tool://<mcp-name>/<channel> with base64 blob data."
+      },
+      "channelMetadata": { "key": "golem.cloud/tool-channel", "stdoutValue": "stdout", "stderrValue": "stderr" },
+      "streamPolicy": "stdin/stdout/stderr are finite buffered byte channels, not live MCP streams; each direction is limited to 16 MiB."
+    },
+    "errors": {
+      "customError": "Return MCP isError=true with one text block containing JSON {name,payload}.",
+      "nativeErrorLosses": ["usage-error versus runtime-error kind", "exit code", "formatter selection"],
+      "invalidInputOrProjection": "Return MCP invalid-params protocol error, not a declared native custom error.",
+      "transportOrInternalFailure": "Return MCP isError content with a diagnostic text block where the invocation layer has a representable failure."
+    },
+    "unsupported": [
+      {
+        "case": "host-managed capability in canonical input, structured result, or custom-error payload",
+        "kinds": ["secret", "quota-token", "permission-card"],
+        "behavior": "Reject export and report the capability kind and schema path."
+      },
+      {
+        "case": "nested typed stream in canonical input, structured result, or custom-error payload",
+        "behavior": "Reject export recursively; byte stdin/stdout/stderr declarations are the only stream projection."
+      },
+      {
+        "case": "live or unbounded byte streaming",
+        "behavior": "Unsupported; only finite buffered channels up to 16 MiB are projected."
+      }
+    ]
+  },
+  "mcpToNativeImport": {
+    "source": {
+      "upstreamName": "catalog.lookup",
+      "projectedName": "catalog-lookup",
+      "title": "Catalog lookup",
+      "description": "Lookup one catalog entry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "item-id": { "type": "string", "minLength": 3 },
+          "includeHistory": { "type": "boolean", "default": false }
+        },
+        "required": ["item-id"],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "revision": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["id", "revision"],
+        "additionalProperties": false
+      }
+    },
+    "nativeMetadata": {
+      "toolVersion": "0.0.0",
+      "requiresFilesystem": false,
+      "commandTree": "Exactly one executable root command named by projectedName, with no aliases, globals, subcommands, positionals, flags, or constraints.",
+      "doc": "Summary is upstream title, falling back to upstream name; description is copied; examples are empty.",
+      "options": "Each projected input property becomes a scalar option with a sanitized native name. Original MCP property names are restored when calling upstream. additionalProperties, when projectable, becomes a rejecting repeated map option.",
+      "stdin": null,
+      "stdout": { "required": false, "mime": ["*/*"] },
+      "stderr": null,
+      "result": {
+        "kind": "record",
+        "fields": [
+          { "name": "structured", "type": "Projected outputSchema, or option<string> carrying undeclared structured JSON text" },
+          { "name": "content", "type": "none | streamed | blocks" }
+        ],
+        "formatter": "json"
+      },
+      "errors": [
+        { "name": "mcp-tool-error", "kind": "runtime-error", "exitCode": 1, "payload": "string" }
+      ],
+      "annotations": "Map MCP readOnlyHint, destructiveHint, idempotentHint, and openWorldHint with MCP defaults."
+    },
+    "successfulResult": {
+      "structured": "Validate structuredContent against declared outputSchema. If no outputSchema was declared, preserve present structuredContent as JSON text in option<string>.",
+      "content": {
+        "none": "Empty MCP content array; no stdout.",
+        "streamed": "Exactly one text, image, or audio block; bytes move to finite native stdout and metadata retains MIME, annotations, and extensions.",
+        "blocks": "Multiple or non-streamable blocks remain typed values: text, image, audio, resource-link, or embedded text/blob resource, including annotations and extensions."
+      }
+    },
+    "errors": {
+      "mcpIsError": "Collapse MCP error content to the declared mcp-tool-error string payload.",
+      "invalidDeclaredStructuredContent": "Produce invalid-result.",
+      "unknownOrMalformedContent": "Produce invalid-result; do not silently drop unknown content types, malformed base64, or malformed embedded resources."
+    },
+    "unsupportedJsonSchema": [
+      "non-JSON-Schema-2020-12 dialects",
+      "external or file references",
+      "dynamic references",
+      "multi-type unions that cannot be represented by the native schema projection"
+    ]
+  },
+  "roundTripExpectations": {
+    "metadataTarget": "The MCP-projected native metadata above, not CONTRACT-1 native metadata.",
+    "preserved": [
+      "projectable JSON input and structured output schemas",
+      "finite text/binary stdout and stderr content with channel metadata on export",
+      "custom error name and payload as MCP error text",
+      "MCP content blocks and annotations/extensions on import"
+    ],
+    "notPreserved": [
+      "native command hierarchy as hierarchy; it becomes one MCP tool per executable canonical/alias path",
+      "native executable constraint metadata; it is descriptive text plus server-side validation",
+      "formatter selection",
+      "native error kind and exit code",
+      "live stream identity and chunk boundaries",
+      "host-managed capabilities",
+      "nested typed streams",
+      "original agent identity across MCP"
+    ],
+    "identityBoundaries": [
+      "The exporting environment owns and invokes the native tool.",
+      "The importing environment owns the projected MCP tool invocation; original agent identity does not cross MCP."
+    ]
+  },
+  "sourceContracts": [
+    "golem-service-base/src/mcp/native_tool/mod.rs",
+    "golem-worker-service/src/mcp/invoke/native_tool.rs",
+    "golem-mcp-import/src/tool.rs",
+    "golem-mcp-import/src/content.rs",
+    "golem-schema/src/schema/host_managed.rs"
+  ]
+}

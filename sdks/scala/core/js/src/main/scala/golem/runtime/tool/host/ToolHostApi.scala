@@ -294,6 +294,8 @@ private[golem] object ToolHostApi {
           ToolWireInterop.toolErrorFromJs(thrown.asInstanceOf[JsToolRpcErrorTool].value) match {
             case golem.tool.wire.WitToolError.CustomError(error) =>
               WireToolRpcFailure.RemoteToolError(WireCustomToolError(error.name, error.payload))
+            case golem.tool.wire.WitToolError.InvalidInput(message) =>
+              WireToolRpcFailure.InvalidInput(message)
             case other => WireToolRpcFailure.InvalidRemoteToolError(other.productPrefix)
           }
         catch { case error: Throwable => WireToolRpcFailure.InvalidRemoteToolError(String.valueOf(error.getMessage)) }

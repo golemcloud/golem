@@ -63,12 +63,16 @@ priv struct ToolInvocationObserver[E] {
   result_lock : @async-core.Mutex
   cached_result : Ref[Result[@toolCommon.InvocationResult, ToolError[E]]?]
   drive_started : Ref[Bool]
+  detached : Ref[Bool]
 }
 
 ///|
 async fn[E] ToolInvocationObserver::get(
   self : ToolInvocationObserver[E],
 ) -> Result[@toolCommon.InvocationResult, ToolError[E]] {
+  if self.detached.val {
+    return Err(tool_protocol_error("result observer was detached"))
+  }
   self.drive_started.val = true
   self.result_lock.acquire()
   defer self.result_lock.release()
@@ -87,11 +91,19 @@ async fn[E] ToolInvocationObserver::get(
 
 ///|
 fn[E] ToolInvocationObserver::drive(self : ToolInvocationObserver[E]) -> Unit {
-  if self.drive_started.val {
+  if self.drive_started.val || self.detached.val {
     return
   }
   self.drive_started.val = true
   @async-core.spawn_component_task_current(async fn() { ignore(self.get()) })
+}
+
+///|
+fn[E] ToolInvocationObserver::detach(self : ToolInvocationObserver[E]) -> Unit {
+  if !self.detached.val {
+    self.detached.val = true
+    self.future.drop()
+  }
 }
 
 ///|
@@ -135,6 +147,15 @@ pub fn[T, E] TypedToolInvocation::cancel(
 }
 
 ///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[T, E] TypedToolInvocation::detach_result_observer(
+  self : TypedToolInvocation[T, E],
+) -> Unit {
+  self.invocation.detach_result_observer()
+}
+
+///|
 pub fn[T, E] TypedToolInvocation::drop(
   self : TypedToolInvocation[T, E],
 ) -> Unit {
@@ -165,7 +186,18 @@ pub async fn[T, E] TypedToolInvocation::collect(
 
 ///|
 pub fn[E] ToolInvocation::cancel(self : ToolInvocation[E]) -> Unit {
-  self.observer.future.cancel()
+  if !self.observer.detached.val {
+    self.observer.future.cancel()
+  }
+}
+
+///|
+/// Stops observing the structured result without cancelling the accepted
+/// invocation or closing its output streams.
+pub fn[E] ToolInvocation::detach_result_observer(
+  self : ToolInvocation[E],
+) -> Unit {
+  self.observer.detach()
 }
 
 ///|
@@ -184,7 +216,7 @@ pub fn[E] ToolInvocation::stderr_stream(
 
 ///|
 pub fn[E] ToolInvocation::drop(self : ToolInvocation[E]) -> Unit {
-  self.observer.future.drop()
+  self.observer.detach()
   match self.stdout_source {
     Some(source) => source.drop_sync()
     None => ()
@@ -211,45 +243,70 @@ pub async fn[E] ToolInvocation::get(
 }
 
 ///|
-pub async fn[E] ToolInvocation::collect(
-  self : ToolInvocation[E],
-) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
-  @async-core.with_task_group(async fn(group) {
-    let collect = async fn(
-      stream : @async-core.Stream[Byte]?,
-    ) -> Result[Bytes?, ToolStreamError] {
-      try {
-        let collected = match stream {
-          None => None
-          Some(stream) => {
-            let bytes : Array[Byte] = []
-            for ;; {
-              match stream.read(65536) {
-                None => break
-                Some(chunk) => bytes.append(chunk)
-              }
-            }
-            Some(Bytes::from_array(bytes))
+async fn collect_tool_output(
+  stream : @async-core.Stream[Byte]?,
+) -> Result[Bytes?, ToolStreamError] {
+  try {
+    let collected = match stream {
+      None => None
+      Some(stream) => {
+        let bytes : Array[Byte] = []
+        for ;; {
+          match stream.read(65536) {
+            None => break
+            Some(chunk) => bytes.append(chunk)
           }
         }
-        Ok(collected)
-      } catch {
-        ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
-        ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
-        ToolStreamError::ResourceExhausted =>
-          Err(ToolStreamError::ResourceExhausted)
-        ToolStreamError::Failed(message) =>
-          Err(ToolStreamError::Failed(message))
-        error => raise error
+        Some(Bytes::from_array(bytes))
       }
     }
-    let stdout = group.spawn(() => collect(self.stdout))
-    let stderr = group.spawn(() => collect(self.stderr))
-    let result = self.get()
+    Ok(collected)
+  } catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    ToolStreamError::Cancelled => Err(ToolStreamError::Cancelled)
+    ToolStreamError::Abandoned => Err(ToolStreamError::Abandoned)
+    ToolStreamError::ResourceExhausted =>
+      Err(ToolStreamError::ResourceExhausted)
+    ToolStreamError::Failed(message) => Err(ToolStreamError::Failed(message))
+    error => Err(ToolStreamError::Failed(repr(error)))
+  }
+}
+
+///|
+async fn[T, E] collect_tool_result(
+  get : async () -> Result[T, ToolError[E]],
+) -> Result[T, ToolError[E]] {
+  get() catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error =>
+      Err(tool_protocol_error("failed to observe tool result: \{repr(error)}"))
+  }
+}
+
+///|
+async fn[T, E] collect_tool_channels(
+  stdout_stream : @async-core.Stream[Byte]?,
+  stderr_stream : @async-core.Stream[Byte]?,
+  get : async () -> Result[T, ToolError[E]],
+) -> CollectedToolInvocation[T, E] {
+  @async-core.with_task_group(async fn(group) {
+    let stdout = group.spawn(() => collect_tool_output(stdout_stream))
+    let stderr = group.spawn(() => collect_tool_output(stderr_stream))
+    let result = collect_tool_result(get)
     let stdout = stdout.wait()
     let stderr = stderr.wait()
     select_collected_terminals(result, stdout, stderr)
   })
+}
+
+///|
+/// Drains both outputs concurrently with the structured result. Ordinary
+/// checked errors are retained in their corresponding outcome. Task
+/// cancellation and runtime aborts remain outside the collected envelope.
+pub async fn[E] ToolInvocation::collect(
+  self : ToolInvocation[E],
+) -> CollectedToolInvocation[@toolCommon.InvocationResult, E] {
+  collect_tool_channels(self.stdout, self.stderr, () => self.get())
 }
 
 ///|
@@ -335,6 +392,7 @@ pub fn[E] ToolClient::start(
     result_lock: @async-core.Mutex(),
     cached_result: Ref(None),
     drive_started: Ref(false),
+    detached: Ref(false),
   }
   let output = stdout_source.map(stream => {
     invocation_stdout(stream, () => observer.drive())

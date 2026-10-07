@@ -278,15 +278,18 @@ fn synthesize_leaf_method_dynamic(
             __schema_path.push(#command_name.to_string());
         }
     };
-    let (_, has_stdout, has_stderr) = stream_idents(cmd);
+    let (stdin_ident, has_stdout, has_stderr) = stream_idents(cmd);
     let has_output = has_stdout || has_stderr;
-    let stdin_expr = match cmd
-        .params
-        .iter()
-        .find_map(|param| match stream_type(&param.ty) {
-            Some((StreamKind::Input, required)) => Some((&param.ident, required)),
-            _ => None,
-        }) {
+    let stdin_arg = stdin_ident.as_ref().map(|(ident, _)| {
+        let ty = &cmd
+            .params
+            .iter()
+            .find(|param| param.ident == *ident)
+            .expect("stream identifier belongs to a command parameter")
+            .ty;
+        quote! { , #ident: #ty }
+    });
+    let stdin_expr = match stdin_ident {
         Some((ident, true)) => quote! { ::std::option::Option::Some(#ident) },
         Some((ident, false)) => quote! { #ident },
         None => quote! { ::std::option::Option::None },
@@ -300,7 +303,7 @@ fn synthesize_leaf_method_dynamic(
         let result_ty = started_result_type(&cmd.output);
         let start = start_call(&cmd.output, stdin_expr, has_stdout, has_stderr);
         return quote! {
-            pub async fn #method_ident(&self #input_args) -> #result_ty {
+            pub async fn #method_ident(&self #input_args #stdin_arg) -> #result_ty {
                 let mut #param_values: ::std::vec::Vec<golem_rust::agentic::DirectInputValue> =
                     ::std::vec![#value_inserts];
 
@@ -314,7 +317,7 @@ fn synthesize_leaf_method_dynamic(
     }
 
     quote! {
-        pub async fn #method_ident(&self #input_args) -> #result_ty {
+        pub async fn #method_ident(&self #input_args #stdin_arg) -> #result_ty {
             let mut #param_values: ::std::vec::Vec<golem_rust::agentic::DirectInputValue> =
                 ::std::vec![#value_inserts];
 
@@ -468,10 +471,7 @@ fn subtree_client_macro_leaf_command_arms(
     let params: Vec<_> = inherited_params
         .iter()
         .chain(cmd.params.iter())
-        .filter(|param| {
-            !is_principal_type(&param.ty)
-                && !matches!(stream_type(&param.ty), Some((StreamKind::Output, _)))
-        })
+        .filter(|param| !is_principal_type(&param.ty) && !is_stream_type(&param.ty))
         .cloned()
         .collect();
     let mut arms =
@@ -1185,11 +1185,13 @@ fn option_char_tokens(value: Option<char>) -> TokenStream {
 }
 
 fn is_global_param(cmd: &CommandIr, param: &ParamIr) -> bool {
-    cmd.args
-        .iter()
-        .find(|arg| arg.param == param.ident)
-        .and_then(|arg| arg.placement)
-        == Some(ArgPlacement::Global)
+    matches!(
+        cmd.args
+            .iter()
+            .find(|arg| arg.param == param.ident)
+            .and_then(|arg| arg.placement),
+        Some(ArgPlacement::RootGlobal | ArgPlacement::Global)
+    )
 }
 
 fn is_flag_param(cmd: &CommandIr, param: &ParamIr) -> bool {

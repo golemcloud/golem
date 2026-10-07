@@ -19,7 +19,13 @@ import {
   sourceValueIsCanonical,
   type SchemaCodec,
 } from '../../schema/codec';
-import { t, typedSchemaValueToWit, type SchemaValue, v } from '../schema-model';
+import {
+  t,
+  typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
+  type SchemaValue,
+  v,
+} from '../schema-model';
 import { withCapabilityAdoptionTransaction } from '../schema-model/capabilityTransaction';
 import type { ExtendedErrorCase } from './model';
 import { schemaValueConforms } from './validation';
@@ -61,6 +67,28 @@ export function encodeToolValue(
       throw new Error('is not canonical for its declared schema');
     }
     return typedSchemaValueToWit({ graph: codec.graph, value: encoded });
+  } catch (error) {
+    if (encoded !== undefined) relinquishSchemaValueCapabilities(encoded);
+    throw invalidToolResult(`${position}: ${errorMessage(error)}`);
+  }
+}
+
+export async function encodeToolValueAsync(
+  codec: SchemaCodec,
+  value: unknown,
+  position: string,
+): Promise<TypedSchemaValue> {
+  if (codec.direct) return encodeToolValue(codec, value, position);
+  let encoded: SchemaValue | undefined;
+  try {
+    encoded = withCapabilityAdoptionTransaction(() => codec.toValue(value));
+    if (!schemaValueConforms(codec.graph, codec.graph.root, encoded)) {
+      throw new Error('does not match its declared schema');
+    }
+    if (!sourceValueIsCanonical(codec, value, encoded)) {
+      throw new Error('is not canonical for its declared schema');
+    }
+    return await typedSchemaValueToWitAsync({ graph: codec.graph, value: encoded });
   } catch (error) {
     if (encoded !== undefined) relinquishSchemaValueCapabilities(encoded);
     throw invalidToolResult(`${position}: ${errorMessage(error)}`);

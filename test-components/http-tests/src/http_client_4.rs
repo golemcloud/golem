@@ -6,6 +6,8 @@ use std::time::Duration;
 pub trait HttpClient4 {
     fn new() -> Self;
 
+    async fn transition_clock_probe(&self, post: bool) -> u16;
+
     /// Sends a POST request with assume_idempotence=false.
     async fn post_non_idempotent(&self) -> String;
 
@@ -35,6 +37,9 @@ pub trait HttpClient4 {
 
     /// Sends a raw P2 GET, reads one byte, then blocking-reads the rest.
     fn get_and_read_body_p2_blocking(&mut self, authority: String) -> String;
+
+    /// Splices a raw P2 TCP input into an already-dispatched HTTP request body.
+    fn post_tcp_body_p2(&self, authority: String, tcp_port: u16, len: u64) -> String;
 
     /// Sends a raw WASI HTTP 0.2 GET and reads the response with blocking-read.
     async fn get_and_blocking_read_body_p2(&self) -> String;
@@ -186,6 +191,41 @@ impl HttpClient4 for HttpClient4Impl {
         }
     }
 
+    async fn transition_clock_probe(&self, post: bool) -> u16 {
+        use futures_concurrency::prelude::*;
+        use golem_rust::wasip3::http::{client, types};
+        use golem_rust::wasip3::wit_future;
+        let port = std::env::var("PORT").unwrap();
+        let headers = types::Fields::from_list(&[]).unwrap();
+        let (tx, rx) = wit_future::new(|| Ok(None));
+        let (request, transmit) = types::Request::new(headers, None, rx, None);
+        request
+            .set_method(&if post {
+                types::Method::Post
+            } else {
+                types::Method::Get
+            })
+            .unwrap();
+        request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+        request
+            .set_authority(Some(&format!("127.0.0.1:{port}")))
+            .unwrap();
+        request.set_path_with_query(Some("/transition")).unwrap();
+        let send = async {
+            let response = client::send(request).await.unwrap();
+            let status = response.get_status_code();
+            drop(response);
+            status
+        };
+        let finish = async {
+            tx.write(Ok(None)).await.unwrap();
+            transmit.await.unwrap();
+        };
+        let clock = golem_rust::wasip3::clocks::monotonic_clock::wait_for(1_000_000);
+        let (status, (), ()) = (send, finish, clock).join().await;
+        status
+    }
+
     async fn post_non_idempotent(&self) -> String {
         with_idempotence_mode_async(false, || do_post_request()).await
     }
@@ -222,6 +262,55 @@ impl HttpClient4 for HttpClient4Impl {
         let response = do_get_and_read_body_p2_blocking(authority);
         self.last_full_response = Some(response.clone());
         response
+    }
+
+    fn post_tcp_body_p2(&self, authority: String, tcp_port: u16, len: u64) -> String {
+        use wasi::http::{outgoing_handler, types};
+        use wasi::sockets::network::{IpAddressFamily, IpSocketAddress, Ipv4SocketAddress};
+
+        let request = types::OutgoingRequest::new(types::Fields::new());
+        request.set_method(&types::Method::Post).unwrap();
+        request.set_scheme(Some(&types::Scheme::Http)).unwrap();
+        request.set_authority(Some(&authority)).unwrap();
+        request.set_path_with_query(Some("/")).unwrap();
+        let body = request.body().unwrap();
+        let output = body.write().unwrap();
+        let response = outgoing_handler::handle(request, None).unwrap();
+
+        // Keep raw socket readiness inside the live attempt of the HTTP batch.
+        let socket =
+            wasi::sockets::tcp_create_socket::create_tcp_socket(IpAddressFamily::Ipv4).unwrap();
+        socket
+            .start_connect(
+                &wasi::sockets::instance_network::instance_network(),
+                IpSocketAddress::Ipv4(Ipv4SocketAddress {
+                    address: (127, 0, 0, 1),
+                    port: tcp_port,
+                }),
+            )
+            .unwrap();
+        socket.subscribe().block();
+        let (input, _output) = socket.finish_connect().unwrap();
+
+        let mut written = 0;
+        while written < len {
+            written += output.blocking_splice(&input, len - written).unwrap();
+        }
+        drop(output);
+        types::OutgoingBody::finish(body, None).unwrap();
+        let response = get_incoming_response_p2(&response);
+        let status = response.status();
+        let body = response.consume().unwrap();
+        let stream = body.stream().unwrap();
+        let mut bytes = Vec::new();
+        loop {
+            match stream.blocking_read(1024) {
+                Ok(chunk) => bytes.extend_from_slice(&chunk),
+                Err(wasi::io::streams::StreamError::Closed) => break,
+                Err(error) => panic!("P2 response read failed: {error:?}"),
+            }
+        }
+        format!("{status} {}", String::from_utf8(bytes).unwrap())
     }
 
     async fn get_and_blocking_read_body_p2(&self) -> String {

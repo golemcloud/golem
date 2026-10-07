@@ -230,7 +230,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
 }
 
 #[test]
-fn referenced_record_output_is_wrapped_in_an_mcp_root_object() {
+fn referenced_record_output_exposes_its_fields_at_the_mcp_root() {
     let id = TypeId::new("answer");
     let mut command = body();
     command.result = Some(ResultSpec {
@@ -257,7 +257,8 @@ fn referenced_record_output_is_wrapped_in_an_mcp_root_object() {
         .unwrap()
         .unwrap();
     assert_eq!(output["type"], "object");
-    assert!(output["properties"][FALLBACK_OUTPUT_FIELD_NAME]["$ref"].is_string());
+    assert_eq!(output["properties"]["value"]["type"], "string");
+    assert!(!output.contains_key("$ref"));
     assert!(output["$defs"].is_object());
 }
 

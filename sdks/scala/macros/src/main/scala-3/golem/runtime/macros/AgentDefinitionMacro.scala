@@ -304,7 +304,7 @@ object AgentDefinitionMacro {
       if (idPrincipalParams.nonEmpty) {
         if (HttpDeclarationMacro.exposesFiles(typeSymbol))
           report.errorAndAbort("filesystem-constructor: caller-dependent identities cannot expose files")
-        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None)
+        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None, Nil)
         HttpValidation.validateMountVarsAreNotPrincipal(agentTypeName, mount, idPrincipalParams) match {
           case Left(err) => report.errorAndAbort(err)
           case Right(()) => ()
@@ -903,12 +903,14 @@ object AgentDefinitionMacro {
   )(symbol: quotes.reflect.Symbol, agentName: String): Option[HttpMountDetails] = {
     import quotes.reflect.*
 
-    val filesystem = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
-    val mountPath  = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val filesystem          = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
+    val fileResponseHeaders = HttpDeclarationMacro.headerValues(symbol, "agentDefinition", 9)
+    val mountPath           = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
     mountPath match {
-      case None if filesystem.nonEmpty => report.errorAndAbort("exposeFiles requires an HTTP mount")
-      case None                        => None
-      case Some(mp)                    =>
+      case None if filesystem.nonEmpty          => report.errorAndAbort("exposeFiles requires an HTTP mount")
+      case None if fileResponseHeaders.nonEmpty => report.errorAndAbort("fileResponseHeaders requires an HTTP mount")
+      case None                                 => None
+      case Some(mp)                             =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
           case Left(err)                                                    => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
           case Right(segments) if HttpDeclarationMacro.exposesFiles(symbol) =>
@@ -945,7 +947,8 @@ object AgentDefinitionMacro {
           webhookSuffix = webhookSuffix,
           staticBindings = Nil,
           filesystemBindings = filesystem,
-          openapiProviderMethod = None
+          openapiProviderMethod = None,
+          fileResponseHeaders = fileResponseHeaders
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)

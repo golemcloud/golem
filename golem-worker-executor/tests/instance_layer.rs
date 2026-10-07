@@ -25,6 +25,7 @@ use golem_common::base_model::agent::{AgentPrincipal, Principal};
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::{AgentTypeName, ParsedAgentId};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -45,8 +46,8 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::{
-    CompiledToolBinding, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, SecretKeyScope, ToolBindingOwner, ToolFilesystemAccess,
+    ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::schema_type::SchemaType;
@@ -192,7 +193,7 @@ impl Drop for CompletionSignal {
     }
 }
 
-async fn owner_component_metadata(
+pub(crate) async fn owner_component_metadata(
     active_agent: &ActiveAgent<TestWorkerCtx>,
     component_id: ComponentId,
     component_revision: ComponentRevision,
@@ -310,7 +311,7 @@ async fn invoke_entity_method(
     }
 }
 
-fn activation(
+pub(crate) fn activation(
     executable: ExecutableTarget,
     component_name: &str,
     agent_type_name: AgentTypeName,
@@ -346,6 +347,7 @@ fn activation_with_provision(
         account_id,
         filesystem,
         provision,
+        ConfigKeyScope::All,
         SecretKeyScope::All,
         SecretKeyScope::All,
     )
@@ -368,8 +370,31 @@ fn activation_with_secret_policy(
         account_id,
         FilesystemCapability::Incapable,
         ToolProvisionConfig::default(),
+        ConfigKeyScope::All,
         secret_keys_readable,
         secret_keys_revealable,
+    )
+}
+
+fn activation_with_config_policy(
+    executable: ExecutableTarget,
+    component_name: &str,
+    agent_type_name: AgentTypeName,
+    tool_name: ToolName,
+    account_id: golem_common::model::account::AccountId,
+    config_keys_readable: ConfigKeyScope,
+) -> EntityActivation {
+    activation_with_policy(
+        executable,
+        component_name,
+        agent_type_name,
+        tool_name,
+        account_id,
+        FilesystemCapability::Incapable,
+        ToolProvisionConfig::default(),
+        config_keys_readable,
+        SecretKeyScope::All,
+        SecretKeyScope::All,
     )
 }
 
@@ -382,6 +407,7 @@ fn activation_with_policy(
     account_id: golem_common::model::account::AccountId,
     filesystem: FilesystemCapability,
     provision: ToolProvisionConfig,
+    config_keys_readable: ConfigKeyScope,
     secret_keys_readable: SecretKeyScope,
     secret_keys_revealable: SecretKeyScope,
 ) -> EntityActivation {
@@ -402,7 +428,7 @@ fn activation_with_policy(
         account_id,
         account_email: AccountEmail::new("test@golem"),
         parameters: NormalizedJsonValue::new(serde_json::json!({})),
-        config_keys_readable: Default::default(),
+        config_keys_readable,
         secret_keys_readable,
         secret_keys_revealable,
         filesystem_access: match filesystem {
@@ -435,7 +461,7 @@ fn activation_with_policy(
 /// the parent lane position, installs a live entity scope, starts a fresh entity Store, and waits
 /// for its result. Tests retain the invocation closure so assertions about Store-local host state
 /// remain visible at the call site.
-async fn run_synchronous_entity_invocation<R, F>(
+pub(crate) async fn run_synchronous_entity_invocation<R, F>(
     active_agent: &ActiveAgent<TestWorkerCtx>,
     owner_metadata: Arc<golem_service_base::model::component::Component>,
     owner_id: &OwnedAgentId,
@@ -477,7 +503,8 @@ where
         parent_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(active_agent.primary().get_wallet_cards().await?);
     let body = active_agent.start_entity_invocation(
         parent_id.clone(),
         scope,
@@ -2170,9 +2197,44 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
     );
     assert_eq!(active_agent.entity_metadata().slots.len(), 2);
 
-    let _ = release_nested.send(());
-    middleware.await_result(&root_id).await?;
+    let restart = tokio::spawn({
+        let worker = active_agent.primary();
+        async move {
+            worker
+                .set_interrupting(
+                    golem_service_base::error::worker_executor::InterruptKind::Restart,
+                )
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while active_agent.entity_metadata().accepting_entities {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("owner restart did not fence the nested execution unit");
+    restart.await??;
+    assert!(
+        release_nested.send(()).is_err(),
+        "nested tool was still waiting after owner restart establishment"
+    );
+    assert!(
+        active_agent
+            .entity_metadata()
+            .slots
+            .iter()
+            .all(|slot| slot.invocations.is_empty()),
+        "owner restart did not retire every nested entity body"
+    );
+    assert!(
+        middleware.await_result(&root_id).await.is_err(),
+        "nested middleware execution survived its owner generation"
+    );
     drop(root);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
     assert!(
         active_agent
             .entity_metadata()
@@ -2181,13 +2243,6 @@ async fn middleware_and_nested_tool_invocations_use_generic_slots_scopes_and_met
             .all(|slot| slot.invocations.is_empty()),
         "completed Stores leave only vacant in-memory slots, never durable child status"
     );
-
-    executor
-        .interrupt_with_optional_recovery(&worker_id, true)
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
-        .await?;
     assert!(
         active_agent.entity_metadata().accepting_entities,
         "a new primary generation must reopen entity admission after an in-place restart"
@@ -2345,7 +2400,8 @@ async fn entity_filesystem_streams_share_root_and_block_executor_inspection(
         root_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(active_agent.primary().get_wallet_cards().await?);
     let (body_started, body_started_rx) = tokio::sync::oneshot::channel();
     let (release_body, release_body_rx) = tokio::sync::oneshot::channel();
     let body = active_agent.start_entity_invocation(
@@ -2456,6 +2512,7 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
     let parent_id = OwnerInvocationId::Agent(parent_start);
 
     let primary = lane.enter_primary(parent_start)?.acquire().await?;
+    let authority_wallet = active_agent.primary().get_wallet_cards().await?;
     let live_scope = invocation_scope(
         &owner_id,
         &entity,
@@ -2463,7 +2520,8 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         parent_start,
         activation.clone(),
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let live_principal = principal.clone();
     let live = active_agent.start_entity_invocation(
         parent_id.clone(),
@@ -2528,7 +2586,8 @@ async fn filesystem_capable_entity_stream_replays_on_owner_filesystem(
         parent_start,
         activation,
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet);
     let replay = active_agent.start_entity_invocation(
         parent_id.clone(),
         replay_scope,
@@ -2685,6 +2744,7 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         .next();
     let root_id = OwnerInvocationId::Agent(root_start);
     let root = lane.enter_primary(root_start)?.acquire().await?;
+    let authority_wallet = active_agent.primary().get_wallet_cards().await?;
 
     let first_scope = invocation_scope(
         &owner_id,
@@ -2693,7 +2753,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         root_start,
         activation.clone(),
         principal.clone(),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let first = active_agent.start_entity_invocation(
         root_id.clone(),
         first_scope,
@@ -2734,7 +2795,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         Principal::Agent(AgentPrincipal {
             agent_id: owner_id.agent_id.clone(),
         }),
-    );
+    )
+    .with_authority_wallet(authority_wallet.clone());
     let second = active_agent.start_entity_invocation(
         root_id.clone(),
         second_scope,
@@ -2754,7 +2816,8 @@ async fn entity_provisioning_is_lane_scoped_idempotent_and_conflict_checked(
         Principal::Agent(AgentPrincipal {
             agent_id: owner_id.agent_id.clone(),
         }),
-    );
+    )
+    .with_authority_wallet(authority_wallet);
     let conflicting = active_agent.start_entity_invocation(
         root_id.clone(),
         conflict_scope,
@@ -3344,74 +3407,102 @@ async fn entity_agent_config_uses_owner_component_declarations(
             .await?;
     let tool_name = ToolName::try_from("owner-config-reader").unwrap();
     let entity = AgentEntity::Tool(tool_name.clone());
-    let activation = Arc::new(activation(
-        ExecutableTarget::new(entity_component.id, entity_component.revision),
-        "test:owner-config-reader",
-        agent_id.agent_type.clone(),
-        tool_name,
-        context.account_id,
-        FilesystemCapability::Incapable,
-    ));
-    // The executable deliberately has no LocalConfigAgent declaration. Successful config and
-    // agent-type lookups therefore prove that both use the pinned owner component revision.
-    let expected = encode_graph(&SchemaGraph::anonymous(SchemaType::s32()))?;
     let expected_owner_component_id = owner_component.id;
     let expected_owner_component_revision = owner_component.revision;
     let expected_entity_component_id = entity_component.id;
     let expected_entity_component_revision = entity_component.revision;
-    run_synchronous_entity_invocation(
-        &active_agent,
-        owner_metadata,
-        &owner_id,
-        &entity,
-        activation,
-        move |_instance, store, _principal| {
-            Box::pin(async move {
-                assert_eq!(
-                    store.data().component_metadata().id,
-                    expected_entity_component_id
-                );
-                assert_eq!(
-                    store.data().component_metadata().revision,
-                    expected_entity_component_revision
-                );
-                assert_eq!(
-                    store.data().durable_ctx().owner_component_metadata().id,
-                    expected_owner_component_id
-                );
-                assert_eq!(
-                    store
-                        .data()
-                        .durable_ctx()
-                        .owner_component_metadata()
-                        .revision,
-                    expected_owner_component_revision
-                );
+    let foo_path = CanonicalAgentConfigPath(vec!["foo".to_string()]);
+    let cases = [
+        (ConfigKeyScope::All, "foo", SchemaType::s32(), true),
+        (
+            ConfigKeyScope::Keys(BTreeSet::from([foo_path.clone()])),
+            "foo",
+            SchemaType::s32(),
+            true,
+        ),
+        (
+            ConfigKeyScope::Keys(BTreeSet::from([foo_path])),
+            "bar",
+            SchemaType::string(),
+            false,
+        ),
+        (
+            ConfigKeyScope::Keys(BTreeSet::new()),
+            "foo",
+            SchemaType::s32(),
+            false,
+        ),
+    ];
+    for (scope, key, expected_type, allowed) in cases {
+        let activation = Arc::new(activation_with_config_policy(
+            ExecutableTarget::new(entity_component.id, entity_component.revision),
+            "test:owner-config-reader",
+            agent_id.agent_type.clone(),
+            tool_name.clone(),
+            context.account_id,
+            scope,
+        ));
+        let expected = encode_graph(&SchemaGraph::anonymous(expected_type))?;
+        let key = key.to_string();
+        // The executable deliberately has no LocalConfigAgent declaration. These lookups prove
+        // both declaration ownership and binding-policy narrowing against creation overrides.
+        run_synchronous_entity_invocation(
+            &active_agent,
+            owner_metadata.clone(),
+            &owner_id,
+            &entity,
+            activation,
+            move |_instance, store, _principal| {
+                Box::pin(async move {
+                    assert_eq!(
+                        store.data().component_metadata().id,
+                        expected_entity_component_id
+                    );
+                    assert_eq!(
+                        store.data().component_metadata().revision,
+                        expected_entity_component_revision
+                    );
+                    assert_eq!(
+                        store.data().durable_ctx().owner_component_metadata().id,
+                        expected_owner_component_id
+                    );
+                    assert_eq!(
+                        store
+                            .data()
+                            .durable_ctx()
+                            .owner_component_metadata()
+                            .revision,
+                        expected_owner_component_revision
+                    );
 
-                let config = AgentHost::get_config_value(
-                    store.data_mut().durable_ctx_mut(),
-                    vec!["foo".to_string()],
-                    expected,
-                )
-                .await?
-                .map_err(|error| WorkerExecutorError::runtime(format!("{error:?}")))?;
-                let config = decode_value(&config)
-                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-                assert_eq!(config, SchemaValue::S32(7));
+                    let config = AgentHost::get_config_value(
+                        store.data_mut().durable_ctx_mut(),
+                        vec![key.clone()],
+                        expected,
+                    )
+                    .await?;
+                    assert_eq!(
+                        config.is_ok(),
+                        allowed,
+                        "unexpected policy result for {key}"
+                    );
+                    if let Ok(config) = config {
+                        let config = decode_value(&config)
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                        assert_eq!(config, SchemaValue::S32(7));
+                    }
 
-                let agent_type = AgentHost::get_agent_type(
-                    store.data_mut().durable_ctx_mut(),
-                    "LocalConfigAgent".to_string(),
-                )
-                .await?;
-                assert!(
-                    agent_type.is_some(),
-                    "entity agent-type lookup must use the owner's component revision"
-                );
-                Ok(())
-            })
-        },
-    )
-    .await?;
+                    let agent_type = AgentHost::get_agent_type(
+                        store.data_mut().durable_ctx_mut(),
+                        "LocalConfigAgent".to_string(),
+                    )
+                    .await?;
+                    assert!(agent_type.is_some());
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+    }
     Ok(())
 }

@@ -21,7 +21,8 @@ fn validate_http_type_annotations(
 ) -> Unit raise AgentParseError {
   if router ||
     has_http_annotation(attrs, "static_file") ||
-    has_http_annotation(attrs, "expose_files") {
+    has_http_annotation(attrs, "expose_files") ||
+    has_http_annotation(attrs, "file_response_header") {
     if mount is None {
       http_fail("M01/M02: HTTP router and file declarations require a mount")
     }
@@ -41,6 +42,42 @@ fn validate_http_type_annotations(
       )
     }
   }
+}
+
+///|
+fn extract_file_response_headers(
+  attrs : @list.List[@attribute.Attribute],
+) -> Array[(String, String)] raise AgentParseError {
+  let headers : Array[(String, String)] = []
+  for attr in attrs {
+    if attr.raw == "#derive.file_response_header" ||
+      attr.raw.has_prefix("#derive.file_response_header(") {
+      match attr.parsed {
+        Some(
+          Apply({ qual: Some("derive"), name: "file_response_header", }, props)
+        ) => {
+          let values : Array[String] = []
+          for prop in props {
+            match prop {
+              Expr(String(s)) => values.push(s)
+              _ =>
+                http_fail(
+                  "M03: #derive.file_response_header requires two string literals",
+                )
+            }
+          }
+          if values.length() != 2 {
+            http_fail(
+              "M03: #derive.file_response_header requires name and value",
+            )
+          }
+          headers.push((values[0], values[1]))
+        }
+        _ => http_fail("M03: invalid #derive.file_response_header declaration")
+      }
+    }
+  }
+  headers
 }
 
 ///|
@@ -79,6 +116,13 @@ fn validate_http_router(
   agent : AgentInfo,
   mount : HttpMountInfo,
 ) -> Unit raise AgentParseError {
+  if !mount.file_response_headers.is_empty() &&
+    mount.static_bindings.is_empty() &&
+    mount.filesystem_bindings.is_empty() {
+    http_fail(
+      "M02: file response headers require static or exposed file declarations: \{agent.name}",
+    )
+  }
   if mount.router {
     if agent.mode != Ephemeral ||
       agent.snapshotting != Disabled ||

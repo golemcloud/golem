@@ -22,6 +22,24 @@ import { getExtendedToolDefinition, toolDefinition } from '../src/tool';
 import { encodeTool } from '../src/internal/tool';
 
 describe('tool schema markers', () => {
+  it('preserves constrained text metadata with a plain string runtime value', async () => {
+    const marker = s.text({ minLength: 2, maxLength: 4, regex: '^[a-z]+$' });
+    const codec = compileSchema(marker);
+
+    expect(codec.graph.root.body).toEqual({
+      tag: 'text',
+      restrictions: {
+        languages: undefined,
+        minLength: 2,
+        maxLength: 4,
+        regex: '^[a-z]+$',
+      },
+    });
+    expect(codec.fromValue(codec.toValue('abcd'))).toBe('abcd');
+    expect(await marker['~standard'].validate('a')).toHaveProperty('issues');
+    expect(await marker['~standard'].validate('AB')).toHaveProperty('issues');
+  });
+
   it('uses the Rust path defaults and preserves path restrictions', () => {
     const defaults = compileSchema(Path());
     expect(defaults.graph.root.body).toEqual({

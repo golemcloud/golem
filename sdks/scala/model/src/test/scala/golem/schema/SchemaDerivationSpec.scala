@@ -360,7 +360,11 @@ object SchemaDerivationSpec extends ZIOSpecDefault {
       // -------------------------------------------------------------------
       test("Secret fails loud rather than silently unwrapping") {
         val graphAttempt = Try(IntoSchema[Secret[String]].graph)
-        val valueAttempt = Try(IntoSchema[Secret[String]].toValue(new Secret[String](Nil, () => "s")))
+        val valueAttempt = Try(
+          IntoSchema[Secret[String]].toValue(
+            new Secret[String](Nil, () => "s", () => throw new IllegalStateException("not configured"))
+          )
+        )
         assertTrue(
           graphAttempt.isFailure,
           graphAttempt.failed.toOption.exists(_.isInstanceOf[SchemaEncodeError]),

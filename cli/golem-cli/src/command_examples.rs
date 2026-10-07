@@ -87,6 +87,17 @@ pub const REPL: &str = "Examples:
   # Always start from a clean state (delete agents and environment)
   golem-cli repl --reset";
 
+pub const SSH: &str = "Examples:
+  # Open a command prompt on an existing agent through its bash tool
+  golem-cli ssh 'MyAgent(\"m1\")'
+
+  # Run one script and exit with its status
+  golem-cli ssh 'MyAgent(\"m1\")' -c 'ls -l /data'
+
+  # Start in a directory and stop any command still running after 30 seconds
+  golem-cli ssh 'MyAgent(\"m1\")' --cwd /data --timeout 30
+";
+
 pub const DEPLOY: &str = "Examples:
   # Build, upload and activate everything (always pass --yes for non-interactive use)
   golem-cli deploy --yes

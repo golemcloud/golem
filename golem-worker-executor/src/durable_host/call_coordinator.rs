@@ -568,7 +568,7 @@ where
         let ctx = get_ctx(access.data_mut());
         (ctx.public_state.worker().clone(), ctx.state.oplog.clone())
     });
-    let status = worker.get_non_detached_last_known_status().await;
+    let status = worker.get_last_known_status().await;
     let current_idx = oplog.current_oplog_index().await;
     let unread_range = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());

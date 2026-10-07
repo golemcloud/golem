@@ -102,6 +102,14 @@ impl SqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -114,6 +122,10 @@ impl SqliteIndexedStorage {
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
             }
         }
     }
@@ -187,6 +199,19 @@ impl SqliteIndexedStorage {
             ))
         } else {
             IndexedStorageError::Other(err.to_safe_string())
+        }
+    }
+
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err)
         }
     }
 }
@@ -317,10 +342,15 @@ impl IndexedStorage for SqliteIndexedStorage {
             return Ok(());
         }
 
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_primary_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (_, value) in pairs.iter() {
@@ -330,16 +360,10 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
-                    // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
-                    // write pool is capped at a single connection (golem-service-base
-                    // db/sqlite.rs:46-50), so this transaction holds the only writer and the
-                    // check cannot be interleaved. Raising that cap means switching this to
-                    // `BEGIN IMMEDIATE`.
-                    //
-                    // That holds within one process. Two processes on one SQLite file would rely
-                    // on SQLite's own lock upgrade, which surfaces a loser as `SQLITE_BUSY` - a
-                    // storage error, not a fence - so a SQLite file shared between executors is
-                    // not supported; give each its own file, or use PostgreSQL.
+                    // SQLite has no `SELECT ... FOR UPDATE`, so labelled write transactions use
+                    // `BEGIN IMMEDIATE` (golem-service-base db/sqlite.rs). The reservation covers
+                    // this epoch check and insert atomically, including when another process uses
+                    // the same SQLite file; a competing writer waits via SQLite's busy timeout.
                     if let Some(expected) = expected_epoch {
                         Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
@@ -361,13 +385,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                 })
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert
-                } else {
-                    Self::classify_repo_error
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this
@@ -777,7 +795,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool

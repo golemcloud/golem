@@ -1,4 +1,4 @@
-use crate::services::oplog::OplogServiceOps;
+use crate::services::oplog::{CommitLevel, Oplog, OplogService, OplogServiceOps};
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
@@ -22,6 +22,49 @@ use golem_common::model::{
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+/// One immutable projection boundary, shared by region discovery and every baseline attempt.
+pub(super) struct StatusOplogReader<'a> {
+    service: Arc<dyn OplogService>,
+    opened: Option<&'a dyn Oplog>,
+    owned_agent_id: &'a OwnedAgentId,
+    agent_mode: AgentMode,
+    horizon: OplogIndex,
+}
+
+impl<'a> StatusOplogReader<'a> {
+    pub(super) fn new(
+        this: &impl HasOplogService,
+        owned_agent_id: &'a OwnedAgentId,
+        agent_mode: AgentMode,
+        opened: Option<&'a dyn Oplog>,
+        horizon: OplogIndex,
+    ) -> Self {
+        Self {
+            service: this.oplog_service(),
+            opened,
+            owned_agent_id,
+            agent_mode,
+            horizon,
+        }
+    }
+
+    async fn read_exact(&self, first: OplogIndex, count: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        if first > self.horizon || count == 0 {
+            return BTreeMap::new();
+        }
+        let count = count.min(self.horizon.as_u64() - first.as_u64() + 1);
+        match self.opened {
+            Some(oplog) => oplog.read_exact(first, count).await,
+            None => {
+                self.service
+                    .read_exact(self.owned_agent_id, self.agent_mode, first, count)
+                    .await
+            }
+        }
+    }
+}
 
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
 pub async fn calculate_last_known_status_for_existing_worker<T>(
@@ -135,10 +178,27 @@ where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
+    let horizon = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
+    calculate_status_with_reader(this, &reader, last_known, read_checkpoint).await
+}
+
+pub(super) async fn calculate_status_with_reader<T, Fut>(
+    this: &T,
+    reader: &StatusOplogReader<'_>,
+    last_known: Option<AgentStatusRecord>,
+    read_checkpoint: impl FnOnce() -> Fut,
+) -> Result<Option<AgentStatusRecord>, String>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
-        && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await?
+        && let Some(status) = try_fold_status_from_reader(this, reader, last_known).await?
     {
         crate::metrics::workers::record_agent_status_recompute("cache");
         return Ok(Some(status));
@@ -147,25 +207,75 @@ where
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
-        && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await?
+        && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
     {
         crate::metrics::workers::record_agent_status_recompute("checkpoint");
         return Ok(Some(status));
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let status = try_fold_status_from(
-        this,
-        owned_agent_id,
-        agent_mode,
-        AgentStatusRecord::default(),
-    )
-    .await?;
+    let status = try_fold_status_from_reader(this, reader, AgentStatusRecord::default()).await?;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     Ok(status)
+}
+
+/// Folds an acknowledged commit, returning receipt-gap detection and the fixed repair horizon.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn fold_committed_status<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    oplog: &dyn Oplog,
+    agent_mode: AgentMode,
+    commit_level: CommitLevel,
+    appended_through: OplogIndex,
+    baseline: AgentStatusRecord,
+    mut entries: BTreeMap<OplogIndex, OplogEntry>,
+) -> (Result<Option<AgentStatusRecord>, String>, bool, OplogIndex)
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    // Direct commits may return receipts already covered by an earlier catch-up.
+    entries.retain(|index, _| *index > baseline.oplog_idx);
+    let flushes_buffer =
+        agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
+    let horizon = baseline
+        .oplog_idx
+        .max(if flushes_buffer {
+            appended_through
+        } else {
+            OplogIndex::NONE
+        })
+        .max(
+            entries
+                .last_key_value()
+                .map(|(index, _)| *index)
+                .unwrap_or(OplogIndex::NONE),
+        );
+    let contiguous = match (entries.first_key_value(), entries.last_key_value()) {
+        (Some((first, _)), Some((last, _))) => {
+            *first == baseline.oplog_idx.next()
+                && last.as_u64() - first.as_u64() + 1 == entries.len() as u64
+                && *last == horizon
+        }
+        _ => horizon == baseline.oplog_idx,
+    };
+    if contiguous {
+        (
+            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry),
+            false,
+            horizon,
+        )
+    } else {
+        // Opened-oplog reads include ephemeral handoffs. Never flush the newer buffered tail.
+        let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
+        (
+            try_fold_status_from_reader(this, &reader, baseline).await,
+            true,
+            horizon,
+        )
+    }
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -184,20 +294,35 @@ pub async fn try_fold_status_from<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    baseline: AgentStatusRecord,
+) -> Result<Option<AgentStatusRecord>, String>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    let horizon = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
+    try_fold_status_from_reader(this, &reader, baseline).await
+}
+
+pub(super) async fn try_fold_status_from_reader<T>(
+    this: &T,
+    reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
 ) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let owned_agent_id = reader.owned_agent_id;
+    let agent_mode = reader.agent_mode;
     let full_rebuild = baseline.oplog_idx == OplogIndex::NONE;
     if full_rebuild && baseline.invocation_results.is_empty() {
         baseline.invocation_results = this.config().invocation_results.membership();
     }
 
-    let last_oplog_index = this
-        .oplog_service()
-        .get_last_index(owned_agent_id, agent_mode)
-        .await;
+    let last_oplog_index = reader.horizon;
 
     if last_oplog_index == OplogIndex::NONE {
         // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
@@ -222,25 +347,14 @@ where
         .max(1);
 
     if full_rebuild {
-        return fold_status_with_precomputed_regions(
-            this,
-            owned_agent_id,
-            agent_mode,
-            baseline,
-            last_oplog_index,
-            chunk_size,
-        )
-        .await;
+        return fold_status_with_precomputed_regions(this, reader, baseline, chunk_size).await;
     }
 
     let original_baseline = baseline.clone();
     let mut first = baseline.oplog_idx.next();
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let mut entries = reader.read_exact(first, count).await;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -254,14 +368,7 @@ where
                 &mut entries,
             )
             .await?;
-            hydrate_initial_pending_evidence(
-                this,
-                owned_agent_id,
-                agent_mode,
-                &mut baseline,
-                &entries,
-            )
-            .await?;
+            hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
             let finalize_oplog_processor_checkpoints =
                 entries.keys().next_back() == Some(&last_oplog_index);
             update_status_with_new_entries_internal(
@@ -281,10 +388,8 @@ where
                 // the complete deletion set before treating a retained-history error as fatal.
                 return fold_status_with_precomputed_regions(
                     this,
-                    owned_agent_id,
-                    agent_mode,
+                    reader,
                     original_baseline,
-                    last_oplog_index,
                     chunk_size,
                 )
                 .await;
@@ -297,26 +402,18 @@ where
 
 async fn fold_status_with_precomputed_regions<T>(
     this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+    reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
-    last_oplog_index: OplogIndex,
     chunk_size: u64,
 ) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let owned_agent_id = reader.owned_agent_id;
+    let agent_mode = reader.agent_mode;
+    let last_oplog_index = reader.horizon;
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) = read_region_entries(
-        this,
-        owned_agent_id,
-        agent_mode,
-        start,
-        last_oplog_index,
-        chunk_size,
-    )
-    .await
-    else {
+    let Some(region_entries) = read_region_entries(reader, start, chunk_size).await else {
         return Ok(None);
     };
     let deleted_regions =
@@ -336,10 +433,7 @@ where
     let mut first = start;
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let mut entries = reader.read_exact(first, count).await;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -351,8 +445,7 @@ where
             &mut entries,
         )
         .await?;
-        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
-            .await?;
+        hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
         let deleted_regions = baseline.deleted_regions.clone();
@@ -399,16 +492,11 @@ where
     Ok(())
 }
 
-async fn hydrate_initial_pending_evidence<T>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+async fn hydrate_initial_pending_evidence(
+    reader: &StatusOplogReader<'_>,
     baseline: &mut AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Result<(), String>
-where
-    T: HasOplogService + Sync,
-{
+) -> Result<(), String> {
     let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), entries);
     for (attached_idx, entry) in entries {
         if deleted.is_in_deleted_region(*attached_idx) {
@@ -446,14 +534,8 @@ where
         let referent = if let Some(entry) = entries.get(&attached.pending_invocation_oplog_index) {
             Some(entry)
         } else {
-            persisted_referent = this
-                .oplog_service()
-                .read_exact(
-                    owned_agent_id,
-                    agent_mode,
-                    attached.pending_invocation_oplog_index,
-                    1,
-                )
+            persisted_referent = reader
+                .read_exact(attached.pending_invocation_oplog_index, 1)
                 .await;
             persisted_referent.get(&attached.pending_invocation_oplog_index)
         };
@@ -565,16 +647,22 @@ fn baseline_is_invalidated(
     } else {
         skipped_regions.clone()
     };
-    new_without_overrides != baseline_without_overrides
-        && new_without_overrides.regions().any(|new_region| {
-            if new_region.start > baseline.oplog_idx {
+    // Removing a temporary snapshot override exposes prefix entries absent from the baseline.
+    // Both newly hidden and newly visible prefix entries require a different baseline.
+    let has_uncovered_prefix = |regions: &DeletedRegions, other: &DeletedRegions| {
+        regions.regions().any(|region| {
+            if region.start > baseline.oplog_idx {
                 return false;
             }
-            let relevant_end = new_region.end.min(baseline.oplog_idx);
-            !baseline_without_overrides.regions().any(|old_region| {
-                old_region.start <= new_region.start && old_region.end >= relevant_end
+            let relevant_end = region.end.min(baseline.oplog_idx);
+            !other.regions().any(|other_region| {
+                other_region.start <= region.start && other_region.end >= relevant_end
             })
         })
+    };
+    new_without_overrides != baseline_without_overrides
+        && (has_uncovered_prefix(&new_without_overrides, &baseline_without_overrides)
+            || has_uncovered_prefix(&baseline_without_overrides, &new_without_overrides))
 }
 
 fn update_status_with_precomputed_regions(
@@ -587,6 +675,14 @@ fn update_status_with_precomputed_regions(
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<AgentStatusRecord, String> {
     let active_plugins = last_known.active_plugins.clone();
+    let mut atomic_rollback = last_known.atomic_rollback;
+    for (index, entry) in &new_entries {
+        if !skipped_regions.is_in_deleted_region(*index)
+            && !deleted_regions.is_in_deleted_region(*index)
+        {
+            atomic_rollback.observe(*index, entry);
+        }
+    }
 
     let (status, last_error_kind, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
@@ -728,6 +824,7 @@ fn update_status_with_precomputed_regions(
         pending_invocations,
         pending_card_events,
         skipped_regions,
+        atomic_rollback,
         pending_updates,
         failed_updates,
         successful_updates,
@@ -1012,16 +1109,10 @@ pub(crate) async fn skipped_regions_at(
     owned_agent_id: &OwnedAgentId,
     horizon: OplogIndex,
 ) -> Result<DeletedRegions, String> {
-    let entries = read_region_entries(
-        this,
-        owned_agent_id,
-        AgentMode::Durable,
-        OplogIndex::INITIAL,
-        horizon,
-        1024,
-    )
-    .await
-    .ok_or("Missing fork source history")?;
+    let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
+    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024)
+        .await
+        .ok_or("Missing fork source history")?;
     let deleted = calculate_deleted_regions(DeletedRegions::default(), &entries);
     Ok(calculate_skipped_regions(
         DeletedRegions::default(),
@@ -1031,20 +1122,15 @@ pub(crate) async fn skipped_regions_at(
 }
 
 async fn read_region_entries(
-    this: &(impl HasOplogService + Sync),
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+    reader: &StatusOplogReader<'_>,
     mut first: OplogIndex,
-    horizon: OplogIndex,
     chunk_size: u64,
 ) -> Option<BTreeMap<OplogIndex, OplogEntry>> {
     let mut regions = BTreeMap::new();
+    let horizon = reader.horizon;
     while first <= horizon {
         let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let entries = reader.read_exact(first, count).await;
         first = entries.keys().next_back()?.next();
         regions.extend(entries.into_iter().filter(|(_, entry)| {
             matches!(

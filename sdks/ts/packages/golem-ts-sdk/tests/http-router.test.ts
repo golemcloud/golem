@@ -161,6 +161,41 @@ it('registers static/provider/empty routers without invoking providers or invent
   expect(get('AssetsOnly').snapshotting).toEqual({ tag: 'disabled' });
 });
 
+it('emits ordered file response headers for live and static mounts', () => {
+  const liveHeaders = {
+    'content-security-policy': "default-src 'none'",
+    'referrer-policy': 'no-referrer',
+  };
+  defineAgent({
+    name: 'HeaderFiles',
+    id: { id: z.string() },
+    methods: {},
+    http: http.mount('/headers/{id}', {
+      exposeFiles: [{ route: '/*', path: '/data/$1' }],
+      fileResponseHeaders: liveHeaders,
+    }),
+  });
+  const staticHeaders = {
+    'content-security-policy': "default-src 'self'",
+    'referrer-policy': 'same-origin',
+  };
+  defineHttpRouter('HeaderAssets')
+    .mount('/assets', { fileResponseHeaders: staticHeaders })
+    .static('/*', '/assets/$1')
+    .implement();
+  liveHeaders['content-security-policy'] = 'mutated';
+  staticHeaders['content-security-policy'] = 'mutated';
+
+  expect(get('HeaderFiles').httpMount!.fileResponseHeaders).toEqual([
+    { name: 'content-security-policy', value: "default-src 'none'" },
+    { name: 'referrer-policy', value: 'no-referrer' },
+  ]);
+  expect(get('HeaderAssets').httpMount!.fileResponseHeaders).toEqual([
+    { name: 'content-security-policy', value: "default-src 'self'" },
+    { name: 'referrer-policy', value: 'same-origin' },
+  ]);
+});
+
 it('registers config and a named canonical handler, with no ordinary client surface', () => {
   const builder = defineHttpRouter('ConfiguredRouter', { config: { greeting: z.string() } });
   const impl = builder.mount('/').implement(() => new Response(), { methodName: 'serveWhatever' });

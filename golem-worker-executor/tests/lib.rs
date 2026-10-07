@@ -52,6 +52,7 @@ pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod oplog_sweep;
+pub mod owner_tool_isolation;
 pub mod rdbms;
 pub mod rdbms_service;
 pub mod readonly;
@@ -64,6 +65,7 @@ pub mod scalability;
 pub mod scheduler_storage;
 pub mod scope_cards;
 pub mod tool_discovery;
+pub mod tool_runtime_bypass;
 pub mod tool_streaming;
 pub mod transactions;
 pub mod wasi;
@@ -110,6 +112,7 @@ tag_suite!(rdbms, group1);
 
 tag_suite!(hot_update, group2);
 tag_suite!(instance_layer, group2);
+tag_suite!(owner_tool_isolation, group2);
 tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
@@ -135,7 +138,8 @@ tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
-tag_suite!(tool_streaming, group1);
+tag_suite!(tool_runtime_bypass, group1);
+tag_suite!(tool_streaming, tool_streaming);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);
@@ -237,10 +241,34 @@ test_component!(
     "golem-it:tool-streaming-rust-caller"
 );
 test_component!(
+    rate_limit_middleware,
+    "rate_limit_middleware",
+    "golem_rate_limit_middleware_release",
+    "golem:rate-limit-middleware"
+);
+test_component!(
+    tool_runtime_bypass_owner,
+    "tool_runtime_bypass_owner",
+    "golem_it_tool_runtime_bypass_owner_release",
+    "golem-it:tool-runtime-bypass-owner"
+);
+test_component!(
+    tool_runtime_bypass_provider,
+    "tool_runtime_bypass_provider",
+    "golem_it_tool_runtime_bypass_provider_release",
+    "golem-it:tool-runtime-bypass-provider"
+);
+test_component!(
     filesystem_tools,
     "filesystem_tools",
     "../builtin-tools/filesystem-tools",
     "golem:filesystem-tools"
+);
+test_component!(
+    audit_middleware,
+    "audit_middleware",
+    "golem_audit_middleware_release",
+    "golem:audit-middleware"
 );
 test_component!(
     javascript_tools,
@@ -295,6 +323,24 @@ test_component!(
     "tool_streaming_moonbit",
     "golem_it_tool_streaming_moonbit",
     "golem:moonbit-examples"
+);
+test_component!(
+    tool_streaming_moonbit_lifecycle_gol40,
+    "tool_streaming_moonbit_lifecycle_gol40",
+    "golem_it_tool_streaming_moonbit_lifecycle_gol40",
+    "golem:moonbit-lifecycle-gol40"
+);
+test_component!(
+    tool_streaming_effect_provider,
+    "tool_streaming_effect_provider",
+    "golem_it_tool_streaming_effect_provider",
+    "golem-it:tool-streaming-effect-provider"
+);
+test_component!(
+    tool_streaming_effect_caller,
+    "tool_streaming_effect_caller",
+    "golem_it_tool_streaming_effect_caller",
+    "golem-it:tool-streaming-effect-caller"
 );
 test_component!(
     agent_counters,

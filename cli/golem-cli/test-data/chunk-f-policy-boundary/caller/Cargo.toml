@@ -1,0 +1,19 @@
+[package]
+name = "chunk_f_caller"
+version = "0.0.1"
+edition = "2024"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+chunk-f-config-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/chunk-f-config-probe-tool-guest-client" }
+chunk-f-filesystem-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/chunk-f-filesystem-probe-tool-guest-client" }
+golem-rust = { path = "__GOLEM_RUST_PATH__", features = ["export_golem_agentic"] }
+
+[workspace]

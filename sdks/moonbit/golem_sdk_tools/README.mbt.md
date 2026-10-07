@@ -50,10 +50,10 @@ component does not define. It auto-adds only the required imports to the target 
 |---|---|---|
 | `#derive.agent` | struct | Marks a struct as a Golem agent |
 | `#derive.agent("ephemeral")` | struct | Marks an agent as ephemeral (stateless) |
-| `#derive.golem_schema` | struct, enum | Generates serialization impls |
+| `#derive.golem_schema` | struct, enum | Generates serialization impls; `inline=true` emits a unit-case enum directly at each use site |
 | `#derive.multimodal` | enum | Generates `@multimodal.MultimodalModality` trait impl |
 | `#derive.prompt_hint("...")` | method | Adds a prompt hint to the method definition |
-| `#derive.tool(...)` | empty struct | Defines a tool and optional wire name/version |
+| `#derive.tool(...)` | empty struct | Defines a tool and optional wire name/version/aliases |
 | `#derive.tool_middleware(...)` | empty struct | Defines monomorphic middleware over same-package presented/expected tool shapes |
 | `#derive.universal_tool_middleware(...)` | async free function | Defines universal middleware over opaque runtime carriers |
 | `#derive.command(...)` | public tool method | Configures command name, aliases, subtree, and behavioral annotations |
@@ -62,8 +62,12 @@ component does not define. It auto-adds only the required imports to the target 
 | `#derive.result(...)` | public tool method | Declares result formatters and the default formatter |
 | `#derive.error(...)` | error enum/suberror case | Declares error kind, exit code, and optional typed payload |
 | `#derive.example(...)` | tool, command, or error case | Adds a documented invocation example |
+| `#derive.case(...)` | `#derive.golem_schema` enum case | Overrides the emitted schema case name |
 
 Doc comments (`///`) on structs, constructors, and methods are extracted as descriptions in the generated `AgentType` metadata.
+Use `#derive.golem_schema(inline=true)` only for unit-case enums whose schema must be embedded
+directly rather than emitted as a named definition. `#derive.case(name="...")` controls each
+authored enum value independently of its MoonBit constructor name.
 
 ## Defining Tools
 
@@ -87,7 +91,7 @@ struct Search {}
 ///|
 #derive.arg("case_sensitive", name="case-sensitive", scope="global", short="i", kind="flag")
 #derive.arg("pattern", scope="positional", regex="^.+$")
-#derive.arg("files", scope="tail", kind="file", direction="input", accepts_stdio=true)
+#derive.arg("files", scope="tail", kind="file", direction="input", extension="wasm", extension="wat", accepts_stdio=true)
 #derive.arg("stderr", channel="stderr")
 pub fn Search::search(
   case_sensitive : Bool,
@@ -104,7 +108,7 @@ pub fn Search::search(
 #derive.command(alias="r")
 #derive.arg("format", scope="option", default="json")
 #derive.constraint("requires_all", value_is="format=json")
-#derive.result("human", formatter="json", default="human")
+#derive.result("human", formatter="json", default="human", doc="Rendered matches", formatter_doc="human=Readable matches", formatter_doc="json=JSON matches")
 pub fn Search::render(format : String) -> Result[String, SearchError] {
   // ...
 }
@@ -115,22 +119,26 @@ pub fn Search::render(format : String) -> Result[String, SearchError] {
 `#derive.arg` starts with the MoonBit source parameter name. `name` overrides its wire name and
 `alias` adds accepted aliases. The most commonly used properties are:
 
-- `scope`: `global`, `positional`, `tail`, or `option`; `kind="flag"` and
-  `kind="count-flag"` define flags.
+- `scope`: `global`, `root-global`, `positional`, `tail`, or `option`;
+  `root-global` places a subtree mount parameter on a namespace-only root, while `kind="flag"`
+  and `kind="count-flag"` define flags.
 - `short`, `env`, `required`, `default`, `value_name`, `negatable`, and `optional_scalar`.
 - `repeatable`: `repeated`, `delimited`, or `either`; delimiter-aware modes also require `delim`.
 - tail controls: `min`, `max`, `separator`, `verbatim`, and `accepts_stdio`.
 - refinements: `regex`, `min_length`, `max_length`, numeric `min`/`max`/`bounds`/`unit`, path
-  `kind`/`direction`/`mime`, and URL `scheme`.
+  `kind`/`direction`/`mime`/`extension`, and URL `scheme`.
+- documentation: `doc` is the summary and `description` is the optional longer description.
 
 Without an explicit mapping, `Bool` is a flag, a final `Array[T]` is a tail positional, other
 arrays and maps are repeatable options, and other values are positionals. Explicit annotations are
-recommended whenever the command-line surface matters.
+recommended whenever the command-line surface matters. Repeatable list and map options without an
+authored default emit an empty list or map default, matching their invocation value when omitted.
 
 The exact qualified runtime types `@tool.Principal` and `@tool.ProviderOutput` are hidden invocation
 parameters; annotate a provider output with `channel="stderr"` to select stderr, while an
 unannotated output selects stdout. Principal and provider-output parameters are not exposed by
-generated clients; `@asyncCore.Stream[Byte]` inputs are accepted as client inputs. Either output
+generated clients; `@asyncCore.Stream[Byte]` inputs are accepted as client inputs. Declaring stdin
+or a provider output with `?` emits an optional stream (`required=false`). Either output
 selects the started-invocation client shape with independent optional stdout/stderr streams,
 structured result, collection, and cancellation. A provider can write, finish successfully, or
 select a typed failure terminal through `ProviderOutput`.
@@ -148,15 +156,24 @@ literal against that argument's schema.
 
 Every case in a tool error enum or typed `suberror` needs `#derive.error(kind=...)`, where `kind` is
 `usage-error` or `runtime-error`; `exit_code` defaults to `2` for usage errors and `1` for runtime
-errors. A case may carry zero or one typed payload. The generator emits one reusable
+errors. A case may carry no payload, one typed payload, or multiple fields; multiple fields emit an
+inline record payload with the authored labels. The generator emits one reusable
 `@tool.ToolErrorSchema` implementation per error type.
+
+`#derive.tool(..., alias="short")` adds namespace-root aliases. Alias, global, constraint, error,
+formatter, and example order is preserved in emitted metadata.
+
+`#derive.result` accepts one or more positional or `formatter` names, a `default`, and optional
+`doc`/`description` fields for the structured result. Repeat
+`formatter_doc="<formatter>=<summary>"` to document individual formatters; each referenced
+formatter must also be declared.
 
 ### Subcommand trees
 
 A command can graft another tool definition as a subtree:
 
 ```moonbit nocheck
-#derive.command(alias="rmt", subtree="Remote")
+#derive.command(name="remote", alias="rmt", subtree="Remote")
 #derive.arg("verbose", scope="global", kind="count-flag")
 pub fn Git::remote(verbose : UInt) -> Unit { ignore(verbose) }
 ```
@@ -164,6 +181,9 @@ pub fn Git::remote(verbose : UInt) -> Unit { ignore(verbose) }
 Subtree commands return `Unit` and may only define globals. The referenced tool remains an internal
 subtool rather than a separately discoverable tool. Its methods are exposed through a nested typed
 client such as `GitRemoteClient`, reached from `GitClient::remote(...)`.
+When the child defines an executable root method, the mount's explicit `name` overrides that root's
+wire name and grafts its body directly at the mount node; the child's other methods remain nested
+subcommands.
 
 ## Typed Tool Clients
 

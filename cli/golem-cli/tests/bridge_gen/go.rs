@@ -1042,6 +1042,7 @@ fn go_http_router_bridge_rejection_uses_kind_not_name() {
                     .map(|mapping| (mapping[0].as_str().unwrap(), mapping[1].as_str().unwrap())),
             )
             .unwrap(),
+            file_response_headers: vec![],
             openapi_provider_method: None,
         });
         assert_eq!(

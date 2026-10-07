@@ -123,6 +123,14 @@ impl PostgresIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -135,6 +143,10 @@ impl PostgresIndexedStorage {
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
             }
         }
     }
@@ -209,6 +221,19 @@ impl PostgresIndexedStorage {
     /// [`FencedTxError::into_indexed_storage_error`], which takes a function pointer.
     fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
         Self::classify_repo_error(err, true)
+    }
+
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err, false)
+        }
     }
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -349,10 +374,15 @@ impl IndexedStorage for PostgresIndexedStorage {
             return Ok(());
         }
         let _permit = self.acquire_permit().await;
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error_general,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (id, value) in pairs.iter() {
@@ -378,7 +408,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 )
                 .await
                 .map(|_| ())
-                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
+                .map_err(classify);
         }
 
         self.pool
@@ -413,13 +443,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_oplog_insert
-                } else {
-                    Self::classify_repo_error_general
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this
@@ -826,7 +850,11 @@ impl IndexedStorage for PostgresIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;

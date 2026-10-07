@@ -218,7 +218,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker
                 .interrupt_and_retire(interrupt_kind, RetirementReason::Requested)
                 .await?;
-        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await {
+        } else if let Some(mut await_interruption) = worker.set_interrupting(interrupt_kind).await?
+        {
             await_interruption.recv().await.unwrap();
         }
         Ok(())
@@ -402,7 +403,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::QueueAndRestart => {
                         debug!("Enqueued update for running worker");
-                        worker.set_interrupting(InterruptKind::Restart).await;
+                        worker.set_interrupting(InterruptKind::Restart).await?;
                         debug!("Interrupted running worker for update");
                     }
                     UpdateDecision::Ignore => unreachable!(),

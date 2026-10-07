@@ -128,24 +128,27 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
     let checkpoint_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let checkpoint_port = checkpoint_listener.local_addr()?.port();
     let (arrived_tx, mut arrived_rx) =
-        tokio::sync::mpsc::unbounded_channel::<tokio::sync::oneshot::Sender<()>>();
-    let checkpoint_handler = axum::routing::get(move || {
-        let arrived_tx = arrived_tx.clone();
-        async move {
-            let (release, wait) = tokio::sync::oneshot::channel();
-            arrived_tx.send(release).unwrap();
-            let _ = wait.await;
-            "ok"
-        }
-    });
-    let checkpoint_server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
-        axum::serve(
-            checkpoint_listener,
-            axum::Router::new().route("/checkpoint/{name}", checkpoint_handler),
-        )
-        .await
-        .unwrap();
-    }));
+        tokio::sync::mpsc::unbounded_channel::<(String, tokio::sync::oneshot::Sender<()>)>();
+    let checkpoint_handler = axum::routing::get(
+        move |axum::extract::Path(name): axum::extract::Path<String>| {
+            let arrived_tx = arrived_tx.clone();
+            async move {
+                let (release, wait) = tokio::sync::oneshot::channel();
+                arrived_tx.send((name, release)).unwrap();
+                let _ = wait.await;
+                "ok"
+            }
+        },
+    );
+    let mut checkpoint_server =
+        tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(
+                checkpoint_listener,
+                axum::Router::new().route("/checkpoint/{name}", checkpoint_handler),
+            )
+            .await
+            .unwrap();
+        }));
 
     let context = TestContext::new(last_unique_id);
     let service = Arc::new(TestEnvironmentStateService::default());
@@ -231,9 +234,22 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 .await
         })
     };
-    let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
-        .await?
-        .expect("checkpoint server stopped");
+    let (checkpoint, release) = tokio::select! {
+        biased;
+        result = &mut checkpoint_server => {
+            panic!("checkpoint server terminated before first checkpoint: {result:?}")
+        }
+        arrived = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv()) => {
+            match arrived? {
+                Some(arrived) => arrived,
+                None => {
+                    let result = (&mut checkpoint_server).await;
+                    panic!("checkpoint server stopped before first checkpoint: {result:?}")
+                }
+            }
+        }
+    };
+    assert_eq!(checkpoint, "before-read");
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await.unwrap();
@@ -280,9 +296,10 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                 .await
         })
     };
-    let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
+    let (checkpoint, release) = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
         .await?
         .expect("replayed checkpoint server stopped");
+    assert_eq!(checkpoint, "before-read");
     release.send(()).expect("replayed checkpoint disconnected");
     let recovered = recovery
         .await??
@@ -345,9 +362,11 @@ async fn mcp_stdout_is_durable_before_consumption_and_projects_only_streamable_c
                     .await
             })
         };
-        let release = tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
-            .await?
-            .expect("cancellation checkpoint server stopped");
+        let (checkpoint, release) =
+            tokio::time::timeout(Duration::from_secs(30), arrived_rx.recv())
+                .await?
+                .expect("cancellation checkpoint server stopped");
+        assert_eq!(checkpoint, name);
         tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let ready = match name {

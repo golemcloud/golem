@@ -182,10 +182,13 @@ impl<P: DropPolicy> Drop for AccessTerminalGuard<P> {
                         start_idx = %call.start_idx(),
                         "durable call terminal abandoned during executor shutdown"
                     );
+                } else if (self.runtime_teardown)() {
+                    // Runtime abandonment is structural: release resident ownership without
+                    // applying the guest-drop policy or recording a semantic terminal.
+                    call.release_atomic_lease();
+                    call.span_finished = None;
                 } else {
-                    if (self.runtime_teardown)() {
-                        call.span_finished = None;
-                    } else if let Some(span) = &mut call.span_finished {
+                    if let Some(span) = &mut call.span_finished {
                         span.finished_at = Timestamp::now_utc();
                     }
                     P::unfinished_drop(call, self.sink.as_ref());

@@ -1,6 +1,7 @@
 import { Context, Effect, type Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { Secret } from "./Capability.js"
 import { ConfigClient } from "./host/ConfigClient.js"
 import { SecretsClient } from "./host/SecretsClient.js"
 import { t, type SchemaGraph } from "./internal/schema-model/model.js"
@@ -30,7 +31,7 @@ type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
     : S extends Schema.Redacted<infer Inner>
       ? {
           /** Fresh opaque capability without revealing its value. @since 1.6.0 @category secrets */
-          readonly borrow: Effect.Effect<CoreTypes.Secret, ConfigError>
+          readonly borrow: Effect.Effect<Secret, ConfigError>
           readonly get: Effect.Effect<
             Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
             ConfigError

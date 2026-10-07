@@ -1203,7 +1203,7 @@ fn validate_manifest_matchers_resolved(
                     && target.bridge_mode == bridge_mode
                     && matches!(
                         target.subject,
-                        crate::model::app::BridgeSdkTargetSubject::Tool(_)
+                        crate::model::app::BridgeSdkTargetSubject::Tool { .. }
                     )
                 {
                     tool_matchers.remove(target.subject.display_name());

@@ -58,7 +58,7 @@ async fn nested_leaf_trap_notifies_external_caller_while_primary_waits_on_silent
     let silent_port = silent_listener.local_addr()?.port();
     let (checkpoint_port, gate_port, checkpoint_server, mut arrivals) =
         start_crash_checkpoint_server().await;
-    let _checkpoint_server = tokio_util::task::AbortOnDropHandle::new(checkpoint_server);
+    let _checkpoint_server = checkpoint_server;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()

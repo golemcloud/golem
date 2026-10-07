@@ -284,7 +284,16 @@ impl<Ctx: WorkerCtx> NativeToolRegistration<Ctx> {
 
 /// Native implementations compiled into the production executor binary.
 pub fn compiled_native_tools<Ctx: WorkerCtx>() -> Vec<NativeToolRegistration<Ctx>> {
-    Vec::new()
+    if golem_native_tool::conformance_fixture::enabled() {
+        vec![NativeToolRegistration {
+            definition: golem_native_tool::conformance_fixture::definition(),
+            handler: Arc::new(NativeToolAdapter(
+                golem_native_tool::conformance_fixture::ConformanceNativeTool,
+            )),
+        }]
+    } else {
+        Vec::new()
+    }
 }
 
 impl<Ctx: WorkerCtx> Default for NativeToolCatalog<Ctx> {

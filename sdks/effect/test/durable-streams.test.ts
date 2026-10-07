@@ -3,7 +3,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } fr
 import { TestClock } from "effect/testing"
 import { vi } from "vitest"
 import type * as Host from "golem:agent/durable-streams@2.0.0"
-import type { Secret } from "golem:core/types@2.0.0"
+import type { Secret as RawSecret } from "golem:core/types@2.0.0"
 import * as DS from "../src/DurableStreams.js"
 import {
   DurableStreamsClient,
@@ -13,6 +13,11 @@ import {
   type Writer,
 } from "../src/host/DurableStreamsClient.js"
 import { agentStreamFromHandle, agentStreamToHandle } from "../src/internal/agentStream.js"
+import {
+  createGuestSecretHandle,
+  takeGuestSecretHandle,
+} from "../src/internal/schema-model/secretHandle.js"
+import { SECRET_INTERNAL } from "../src/internal/schema-model/secretInternal.js"
 import { toWitCodec } from "../src/WitCodec.js"
 import { Uint8, Uint64 } from "../src/WitTypes.js"
 
@@ -23,6 +28,10 @@ vi.mock("golem:agent/durable-streams@2.0.0", async (original) => ({
 }))
 
 const options = { url: "https://streams.example/events", producerId: "producer", maxRetries: 0 }
+const auth = () => {
+  const raw = Object.freeze({}) as RawSecret
+  return { raw, wrapper: createGuestSecretHandle(SECRET_INTERNAL, raw) }
+}
 const bytes = (s: string) => new TextEncoder().encode(s)
 const batch = (
   payload: Uint8Array,
@@ -72,13 +81,13 @@ describe("Durable Streams", () => {
         requests: Host.DurableStreamReadRequest[]
         drop: ReturnType<typeof vi.fn>
       }[] = []
-      const auth = Object.freeze({}) as Secret
+      const { raw, wrapper } = auth()
       wit.DurableStreamReader.mockImplementation(function (
         descriptor: Host.DurableStreamReaderOptions,
-        secret: Secret,
+        secret: RawSecret,
       ) {
         expect(descriptor).toEqual({ url: options.url, mode: "bytes", timeoutMs: 1234n })
-        expect(secret).toBe(auth)
+        expect(secret).toBe(raw)
         const instance = { requests: [] as Host.DurableStreamReadRequest[], drop: vi.fn() }
         instances.push(instance)
         return {
@@ -96,7 +105,7 @@ describe("Durable Streams", () => {
           [Symbol.dispose]: instance.drop,
         }
       })
-      const source = DS.readBytes({ ...options, auth, timeoutMs: 1234 })
+      const source = DS.readBytes({ ...options, auth: wrapper, timeoutMs: 1234 })
       expect(instances).toHaveLength(0)
       expect(yield* Stream.runCollect(source).pipe(Effect.provide(DurableStreamsLive))).toEqual([
         17, 93,
@@ -185,12 +194,12 @@ describe("Durable Streams", () => {
           requests: Host.DurableStreamAppendRequest[]
           drop: ReturnType<typeof vi.fn>
         }[] = []
-        const auth = Object.freeze({}) as Secret
+        const { raw, wrapper } = auth()
         wit.DurableStreamWriter.mockImplementation(function (
           descriptor: Host.DurableStreamWriterOptions,
-          secret: Secret,
+          secret: RawSecret,
         ) {
-          expect(secret).toBe(auth)
+          expect(secret).toBe(raw)
           const instance = {
             descriptor,
             requests: [] as Host.DurableStreamAppendRequest[],
@@ -211,7 +220,7 @@ describe("Durable Streams", () => {
         yield* Effect.gen(function* () {
           const mutable = {
             ...options,
-            auth,
+            auth: wrapper,
             epoch: 7n,
             timeoutMs: 912,
             contentType: "application/custom",
@@ -853,31 +862,31 @@ describe("Durable Streams", () => {
       }),
   )
 
-  it.effect("passes the borrowed capability unchanged without inspecting or revealing it", () =>
+  it.effect("borrows the raw capability from a live wrapper without consuming it", () =>
     Effect.gen(function* () {
-      const auth = Object.freeze({}) as Secret
-      yield* Stream.runDrain(DS.readBytes({ ...options, auth })).pipe(
+      const { raw, wrapper } = auth()
+      yield* Stream.runDrain(DS.readBytes({ ...options, auth: wrapper })).pipe(
         Effect.provide(
           layer(
             {},
             {
               makeReader: (_options, secret) =>
                 Effect.sync(() => {
-                  expect(secret).toBe(auth)
+                  expect(secret).toBe(raw)
                   return { read: () => Effect.succeed(batch(new Uint8Array())) }
                 }),
             },
           ),
         ),
       )
-      const writer = yield* DS.makeByteWriter({ ...options, auth }).pipe(
+      const writer = yield* DS.makeByteWriter({ ...options, auth: wrapper }).pipe(
         Effect.provide(
           layer(
             {},
             {
               makeWriter: (_options, secret) =>
                 Effect.sync(() => {
-                  expect(secret).toBe(auth)
+                  expect(secret).toBe(raw)
                   return { append: (request) => Effect.succeed(receipt(request)) }
                 }),
             },
@@ -885,6 +894,34 @@ describe("Durable Streams", () => {
         ),
       )
       yield* writer.close
+      expect(takeGuestSecretHandle(SECRET_INTERNAL, wrapper)).toBe(raw)
+    }),
+  )
+
+  it.effect("rejects a consumed auth wrapper as a typed invalid request", () =>
+    Effect.gen(function* () {
+      const { wrapper } = auth()
+      takeGuestSecretHandle(SECRET_INTERNAL, wrapper)
+      const exit = yield* DS.makeByteWriter({ ...options, auth: wrapper }).pipe(
+        Effect.provide(layer({})),
+        Effect.scoped,
+        Effect.exit,
+      )
+      expect(exit).toEqual(
+        Exit.fail(new DS.DurableStreamError("invalid-request", "Invalid auth secret capability")),
+      )
+    }),
+  )
+
+  it.effect("rejects an invalid auth wrapper as a typed invalid request", () =>
+    Effect.gen(function* () {
+      const exit = yield* DS.makeByteWriter({
+        ...options,
+        auth: Object.freeze({}) as NonNullable<DS.Options["auth"]>,
+      }).pipe(Effect.provide(layer({})), Effect.scoped, Effect.exit)
+      expect(exit).toEqual(
+        Exit.fail(new DS.DurableStreamError("invalid-request", "Invalid auth secret capability")),
+      )
     }),
   )
 })
