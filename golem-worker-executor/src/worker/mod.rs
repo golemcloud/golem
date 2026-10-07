@@ -30,7 +30,7 @@ pub mod instance;
 pub mod invocation;
 mod invocation_loop;
 mod lifecycle;
-mod monthly;
+mod monthly_limits;
 #[cfg(feature = "test-utils")]
 mod p2_connect_replay_test;
 #[cfg(feature = "test-utils")]
@@ -52,7 +52,7 @@ mod websocket_reconnect_pool_test;
 #[cfg(feature = "test-utils")]
 mod websocket_timed_receive_test;
 #[cfg(feature = "test-utils")]
-pub use monthly::{
+pub use monthly_limits::{
     MonthlyAcceptanceForTest, MonthlyClockForTest, MonthlyProposalForTest, MonthlyTimerPollForTest,
 };
 #[cfg(feature = "test-utils")]
@@ -784,7 +784,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     interrupt_signal: Arc<async_lock::Mutex<WorkerInterruptState>>,
     stop_progress: StopProgress,
     self_ref: std::sync::Weak<Worker<Ctx>>,
-    monthly_window: StdMutex<Option<Arc<monthly::MonthlyWindowTarget>>>,
+    monthly_window: StdMutex<Option<Arc<monthly_limits::MonthlyWindowTarget>>>,
     #[cfg(feature = "test-utils")]
     monthly_clock: StdMutex<Option<Arc<MonthlyClockForTest>>>,
     #[cfg(feature = "test-utils")]
@@ -11951,7 +11951,7 @@ impl RunningWorker {
     ) -> Result<
         (
             WorkerRunningAgent<Ctx>,
-            monthly::ExecutionWindow,
+            monthly_limits::ExecutionWindow,
             Option<RetryDecision>,
         ),
         CreateWorkerInstanceError,
@@ -12432,7 +12432,7 @@ impl RunningWorker {
                     .await);
                 }
             };
-        let window = monthly::ExecutionWindow::new(&parent, window, start_attempt).await;
+        let window = monthly_limits::ExecutionWindow::new(&parent, window, start_attempt).await;
         let prepared = match prepare_initial_files(
             &parent.file_loader(),
             parent.owned_agent_id.environment_id,
@@ -12825,7 +12825,7 @@ async fn create_filesystem_context(
 
 async fn cleanup_reconstructing_agent_filesystem(
     filesystem: ReconstructingFilesystem,
-    window: monthly::ExecutionWindow,
+    window: monthly_limits::ExecutionWindow,
     startup_error: WorkerExecutorError,
 ) -> CreateWorkerInstanceError {
     cleanup_open_agent_filesystem(abort_reconstruction(filesystem), window, startup_error).await
@@ -12846,7 +12846,7 @@ fn reconstruction_startup_error(
 
 async fn cleanup_open_agent_filesystem(
     filesystem: SealedFilesystem,
-    window: monthly::ExecutionWindow,
+    window: monthly_limits::ExecutionWindow,
     startup_error: WorkerExecutorError,
 ) -> CreateWorkerInstanceError {
     invocation_loop::cleanup_startup_filesystem(filesystem, window, startup_error).await

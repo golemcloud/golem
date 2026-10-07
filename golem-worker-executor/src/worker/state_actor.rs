@@ -259,7 +259,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     },
     MonthlyCapacityExhausted {
         worker: Arc<Worker<Ctx>>,
-        target: Arc<super::monthly::MonthlyWindowTarget>,
+        target: Arc<super::monthly_limits::MonthlyWindowTarget>,
         capacity: crate::services::resource_limits::MonthlyCapacity,
     },
 }
@@ -309,7 +309,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub(super) fn monthly_capacity_exhausted(
         &self,
         worker: Arc<Worker<Ctx>>,
-        target: Arc<super::monthly::MonthlyWindowTarget>,
+        target: Arc<super::monthly_limits::MonthlyWindowTarget>,
         capacity: crate::services::resource_limits::MonthlyCapacity,
     ) -> Result<(), WorkerExecutorError> {
         self.lifecycle_jobs

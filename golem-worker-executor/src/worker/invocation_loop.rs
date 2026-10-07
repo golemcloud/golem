@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::monthly::ExecutionWindow;
+use super::monthly_limits::ExecutionWindow;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::model::{LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};

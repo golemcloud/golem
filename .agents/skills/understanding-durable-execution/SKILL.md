@@ -262,7 +262,7 @@ before publishing reclaimable `LoadedIdle` or `WarmRunnable` state. This ends th
 design; it does not mean every cached allocation is physically freed immediately. Released-permit
 durable sleep, reclaimable cache time and unloaded time do not accrue memory or storage byte-time.
 
-`worker/monthly.rs` attaches one monitor to an enabled, permit-held execution window. It checks
+`worker/monthly_limits.rs` attaches one monitor to an enabled, permit-held execution window. It checks
 local capacity on a normal 30-second cadence and on applied Registry updates, settling owner-scoped
 byte-time first and reading published fuel reservations without locking the Store. Before each wait,
 it settles that usage and wakes earlier when exact remaining monthly memory byte-nanoseconds divided
