@@ -84,6 +84,9 @@ fn preview_app() -> TuiApp {
         pending_repl_restart: None,
         agents: AgentsState::default(),
         ops_environment: OpsEnvironmentState::default(),
+        metrics: MetricsState::default(),
+        activity: ActivityState::default(),
+        resources: ResourcesState::default(),
         next_command_id: 1,
         selected_target: SelectedTarget {
             context: TuiContextInfo {

@@ -863,6 +863,70 @@ impl AgentCommandHandler {
         Ok(())
     }
 
+    pub async fn oplog_snapshot(
+        &self,
+        component_name: &ComponentName,
+        agent_id: &RawAgentId,
+        max_entries: u64,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<AgentOplogEntryView>> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_environment(EnvironmentResolveMode::Any)
+            .await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&environment, component_name, Some(agent_id.into()))
+            .await?
+            .with_context(|| format!("Component {component_name} not found"))?;
+        let clients = self.ctx.golem_clients().await?;
+        let from = if query.is_none() {
+            let metadata = clients
+                .worker
+                .get_worker_metadata(&component.id.0, &agent_id.0)
+                .await
+                .map_service_error()?;
+            Some(
+                metadata
+                    .last_oplog_index
+                    .as_u64()
+                    .saturating_sub(max_entries.saturating_sub(1)),
+            )
+        } else {
+            None
+        };
+        let mut cursor = None;
+        let mut entries = Vec::new();
+        while entries.len() < max_entries as usize {
+            let remaining = max_entries.saturating_sub(entries.len() as u64);
+            let result = clients
+                .worker
+                .get_oplog(
+                    &component.id.0,
+                    &agent_id.0,
+                    from,
+                    remaining.min(self.ctx.http_batch_size()),
+                    cursor.as_ref(),
+                    query,
+                )
+                .await
+                .map_service_error()?;
+            entries.extend(result.entries.into_iter().map(|entry| AgentOplogEntryView {
+                index: entry.oplog_index.as_u64(),
+                attribution: entry.attribution,
+                entry: entry.entry,
+            }));
+            cursor = result.next;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        entries.truncate(max_entries as usize);
+        Ok(entries)
+    }
+
     async fn cmd_revert(
         &self,
         agent_id: AgentIdArgs,

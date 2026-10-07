@@ -19,6 +19,7 @@ mod interaction;
 mod layout;
 mod navigation;
 mod nested_cli;
+mod ops;
 #[cfg(feature = "tui-preview")]
 mod preview;
 mod terminal;
@@ -31,6 +32,9 @@ use context_executor::TuiContextTaskResult;
 use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
 use nested_cli::{NestedCliEvent, NestedCliTarget};
+use ops::activity::ActivityRefreshPayload;
+use ops::metrics::MetricsRefreshPayload;
+use ops::resources::ResourcesRefreshPayload;
 use tokio::sync::oneshot;
 
 pub use app::run;
@@ -59,6 +63,19 @@ enum TuiEvent {
     OpsEnvironmentRefreshFinished {
         generation: u64,
         result: TuiContextTaskResult<OpsEnvironmentSnapshot>,
+    },
+    MetricsRefreshTick,
+    MetricsRefreshFinished {
+        generation: u64,
+        result: TuiContextTaskResult<MetricsRefreshPayload>,
+    },
+    ActivityRefreshFinished {
+        generation: u64,
+        result: TuiContextTaskResult<ActivityRefreshPayload>,
+    },
+    ResourcesRefreshFinished {
+        generation: u64,
+        result: TuiContextTaskResult<ResourcesRefreshPayload>,
     },
     ContextSwitchFinished {
         generation: u64,
