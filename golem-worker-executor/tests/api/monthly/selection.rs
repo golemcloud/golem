@@ -8,20 +8,6 @@ use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-fn available_monthly_policy() -> MonthlyResourcePolicy {
-    MonthlyResourcePolicy {
-        period: AccountUsagePeriod::current(),
-        mode: MonthlyUsageMode::HardLimit,
-        available_fuel: u64::MAX,
-        available_memory_gb_seconds: u64::MAX,
-        available_memory_byte_nanoseconds_remainder: 0,
-        available_durable_storage_byte_seconds: u64::MAX,
-        available_durable_storage_byte_nanoseconds_remainder: 0,
-        available_ephemeral_storage_byte_seconds: u64::MAX,
-        available_ephemeral_storage_byte_nanoseconds_remainder: 0,
-    }
-}
-
 #[test]
 #[timeout("2m")]
 async fn pending_restart_publishes_only_elected_monthly_cause(

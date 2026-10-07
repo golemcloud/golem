@@ -286,7 +286,7 @@ neither request immediate reconstruction nor acquire a replacement permit. The m
 closed lifecycle channel or lost send as an infrastructure error, retains that health, and requests
 a cooperative Worker stop. If status work then panics because the actor has stopped, the invocation
 loop retains its resident agent across the borrowed inner-loop failure and runs ordinary unload
-without submitting more actor work. Tests in `tests/api/monthly_health.rs` cover both idle boundaries
+without submitting more actor work. Tests in `tests/api/monthly/lifecycle/health.rs` cover both idle boundaries
 and a pending silent-TCP invocation. Other panic paths still use the outer panic boundary.
 
 Worker stop registration and window closure share a synchronous admission lock. Closure seals
@@ -303,7 +303,7 @@ stop receipt. Restart and Jump preserve pending work without lifecycle or invoca
 markers and request ordinary reconstruction. Dropping the receipt does not cancel the driver.
 If core initialization stops before a prepared Store exists, the invocation-loop-owned Worker
 stop acknowledges the published interruption under the lifecycle lock. No Store callback remains
-to send that receipt. The real initializer tests in `tests/api/monthly_preparation.rs` verify
+to send that receipt. The real initializer tests in `tests/api/monthly/lifecycle/admission.rs` verify
 cleanup and one receipt, durable Suspend and reconstruction, and an ephemeral typed resource
 error recorded as Recovery before any guest invocation starts.
 
@@ -321,7 +321,7 @@ with the frozen kind, verifies the physical owner-failure winner, then publishes
 existing Loading/Running subscribers and the late-subscriber projection. A conflicting independent
 owner failure remains authoritative and fails stop cleanup rather than becoming a quota error.
 The invocation loop remains the sole primary-Store owner. Tests in
-`tests/api/monthly_admission_owner_election.rs` gate a real Context Worker's loaded Compute
+`tests/api/monthly/lifecycle/admission.rs` gate a real Context Worker's loaded Compute
 admission teardown and monitor driver in both fence orders, then verify one pending invocation
 executes after physical unload and reconstruction.
 
@@ -335,7 +335,7 @@ Monthly acceptance rejects further proposals once a terminal stop is claimed, un
 interrupt and admission locks. The same active window can keep accounting during retirement, but
 later ticks or applied updates cannot replace the accepted monthly kind/reason or queue another
 terminal demand. This also preserves a claimed user stop. Generic terminal queuing still permits
-later deletion. `tests/api/monthly_p2_input/repeated_stop.rs` holds a real outcome writer after
+later deletion. `tests/api/monthly/host/p2/tcp/input/repeated_stop.rs` holds a real outcome writer after
 selection, checks tick and changed-resource update rejection, then verifies one terminal, physical
 cleanup, durable continuation and ephemeral archival.
 
@@ -347,7 +347,7 @@ and `Lifecycle` from `InvokeResult::Interrupted`, including monthly admission's 
 explicit Interrupt therefore cannot lose the invocation marker to a later admission Suspend.
 Neither classification depends on error text. Independent guest traps, owner infrastructure failures
 and tail-work failures keep their original classification. Tests in
-`tests/api/monthly_lifecycle_regressions.rs` gate the frozen publisher against real monthly admission
+`tests/api/monthly/lifecycle/windows.rs` gate the frozen publisher against real monthly admission
 and verify that a consumed Suspend cannot survive joined unload into the next activation. A timeout selected before stop acceptance remains authoritative.
 Real Worker tests in `tests/api/monthly/selection.rs` expire the actual invocation timer while
 silent TCP receive is pending and the accepted stop driver is held before publication. A result
@@ -367,7 +367,7 @@ selection on real Workers, including silent TCP and a blocked concurrent-agent p
 The default 10 ms epoch increment still does not wake pending host futures. Real silent-TCP tests
 cover monthly-memory detection by both the local tick and applied Registry update, cooperative
 socket closure, durable reconstruction and ephemeral resource failure. The P2 TCP input
-`subscribe().block()` tests in `tests/api/monthly_p2_poll.rs` cover memory, prepaid compute and
+`subscribe().block()` tests in `tests/api/monthly/host/p2/tcp/poll.rs` cover memory, prepaid compute and
 mode-matching scripted storage in both modes. They verify physical unload and permit release
 before peer readiness, then repair the original poll Start for durable agents. Scripted allocation
 proves Worker orchestration, not native managed-XFS measurement. These tests do not establish a
@@ -381,7 +381,7 @@ the new native connect future before returning its recorded readiness, otherwise
 the oplog. Only the native TCP readiness wait selects the existing typed interrupt signal, after
 completed replay has closed the durable handle. Replay resolution, the recorded terminal and
 file-readiness revalidation stay outside that race. Late subscribers read an already published
-stop from `ExecutionStatus`. Tests in `tests/api/monthly_p2_poll.rs` gate both replay entry points
+stop from `ExecutionStatus`. Tests in `tests/api/monthly/host/p2/tcp/poll.rs` gate both replay entry points
 before subscription, while waiting and after readiness selection; they retain the original input
 Start across another monthly stop and recovery. Holding the Store at that gate proves the permit
 is still held after signal delivery, before physical unload. The gate controls native readiness
@@ -419,7 +419,7 @@ runs; unload must drain that work before deletion and actual permit release. Kno
 syscalls cannot be preempted inside a future poll, and started blocking tasks may delay drain. Cleanup
 failures and unknown writers remain observable, not successful release.
 
-`tests/api/monthly_blob_filesystem.rs` verifies representative monthly memory in both agent modes.
+`tests/api/monthly/host/blob_filesystem.rs` verifies representative monthly memory in both agent modes.
 Its blob override observes real provider Pending and stays withheld through physical release. Its
 keyed filesystem gate observes admitted stat waiting before native execution, not a stalled native
 syscall. Durable cases retain and complete the original Start under the same invocation key after a
@@ -455,7 +455,7 @@ Module tests observe actual quiet receive, bounded publication and CLI acknowled
 Pending. They verify typed interruption, retained consumed output and final buffering, ready-first
 behavior, nonidentity projection, and source-selected journal completion through a later stop.
 Durable journal reload continues under the same session key without an invented terminal.
-`tests/api/monthly_frontend_streams.rs` observes a real native-tool stdin reader's first Pending,
+`tests/api/monthly/host/frontend_streams.rs` observes a real native-tool stdin reader's first Pending,
 then monthly memory Suspend, joined physical unload and permit/monitor release while stdin stays
 quiet. The original accepted session and invocation key subsequently consume their first packed
 bytes and finish normally after a grant. This is representative durable monthly-memory evidence,
@@ -475,7 +475,7 @@ Even completed historical raw input executes again when a fresh invocation recon
 unloaded Worker. Deterministic peer data is required to reproduce the recorded invocation result;
 this does not provide exactly-once TCP consumption.
 
-`tests/api/monthly_p2_input.rs` covers each export with memory, prepaid compute and matching
+`tests/api/monthly/host/p2/tcp/input/mod.rs` covers each export with memory, prepaid compute and matching
 scripted storage in both modes. Its Worker-local test observer reports the real native future's
 first `Poll::Pending` and tracks return versus drop without gating readiness or locking the Store.
 Tests keep the peer silent through monthly stop, physical unload and permit release. Durable
@@ -494,7 +494,7 @@ the native splice selects the existing composed `create_interrupt_signal()` thro
 filesystem readiness, unknown outputs, durable settlement and resource deletion stay outside
 this select. Raw read/skip retain their separate signal construction.
 
-`tests/api/monthly_p2_input.rs` and `monthly_p2_input/cross_socket.rs` observe the actual splice
+`tests/api/monthly/host/p2/tcp/input/mod.rs` and `api/monthly/host/p2/tcp/input/cross_socket.rs` observe the actual splice
 future's first Pending for same-socket and cross-socket pairs. A positive native `check_write`
 probe runs only when the test observer is installed. Fresh output capacity and a silent source
 support input-demand attribution through provider ordering; the provider-internal input await
@@ -537,19 +537,19 @@ body or stream is replaced. The inline retry delay, live response-body resend
 the typed interrupt. Each ready select prefers native completion on a tie. An interrupted
 prefix skip drops the detached body without replacing the original guest body or stream.
 Retry policy, response classification, prefix read, durable completion and request-scope
-settlement remain outside those ready selects. `tests/api/monthly_p2_http_body.rs` observes the second native read's actual Pending
+settlement remain outside those ready selects. `tests/api/monthly/host/p2/http/body.rs` observes the second native read's actual Pending
 after a first byte and keeps the first response silent through physical stop.
-`tests/api/monthly_p2_http_retry_delay.rs` instead closes the partial first response, observes
+`tests/api/monthly/host/p2/http/retry_delay/mod.rs` instead closes the partial first response, observes
 the actual retry sleep's first Pending with the same read child and invocation, and stops before
 any second request. It tests both modes under memory, prepaid compute and matching scripted storage,
 plus a completion-before-stop case where the sleep returns before the second request. A two-slot
 pool permits durable repair. Account-level positive memory updates after the seed are not attributed
 to the target because the seed's sub-unit remainder may flush later; the closed-window zero-delta
-check remains separate. `tests/api/monthly_p2_http_resend.rs` ends the partial first response,
+check remains separate. `tests/api/monthly/host/p2/http/resend/mod.rs` ends the partial first response,
 observes the second request and its native resend-ready Pending with two HTTP pool slots, then verifies
 physical stop and socket closure while the second response headers remain withheld. Its
 completion-before-stop control releases the second response while the same native ready future
-is Pending and verifies normal End and Finished with no monthly stop. `tests/api/monthly_p2_http_prefix.rs` receives the second
+is Pending and verifies normal End and Finished with no monthly stop. `tests/api/monthly/host/p2/http/prefix/mod.rs` receives the second
 Range request, sends a matching full 200 response's headers, then withholds its first body
 frame while the actual prefix-skip ready future reports Pending. It checks physical unload
 and socket closure while that frame remains withheld; its completion control releases the frame
@@ -560,7 +560,7 @@ Direct P2 HTTP response-body `blocking_skip` also opens a `WriteRemoteBatched` c
 that request scope. Its live native wait selects the typed signal with native completion first
 on a tie, abandoning only the skip child on interruption. Replay retains the single scope,
 Jump-replaces the interrupted children and sends a new HTTP request with the same key.
-`tests/api/monthly_p2_http_skip.rs` observes the actual skip Pending after a completed first-byte
+`tests/api/monthly/host/p2/http/skip.rs` observes the actual skip Pending after a completed first-byte
 read, keeps the second byte gated through physical stop, and verifies completion-first return
 separately. The one-slot pool self-wait is separate GOL-685. Status-code retry resend-ready, background
 resend-ready, nonblocking body reads and upload capacity remain separate boundaries.
@@ -591,7 +591,7 @@ around the native live receive. `run_read_access` leaves an interrupted
 `InterruptKind` root cause. Replay resolution, End persistence, accessor delivery and native
 bind/drop remain outside the select. The call remains `ReadRemote` and repairs its original Start.
 
-`tests/api/monthly_p3_udp.rs` covers explicitly bound, unconnected receive in both modes with
+`tests/api/monthly/host/p3/udp/mod.rs` covers explicitly bound, unconnected receive in both modes with
 memory, prepaid compute and matching scripted storage. A test-utils-only observer reports the
 real receive future's first Pending and native local address, then distinguishes return from drop.
 The guest binds loopback port zero and never reads that varying port. After physical unload,
@@ -610,7 +610,7 @@ selects the existing typed interrupt signal without a Store lock. An interrupted
 abandons the call for a trap, leaving its Start incomplete; it does not append `Cancelled`.
 Only successful acquisition transfers the permit to the live socket. The subsequent handshake
 has its own interrupt select; neither call completion nor resource-table registration is raced
-with this pool wait. `tests/api/monthly_websocket/pool.rs` holds the sole pool slot with a
+with this pool wait. `tests/api/monthly/host/websocket/pool.rs` holds the sole pool slot with a
 completed, loaded-idle Worker whose monthly permit and monitor have been released. A second
 Worker parks on initial connect with no peer connection or receive Start. Six resource/mode
 cases stop and physically unload that target before evicting the holder. Durable reconstruction
@@ -619,7 +619,7 @@ remains terminal. Peer handshakes and frames are counted as attempts, not extern
 effects.
 
 The initial `connect_async` handshake begins after a free pool permit is acquired. A passive
-observer in `tests/api/monthly_websocket/handshake.rs` reports its first native Pending while an
+observer in `tests/api/monthly/host/websocket/handshake.rs` reports its first native Pending while an
 in-process TCP peer holds back the Upgrade response. Six resource/mode cells stop the Worker,
 close the half-open socket and return both permits while 101 remains withheld. Durable replay
 repairs the original Connect Start with a new handshake; ephemeral failure is typed and a fresh
@@ -628,13 +628,13 @@ The handshake already selected the typed signal; these tests did not expose a pr
 
 Completed durable Connect replay instead restores a `Replay` connection handle without a TCP
 connection. A fresh Receive accessor or direct Close opens its own Start, then acquires a pool
-slot before reconnecting. `tests/api/monthly_websocket/reconnect_pool.rs` holds the only slot
+slot before reconnecting. `tests/api/monthly/host/websocket/reconnect_pool.rs` holds the only slot
 with another loaded-idle Worker and observes the *target's* native acquire Pending. Both helper
 acquisitions select the composed typed signal; the direct helper formerly waited without a
 signal. The holder stays loaded until the stopped target physically unloads. After holder
 eviction and capacity grant, the original Receive Start gains End then CompletionDelivered, or
 the original Close Start gains direct End, with one new handshake and no historical replay
-traffic. `tests/api/monthly_websocket/reconnect_handshake.rs` instead starts with the pool free
+traffic. `tests/api/monthly/host/websocket/reconnect_handshake.rs` instead starts with the pool free
 and withholds the third TCP Upgrade response after the target's actual reconnect `connect_async`
 reports Pending. The typed stop closes that socket and frees the slot before the peer supplies
 101; recovery repairs the same operation Start on a fourth TCP connection. Both helper paths
@@ -646,7 +646,7 @@ reader/writer locks and send/close transport back-pressure remain unproved by th
 
 A timed WebSocket receive is another distinct frame read: `live.reader.lock().await` completes
 before `reader.next()` is wrapped by the timeout and raced against the composed typed signal.
-`tests/api/monthly_websocket/timed_receive.rs` observes the *native read's* first Pending after a
+`tests/api/monthly/host/websocket/timed_receive.rs` observes the *native read's* first Pending after a
 valid Upgrade while the peer withholds its frame, matched to the timed Receive Start, invocation
 key and runtime. The guest's 300-second deadline is not driven by the monthly test clock. Six
 resource/mode cases check stop and physical socket/Store/permit/window release with the frame
@@ -658,7 +658,7 @@ interrupted; no production RED or timeout/stop tie is claimed. The reader mutex 
 Worker orchestration, not native managed-XFS measurement.
 
 A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
-untimed receive holds it in its native frame read. `tests/api/monthly_websocket/reader_lock.rs`
+untimed receive holds it in its native frame read. `tests/api/monthly/host/websocket/reader_lock.rs`
 observes the timed `reader.lock()` future's first Pending after both distinct Starts; six
 resource/mode cells prove **stop-only** physical cleanup with both frames withheld. The first
 interruptible read releases its guard on an owner monthly stop, so the missing select around
