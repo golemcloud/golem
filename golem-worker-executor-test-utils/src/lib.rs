@@ -597,6 +597,9 @@ pub struct TestWorkerExecutor {
     services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
+    /// The oplog service of an executor that runs the production worker context, which has no
+    /// test service graph.
+    production_oplog: Option<Arc<dyn golem_worker_executor::services::oplog::OplogService>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
 }
@@ -714,16 +717,17 @@ impl TestWorkerExecutor {
     }
 
     /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
-    /// executor, so it works when the shard of the agent is no longer assigned here.
+    /// executor, so it works when the shard of the agent is no longer assigned here. It works with
+    /// the test worker context and with the production worker context.
     pub async fn stored_oplog(&self, agent_id: &AgentId) -> Vec<OplogEntry> {
         use golem_worker_executor::services::HasOplogService;
 
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let oplog = self
-            .services
-            .as_ref()
-            .expect("test service graph is captured")
-            .oplog_service();
+        let oplog = match (&self.services, &self.production_oplog) {
+            (Some(services), _) => services.oplog_service(),
+            (None, Some(oplog)) => Arc::clone(oplog),
+            (None, None) => panic!("the executor has no captured oplog service"),
+        };
         let last = oplog
             .get_last_index(&owned_agent_id, AgentMode::Durable)
             .await;
@@ -2287,6 +2291,7 @@ async fn start_executor_with_config(
                 additional_test_deps,
                 services: services.lock().unwrap().take(),
                 production_active_agents: None,
+                production_oplog: None,
                 concurrent_resource_entry: None,
                 leak_detector,
             });
@@ -3489,6 +3494,7 @@ struct ProductionContextTestServerBootstrap {
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
+    oplog: Arc<std::sync::OnceLock<Arc<dyn golem_worker_executor::services::oplog::OplogService>>>,
 }
 
 /// Builds the active agents of an executor that runs in the test process.
@@ -3536,6 +3542,17 @@ async fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn capture_services(
+        &self,
+        services: &golem_worker_executor::services::All<
+            golem_worker_executor::workerctx::default::Context,
+        >,
+    ) {
+        use golem_worker_executor::services::HasOplogService;
+
+        let _ = self.oplog.set(services.oplog_service());
+    }
+
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
@@ -3780,12 +3797,14 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
 
     let active_agents = Arc::new(std::sync::OnceLock::new());
+    let oplog = Arc::new(std::sync::OnceLock::new());
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
+            oplog: oplog.clone(),
         },
         config,
         prometheus.clone(),
@@ -3832,6 +3851,7 @@ async fn run_production_context_bootstrap(
                         .expect("active agents initialized")
                         .clone(),
                 ),
+                production_oplog: oplog.get().cloned(),
                 concurrent_resource_entry,
                 leak_detector,
             });
