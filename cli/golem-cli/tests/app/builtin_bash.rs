@@ -20,19 +20,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use test_r::{test, timeout};
 
-const OWNER: &str = r#"BashOwner("acceptance")"#;
+pub(super) const OWNER: &str = r#"BashOwner("acceptance")"#;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BashResult {
-    stdout: String,
-    stderr: String,
-    exit_code: u8,
-    cwd: String,
+pub(super) struct BashResult {
+    pub(super) stdout: String,
+    pub(super) stderr: String,
+    pub(super) exit_code: u8,
+    pub(super) cwd: String,
 }
 
 // Start an isolated server with three owners: full access, no sibling binding, and denied sibling files.
-async fn context() -> TestContext {
+pub(super) async fn context() -> TestContext {
     let mut ctx = TestContext::new();
     let component_dir = ctx.cwd_path_join("component");
     fs::create_dir_all(component_dir.join("src")).unwrap();
@@ -135,7 +135,7 @@ async fn context() -> TestContext {
 
 // Every call is a fresh shell starting in `cwd` (empty for the default). Each call gets a new
 // request key.
-async fn invoke(ctx: &TestContext, owner: &str, cwd: &str, script: &str) -> BashResult {
+pub(super) async fn invoke(ctx: &TestContext, owner: &str, cwd: &str, script: &str) -> BashResult {
     invoke_with_key(ctx, owner, cwd, script, &uuid::Uuid::new_v4().to_string()).await
 }
 
