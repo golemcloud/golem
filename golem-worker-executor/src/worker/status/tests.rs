@@ -18,11 +18,13 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::status::{
-    calculate_last_known_status, calculate_last_known_status_for_existing_worker,
+    StatusOplogReader, calculate_last_known_status,
+    calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
     calculate_oplog_processor_checkpoints, calculate_revert_validation_regions,
-    calculate_total_linear_memory_size, fold_invocation_result_entries,
-    hydrate_initial_pending_evidence, try_fold_status_from,
+    calculate_status_with_reader, calculate_total_linear_memory_size, fold_committed_status,
+    fold_invocation_result_entries, hydrate_initial_pending_evidence, try_fold_status_from,
+    try_fold_status_from_reader,
 };
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
@@ -122,15 +124,16 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
             },
         )]);
         test_case.read_starts.lock().unwrap().clear();
-        hydrate_initial_pending_evidence(
+        let reader = StatusOplogReader::new(
             &test_case,
             &test_case.owned_agent_id,
             AgentMode::Durable,
-            &mut baseline,
-            &entries,
-        )
-        .await
-        .unwrap();
+            None,
+            OplogIndex::from_u64(13),
+        );
+        hydrate_initial_pending_evidence(&reader, &mut baseline, &entries)
+            .await
+            .unwrap();
         assert!(test_case.read_starts.lock().unwrap().is_empty());
         assert!(
             baseline
@@ -2939,7 +2942,9 @@ async fn non_existing_oplog() {
 /// Builds an oplog where a clean idle boundary (idx 3) precedes an invocation that later jumps,
 /// deleting the region [4, 7]. Returns the test case plus the clean-checkpoint baseline (idx 3),
 /// a stale live baseline inside the deleted region (idx 6), and the expected final status.
-fn jump_repair_fixture() -> (
+fn jump_repair_fixture(
+    agent_mode: AgentMode,
+) -> (
     TestCase,
     AgentStatusRecord,
     AgentStatusRecord,
@@ -2949,6 +2954,7 @@ fn jump_repair_fixture() -> (
     let k2 = IdempotencyKey::fresh();
 
     let test_case = TestCase::builder(0)
+        .agent_mode(agent_mode)
         .agent_invocation_started("a", vec![], k1.clone()) // idx 2
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
@@ -2974,8 +2980,190 @@ fn jump_repair_fixture() -> (
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let (test_case, checkpoint, stale_live, expected) = jump_repair_fixture(AgentMode::Ephemeral);
+    let fixture = gated_ephemeral_fixture(100).await;
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    let horizon = *receipt.last_key_value().unwrap().0;
+    fixture.archive.wait_for_appends(1).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Ephemeral,
+        Some(fixture.oplog.as_ref()),
+        horizon,
+    );
+    // Exercise both checkpoint fallback and full reconstruction with the writer blocked.
+    for candidate in [Some(checkpoint), None] {
+        let result =
+            calculate_status_with_reader(&test_case, &reader, Some(stale_live.clone()), || async {
+                candidate
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(result.oplog_idx, horizon);
+    }
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    assert_eq!(fixture.archive.length().await.unwrap(), 0);
+    // The actor's fold must not mistake a DurableOnly precommit tip for acknowledged coverage.
+    let sampled = fixture.oplog.current_oplog_index().await;
+    let receipt = fixture
+        .oplog
+        .commit(CommitLevel::DurableOnly)
+        .await
+        .unwrap();
+    let (result, gap, projected_through) = fold_committed_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::DurableOnly,
+        sampled,
+        expected.clone(),
+        receipt,
+    )
+    .await;
+    assert_eq!(projected_through, horizon);
+    assert_eq!(result.unwrap(), Some(expected));
+    assert!(!gap);
+    fixture.archive.release(2);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn bounded_fold_covers_receipt_gap_and_unpersisted_tail() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let mut builder = TestCase::builder(0).agent_mode(AgentMode::Ephemeral);
+    for delta in 1..80 {
+        builder = builder.grow_memory(delta);
+    }
+    let test_case = builder.build();
+    let fixture = gated_ephemeral_fixture(1).await;
+    // Forty threshold batches overflow the receipt cache. The last two remain unpersisted.
+    fixture.archive.release(38);
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    assert!(!receipt.contains_key(&OplogIndex::from_u64(3)));
+    let horizon = *receipt.last_key_value().unwrap().0;
+    assert_eq!(horizon, OplogIndex::from_u64(80));
+    fixture.archive.wait_for_appends(39).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+    // The receipt proves coverage beyond the sampled tip; an empty consumed receipt uses
+    // the precommit sample instead. Both paths must stop before the buffered sentinel.
+    for (sampled, receipt) in [
+        (OplogIndex::from_u64(78), receipt),
+        (horizon, BTreeMap::new()),
+    ] {
+        let (result, gap, projected_through) = fold_committed_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            fixture.oplog.as_ref(),
+            AgentMode::Ephemeral,
+            CommitLevel::Deferred,
+            sampled,
+            test_case.entries[0].expected_status.clone(),
+            receipt,
+        )
+        .await;
+        assert_eq!(projected_through, horizon);
+        let result = result.unwrap().unwrap();
+        assert!(gap);
+        assert_eq!(result, test_case.entries[79].expected_status);
+        assert_eq!(result.total_linear_memory_size, 200 + (79 * 80 / 2));
+    }
+    assert_eq!(fixture.archive.length().await.unwrap(), 76);
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    fixture.archive.release(3);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+async fn bounded_fold_excludes_later_jump_and_rejects_ahead_baseline() {
+    let (test_case, checkpoint, stale_live, _) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(6),
+    );
+    let result = try_fold_status_from_reader(&test_case, &reader, checkpoint)
+        .await
+        .unwrap();
+    assert_eq!(result, Some(stale_live.clone()));
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(5),
+    );
+    assert!(
+        try_fold_status_from_reader(&test_case, &reader, stale_live)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+async fn invocation_prefix_repairs_jump_without_reading_persisted_checkpoint() {
+    let (test_case, invocation_prefix, _, final_expected) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        final_expected.oplog_idx,
+    );
+    let repaired =
+        calculate_status_with_reader(&test_case, &reader, Some(invocation_prefix), || async {
+            panic!("a surviving invocation prefix must avoid the storage checkpoint read")
+        })
+        .await
+        .unwrap();
+    assert_eq!(repaired, Some(final_expected));
+    assert!(!test_case.read_starts.lock().unwrap().contains(&1));
+}
+
+#[test]
 async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
-    let (test_case, checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // The stale live baseline is inside the deleted region, so it cannot be folded forward.
     let direct = try_fold_status_from(
@@ -3015,7 +3203,8 @@ async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     test_case.read_starts.lock().unwrap().clear();
 
@@ -3040,7 +3229,8 @@ async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
 
 #[test]
 async fn full_recompute_reads_each_oplog_chunk_twice() {
-    let (test_case, _checkpoint, _stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, _stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     let result = calculate_last_known_status(
         &test_case,
@@ -3060,7 +3250,8 @@ async fn full_recompute_reads_each_oplog_chunk_twice() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // A checkpoint that itself falls inside the deleted region (idx 5) cannot be folded forward
     // either, so we must fall back to a full recompute.
@@ -3084,6 +3275,385 @@ async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable
     assert!(
         read_starts.contains(&1),
         "expected a full recompute from idx 1, got {read_starts:?}"
+    );
+}
+
+fn rollback_fixture() -> TestCase {
+    TestCase::builder(0)
+        .add(
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            |status| status,
+        ) // 2
+        .add(
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::Custom("<scope:transaction>".into()),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                span_started: None,
+            },
+            |status| status,
+        ) // 3
+        .grow_memory(17) // 4: work inside the transaction and atomic region
+        .add(
+            OplogEntry::EndAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                begin_index: OplogIndex::from_u64(2),
+            },
+            |status| status,
+        ) // 5
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            IdempotencyKey::fresh(),
+            ComponentRevision::INITIAL,
+        ) // 6: transaction still open
+        .add(
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(3),
+                response: None,
+                forced_commit: true,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |status| status,
+        ) // 7: may have drained after acceptance of a runtime cut
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            IdempotencyKey::fresh(),
+            ComponentRevision::INITIAL,
+        ) // 8: safe retirement boundary
+        .build()
+}
+
+fn fold_rollback_fixture(test_case: &TestCase, tip: usize, chunk_size: usize) -> AgentStatusRecord {
+    let mut status = AgentStatusRecord::default();
+    for (chunk_index, chunk) in test_case.entries[..tip].chunks(chunk_size).enumerate() {
+        let entries = chunk
+            .iter()
+            .enumerate()
+            .map(|(offset, entry)| {
+                (
+                    OplogIndex::from_u64((chunk_index * chunk_size + offset + 1) as u64),
+                    entry.oplog_entry.clone(),
+                )
+            })
+            .collect();
+        status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    }
+    status
+}
+
+#[test]
+fn atomic_rollback_retirement_is_entry_ordered_and_chunk_independent() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    let fixture = rollback_fixture();
+    for tip in [6, 7, 8] {
+        for chunk_size in 1..=tip {
+            let status = fold_rollback_fixture(&fixture, tip, chunk_size);
+            let state = &status.atomic_rollback;
+            assert_eq!(state.last_work, OplogIndex::from_u64(tip as u64));
+            assert_eq!(
+                state.open_cut_scopes.contains_key(&OplogIndex::from_u64(3)),
+                tip == 6
+            );
+            if tip < 8 {
+                assert_eq!(state.retired_through, OplogIndex::NONE);
+                assert_eq!(
+                    state.regions.get(&OplogIndex::from_u64(2)),
+                    Some(&Some(OplogIndex::from_u64(5)))
+                );
+                assert_eq!(
+                    suffix_rollback_region(
+                        state,
+                        &status.skipped_regions,
+                        status.oplog_idx,
+                        Some(OplogIndex::from_u64(4))
+                    )
+                    .unwrap(),
+                    Some(OplogRegion::from_range(3..=tip as u64))
+                );
+            } else {
+                assert!(state.regions.is_empty());
+                assert_eq!(state.retired_through, OplogIndex::from_u64(8));
+                assert!(
+                    suffix_rollback_region(
+                        state,
+                        &status.skipped_regions,
+                        status.oplog_idx,
+                        Some(OplogIndex::from_u64(4))
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+async fn atomic_rollback_serialized_warm_status_never_reads_its_prefix() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    use golem_common::serialization::{deserialize, serialize};
+    let mut fixture = rollback_fixture();
+    fixture.entries.truncate(7);
+    let baseline = fold_rollback_fixture(&fixture, 6, 2);
+    let bytes = serialize(&baseline).unwrap();
+    let restored: AgentStatusRecord = deserialize(&bytes).unwrap();
+    fixture.read_starts.lock().unwrap().clear();
+    let status = try_fold_status_from(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        restored,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        suffix_rollback_region(
+            &status.atomic_rollback,
+            &status.skipped_regions,
+            status.oplog_idx,
+            Some(OplogIndex::from_u64(4))
+        )
+        .unwrap(),
+        Some(OplogRegion::from_range(3..=7))
+    );
+    let reads = fixture.read_starts.lock().unwrap();
+    assert!(!reads.is_empty());
+    assert!(
+        reads.iter().all(|start| *start == 7),
+        "read cached prefix: {reads:?}"
+    );
+}
+
+#[test]
+fn atomic_rollback_snapshot_selection_does_not_destroy_fallback_state() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    let fixture = rollback_fixture();
+    let status = fold_rollback_fixture(&fixture, 4, 1);
+    let mut selected = status.skipped_regions.clone();
+    selected.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+        2..=4,
+    )]));
+    assert_eq!(
+        suffix_rollback_region(&status.atomic_rollback, &selected, status.oplog_idx, None).unwrap(),
+        None
+    );
+    assert_eq!(
+        suffix_rollback_region(
+            &status.atomic_rollback,
+            &status.skipped_regions,
+            status.oplog_idx,
+            None
+        )
+        .unwrap(),
+        Some(OplogRegion::from_range(3..=4))
+    );
+}
+
+#[test]
+fn atomic_rollback_ignores_cancelled_and_transaction_precommit_as_scope_ends() {
+    let fixture = rollback_fixture();
+    let mut state = fold_rollback_fixture(&fixture, 6, 1).atomic_rollback;
+    state.observe(
+        OplogIndex::from_u64(7),
+        &OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(3),
+            partial: None,
+            span_finished: None,
+        },
+    );
+    state.observe(
+        OplogIndex::from_u64(8),
+        &OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index: OplogIndex::from_u64(4),
+        },
+    );
+    state.observe(OplogIndex::from_u64(9), &fixture.entries[7].oplog_entry);
+    assert!(state.open_cut_scopes.contains_key(&OplogIndex::from_u64(3)));
+    assert_eq!(state.regions.len(), 1);
+    assert_eq!(state.retired_through, OplogIndex::NONE);
+}
+
+#[test]
+fn atomic_rollback_long_completed_history_does_not_accumulate_regions() {
+    let fixture = rollback_fixture();
+    let mut state = golem_common::model::AtomicRollbackState::default();
+    for invocation in 0..10_000 {
+        let begin = OplogIndex::from_u64(invocation * 3 + 1);
+        state.observe(begin, &fixture.entries[1].oplog_entry);
+        state.observe(
+            begin.next(),
+            &OplogEntry::EndAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                begin_index: begin,
+            },
+        );
+        state.observe(begin.next().next(), &fixture.entries[7].oplog_entry);
+        assert!(state.regions.is_empty());
+        assert!(state.open_cut_scopes.is_empty());
+    }
+    assert_eq!(state.retired_through, OplogIndex::from_u64(30_000));
+}
+
+#[test]
+fn baseline_rejects_newly_exposed_snapshot_prefix() {
+    let mut baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(8),
+        ..Default::default()
+    };
+    baseline
+        .skipped_regions
+        .set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=5,
+        )]));
+    assert!(super::baseline_is_invalidated(
+        &baseline,
+        &DeletedRegions::new(),
+        &DeletedRegions::new()
+    ));
+    let mut later = baseline.skipped_regions.clone();
+    later.add(OplogRegion::from_range(9..=10));
+    assert!(!super::baseline_is_invalidated(
+        &baseline,
+        &DeletedRegions::new(),
+        &later
+    ));
+}
+
+#[test]
+async fn atomic_rollback_jump_and_revert_repair_from_a_retained_prefix() {
+    for revert in [false, true] {
+        let mut fixture = rollback_fixture();
+        let prefix = fold_rollback_fixture(&fixture, 1, 1);
+        let stale = fold_rollback_fixture(&fixture, 8, 2);
+        assert_eq!(
+            stale.atomic_rollback.retired_through,
+            OplogIndex::from_u64(8)
+        );
+        fixture.entries.push(TestEntry {
+            oplog_entry: if revert {
+                OplogEntry::revert(OplogRegion::from_range(2..=8))
+            } else {
+                OplogEntry::jump(None, OplogRegion::from_range(3..=8))
+            },
+            expected_status: AgentStatusRecord::default(),
+        });
+        fixture.read_starts.lock().unwrap().clear();
+        let reader = StatusOplogReader::new(
+            &fixture,
+            &fixture.owned_agent_id,
+            AgentMode::Durable,
+            None,
+            OplogIndex::from_u64(9),
+        );
+        let repaired =
+            calculate_status_with_reader(&fixture, &reader, Some(stale), || async { Some(prefix) })
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(repaired.atomic_rollback.retired_through, OplogIndex::NONE);
+        assert!(repaired.atomic_rollback.open_cut_scopes.is_empty());
+        assert_eq!(repaired.atomic_rollback.regions.len(), usize::from(!revert));
+        if !revert {
+            assert_eq!(
+                repaired
+                    .atomic_rollback
+                    .regions
+                    .get(&OplogIndex::from_u64(2)),
+                Some(&None)
+            );
+            assert_eq!(repaired.atomic_rollback.last_work, OplogIndex::from_u64(2));
+        }
+        assert!(
+            fixture
+                .read_starts
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|start| *start > 1)
+        );
+    }
+}
+
+#[test]
+async fn atomic_rollback_failed_snapshot_update_restores_prefix_without_full_scan() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".into(),
+    };
+    let fixture = TestCase::builder(0)
+        .add(
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            |status| status,
+        )
+        .grow_memory(17)
+        .pending_update(&update, |_| {})
+        .failed_update(update)
+        .build();
+    let prefix = fold_rollback_fixture(&fixture, 3, 1);
+    let pending_reader = StatusOplogReader::new(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(4),
+    );
+    let pending = calculate_status_with_reader(&fixture, &pending_reader, None, || async { None })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pending.atomic_rollback.regions.is_empty());
+    fixture.read_starts.lock().unwrap().clear();
+    let reader = StatusOplogReader::new(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(5),
+    );
+    let repaired =
+        calculate_status_with_reader(&fixture, &reader, Some(pending), || async { Some(prefix) })
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        repaired
+            .atomic_rollback
+            .regions
+            .get(&OplogIndex::from_u64(2)),
+        Some(&None)
+    );
+    assert_eq!(repaired.total_linear_memory_size, 217);
+    assert!(
+        fixture
+            .read_starts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|start| *start >= 4)
     );
 }
 
@@ -3137,6 +3707,17 @@ impl TestCaseBuilder {
             previous_status_record: status,
             owned_agent_id,
         }
+    }
+
+    fn agent_mode(mut self, agent_mode: AgentMode) -> Self {
+        assert_eq!(self.entries.len(), 1);
+        let OplogEntry::Create { parameters, .. } = &mut self.entries[0].oplog_entry else {
+            unreachable!()
+        };
+        parameters.agent_mode = agent_mode;
+        self.entries[0].expected_status.agent_mode = agent_mode;
+        self.previous_status_record.agent_mode = agent_mode;
+        self
     }
 
     pub fn add(
@@ -3789,7 +4370,22 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn build(self) -> TestCase {
+    pub fn build(mut self) -> TestCase {
+        // These fixtures assert the other status fields. Rollback state has dedicated assertions
+        // below, while each cached baseline here must also carry its derived rollback summary.
+        for tip in 0..self.entries.len() {
+            let visibility = &self.entries[tip].expected_status;
+            let mut state = golem_common::model::AtomicRollbackState::default();
+            for (offset, entry) in self.entries[..=tip].iter().enumerate() {
+                let index = OplogIndex::from_u64(offset as u64 + 1);
+                if !visibility.skipped_regions.is_in_deleted_region(index)
+                    && !visibility.deleted_regions.is_in_deleted_region(index)
+                {
+                    state.observe(index, &entry.oplog_entry);
+                }
+            }
+            self.entries[tip].expected_status.atomic_rollback = state;
+        }
         TestCase {
             owned_agent_id: self.owned_agent_id,
             entries: self

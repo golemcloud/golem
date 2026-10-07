@@ -17,6 +17,8 @@ use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::{
     OplogArchive, OplogArchiveResult, OplogArchiveService, transfer_between_lower_layers,
 };
+use crate::services::oplog::rate_limited::RateLimitedOplog;
+use crate::services::resource_limits::AtomicResourceEntry;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
@@ -8099,6 +8101,120 @@ async fn deleting_worker_fences_in_flight_archive_transfers_impl(agent_mode: Age
         !service.exists(&owned_agent_id, agent_mode).await,
         "an in-flight archive transfer recreated a deleted oplog"
     );
+}
+
+#[test]
+async fn saved_executor_fence_stops_keep_alive_transfer_after_outer_handle_drops() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let (append_started_tx, append_started_rx) = oneshot::channel();
+    let release_append = Arc::new(Notify::new());
+    let secondary: Arc<dyn OplogArchiveService> = Arc::new(BlockingArchiveService {
+        inner: Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+            RetryConfig::default(),
+        )),
+        pause_at: PausePoint::Append,
+        paused: Arc::new(Mutex::new(Some(append_started_tx))),
+        release: release_append,
+        append_finished: Arc::new(Notify::new()),
+    });
+    let service = Arc::new(MultiLayerOplogService::new(
+        primary,
+        nev![secondary],
+        1000,
+        1,
+    ));
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: ComponentId(Uuid::new_v4()),
+        agent_id: "executor-shutdown-during-transfer".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let inner = service
+        .open(
+            &mut service.lock_lifecycle(&agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id.clone(), account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    inner.add(OplogEntry::no_op(None)).await.unwrap();
+    inner.commit(CommitLevel::Always).await.unwrap();
+
+    let outer: Arc<dyn Oplog> = Arc::new(RateLimitedOplog::new(
+        inner.clone(),
+        Arc::new(AtomicResourceEntry::new(
+            u64::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            u64::MAX,
+        )),
+        account_id,
+        environment_id,
+    ));
+    let weak_outer = Arc::downgrade(&outer);
+    let weak_inner = Arc::downgrade(&inner);
+    let stale_shutdown = outer.executor_shutdown_handle();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let loops = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+    loops.register_owner_oplog(outer.clone());
+
+    assert_eq!(MultiLayerOplog::try_archive(&inner).await, Ok(Some(true)));
+    tokio::time::timeout(Duration::from_secs(1), append_started_rx)
+        .await
+        .expect("archive transfer did not start")
+        .expect("archive transfer start signal dropped");
+    drop(outer);
+    drop(inner);
+    assert!(weak_outer.upgrade().is_none());
+
+    shutdown.cancel();
+    tokio::time::timeout(Duration::from_secs(1), loops.wait_for_exit())
+        .await
+        .expect("saved executor fence did not stop the keep-alive transfer")
+        .unwrap();
+    assert!(weak_inner.upgrade().is_none());
+
+    let replacement = service
+        .open(
+            &mut service.lock_lifecycle(&agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            None,
+        )
+        .await;
+    stale_shutdown.fence();
+    stale_shutdown.fence();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), replacement.closed())
+            .await
+            .is_err(),
+        "stale executor fence stopped the replacement transfer"
+    );
+    replacement.retire();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

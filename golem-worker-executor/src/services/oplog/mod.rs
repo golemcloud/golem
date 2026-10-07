@@ -76,6 +76,9 @@ mod raw_session;
 mod reader;
 
 #[cfg(test)]
+pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
+
+#[cfg(test)]
 pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
 
 #[cfg(test)]
@@ -881,6 +884,36 @@ impl std::error::Error for OplogError {}
 pub type OplogAddReceipt = BoxFuture<'static, Result<OplogIndex, OplogError>>;
 pub type OplogAddPairReceipt = BoxFuture<'static, Result<(OplogIndex, OplogIndex), OplogError>>;
 
+#[derive(Clone)]
+pub struct OplogShutdownHandle {
+    fence: Arc<dyn Fn() + Send + Sync>,
+    close_and_wait: Arc<dyn Fn() -> BoxFuture<'static, Result<(), String>> + Send + Sync>,
+}
+
+impl OplogShutdownHandle {
+    pub fn new(
+        fence: impl Fn() + Send + Sync + 'static,
+        close_and_wait: impl Fn() -> BoxFuture<'static, Result<(), String>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            fence: Arc::new(fence),
+            close_and_wait: Arc::new(close_and_wait),
+        }
+    }
+
+    pub fn from_completion(completion: OplogCloseCompletion) -> Self {
+        Self::new(|| {}, move || completion.clone().boxed())
+    }
+
+    pub fn fence(&self) {
+        (self.fence)();
+    }
+
+    pub async fn close_and_wait(&self) -> Result<(), String> {
+        (self.close_and_wait)().await
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
     pub watermark: OplogIndex,
@@ -890,6 +923,16 @@ pub struct RawDurableStreamSessionStatus {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
+    /// A non-owning, exact-generation executor-shutdown capability. The synchronous fence is
+    /// installed before executor-owned tasks are cancelled; after those tasks stop, the close
+    /// action joins every captured oplog layer even if the outer handle has already disappeared.
+    fn executor_shutdown_handle(&self) -> OplogShutdownHandle {
+        self.inner().map_or_else(
+            || OplogShutdownHandle::from_completion(self.closed()),
+            |inner| inner.executor_shutdown_handle(),
+        )
+    }
+
     /// Retires this open handle after its worker's durable state has been deleted.
     ///
     /// Cached implementations unregister the exact handle and propagate retirement through

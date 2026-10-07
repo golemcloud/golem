@@ -1,20 +1,58 @@
+import { readFileSync } from "node:fs"
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { sharedEffectRuntime } from "./shared-effect.mjs"
 import { staticContracts } from "./static-contracts.mjs"
 
-const sdkSource = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/src")
+const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const manifest = JSON.parse(readFileSync(resolve(packageDirectory, "package.json"), "utf8"))
+const sdkSource = resolve(packageDirectory, "dist/component")
 const entry = "\0golem-effect-component"
-const packageName = "@golemcloud/effect-golem"
-const publicEntries = new Map([
-  [packageName, "index.js"],
-  [`${packageName}/HttpRouter`, "internal/component/HttpRouter.js"],
-  [`${packageName}/middleware`, "Middleware.js"],
-  [`${packageName}/sqlite`, "Sqlite/SqliteClient.js"],
-  [`${packageName}/postgres`, "Postgres/PgClient.js"],
-  [`${packageName}/mysql`, "Mysql/MySqlClient.js"],
-  [`${packageName}/ignite2`, "Ignite/IgniteClient.js"],
-])
+const packageName = manifest.name
+const componentRoot = "./dist/component/"
+const matchPackageExport = (subpath) => {
+  if (Object.hasOwn(manifest.exports, subpath)) return [manifest.exports[subpath], undefined]
+  let best
+  for (const [pattern, target] of Object.entries(manifest.exports)) {
+    const star = pattern.indexOf("*")
+    if (star === -1) continue
+    const prefix = pattern.slice(0, star)
+    const suffix = pattern.slice(star + 1)
+    if (!subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue
+    if (
+      !best ||
+      prefix.length > best.prefix.length ||
+      (prefix.length === best.prefix.length && pattern.length > best.pattern.length)
+    )
+      best = {
+        pattern,
+        prefix,
+        target,
+        wildcard: subpath.slice(prefix.length, subpath.length - suffix.length),
+      }
+  }
+  return best ? [best.target, best.wildcard] : [undefined, undefined]
+}
+const packageEntry = (source) => {
+  let subpath = "."
+  if (source !== packageName) {
+    if (!source.startsWith(packageName + "/")) return undefined
+    const name = source.slice(packageName.length + 1)
+    if (
+      name.includes("\\") ||
+      name.split("/").some((part) => part === "" || part === "." || part === "..")
+    )
+      throw new Error(`Invalid ${packageName} component subpath: ${name}`)
+    subpath = `./${name}`
+  }
+  const [target, wildcard] = matchPackageExport(subpath)
+  const component = target && typeof target === "object" && target["golem-component"]
+  if (!component) return undefined
+  const resolved = wildcard === undefined ? component : component.replaceAll("*", wildcard)
+  if (!resolved.startsWith(componentRoot))
+    throw new Error(`Invalid ${packageName} component export target: ${resolved}`)
+  return resolved.slice(componentRoot.length)
+}
 
 const normalizePlugins = async (plugins) => {
   const normalized = []
@@ -48,12 +86,7 @@ export async function componentConfiguration(rollup, optionsFactory) {
   const makeSdkPlugin = () => ({
     name: "golem-effect-sdk-source",
     resolveId(source) {
-      if (source === packageName)
-        return {
-          id: join(sdkSource, "internal/component/index.js"),
-          moduleSideEffects: false,
-        }
-      const path = publicEntries.get(source)
+      const path = packageEntry(source)
       if (path) return { id: join(sdkSource, path), moduleSideEffects: false }
       if (source.startsWith(sdkSource + sep)) return { id: source, moduleSideEffects: false }
       return null
@@ -64,7 +97,7 @@ export async function componentConfiguration(rollup, optionsFactory) {
     },
   })
   const plugins = [
-    staticContracts(sdkSource, publicEntries),
+    staticContracts(sdkSource, packageEntry),
     makeSdkPlugin(),
     sharedEffectRuntime(input),
     ...(await normalizePlugins(options.plugins)),
@@ -132,7 +165,7 @@ export async function componentConfiguration(rollup, optionsFactory) {
     },
   }
   const finalPlugins = [
-    staticContracts(sdkSource, publicEntries),
+    staticContracts(sdkSource, packageEntry),
     makeSdkPlugin(),
     sharedEffectRuntime(input),
     ...finalCallerPlugins,

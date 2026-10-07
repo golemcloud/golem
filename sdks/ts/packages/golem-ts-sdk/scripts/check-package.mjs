@@ -3,7 +3,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import nodeResolve from '@rollup/plugin-node-resolve';
+import { rollup } from 'rollup';
+import ts from 'typescript';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const directory = mkdtempSync(join(tmpdir(), 'golem-ts-package-'));
@@ -58,6 +61,97 @@ try {
     `typescript@${manifest.devDependencies.typescript}`,
     `@types/node@${manifest.devDependencies['@types/node']}`,
   ]);
+  const publicComponentExports = Object.entries(manifest.exports).filter(
+    ([, target]) => target && typeof target === 'object' && typeof target.import === 'string',
+  );
+  for (const [subpath, target] of publicComponentExports)
+    assert.equal(
+      typeof target['golem-component'],
+      'string',
+      `Public runtime export has no component target: ${subpath}`,
+    );
+  const publicComponentModules = publicComponentExports.map(([subpath]) =>
+    subpath === '.' ? manifest.name : `${manifest.name}/${subpath.slice(2)}`,
+  );
+  const componentInput = join(directory, 'component-public-exports.mjs');
+  writeFileSync(
+    componentInput,
+    `${publicComponentModules
+      .map((name, index) => `import * as public${index} from ${JSON.stringify(name)};`)
+      .join('\n')}
+import { defineHttpRouter } from ${JSON.stringify(manifest.name)};
+import { HttpRouterError } from ${JSON.stringify(`${manifest.name}/http-router`)};
+const router = defineHttpRouter('PackedIdentity').mount('/packed');
+try {
+  router.mount('/duplicate');
+  throw new Error('Expected defineHttpRouter to reject a second mount');
+} catch (error) {
+  if (!(error instanceof HttpRouterError)) throw error;
+}
+export const publicModules = [${publicComponentModules.map((_, index) => `public${index}`).join(',')}];
+`,
+  );
+  const { componentPlugin } = await import(pathToFileURL(join(installed, 'dist/component.mjs')));
+  const componentConfiguration = (input) => ({
+    fileNames: [input],
+    options: {
+      allowJs: true,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      target: ts.ScriptTarget.ES2022,
+      skipLibCheck: true,
+    },
+  });
+  const componentBundle = await rollup({
+    input: 'virtual:agent-main',
+    external: (id) => /^(golem:|wasi:|node:|wasm-rquickjs:)/.test(id),
+    onwarn: (warning, warn) => {
+      if (warning.code !== 'CIRCULAR_DEPENDENCY') warn(warning);
+    },
+    plugins: [
+      componentPlugin(componentConfiguration(componentInput), componentInput),
+      nodeResolve({ extensions: ['.mjs', '.js'] }),
+    ],
+  });
+  try {
+    const watched = new Set(componentBundle.watchFiles.map((id) => id.replaceAll('\\', '/')));
+    for (const [, target] of publicComponentExports) {
+      const expected = join(installed, target['golem-component']).replaceAll('\\', '/');
+      assert.ok(
+        watched.has(expected),
+        `Packed component plugin did not resolve ${target['golem-component']}`,
+      );
+    }
+    const { output } = await componentBundle.generate({
+      format: 'cjs',
+      inlineDynamicImports: true,
+    });
+    const chunk = output.find((item) => item.type === 'chunk');
+    assert.ok(chunk, 'Packed component plugin omitted its JavaScript chunk');
+    const host = new Proxy(function () {}, {
+      get: (_, key) => (key === 'DatabaseSync' ? class {} : host),
+      apply: () => host,
+      construct: () => host,
+    });
+    const module = { exports: {} };
+    new Function('require', 'module', 'exports', chunk.code)(() => host, module, module.exports);
+    await (module.exports.default ?? module.exports);
+  } finally {
+    await componentBundle.close();
+  }
+  const privateComponentInput = join(directory, 'component-private-export.mjs');
+  writeFileSync(privateComponentInput, `import ${JSON.stringify(`${manifest.name}/component`)};\n`);
+  await assert.rejects(
+    rollup({
+      input: 'virtual:agent-main',
+      external: (id) => /^(golem:|wasi:|node:|wasm-rquickjs:)/.test(id),
+      plugins: [
+        componentPlugin(componentConfiguration(privateComponentInput), privateComponentInput),
+        nodeResolve({ extensions: ['.mjs', '.js'] }),
+      ],
+    }),
+    /not available to component builds/,
+  );
   writeFileSync(
     join(directory, 'consumer.ts'),
     `

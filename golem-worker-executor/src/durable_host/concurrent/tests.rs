@@ -1659,24 +1659,24 @@ fn terminal_guard_distinguishes_guest_drop_from_owner_teardown() {
         let probe = fenced.clone();
         let guard = AccessTerminalGuard::<Cancellable>::new(
             call,
-            Some(tx),
+            Some(tx.clone()),
             None,
             Arc::new(move || probe.load(Ordering::Acquire)),
         );
         fenced.store(teardown, Ordering::Release);
         drop(guard);
-        let DropEvent::UnfinishedCancellable { call } = rx.try_recv().unwrap() else {
-            panic!("terminal guard must preserve the existing cancellation policy");
-        };
         if teardown {
-            assert!(
-                call.span_finished.is_none(),
-                "teardown must not close the span"
-            );
+            assert!(matches!(
+                rx.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
         } else {
+            let DropEvent::UnfinishedCancellable { call } = rx.try_recv().unwrap() else {
+                panic!("terminal guard must preserve the existing cancellation policy");
+            };
             assert_eq!(call.span_finished.unwrap().span_id, span_id);
+            assert!(rx.try_recv().is_err());
         }
-        assert!(rx.try_recv().is_err());
     }
 }
 

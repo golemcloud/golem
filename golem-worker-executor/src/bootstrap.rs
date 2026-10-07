@@ -43,7 +43,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> NoAdditionalDeps {
-        NoAdditionalDeps {}
+        NoAdditionalDeps::new()
     }
 }
 

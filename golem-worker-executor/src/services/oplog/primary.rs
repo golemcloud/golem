@@ -2460,6 +2460,23 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
+    fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
+        let jobs = self.jobs.clone();
+        let closed = self.closed();
+        super::OplogShutdownHandle::new(
+            || {},
+            move || {
+                let jobs = jobs.clone();
+                let closed = closed.clone();
+                async move {
+                    let _ = jobs.send(OplogJob::Close);
+                    closed.await
+                }
+                .boxed()
+            },
+        )
+    }
+
     fn retire(&self) {
         if !self.retired.swap(true, Ordering::AcqRel) {
             let _ = self.jobs.send(OplogJob::Close);

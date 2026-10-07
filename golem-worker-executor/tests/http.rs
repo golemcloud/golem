@@ -36,6 +36,8 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
 use tracing::Instrument;
 
+mod transition_probe;
+
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
@@ -1858,6 +1860,30 @@ async fn outgoing_http_reissues_incomplete_consume_body_scope_after_restart(
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    // A fresh invocation forces Store reconstruction; looking up the completed key alone could
+    // return its persisted result without replaying the repaired history.
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let next_key = IdempotencyKey::fresh();
+    let replayed = timeout(
+        Duration::from_secs(60),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &next_key,
+            "get_idempotent",
+            data_value!(),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(replayed, format!("200 {RESPONSE}"));
+    assert_eq!(
+        request_count.load(Ordering::SeqCst),
+        3,
+        "only the new invocation may issue another HTTP request after reconstruction"
+    );
+
     drop(executor);
     http_server.abort();
     Ok(())
@@ -2760,6 +2786,144 @@ async fn outgoing_http_post_cancel_records_cancelled_and_replays(
     drop(executor);
     http_server.abort();
 
+    Ok(())
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn interrupt_while_parked_in_p2_http_blocking_splice(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const SPLICE: &str = "http::types::outgoing_body_stream::blocking_splice";
+    const BODY: &[u8] = b"splice!";
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let tcp_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let tcp_port = tcp_listener.local_addr()?.port();
+    let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let authority = http_listener.local_addr()?.to_string();
+    let (connected_tx, connected_rx) = tokio::sync::oneshot::channel();
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    let (interrupted_tx, interrupted_rx) = tokio::sync::oneshot::channel();
+    let (body_tx, mut body_rx) = mpsc::unbounded_channel();
+    // JoinSet aborts the server even if an assertion or bounded wait fails.
+    let mut servers = tokio::task::JoinSet::new();
+    servers.spawn(async move {
+        let (mut stream, _) = http_listener.accept().await?;
+        let _ = connected_tx.send(());
+        interrupted_rx.await?;
+        let _ = closed_tx.send(wait_for_peer_close_draining_data(&mut stream).await);
+        drop(stream);
+        let route = Router::new().route(
+            "/",
+            post(move |body: Bytes| async move {
+                let _ = body_tx.send(body.clone());
+                body
+            }),
+        );
+        axum::serve(http_listener, route).await?;
+        anyhow::Ok(())
+    });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, http_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpClient4");
+    let worker = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let invocation = tokio_util::task::AbortOnDropHandle::new(spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let agent_id = agent_id.clone();
+        let authority = authority.clone();
+        let key = key.clone();
+        async move {
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent_id,
+                    &key,
+                    "post_tcp_body_p2",
+                    data_value!(authority, tcp_port, BODY.len() as u64),
+                )
+                .await
+        }
+    }));
+    let (mut source, _) = timeout(Duration::from_secs(20), tcp_listener.accept()).await??;
+    timeout(Duration::from_secs(20), connected_rx).await??;
+
+    // A committed incomplete Start proves the guest reached the durable HTTP branch.
+    // The TCP peer stays connected and withholds every byte until interruption finishes.
+    timeout(Duration::from_secs(20), async {
+        loop {
+            executor.commit_oplog(&worker).await?;
+            let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+            if partition_starts(&oplog, SPLICE).counts() == (0, 0, 1) {
+                break anyhow::Ok(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await??;
+
+    timeout(Duration::from_secs(10), executor.interrupt(&worker)).await??;
+    interrupted_tx.send(()).unwrap();
+    let result = timeout(Duration::from_secs(10), invocation).await??;
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Interrupted via the Golem API")
+    );
+    executor
+        .wait_for_status(&worker, AgentStatus::Interrupted, Duration::from_secs(10))
+        .await?;
+    let owned_worker =
+        golem_common::model::OwnedAgentId::new(context.default_environment_id, &worker);
+    assert!(!executor.worker_is_loaded(&owned_worker).await);
+    assert!(wait_for_peer_close(&mut source).await?);
+    assert!(timeout(Duration::from_secs(10), closed_rx).await???);
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert_eq!(partition_starts(&oplog, SPLICE).counts(), (0, 0, 1));
+
+    // Resume the same accepted invocation with a fresh TCP connection that supplies data.
+    servers.spawn(async move {
+        let (mut source, _) = tcp_listener.accept().await?;
+        source.write_all(BODY).await?;
+        anyhow::Ok(())
+    });
+    executor.resume(&worker, false).await?;
+    let result = timeout(
+        Duration::from_secs(30),
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &agent_id,
+            &key,
+            "post_tcp_body_p2",
+            data_value!(authority, tcp_port, BODY.len() as u64),
+        ),
+    )
+    .await??
+    .into_typed::<String>()?;
+    assert_eq!(result, "200 splice!");
+    assert_eq!(
+        timeout(Duration::from_secs(10), body_rx.recv())
+            .await?
+            .unwrap(),
+        BODY
+    );
+    assert!(
+        body_rx.try_recv().is_err(),
+        "recovery must send the body only once"
+    );
+    executor.check_oplog_is_queryable(&worker).await?;
     Ok(())
 }
 

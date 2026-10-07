@@ -74,6 +74,13 @@ impl HttpClient2 for HttpClient2Impl {
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
         let component_id = std::env::var("GOLEM_COMPONENT_ID").unwrap_or("unknown".to_string());
         let worker_name = std::env::var("GOLEM_WORKER_NAME").unwrap_or("unknown".to_string());
+        let poll_delay_nanos = std::env::var("POLL_DELAY_NANOS")
+            .map(|value| {
+                value
+                    .parse::<u64>()
+                    .expect("POLL_DELAY_NANOS must be an unsigned integer")
+            })
+            .unwrap_or(100_000_000);
 
         println!("Polling until receiving {until}");
 
@@ -96,7 +103,7 @@ impl HttpClient2 for HttpClient2Impl {
                 println!("Poll loop finished");
                 return;
             } else {
-                golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(poll_delay_nanos).await;
             }
         }
     }

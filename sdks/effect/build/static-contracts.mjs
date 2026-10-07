@@ -27,6 +27,7 @@ function metadataLoader(runtime) {
     cache.set(file, module)
     const source = file
       .replace(`${path.sep}dist${path.sep}src${path.sep}`, `${path.sep}src${path.sep}`)
+      .replace(`${path.sep}dist${path.sep}component${path.sep}`, `${path.sep}src${path.sep}`)
       .replace(/\.js$/, ".ts")
     const input = fs.existsSync(source) ? source : file
     const code = ts.transpileModule(fs.readFileSync(input, "utf8"), {
@@ -56,9 +57,13 @@ function metadataLoader(runtime) {
   return (name) => load(path.join(runtime, name))
 }
 
-export function staticContracts(runtime, publicEntries) {
+export function staticContracts(runtime, packageEntry) {
   const load = metadataLoader(runtime)
-  const sdkModule = (name) => publicEntries.get(name) ?? name.slice(packageName.length + 1) + ".js"
+  const sdkModule = (name) => {
+    const entry = packageEntry(name)
+    if (!entry) throw new Error(`Package import ${name} is not available to component builds`)
+    return entry
+  }
   const sources = new Map()
   const checkers = new Map()
   const transformed = new Map()

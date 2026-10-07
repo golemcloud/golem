@@ -205,7 +205,7 @@ async fn executor_shutdown_drains_deferred_ephemeral_archive() {
         },
     );
     shutdown.cancel();
-    loops.wait_for_exit().await;
+    loops.wait_for_exit().await.unwrap();
     assert!(producer.ensure_healthy().is_err());
     assert!(slot.retain_response().is_err());
 }
@@ -375,6 +375,85 @@ async fn forced_retirement_wins_initial_and_recovery_publication_after_metadata_
         );
         assert!(slot.try_retire_quiescent());
     }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn recovery_fence_drains_admitted_work_and_reloads_from_fresh_history() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    let producer = slot.get_or_load(unused_commit(), load).await.unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let admitted = tokio::spawn({
+        let producer = producer.clone();
+        async move {
+            producer
+                .with_metadata_activity(async move {
+                    started.send(()).unwrap();
+                    released.await.unwrap();
+                })
+                .await
+        }
+    });
+    ready.await.unwrap();
+
+    // Starting the fence is synchronous and its detached owner survives this waiter.
+    drop(slot.begin_recovery());
+    assert!(slot.is_recovering());
+    assert!(matches!(
+        slot.get_or_load(unused_commit(), load).await,
+        Err(StreamStoreError::RecoveryRequired)
+    ));
+    assert!(slot.retain_response().is_err());
+    assert_eq!(
+        producer.ensure_healthy(),
+        Err(StreamStoreError::RecoveryRequired)
+    );
+    let mut drain = Box::pin(slot.begin_recovery());
+    assert!(futures::poll!(drain.as_mut()).is_pending());
+    release.send(()).unwrap();
+    assert!(matches!(
+        admitted.await.unwrap(),
+        Err(StreamStoreError::RecoveryRequired)
+    ));
+    drain.await.unwrap();
+
+    slot.finish_recovery();
+    let replacement = slot.get_or_load(unused_commit(), load).await.unwrap();
+    assert!(!Arc::ptr_eq(&replacement, &producer));
+    assert!(producer.ensure_healthy().is_err());
+    replacement.ensure_healthy().unwrap();
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn recovery_fence_owns_an_already_loading_producer() {
+    let slot = Arc::new(DurableStreamProducerSlot::default());
+    let (release, released) = tokio::sync::oneshot::channel();
+    let (started, ready) = tokio::sync::oneshot::channel();
+    let loading = tokio::spawn({
+        let slot = slot.clone();
+        async move {
+            slot.get_or_load(unused_commit(), move || async move {
+                started.send(()).unwrap();
+                released.await.unwrap();
+                load().await
+            })
+            .await
+        }
+    });
+    ready.await.unwrap();
+    let mut recovery = Box::pin(slot.begin_recovery());
+    assert!(futures::poll!(recovery.as_mut()).is_pending());
+    release.send(()).unwrap();
+    assert!(matches!(
+        loading.await.unwrap(),
+        Err(StreamStoreError::RecoveryRequired)
+    ));
+    recovery.await.unwrap();
+    assert!(slot.is_recovering());
+    slot.finish_recovery();
+    slot.get_or_load(unused_commit(), load).await.unwrap();
 }
 
 #[test]
