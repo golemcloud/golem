@@ -296,6 +296,75 @@ async fn a_second_delete_all_during_the_drain_of_the_first_waits_for_the_save_be
     );
 }
 
+#[test]
+#[timeout("60s")]
+async fn a_delete_all_after_a_dropped_delete_all_waits_for_the_save_before_both() {
+    // The gate holds the pack write of the save. The first delete of all snapshots begins its
+    // drain while the write is held, and its caller drops it. The second one begins after that.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "write" && path.starts_with("data") {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        });
+    let store = store(
+        storage.clone(),
+        policy(LONG_DEADLINE, NEVER, Duration::ZERO),
+    );
+    let scope = new_scope();
+    let tree = one_file_tree("held");
+    let saving = AbortOnDropHandle::new(tokio::spawn({
+        let (store, scope) = (store.clone(), scope.clone());
+        let tree = tree.path().to_path_buf();
+        async move {
+            store
+                .save(
+                    &scope,
+                    &name("p-1"),
+                    &tree,
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+                .await
+        }
+    }));
+    let held = eventually(|| calls_with(&storage.calls(), "write") > 0).await;
+    let delete_all = || {
+        let (store, scope) = (store.clone(), scope.clone());
+        AbortOnDropHandle::new(tokio::spawn(async move {
+            store
+                .delete_all(&scope, &crate::filesystem_snapshot::Unlimited)
+                .await
+        }))
+    };
+    let first = delete_all();
+    tokio::time::sleep(WAIT).await;
+    let first_waited = !first.is_finished();
+    drop(first);
+    let second = delete_all();
+
+    tokio::time::sleep(WAIT).await;
+    let waited = scope_deletes(&storage.calls()) == 0 && !second.is_finished();
+    storage.open_gate();
+    let saved = tokio::time::timeout(LIMIT, saving).await;
+    let second = tokio::time::timeout(LIMIT, second).await;
+
+    assert!(matches!(saved, Ok(Ok(Ok(_)))), "{saved:?}");
+    assert!(matches!(second, Ok(Ok(Ok(())))), "{second:?}");
+    assert_eq!(
+        (
+            held,
+            first_waited,
+            waited,
+            listed_names(&store, &scope).await
+        ),
+        (true, true, true, Vec::<String>::new())
+    );
+}
+
 /// Saves `p-3` through one store while a delete of `p-1` through another store over the same
 /// storage prunes, as an upload and a clean-up of one agent do. The prune reads the index before
 /// the publish of the save when `index_read_first`, and after it otherwise. Gives the answer of

@@ -34,6 +34,7 @@ fn lone_work() -> Arc<AgentWork> {
         tracker: TaskTracker::new(),
         works: std::sync::Weak::new(),
         agent: new_scope(),
+        successor: std::sync::OnceLock::new(),
     })
 }
 
@@ -219,4 +220,33 @@ fn no_agent_work_is_dropped_under_the_map_mutex() {
         (true, true, Some(0))
     );
     drained.join().unwrap();
+}
+
+/// A drain that its caller drops while the work before it runs does not let a later drain end
+/// before that work: when the drop comes before the later drain registers, and when it comes
+/// after.
+#[test]
+fn a_dropped_drain_keeps_the_work_before_it_for_a_later_drain() {
+    let outcomes = [false, true].map(|second_first| {
+        let works = works();
+        let agent = new_scope();
+        let before = begin_operation(&works, &agent);
+        let mut first = Box::pin(drain_agent(&works, &agent));
+        let first_waits = (&mut first).now_or_never().is_none();
+        let mut second = if second_first {
+            let second = Box::pin(drain_agent(&works, &agent));
+            drop(first);
+            second
+        } else {
+            drop(first);
+            Box::pin(drain_agent(&works, &agent))
+        };
+
+        let second_waits = (&mut second).now_or_never().is_none();
+        drop(before);
+        let second_ended = second_waits && (&mut second).now_or_never().is_some();
+        (first_waits, second_waits, second_ended)
+    });
+
+    assert_eq!(outcomes, [(true, true, true), (true, true, true)]);
 }

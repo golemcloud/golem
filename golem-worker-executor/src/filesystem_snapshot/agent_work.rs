@@ -23,7 +23,7 @@
 
 use crate::filesystem_snapshot::AgentSnapshots;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 
@@ -39,6 +39,10 @@ pub(super) struct AgentWork {
     tracker: TaskTracker,
     works: Weak<Mutex<Entries>>,
     agent: AgentSnapshots,
+    /// The share in the work that a drain put in the place of this work. This work holds it for
+    /// as long as it lives, so a drain of the newer work waits for this work, also when the drain
+    /// that replaced this work was dropped.
+    successor: OnceLock<OperationWork>,
 }
 
 impl Drop for AgentWork {
@@ -87,6 +91,7 @@ fn new_work(works: &AgentWorks, entries: &mut Entries, agent: &AgentSnapshots) -
         tracker: TaskTracker::new(),
         works: Arc::downgrade(works),
         agent: agent.clone(),
+        successor: OnceLock::new(),
     });
     entries.insert(agent.clone(), Arc::downgrade(&work));
     OperationWork::of(work)
@@ -105,14 +110,22 @@ pub(super) fn begin_operation(works: &AgentWorks, agent: &AgentSnapshots) -> Ope
 
 /// Waits until each work of the incarnation `agent` that began before the drain ends, and gives
 /// the share of the drain in a new work of the incarnation. In one locked step, the drain takes
-/// the old entry out and puts the new work in its place. So a later drain also waits for this
-/// drain and, through it, for the old work. Work that begins after that step joins the new work,
-/// which this drain does not wait for.
+/// the old entry out, puts the new work in its place, and gives the old work a share in the new
+/// work, which the old work holds until it ends. So a later drain waits for the old work, also
+/// when the caller of this drain stops waiting. Work that begins after that step joins the new
+/// work, which this drain does not wait for. The drain waits outside the lock.
 pub(super) async fn drain_agent(works: &AgentWorks, agent: &AgentSnapshots) -> OperationWork {
     let (drained, own) = {
         let mut entries = works.lock().unwrap_or_else(PoisonError::into_inner);
         let drained = entries.remove(agent).and_then(|entry| entry.upgrade());
-        (drained, new_work(works, &mut entries, agent))
+        let own = new_work(works, &mut entries, agent);
+        if let Some(work) = &drained {
+            // Only the drain that took the entry out sets the share, so the cell is empty. A
+            // refused share is a share of the new work, which `own` keeps alive, so its drop
+            // under the lock never drops a work.
+            let _ = work.successor.set(own.clone());
+        }
+        (drained, own)
     };
     if let Some(work) = drained {
         work.tracker.close();
