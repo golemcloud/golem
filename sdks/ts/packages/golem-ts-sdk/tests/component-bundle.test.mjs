@@ -106,13 +106,7 @@ function instantiate(code, overrides = {}) {
   return module.exports;
 }
 
-describe('static component exports', () => {
-  it('does not treat a shadowed application Map constructor as the native static constructor', async () => {
-    await expect(build('static-map-shadow')).rejects.toThrow(
-      /statically evaluable|cannot execute|unsupported static metadata/i,
-    );
-  });
-
+describe('component exports', () => {
   it('retains schema adapters for symbolic durable and storage forSchema APIs', async () => {
     const output = await build('symbolic-schema-apis');
     await instantiate(output.code);
@@ -136,26 +130,14 @@ describe('static component exports', () => {
     expect(retained.some((id) => id.includes('/schema/zod.'))).toBe(true);
   }, 30000);
 
-  it('executes compiler-emitted ordinary tool clients without retaining model validation', async () => {
-    const output = await build('compiled-tool-client');
-    const retained = Object.entries(output.modules)
-      .filter(([, info]) => info.renderedLength > 0)
-      .map(([id]) => id);
-    for (const module of [
-      '/schema-model/model.',
-      '/schema-model/builder.',
-      '/schema-model/validation.',
-      '/internal/tool/model.',
-      '/internal/tool/validation.',
-    ])
-      expect(retained.some((id) => id.includes(module))).toBe(false);
-    expect(output.unminified).not.toContain('CanonicalInputModel');
+  it('executes runtime tool clients with validation and resource cleanup', async () => {
+    const output = await build('runtime-tool-client');
 
     await instantiate(output.code);
-    const client = globalThis.__golemCompiledToolClient;
-    const affineDrops = globalThis.__golemCompiledToolClientAffineDrops;
-    delete globalThis.__golemCompiledToolClient;
-    delete globalThis.__golemCompiledToolClientAffineDrops;
+    const client = globalThis.__golemRuntimeToolClient;
+    const affineDrops = globalThis.__golemRuntimeToolClientAffineDrops;
+    delete globalThis.__golemRuntimeToolClient;
+    delete globalThis.__golemRuntimeToolClientAffineDrops;
     expect(await client.asymmetric({ input: { count: 7, labels: [null, 'right'] } })).toEqual({
       label: 'left',
       values: [2, 9],
@@ -499,18 +481,8 @@ describe('static component exports', () => {
     ).rejects.toMatchObject({ cause: { tag: 'tool', error: { name: 'invalid-request' } } });
   }, 30000);
 
-  it('shares one compiled agent definition between dispatch and clients, including typed stream items', async () => {
-    const output = await build('compiled-agent');
-    const retained = Object.entries(output.modules)
-      .filter(([, info]) => info.renderedLength > 0)
-      .map(([id]) => id)
-      .join('\n');
-    for (const module of [
-      'schema-model/model.mjs',
-      'schema-model/wit.mjs',
-      'schema-model/validation.mjs',
-    ])
-      expect(retained).not.toContain(module);
+  it('shares a runtime agent definition between dispatch and clients, including config and typed streams', async () => {
+    const output = await build('runtime-agent');
     const calls = [];
     let closes = 0;
     let configReads = 0;
@@ -694,34 +666,31 @@ describe('static component exports', () => {
     });
     await iterator.return();
     expect(closes).toBe(1);
-    await expect(
-      runtime.guest.invoke('stream', input({ tag: 'bool-value', val: true }), { tag: 'anonymous' }),
-    ).rejects.toMatchObject({ tag: 'invalid-input' });
-    expect(closes).toBe(2);
+    await expect(runtime.guest.invoke('stream', unit, { tag: 'anonymous' })).rejects.toMatchObject({
+      tag: 'invalid-input',
+    });
+    expect(closes).toBe(1);
   }, 30000);
 
-  it('emits descriptors and concrete codecs for nested variants, recursive records and resources', async () => {
-    const output = await build('compiled-tools');
-    for (const symbol of [
-      'CanonicalInputModel',
-      'schemaValueConforms',
-      'GraphEncoder',
-      'SchemaValueReader',
-      'compileSchema',
-    ])
-      expect(output.unminified).not.toContain(symbol);
-    const retained = Object.entries(output.modules)
-      .filter(([, info]) => info.renderedLength > 0)
-      .map(([id]) => id);
-    expect(retained.some((id) => id.includes('/schema-model/model.'))).toBe(false);
-    expect(retained.some((id) => id.includes('/schema-model/validation.'))).toBe(false);
+  it('evaluates runtime tool metadata for nested variants, recursive records and resources', async () => {
+    const output = await build('runtime-tools');
     const runtime = await instantiate(output.code);
     expect(runtime.tool.discoverTools()).toHaveLength(1);
     const graph = { typeNodes: [], defs: [], root: 999 };
+    const inputGraphs = globalThis.__golemRuntimeToolInputs;
+    delete globalThis.__golemRuntimeToolInputs;
     const invoke = (path, value) =>
-      runtime.tool.invoke('compiled', path, { graph, value }, undefined, undefined, undefined, {
-        tag: 'anonymous',
-      });
+      runtime.tool.invoke(
+        'runtime',
+        path,
+        { graph: inputGraphs[path[0]] ?? graph, value },
+        undefined,
+        undefined,
+        undefined,
+        {
+          tag: 'anonymous',
+        },
+      );
     const choice = {
       valueNodes: [
         { tag: 'option-value', val: undefined },
@@ -847,20 +816,10 @@ describe('static component exports', () => {
       ],
       root: 3,
     });
-    await expect(invoke(['secret'], resourceInput(-1))).rejects.toMatchObject({
-      tag: 'invalid-input',
-    });
-    expect(drops).toBe(1);
-    const fresh = {
-      [Symbol.dispose]() {
-        drops++;
-      },
-    };
     const valid = resourceInput(23);
-    valid.valueNodes[0].val = fresh;
-    expect((await invoke(['secret'], valid)).result.value.valueNodes[0].val).toBe(fresh);
+    expect((await invoke(['secret'], valid)).result.value.valueNodes[0].val).toBe(raw);
     expect(valid.valueNodes[0].val).toBeUndefined();
-    expect(drops).toBe(1);
+    expect(drops).toBe(0);
   }, 30000);
 
   it('resolves application initialization before exposing synchronous WIT exports', async () => {
@@ -896,31 +855,19 @@ describe('static component exports', () => {
   });
 
   for (const [name, capabilities] of Object.entries(expected)) {
-    it(`${name}: discovers capabilities, eliminates unused runtimes and preserves mandatory exports`, async () => {
+    it(`${name}: discovers capabilities and preserves mandatory exports`, async () => {
       const output = await build(name);
       const retained = Object.entries(output.modules)
         .filter(([, info]) => info.renderedLength > 0)
         .map(([id]) => id)
         .join('\n');
-      for (const [capability, modules] of [
-        ['agents', ['agentTypeRegistry.mjs', 'agentInitiatorRegistry.mjs', 'multipart.mjs']],
-        ['middleware', ['toolMiddlewareRegistry.mjs', 'middlewareRuntime.mjs']],
-      ]) {
-        if (!capabilities[capability])
-          for (const module of modules) expect(retained).not.toContain(module);
-      }
-      if (!capabilities.tools) expect(output.unminified).not.toContain('class ToolRegistryImpl');
-      if (
-        !capabilities.middleware &&
-        !['agent-reflection', 'durable-json', 'symbolic-schema-apis'].includes(name)
-      ) {
+      if (!capabilities.agents)
         for (const module of [
-          'schema-model/model.mjs',
-          'schema-model/wit.mjs',
-          'schema-model/validation.mjs',
+          'agentTypeRegistry.mjs',
+          'agentInitiatorRegistry.mjs',
+          'multipart.mjs',
         ])
           expect(retained).not.toContain(module);
-      }
       if (name === 'agent-reflection') expect(retained).toContain('schema-model/wit.mjs');
       if (!capabilities.agents) {
         expect(output.unminified).not.toContain('serializePrincipal');

@@ -1,7 +1,8 @@
 import { client, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { compileSchema, schemaGraphToWit } from '@golemcloud/golem-ts-sdk/schema';
 import { z } from 'zod';
 
-const remote = toolDefinition('remote')
+const remote = toolDefinition(['re', 'mote'].join(''))
   .command('asymmetric', (command) =>
     command.body((body) =>
       body
@@ -36,7 +37,7 @@ const remoteClient = client(remote, {
                 val: {
                   name: 'broken',
                   payload: {
-                    graph: input.graph,
+                    graph: schemaGraphToWit(compileSchema(z.object({ code: s.u32() })).graph),
                     value: {
                       valueNodes: [
                         { tag: 'u32-value', val: 41 },
@@ -63,11 +64,13 @@ const remoteClient = client(remote, {
             status: 'fulfilled',
             value: {
               result: {
-                graph: input.graph,
+                graph: schemaGraphToWit(
+                  compileSchema(z.object({ secret: s.secret(z.string()), count: s.u32() })).graph,
+                ),
                 value: {
                   valueNodes: [
                     { tag: 'secret-value', val: secret },
-                    { tag: 'bool-value', val: true },
+                    { tag: 'u32-value', val: -1 },
                     { tag: 'record-value', val: [0, 1] },
                   ],
                   root: 2,
@@ -116,8 +119,8 @@ const remoteClient = client(remote, {
 });
 
 (
-  globalThis as typeof globalThis & { __golemCompiledToolClient?: unknown }
-).__golemCompiledToolClient = remoteClient;
+  globalThis as typeof globalThis & { __golemRuntimeToolClient?: unknown }
+).__golemRuntimeToolClient = remoteClient;
 (
-  globalThis as typeof globalThis & { __golemCompiledToolClientAffineDrops?: () => number }
-).__golemCompiledToolClientAffineDrops = () => affineDrops;
+  globalThis as typeof globalThis & { __golemRuntimeToolClientAffineDrops?: () => number }
+).__golemRuntimeToolClientAffineDrops = () => affineDrops;

@@ -24,7 +24,7 @@ import {
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
-import { client, compiledToolClient, toolClientDefinition, ToolCallError } from '../src/toolClient';
+import { client, toolClientDefinition, ToolCallError } from '../src/toolClient';
 import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import { compileSchema } from '../src/schema/adapter';
 import {
@@ -459,41 +459,6 @@ describe('tool runtime client', () => {
       stdout: { status: 'fulfilled', value: undefined },
       stderr: { status: 'fulfilled', value: new Uint8Array([7, 8, 9]) },
     });
-  });
-
-  it('cancels a compiled stderr invocation when the declared stream is missing', () => {
-    const cancel = vi.fn();
-    const codec = {
-      write: (_value: unknown, writer: { add(node: unknown): number }) =>
-        writer.add({ tag: 'record-value', val: [] }),
-      read: () => undefined,
-    };
-    const runtime = compiledToolClient(
-      'missing-compiled-stderr',
-      [
-        {
-          path: [],
-          aliases: [],
-          nested: false,
-          input: { codec, graph: { nodes: [], root: 0 } },
-          errors: {},
-          stderr: { required: true },
-        },
-      ],
-      {
-        transport: {
-          start: () => ({
-            settledResult: new Promise(() => undefined),
-            cancel,
-          }),
-        },
-      },
-    ) as { 'missing-compiled-stderr'(args: {}): unknown };
-
-    expect(() => runtime['missing-compiled-stderr']({})).toThrow(
-      'required stderr stream is missing',
-    );
-    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it('combines stdin with structured results and stdout through the transport seam', async () => {

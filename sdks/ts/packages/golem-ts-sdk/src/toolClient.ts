@@ -13,21 +13,7 @@
 // limitations under the License.
 
 import type { ToolRpcError } from 'golem:core/types@2.0.0';
-import type { TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { createToolClientTransport, isRpcError } from './bridge/tool';
-import {
-  deferredStartedToolInvocation,
-  mapSettledToolResult,
-  resultFromSettledToolResult,
-  startedToolInvocation,
-  type StartedToolInvocation,
-} from './internal/tool/startedToolInvocation';
-import {
-  readConcrete,
-  writeConcrete,
-  writeConcreteAsync,
-  type CompiledCommand,
-} from './internal/tool/compiled';
 import {
   createToolClient,
   decodeDeclaredToolError,
@@ -105,159 +91,15 @@ export function client<Definition extends AnyToolDefinition>(
 
 registerToolClientFactory(client);
 
-/** @internal Compiler-emitted model-free typed tool client. */
-export function compiledToolClient(
-  toolName: string,
-  commands: CompiledCommand[],
-  options: ToolClientOptions = {},
-): object {
-  const transport = options.transport ?? createToolClientTransport(options.lookupName ?? toolName);
-  const root: Record<string, unknown> = {};
-  for (const command of commands) {
-    let target = root;
-    const members = command.path.length ? command.path : [toolName];
-    for (const member of members.slice(0, -1))
-      target = (target[member] ??= {}) as Record<string, unknown>;
-    const name = members.at(-1)!;
-    const callName = [toolName, ...command.path].join(' ');
-    const method = (args: Record<string, unknown>): unknown => {
-      const start = (input: TypedSchemaValue) => {
-        try {
-          const stdin = command.stdin ? args.stdin : undefined;
-          if (stdin !== undefined && !(stdin instanceof ReadableStream))
-            throw new TypeError('stdin must be a readable stream');
-          if (command.stdin?.required && stdin === undefined)
-            throw new TypeError('required stdin stream is missing');
-          const invocation = transport.start(
-            command.path,
-            input,
-            stdin as ReadableStream<Uint8Array> | undefined,
-            command.stdout !== undefined,
-            command.stderr !== undefined,
-          );
-          const settled = mapSettledToolResult(
-            invocation.settledResult,
-            (terminal) => {
-              try {
-                if (!command.result && terminal.result !== undefined)
-                  throw new TypeError('unit command returned an unexpected result');
-                if (command.result && terminal.result === undefined)
-                  throw new TypeError('structured command result is missing');
-                return command.result
-                  ? readConcrete(command.result.codec, terminal.result!.value)
-                  : undefined;
-              } catch (error) {
-                throw mapCompiledFailure(error, command, callName);
-              }
-            },
-            (error) => {
-              throw mapCompiledFailure(error, command, callName);
-            },
-          );
-          if (!command.stdout && !command.stderr) return resultFromSettledToolResult(settled);
-          if (command.stdout && !invocation.stdout) {
-            invocation.cancel();
-            throw new TypeError('required stdout stream is missing');
-          }
-          if (command.stderr && !invocation.stderr) {
-            invocation.cancel();
-            throw new TypeError('required stderr stream is missing');
-          }
-          return startedToolInvocation(invocation.stdout, invocation.stderr, settled, () =>
-            invocation.cancel(),
-          );
-        } catch (error) {
-          throw mapCompiledFailure(error, command, callName);
-        }
-      };
-      try {
-        if (args === null || typeof args !== 'object' || Array.isArray(args))
-          throw new TypeError('tool client arguments must be an object');
-        if (command.stdout || command.stderr) {
-          try {
-            return start({
-              graph: command.input.graph,
-              value: writeConcrete(command.input.codec, args),
-            });
-          } catch (error) {
-            if (!requiresAsyncSchemaStreamEncoding(error)) throw error;
-            return deferredStartedToolInvocation(
-              writeConcreteAsync(command.input.codec, args)
-                .then((value) => start({ graph: command.input.graph, value }))
-                .catch((asyncError) => {
-                  throw mapCompiledFailure(asyncError, command, callName);
-                }) as Promise<StartedToolInvocation<unknown>>,
-              command.stdout !== undefined,
-              command.stderr !== undefined,
-            );
-          }
-        }
-        return writeConcreteAsync(command.input.codec, args)
-          .then((value) => start({ graph: command.input.graph, value }))
-          .catch((error) => {
-            throw mapCompiledFailure(error, command, callName);
-          });
-      } catch (error) {
-        throw mapCompiledFailure(error, command, callName);
-      }
-    };
-    Object.defineProperty(target, name, { value: method, enumerable: true });
-  }
-  return root;
-}
-
-function requiresAsyncSchemaStreamEncoding(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.message.includes('native schema streams require asynchronous encoding')
-  );
-}
-
-function mapCompiledFailure(error: unknown, command: CompiledCommand, callName: string): unknown {
-  if (error instanceof ToolCallError) return error;
-  if (
-    error !== null &&
-    typeof error === 'object' &&
-    (error as { tag?: unknown }).tag === 'remote-tool-error' &&
-    (error as { val?: { tag?: unknown } }).val?.tag === 'custom-error'
-  ) {
-    const custom = (
-      error as {
-        val: { val: { name: string; payload: TypedSchemaValue } };
-      }
-    ).val.val;
-    const codec = command.errors[custom.name];
-    if (codec) {
-      try {
-        return new ToolCallError({
-          tag: 'tool',
-          error: {
-            tag: 'err',
-            name: custom.name,
-            hasPayload: true,
-            payload: readConcrete(codec.codec, custom.payload.value),
-          },
-        });
-      } catch (decodeError) {
-        return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
-      }
-    }
-    if (Object.prototype.hasOwnProperty.call(command.errors, custom.name))
-      return new ToolCallError({
-        tag: 'tool',
-        error: { tag: 'err', name: custom.name, hasPayload: false },
-      });
-    return new ToolCallError({ tag: 'unknown-error', name: custom.name, payload: custom.payload });
-  }
-  if (isRpcError(error)) return new ToolCallError({ tag: 'rpc', error });
-  return protocolToolCallError(`${callName}: ${errorMessage(error)}`);
-}
-
 function mapToolClientFailure(
   error: unknown,
   { body, callName }: ToolClientFailureContext,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error instanceof ToolCallError) return error;
+  const rpc = error as ToolRpcError | null | undefined;
+  // Custom payload validation must run inside the terminal ownership boundary.
+  if (rpc?.tag === 'remote-tool-error' && rpc.val?.tag === 'custom-error')
+    return mapToolRpcError(body, rpc, callName);
   if (isRpcError(error)) return mapToolRpcError(body, error, callName);
   return protocolToolCallError(`${callName}: ${errorMessage(error)}`);
 }
@@ -266,19 +108,26 @@ function mapToolRpcError(
   body: ToolClientFailureContext['body'],
   error: ToolRpcError,
   callName: string,
-): ToolCallError<unknown> {
+): ToolCallError<unknown> | Promise<ToolCallError<unknown>> {
   if (error.tag !== 'remote-tool-error' || error.val.tag !== 'custom-error') {
     return new ToolCallError({ tag: 'rpc', error });
   }
 
-  try {
-    const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
-    return declaredError.tag === 'unknown-error'
+  const decodedError = (declaredError: Awaited<ReturnType<typeof decodeDeclaredToolError>>) =>
+    declaredError.tag === 'unknown-error'
       ? new ToolCallError(declaredError)
       : new ToolCallError({ tag: 'tool', error: declaredError });
+  const invalidPayload = (decodeError: unknown) =>
+    decodeError instanceof ToolCallError
+      ? decodeError
+      : protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+  try {
+    const declaredError = decodeDeclaredToolError(body, error.val.val, callName);
+    return declaredError instanceof Promise
+      ? declaredError.then(decodedError, invalidPayload)
+      : decodedError(declaredError);
   } catch (decodeError) {
-    if (decodeError instanceof ToolCallError) return decodeError;
-    return protocolToolCallError(`${callName}: ${errorMessage(decodeError)}`);
+    return invalidPayload(decodeError);
   }
 }
 

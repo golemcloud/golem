@@ -1,4 +1,4 @@
-import { Context, Effect, Redacted, Schema } from "effect"
+import { Effect, Redacted, Schema } from "effect"
 import type * as Core from "golem:core/types@2.0.0"
 import type * as Common from "golem:agent/common@2.0.0"
 import { ConfigError } from "../Config.js"
@@ -91,19 +91,5 @@ export function compiledConfigRuntime(
         }
         return root
       }),
-  }
-}
-
-export function compiledConfigService(
-  name: string,
-  fields: unknown,
-  compile: (fields: unknown) => ReturnType<typeof compiledConfigRuntime>,
-): Context.ServiceClass<never, string, unknown> & {
-  readonly fields: unknown
-  readonly __wireConfig: ReturnType<typeof compiledConfigRuntime>
-} {
-  return class extends Context.Service<never, unknown>()(name) {
-    static readonly fields = fields
-    static readonly __wireConfig = compile(fields)
   }
 }

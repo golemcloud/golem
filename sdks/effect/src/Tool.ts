@@ -4,7 +4,8 @@ export { toolGuest } from "./internal/tool/runtime.js"
 
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
-import { Cause, Context, Effect, Exit, Schema, Scope, Stream } from "effect"
+import type * as Core from "golem:core/types@2.0.0"
+import { Cause, Context, Deferred, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
@@ -15,6 +16,12 @@ import {
   registerToolClientFactory,
 } from "./internal/tool/model.js"
 import { compile, type CompiledWitCodec } from "./WitCodec.js"
+import { withCapabilityTransaction } from "./internal/schema-model/capabilityTransaction.js"
+import { schemaValueFromWit } from "./internal/schema-model/wit.js"
+import { abandonGuestQuotaTokenWireHandle } from "./internal/schema-model/quotaTokenHandle.js"
+import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
+import { abandonGuestPermissionCardWireHandle } from "./internal/schema-model/permissionCardHandle.js"
+import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
 
 export { ToolClient } from "./host/ToolClient.js"
 
@@ -205,12 +212,12 @@ export function client<D extends ToolDefinition<any, any>>(
   return clientCompiled(definition.name, commands, options)
 }
 
-type ClientWireCodec = Pick<CompiledWitCodec<any>, "schemaGraph" | "encodeAsync" | "decode"> & {
-  readonly decodeTyped?: (value: Common.TypedSchemaValue) => Effect.Effect<any, unknown, any>
-}
+type ClientWireCodec = Pick<
+  CompiledWitCodec<any>,
+  "schemaGraph" | "encodeAsync" | "decode" | "codec"
+>
 
-/** @internal Concrete command codecs supplied by the component compiler. */
-export interface CompiledToolCommand {
+interface CompiledToolCommand {
   readonly path: readonly string[]
   readonly fields: readonly string[]
   readonly stdout: boolean
@@ -220,8 +227,64 @@ export interface CompiledToolCommand {
   readonly errors: readonly { name: string; codec: Effect.Effect<ClientWireCodec, unknown, any> }[]
 }
 
-/** @internal Shared transport for generated and dynamically compiled tool clients. */
-export function clientCompiled(
+function discardRejectedPayload<A, E, R>(
+  payload: Common.TypedSchemaValue | undefined,
+  decode: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> {
+  return Effect.onExit(decode, (exit) =>
+    Exit.isFailure(exit) && payload
+      ? Effect.promise(async () => {
+          const seen = new Set<object>()
+          const cleanups: Promise<void>[] = []
+          const nodes = payload.value?.valueNodes
+          if (!Array.isArray(nodes)) return
+          for (const node of nodes) {
+            if (
+              node?.tag !== "secret-value" &&
+              node?.tag !== "quota-token-handle" &&
+              node?.tag !== "permission-card-handle" &&
+              node?.tag !== "stream-value"
+            )
+              continue
+            const raw = node.val
+            ;(node as { val: unknown }).val = undefined
+            if (!raw || seen.has(raw)) continue
+            seen.add(raw)
+            cleanups.push(
+              (async () => {
+                try {
+                  if (node.tag === "quota-token-handle")
+                    abandonGuestQuotaTokenWireHandle(QUOTA_INTERNAL, raw as Core.QuotaToken, node)
+                  else if (node.tag === "permission-card-handle")
+                    abandonGuestPermissionCardWireHandle(
+                      PERMISSION_CARD_INTERNAL,
+                      raw as Core.PermissionCard,
+                      node,
+                    )
+                  if (node.tag === "stream-value") {
+                    const { SchemaValueStream } = await import("golem:core/types@2.0.0")
+                    const source = await SchemaValueStream.unwrap(raw as Core.SchemaValueStream)
+                    await source[Symbol.asyncIterator]().return?.()
+                  }
+                } catch {
+                  // Continue releasing siblings if a handle is malformed or a stream cannot close.
+                } finally {
+                  try {
+                    ;(raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.()
+                  } catch {
+                    // Preserve the rejection and release the remaining resources.
+                  }
+                }
+              })(),
+            )
+          }
+          await Promise.all(cleanups)
+        })
+      : Effect.void,
+  )
+}
+
+function clientCompiled(
   name: string,
   commands: readonly CompiledToolCommand[],
   options: ClientOptions = {},
@@ -289,6 +352,7 @@ export function clientCompiled(
                 )
               : drainByteStream(output)
             : Effect.void
+        const consumed = yield* Deferred.make<readonly Exit.Exit<void, unknown>[]>()
         const consume = Effect.all(
           [consumeOutput(stdout, streams?.stdout), consumeOutput(stderr, streams?.stderr)].map(
             (output) =>
@@ -301,6 +365,14 @@ export function clientCompiled(
               ),
           ),
           { concurrency: "unbounded" },
+        ).pipe(Effect.tap((exits) => Deferred.succeed(consumed, exits)))
+        const consumeSucceeded = Deferred.await(consumed).pipe(
+          Effect.flatMap((exits) => {
+            const failure = exits.find(Exit.isFailure)
+            return failure && Exit.isFailure(failure)
+              ? Effect.failCause(failure.cause)
+              : Effect.void
+          }),
         )
         const invocationResult = started.result.pipe(
           Effect.catchIf(
@@ -317,68 +389,80 @@ export function clientCompiled(
                       payload: toolError.val.payload,
                     }),
                   )
-                return Effect.gen(function* () {
-                  const codec = yield* declared.codec.pipe(
-                    Effect.mapError((error) => new ToolClientError("declared-error", error)),
-                  )
-                  if (
-                    !codec.decodeTyped &&
-                    !sameWireGraph(codec.schemaGraph, toolError.val.payload.graph)
-                  )
-                    return yield* Effect.fail(
-                      new ToolClientError(
-                        "declared-error",
-                        `custom error '${declared.name}' schema does not match`,
-                      ),
+                return discardRejectedPayload(
+                  toolError.val.payload,
+                  Effect.gen(function* () {
+                    const codec = yield* declared.codec.pipe(
+                      Effect.mapError((error) => new ToolClientError("declared-error", error)),
                     )
-                  const value = yield* (
-                    codec.decodeTyped
-                      ? codec.decodeTyped(toolError.val.payload)
-                      : codec.decode(toolError.val.payload.value)
-                  ).pipe(Effect.mapError((error) => new ToolClientError("declared-error", error)))
-                  return yield* Effect.fail({
-                    _tag: "ToolFailure",
-                    name: declared.name,
-                    value,
-                  } as const)
-                })
+                    if (!sameWireGraph(codec.schemaGraph, toolError.val.payload.graph))
+                      return yield* Effect.fail(
+                        new ToolClientError(
+                          "declared-error",
+                          `custom error '${declared.name}' schema does not match`,
+                        ),
+                      )
+                    return yield* codec
+                      .decode(toolError.val.payload.value)
+                      .pipe(
+                        Effect.mapError((error) => new ToolClientError("declared-error", error)),
+                      )
+                  }),
+                ).pipe(
+                  Effect.flatMap((value) =>
+                    Effect.fail({
+                      _tag: "ToolFailure",
+                      name: declared.name,
+                      value,
+                    } as const),
+                  ),
+                )
               }
               return Effect.fail(new ToolClientError("invoke", cause))
             },
           ),
         )
         const decodedResult = invocationResult.pipe(
-          Effect.flatMap((result) => {
-            if (result.stdout !== undefined || result.stderr !== undefined)
-              return Effect.fail(
-                new ToolClientError("result", "tool returned output attachments in its result"),
-              )
-            if (!command.output)
-              return result.result === undefined
-                ? Effect.succeed(undefined)
-                : Effect.fail(new ToolClientError("result", "unexpected remote result"))
-            if (!result.result) return Effect.fail(new ToolClientError("result", "missing result"))
-            return command.output.pipe(
-              Effect.mapError((cause) => new ToolClientError("result", cause)),
-              Effect.flatMap((output) =>
-                (output.decodeTyped
-                  ? output.decodeTyped(result.result!)
-                  : output.decode(result.result!.value)
-                ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause))),
-              ),
-            )
-          }),
+          Effect.flatMap((result) =>
+            discardRejectedPayload(
+              result.result,
+              Effect.gen(function* () {
+                if (result.stdout !== undefined || result.stderr !== undefined)
+                  return yield* Effect.fail(
+                    new ToolClientError("result", "tool returned output attachments in its result"),
+                  )
+                if (!command.output) {
+                  if (result.result !== undefined)
+                    return yield* Effect.fail(
+                      new ToolClientError("result", "unexpected remote result"),
+                    )
+                  return yield* consumeSucceeded
+                }
+                if (!result.result)
+                  return yield* Effect.fail(new ToolClientError("result", "missing result"))
+                const output = yield* command.output.pipe(
+                  Effect.mapError((cause) => new ToolClientError("result", cause)),
+                )
+                return yield* withCapabilityTransaction((transaction) =>
+                  Effect.gen(function* () {
+                    const model = yield* Effect.try(() =>
+                      schemaValueFromWit(result.result!.value, transaction),
+                    ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
+                    const decoded = yield* Schema.decodeEffect(output.codec)(model).pipe(
+                      Effect.mapError((cause) => new ToolClientError("result", cause)),
+                    )
+                    yield* consumeSucceeded
+                    return decoded
+                  }),
+                )
+              }),
+            ),
+          ),
         )
-        const [consumeExits, resultExit] = yield* Effect.all(
-          [consume, Effect.exit(decodedResult)] as const,
-          {
-            concurrency: "unbounded",
-          },
-        )
+        const [, resultExit] = yield* Effect.all([consume, Effect.exit(decodedResult)] as const, {
+          concurrency: "unbounded",
+        })
         if (Exit.isFailure(resultExit)) return yield* Effect.failCause(resultExit.cause)
-        const consumeFailure = consumeExits.find(Exit.isFailure)
-        if (consumeFailure && Exit.isFailure(consumeFailure))
-          return yield* Effect.failCause(consumeFailure.cause)
         return resultExit.value
       }),
     )
