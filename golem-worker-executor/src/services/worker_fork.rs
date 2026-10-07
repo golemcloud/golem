@@ -1393,20 +1393,25 @@ impl ForkUpdates {
     /// The entries that end every update of the copied prefix, and the name of the baseline:
     /// one failed update for each pending update, in the order of the queue, then one for each
     /// manual update invocation that no `PendingUpdate` paired, in the order of the invocations.
-    pub(crate) fn into_parts(self) -> (Box<[OplogEntry]>, Option<FilesystemSnapshotName>) {
+    /// Each entry is built when the iterator gives it.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        impl Iterator<Item = OplogEntry> + Send,
+        Option<FilesystemSnapshotName>,
+    ) {
         let (pending, admissions) = self.queue.into_open();
         (
             pending
-                .iter()
-                .map(|update| start_outcome::cancelled_update_of(update, CANCELLED_BY_FORK.into()))
-                .chain(admissions.iter().map(|admission| {
+                .into_iter()
+                .map(|update| start_outcome::cancelled_update_of(&update, CANCELLED_BY_FORK.into()))
+                .chain(admissions.into_iter().map(|admission| {
                     start_outcome::failed_admission_of(
                         admission.target_revision,
                         admission.index,
                         CANCELLED_BY_FORK.into(),
                     )
-                }))
-                .collect(),
+                })),
             self.baseline,
         )
     }
@@ -1582,14 +1587,15 @@ mod tests {
         entries: &[OplogEntry],
         deleted: &[u64],
     ) -> (Box<[OplogEntry]>, Option<FilesystemSnapshotName>) {
-        entries
+        let (cancellations, baseline) = entries
             .iter()
             .enumerate()
             .fold(ForkUpdates::default(), |updates, (position, entry)| {
                 let at = position as u64 + 2;
                 updates.after(index(at), entry, deleted.contains(&at))
             })
-            .into_parts()
+            .into_parts();
+        (cancellations.collect(), baseline)
     }
 
     /// The target revision, the attempt index, the details, the snapshot-assisted pending update

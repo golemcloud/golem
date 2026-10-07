@@ -8149,6 +8149,7 @@ mod update_entry_sequences {
                     updates.after(*index, entry, status.deleted_regions.is_in_deleted_region(*index))
                 })
                 .into_parts();
+            let cancelled = cancelled.collect::<Vec<_>>();
             prop_assert_eq!(
                 cancelled_updates(&cancelled),
                 status
