@@ -22,7 +22,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{AgentStatusRecord, PendingUpdateKind, PendingUpdateRef};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// The regions and the update queue after a range of entries.
 #[derive(Clone, Debug)]
@@ -50,7 +50,23 @@ pub(crate) fn fold_regions(
     baseline: &AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> RegionFold {
-    fold(baseline, entries, None, true)
+    fold(
+        baseline,
+        baseline.pending_updates.clone(),
+        entries,
+        None,
+        true,
+    )
+}
+
+/// The fold of [`fold_regions`] for a caller that owns the pending updates of `baseline`: the
+/// queue starts from `pending_updates`, and the pending updates of `baseline` are not read.
+pub(crate) fn fold_regions_from(
+    baseline: &AgentStatusRecord,
+    pending_updates: VecDeque<PendingUpdateRef>,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> RegionFold {
+    fold(baseline, pending_updates, entries, None, true)
 }
 
 /// The skipped regions that a revert which drops `dropped` must respect. The regions of
@@ -62,7 +78,14 @@ pub(crate) fn revert_validation_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     dropped: &OplogRegion,
 ) -> DeletedRegions {
-    fold(&AgentStatusRecord::default(), entries, Some(dropped), false).skipped
+    fold(
+        &AgentStatusRecord::default(),
+        VecDeque::new(),
+        entries,
+        Some(dropped),
+        false,
+    )
+    .skipped
 }
 
 /// The deleted regions of `initial` with the regions that the `Revert` entries of `entries` drop.
@@ -93,6 +116,7 @@ pub(crate) fn deleted_regions(
 /// the queue, which then holds no manual admissions.
 fn fold(
     baseline: &AgentStatusRecord,
+    pending_updates: VecDeque<PendingUpdateRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     ignored: Option<&OplogRegion>,
     manual_admissions: bool,
@@ -106,7 +130,7 @@ fn fold(
 
     let (queue, skipped, steps) = entries.iter().fold(
         (
-            UpdateQueue::of(baseline),
+            UpdateQueue::of(pending_updates, &baseline.pending_invocations),
             DeletedRegionsBuilder::from_regions(committed.into_regions()),
             BTreeMap::new(),
         ),

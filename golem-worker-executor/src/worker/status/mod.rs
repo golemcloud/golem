@@ -24,7 +24,9 @@ use std::sync::Arc;
 pub(crate) mod regions;
 pub(crate) mod update_queue;
 
-pub(crate) use regions::{RegionFold, deleted_regions, fold_regions, revert_validation_regions};
+pub(crate) use regions::{
+    RegionFold, deleted_regions, fold_regions, fold_regions_from, revert_validation_regions,
+};
 use update_queue::{UpdateStep, manual_update_target_revision_of};
 
 /// One immutable projection boundary, shared by region discovery and every baseline attempt.
@@ -419,7 +421,8 @@ where
     let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await else {
         return Ok(None);
     };
-    let mut regions = fold_regions(&baseline, &region_entries);
+    let pending_updates = std::mem::take(&mut baseline.pending_updates);
+    let mut regions = fold_regions_from(&baseline, pending_updates, &region_entries);
 
     if baseline_is_invalidated(&baseline, &regions.deleted, &regions.skipped) {
         return Ok(None);
@@ -427,7 +430,7 @@ where
     baseline.deleted_regions = regions.deleted.clone();
     baseline.skipped_regions = regions.skipped.clone();
     // The queue after the whole range belongs to the status after the last chunk. A status
-    // between two chunks keeps the pending updates of the baseline; nothing reads them.
+    // between two chunks has no pending updates; nothing reads them.
     let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_open().0);
 
     let mut first = start;
@@ -592,18 +595,19 @@ pub fn update_status_with_new_entries(
 
 fn update_status_with_new_entries_internal(
     agent_mode: AgentMode,
-    last_known: AgentStatusRecord,
+    mut last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     default_retry_policy: &RetryConfig,
     validate_baseline: bool,
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<Option<AgentStatusRecord>, String> {
+    let pending_updates = std::mem::take(&mut last_known.pending_updates);
     let RegionFold {
         deleted,
         skipped,
         queue,
         steps,
-    } = fold_regions(&last_known, &new_entries);
+    } = fold_regions_from(&last_known, pending_updates, &new_entries);
 
     // If the last known status is from a deleted region based on the latest deleted region status,
     // we cannot fold the new status from the new entries only, and need to recalculate the whole status

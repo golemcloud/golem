@@ -24,7 +24,7 @@ use golem_common::base_model::OplogIndex;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
 use golem_common::model::{
-    AgentInvocationPayload, AgentStatusRecord, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentInvocationPayload, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
 use golem_common::serialization::deserialize;
 use std::collections::VecDeque;
@@ -127,13 +127,15 @@ impl UpdateStep {
 }
 
 impl UpdateQueue {
-    /// The queue of a fold that starts from `status`: its pending updates, and its pending
-    /// invocations that carry a manual update target revision.
-    pub(crate) fn of(status: &AgentStatusRecord) -> Self {
+    /// The queue of a fold that starts from `pending` updates and from the `pending_invocations`
+    /// that carry a manual update target revision.
+    pub(crate) fn of(
+        pending: VecDeque<PendingUpdateRef>,
+        pending_invocations: &[PendingInvocationRef],
+    ) -> Self {
         Self {
-            pending: status.pending_updates.clone(),
-            manual_admissions: status
-                .pending_invocations
+            pending,
+            manual_admissions: pending_invocations
                 .iter()
                 .filter_map(|invocation| {
                     invocation
@@ -349,7 +351,7 @@ pub(crate) fn manual_update_target_revision_of(
 mod tests {
     use super::*;
     use golem_common::model::oplog::FilesystemSnapshotName;
-    use golem_common::model::{AssistedSelection, PendingInvocationRef, UsableAutomaticSnapshot};
+    use golem_common::model::{AgentStatusRecord, AssistedSelection, UsableAutomaticSnapshot};
     use test_r::test;
 
     fn idx(value: u64) -> OplogIndex {
@@ -671,7 +673,7 @@ mod tests {
             ..AgentStatusRecord::default()
         };
 
-        let queue = UpdateQueue::of(&status);
+        let queue = UpdateQueue::of(status.pending_updates, &status.pending_invocations);
         assert_eq!(queue.head(), Some(&head));
         assert_eq!(admissions(&queue), vec![idx(7)]);
 
