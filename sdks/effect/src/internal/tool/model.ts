@@ -306,6 +306,7 @@ export interface CommandModel {
   readonly children: Readonly<Record<string, CommandModel>>
 }
 export class CommandBuilder<M extends CommandModel = CommandModel> {
+  readonly version: string = "0.1.0"
   readonly requiresFilesystem = false
   constructor(readonly model: M) {}
   declare readonly name: M["name"]
@@ -367,6 +368,7 @@ export interface ToolDefinition<
   M extends CommandModel = CommandModel,
 > {
   readonly name: Name
+  readonly version: string
   readonly model: M
   readonly requiresFilesystem: boolean
 }
@@ -397,7 +399,12 @@ export interface ImplementedTool<Name extends string = string> {
 }
 export const toolDefinition = <N extends string>(
   name: N,
-  options: { aliases?: readonly string[]; doc?: DocInput; requiresFilesystem?: boolean } = {},
+  options: {
+    aliases?: readonly string[]
+    doc?: DocInput
+    version?: string
+    requiresFilesystem?: boolean
+  } = {},
 ): CommandBuilder<{ name: N; aliases: readonly string[]; children: Record<never, never> }> => {
   let model: CommandModel = {
     name,
@@ -407,6 +414,7 @@ export const toolDefinition = <N extends string>(
   }
   const definition = Object.assign(Object.create(CommandBuilder.prototype), {
     name,
+    version: options.version ?? "0.1.0",
     requiresFilesystem: options.requiresFilesystem ?? false,
     body: (build: (body: BodyBuilder) => BodyBuilder<any, any, any>) => {
       model = { ...model, body: build(new BodyBuilder()).model }
@@ -759,7 +767,7 @@ export function compileDefinition(
     definition,
     bodies,
     wire: {
-      version: "0.1.0",
+      version: definition.version,
       requiresFilesystem: definition.requiresFilesystem,
       commands: { nodes },
       schema: enc.finish(),

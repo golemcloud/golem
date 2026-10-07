@@ -379,8 +379,14 @@ fn projected_middleware_param(
       }
     Hidden(InputStream) | LabelledHidden(InputStream) =>
       Some(Simple("@toolMiddleware.MiddlewareStdin"))
+    OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
+      Some(Optional(Simple("@toolMiddleware.MiddlewareStdin")))
     Hidden(OutputStream | ErrorStream)
-    | LabelledHidden(OutputStream | ErrorStream) => None
+    | LabelledHidden(OutputStream | ErrorStream)
+    | OptionalHidden(OutputStream | ErrorStream)
+    | LabelledOptionalHidden(OutputStream | ErrorStream) => None
+    OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
+      abort("principal cannot be optional")
   }
 }
 
@@ -399,7 +405,10 @@ fn middleware_param_identities(
   parameter : ToolParamType,
 ) -> Array[String] {
   match parameter {
-    Hidden(_) | LabelledHidden(_) => [source_name]
+    Hidden(_)
+    | LabelledHidden(_)
+    | OptionalHidden(_)
+    | LabelledOptionalHidden(_) => [source_name]
     Public(_) | LabelledPublic(_) | QuestionOptionalPublic(_) => {
       let info = command.args
         .iter()
@@ -440,11 +449,17 @@ fn append_projected_params(
             ToolMiddlewareParamSource::CanonicalInput(identities[0])
           Hidden(InputStream) | LabelledHidden(InputStream) =>
             ToolMiddlewareParamSource::Stdin
+          OptionalHidden(InputStream) | LabelledOptionalHidden(InputStream) =>
+            ToolMiddlewareParamSource::Stdin
           Hidden(Principal) | LabelledHidden(Principal) =>
             ToolMiddlewareParamSource::Principal
           Hidden(OutputStream | ErrorStream)
-          | LabelledHidden(OutputStream | ErrorStream) =>
+          | LabelledHidden(OutputStream | ErrorStream)
+          | OptionalHidden(OutputStream | ErrorStream)
+          | LabelledOptionalHidden(OutputStream | ErrorStream) =>
             abort("output streams are not middleware handler parameters")
+          OptionalHidden(Principal) | LabelledOptionalHidden(Principal) =>
+            abort("principal cannot be optional")
         }
         result.push({ source_name: pair.0, type_, identities, source, })
         for identity in identities {

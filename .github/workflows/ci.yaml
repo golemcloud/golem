@@ -211,6 +211,7 @@ jobs:
           - name: group3
           - name: group4
           - name: group5
+          - name: tool-streaming
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - uses: actions/checkout@v5
@@ -885,7 +886,7 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test http_router --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+            test-args: --lib --bins --test agent --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
           - name: ui
@@ -915,6 +916,7 @@ jobs:
           expected='agent
           http_router
           reflection_recipe_compile
+          rich_tool_conformance
           schema_reexport
           tool
           tool_canonical
@@ -1105,6 +1107,7 @@ jobs:
     needs:
       - build-cli-test-bins
       - build-golem-ts
+      - build-golem-effect
       - build-golem-scala
       - list-test-component-groups
     strategy:
@@ -1167,6 +1170,16 @@ jobs:
       - name: Extract built TS SDK
         if: matrix.chunk.needs-node
         run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
+
+      - name: Restore built Effect SDK
+        if: matrix.chunk.needs-effect
+        uses: actions/download-artifact@v8
+        with:
+          name: golem-effect-sdk
+          path: tmp/effect-sdk-artifacts
+      - name: Extract built Effect SDK
+        if: matrix.chunk.needs-effect
+        run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node

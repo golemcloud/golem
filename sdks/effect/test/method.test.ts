@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Result, Schema } from "effect"
+import { Effect, Exit, Result, Schema, SchemaGetter } from "effect"
 import { get, post } from "../src/Http.js"
 import {
   compileMethod,
@@ -12,7 +12,8 @@ import {
   withHttp,
   withPromptHint,
 } from "../src/Method.js"
-import { schemaValueFromWit } from "../src/internal/schema-model/wit.js"
+import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
+import { v } from "../src/internal/schema-model/model.js"
 import { PrincipalSchema } from "../src/Principal.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
@@ -24,6 +25,44 @@ const greet = defineMethod({
 })
 
 describe("Method", () => {
+  it.effect("reuses prepared codecs without caching transformed values or validation results", () =>
+    Effect.gen(function* () {
+      const pattern = new RegExp("^item-[0-9]+$")
+      let decodes = 0
+      let encodes = 0
+      const transformed = Schema.String.check(Schema.isPattern(pattern)).pipe(
+        Schema.decodeTo(Schema.Number, {
+          decode: SchemaGetter.transform((value) => {
+            decodes++
+            return Number(value.slice(5))
+          }),
+          encode: SchemaGetter.transform((value) => {
+            encodes++
+            return `item-${value}`
+          }),
+        }),
+      )
+      const compiled = yield* compileMethodSpec(
+        "transform",
+        method({ input: { value: transformed }, success: transformed }),
+      )
+      expect([decodes, encodes]).toEqual([0, 0])
+      for (const n of [17, 42, 17]) {
+        const input = schemaValueToWit(v.record([v.string(`item-${n}`)]))
+        const output = yield* invokeMethod(
+          compiled,
+          ({ value }) => Effect.succeed(value + 3),
+          input,
+        )
+        expect(schemaValueFromWit(output!)).toEqual(v.string(`item-${n + 3}`))
+      }
+      expect([decodes, encodes]).toEqual([3, 3])
+      const invalid = schemaValueToWit(v.record([v.string("not-an-item")]))
+      expect(Exit.isFailure(yield* Effect.exit(compiled.inputCodec.decode(invalid)))).toBe(true)
+      expect(Exit.isFailure(yield* Effect.exit(compiled.encodeOutput!(-1)))).toBe(true)
+    }),
+  )
+
   it.effect("invokes decoded methods", () =>
     Effect.gen(function* () {
       expect(yield* invoke(greet, { person: { name: "Ada", age: 36 }, greeting: "Hello" })).toBe(

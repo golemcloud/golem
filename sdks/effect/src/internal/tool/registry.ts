@@ -17,27 +17,13 @@ export function registerTool<N extends string>(
 ): ImplementedTool<N> {
   if (registry.has(definition.name))
     throw new Error(`Tool '${definition.name}' is already registered`)
-  return registerCompiledTool(
-    compileDefinition(definition),
-    implementation,
-    layer,
-  ) as ImplementedTool<N>
-}
-
-export function registerCompiledTool(
-  compiled: Omit<Registered, "implementation" | "layer">,
-  implementation: ToolImplementation,
-  layer?: Layer.Layer<any>,
-): ImplementedTool<string> {
-  const definition = compiled.definition
-  if (registry.has(definition.name))
-    throw new Error(`Tool '${definition.name}' is already registered`)
+  const compiled = compileDefinition(definition)
   for (const path of compiled.bodies.keys()) {
     if (!implementationAt(implementation, definition.name, path ? path.split("/") : []))
       throw new Error(`missing implementation for tool command '${path || definition.name}'`)
   }
   registry.set(definition.name, { ...compiled, implementation, layer })
-  return { name: definition.name, definition }
+  return { name: definition.name, definition } as ImplementedTool<N>
 }
 export const registeredTools = () => [...registry.values()]
 export const resetTools = () => registry.clear()

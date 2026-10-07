@@ -2906,6 +2906,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(arb_file_mapping(), 1..3),
         proptest::collection::vec(arb_file_mapping(), 1..3),
+        proptest::collection::vec((arb_small_string(), arb_small_string()), 0..3),
         proptest::option::of(arb_small_string()),
     )
         .prop_map(
@@ -2917,6 +2918,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 webhook_suffix,
                 static_bindings,
                 filesystem_bindings,
+                file_response_headers,
                 openapi_provider_method,
             )| {
                 golem_common::model::agent::HttpMountDetails {
@@ -2927,6 +2929,15 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     webhook_suffix,
                     static_bindings,
                     filesystem_bindings,
+                    file_response_headers: file_response_headers
+                        .into_iter()
+                        .map(
+                            |(name, value)| golem_common::model::agent::FileResponseHeader {
+                                name,
+                                value,
+                            },
+                        )
+                        .collect(),
                     openapi_provider_method,
                 }
             },

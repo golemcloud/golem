@@ -1,0 +1,46 @@
+# Schema for IDEA:
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+# Schema for vscode-yaml:
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
+
+manifestVersion: 1.6.0
+
+app: tool-runtime-bypass
+
+includes:
+- ../golem-test-components-common.yaml
+
+components:
+  golem-it:tool-runtime-bypass-owner:
+    dir: owner
+    templates: rust, rust-test-component
+    dependencies:
+      tools:
+      - golem-it:tool-runtime-bypass-provider/validation-probe
+  golem-it:tool-runtime-bypass-provider:
+    dir: provider
+    templates: rust, rust-test-component
+  golem-it:tool-runtime-bypass-middleware:
+    dir: middleware
+    templates: rust, rust-test-component
+
+tools:
+  chain-probe: {}
+  validation-probe: {}
+
+agents:
+  ToolRuntimeBypassOwner:
+    tools:
+      chain-probe: {}
+      validation-probe: {}
+
+bridge:
+  rust:
+    internal:
+      tools:
+      - validation-probe
+
+environments:
+  local:
+    server: local
+    componentPresets: release

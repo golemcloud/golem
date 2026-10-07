@@ -16555,6 +16555,17 @@ components:
             - Subtree
             example: Subtree
       - $ref: '#/components/schemas/SubtreeFileMapping'
+    FileResponseHeader:
+      type: object
+      title: FileResponseHeader
+      required:
+      - name
+      - value
+      properties:
+        name:
+          type: string
+        value:
+          type: string
     FiniteResourceLimit:
       type: object
       title: FiniteResourceLimit
@@ -16939,6 +16950,7 @@ components:
       - webhookSuffix
       - staticBindings
       - filesystemBindings
+      - fileResponseHeaders
       properties:
         pathPrefix:
           type: array
@@ -16962,6 +16974,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FileMapping'
+        fileResponseHeaders:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponseHeader'
         openapiProviderMethod:
           type: string
           description: The name of a parameterless router method that returns the OpenAPI document as a string.
@@ -21619,9 +21635,9 @@ components:
     ToolMiddlewareMergeMode:
       type: string
       enum:
-      - Prepend
-      - Append
-      - Replace
+      - prepend
+      - append
+      - replace
     ToolMiddlewarePublication:
       type: object
       title: ToolMiddlewarePublication

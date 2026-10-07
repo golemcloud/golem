@@ -138,6 +138,7 @@ vi.mock('golem:api/oplog@1.5.0', () => ({
 }));
 
 vi.mock('golem:quota/types@1.5.0', () => ({}));
+vi.mock('golem:permissions/types@0.1.0', () => ({}));
 
 vi.mock('golem:secrets/reveal@0.1.0', () => ({
   reveal: vi.fn(() => {

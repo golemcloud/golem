@@ -23,7 +23,7 @@ use golem_common::agent_id;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::extraction::extract_component_metadata;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, OwnerKind, Principal,
+    AgentMode, AgentTypeName, GolemUserPrincipal, OidcPrincipal, OwnerKind, Principal,
 };
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -76,7 +76,7 @@ use golem_worker_executor_test_utils::{
     TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
     native_test_tool_metadata, start_with_overrides,
 };
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -85,8 +85,16 @@ use tokio_stream::wrappers::ReceiverStream;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+mod chunk_f_policy_acceptance;
+mod chunk_m_stream_deltas;
+mod gol40_k1_audit_acceptance;
+mod matrix_client_resource_acceptance;
+mod matrix_conformance;
 mod middleware_acceptance;
 mod moonbit_exports;
+mod moonbit_sdk_rows_acceptance;
+mod path_policy_acceptance;
+mod rust_sdk_gol40_conformance;
 mod trapped_leaf_observers;
 
 static SINGLE_STORE_PROBE_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -106,7 +114,15 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("rate_limit_middleware")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("filesystem_tools")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("audit_middleware")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -143,6 +159,18 @@ inherit_test_dep!(
 );
 inherit_test_dep!(
     #[tagged_as("tool_streaming_moonbit")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_moonbit_lifecycle_gol40")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_effect_provider")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
+    #[tagged_as("tool_streaming_effect_caller")]
     PrecompiledComponent
 );
 inherit_test_dep!(
@@ -760,6 +788,15 @@ struct StreamEvidence {
     bytes_read: u64,
     output_closed: bool,
     completion: String,
+}
+
+#[derive(Debug, FromSchema)]
+struct RedactionEvidence {
+    output: Vec<u8>,
+    stdout_terminal: String,
+    stderr: Vec<u8>,
+    stderr_terminal: String,
+    outcome: String,
 }
 
 #[derive(Debug, FromSchema)]
@@ -1490,9 +1527,6 @@ fn install_middleware_chain(
                 .expect("fixture contracts must be compatible")
             });
             if let Some(presented) = &presented_definition {
-                assert!(next_effective_definition.commands.nodes.iter().all(|node| {
-                    node.body.as_ref().is_none_or(|body| body.errors.is_empty())
-                }), "this fixture helper requires an inner surface with no inherited errors");
                 effective_definition = presented.clone();
             }
             CompiledToolMiddlewareOccurrence {
@@ -1580,6 +1614,75 @@ fn secret_policy_middleware_parameters(
         definition.parameter_schema.clone(),
         SchemaValue::Record {
             fields: vec![SchemaValue::String(label.to_string())],
+        },
+    )
+}
+
+fn audit_middleware_parameters(
+    definition: &ToolMiddleware,
+    label: &str,
+    sink_url: &str,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(label.to_string()),
+                SchemaValue::String(sink_url.to_string()),
+            ],
+        },
+    )
+}
+
+fn output_redaction_parameters(
+    definition: &ToolMiddleware,
+    structured: Vec<(&str, &str, &str)>,
+    stdout: Vec<(&str, &str)>,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::List {
+                    elements: structured
+                        .into_iter()
+                        .map(|(selector, pattern, replacement)| SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String(selector.to_string()),
+                                SchemaValue::String(pattern.to_string()),
+                                SchemaValue::String(replacement.to_string()),
+                            ],
+                        })
+                        .collect(),
+                },
+                SchemaValue::List {
+                    elements: stdout
+                        .into_iter()
+                        .map(|(pattern, replacement)| SchemaValue::Record {
+                            fields: vec![
+                                SchemaValue::String(pattern.to_string()),
+                                SchemaValue::String(replacement.to_string()),
+                            ],
+                        })
+                        .collect(),
+                },
+            ],
+        },
+    )
+}
+
+fn human_approval_middleware_parameters(
+    definition: &ToolMiddleware,
+    request_url: &str,
+    policy: &str,
+) -> TypedSchemaValue {
+    TypedSchemaValue::new(
+        definition.parameter_schema.clone(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String(request_url.to_string()),
+                SchemaValue::String(policy.to_string()),
+            ],
         },
     )
 }
@@ -2627,10 +2730,49 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
             .unwrap()
     };
     let universal = definition("streaming-universal-pass-through");
+    let streaming_pass_through = definition("streaming-monomorphic-pass-through");
     let transform = definition("streaming-transform");
     let parameterized = definition("streaming-parameterized");
     let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
     let tool_name = ToolName::try_from("middleware-probe").unwrap();
+    let deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        agent_type.0.as_str(),
+        provider_metadata.tools.clone(),
+    );
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+
+    let uninstalled: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "middleware_probe_modes",
+            data_value!("uninstalled"),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        uninstalled,
+        [
+            "leaf(sync-uninstalled)",
+            "fire-and-forget-admitted",
+            "leaf(async-uninstalled)",
+        ],
+        "uploaded discoverable middleware metadata must not install itself"
+    );
+
     let mut deployment = deployment_state(
         context.account_id,
         provider_component.id,
@@ -2671,10 +2813,16 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         middleware_component.revision,
         "golem-it:tool-streaming-rust-middleware",
         &middleware_metadata.tool_middlewares,
-        vec![(
-            universal.name.as_str(),
-            empty_middleware_parameters(universal),
-        )],
+        vec![
+            (
+                universal.name.as_str(),
+                empty_middleware_parameters(universal),
+            ),
+            (
+                streaming_pass_through.name.as_str(),
+                empty_middleware_parameters(streaming_pass_through),
+            ),
+        ],
     );
     environment_state.set_tool_deployment(
         context.default_environment_id,
@@ -2682,10 +2830,7 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
         caller_component.revision,
         Some(deployment),
     );
-    let agent_id = agent_id!("ToolStreamingCaller", "middleware-chain-dispatch");
-    let worker_id = executor
-        .start_agent(&caller_component.id, agent_id.clone())
-        .await?;
+    executor.simulated_crash(&worker_id).await?;
 
     let results: Vec<String> = executor
         .invoke_and_await_agent(
@@ -2721,6 +2866,66 @@ async fn middleware_chain_dispatches_universal_monomorphic_and_typed_parameters_
     assert_eq!(streamed.bytes_read, stream_input.len() as u64);
     assert!(!streamed.output_closed);
     assert_eq!(streamed.completion, "ok");
+
+    let starts_before_terminal_rows = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    let terminal_rows: Vec<String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "rust_provider_terminal_rows",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(&terminal_rows[..2], ["marker:", "finished"]);
+    assert!(terminal_rows[2].contains("Declared"), "{terminal_rows:?}");
+    assert_eq!(
+        &terminal_rows[3..],
+        [
+            "marker:",
+            "stream producer failed",
+            "false",
+            "marker:",
+            "false",
+        ]
+    );
+    let starts_after_terminal_rows = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert_eq!(
+        starts_after_terminal_rows - starts_before_terminal_rows,
+        9,
+        "three provider calls through two middleware layers must each execute exactly once"
+    );
+    if let Some(active) = executor
+        .active_entity_metadata(&OwnedAgentId::new(
+            context.default_environment_id,
+            &worker_id,
+        ))
+        .await
+    {
+        assert!(active.tool_operations.operations.is_empty());
+    }
 
     let short_circuit = definition("streaming-short-circuit");
     let mut redeployed = deployment_state(
@@ -4791,6 +4996,136 @@ async fn concurrent_tool_attempt_identity_survives_reordered_admission_and_repla
 #[test]
 #[tracing::instrument]
 #[timeout("3m")]
+async fn native_tool_config_uses_owner_binding_without_host_privilege(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent_config::CanonicalAgentConfigPath;
+    use golem_common::model::worker::AgentConfigEntryDto;
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let mut streaming = native_streaming_tool_metadata();
+    streaming.commands.nodes[0].name = "native-streaming".to_string();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            native_tool_metadata: Some(streaming.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let configured = |allowed: &str, denied: &str| {
+        vec![
+            AgentConfigEntryDto {
+                path: vec!["allowed".to_string()],
+                value: serde_json::json!(allowed).into(),
+            },
+            AgentConfigEntryDto {
+                path: vec!["denied".to_string()],
+                value: serde_json::json!(denied).into(),
+            },
+        ]
+    };
+    let narrowed_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .unique()
+        .name("native-config-narrowed")
+        .with_agent_config(
+            "ToolStreamingCaller",
+            configured("narrowed-allowed", "narrowed-denied"),
+        )
+        .store()
+        .await?;
+    let empty_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .unique()
+        .name("native-config-empty")
+        .with_agent_config(
+            "ToolStreamingCaller",
+            configured("empty-allowed", "empty-denied"),
+        )
+        .store()
+        .await?;
+    let owner = ToolBindingOwner::AgentType {
+        agent_type_name: AgentTypeName("ToolStreamingCaller".to_string()),
+    };
+    let tool_name = ToolName::try_from("native-streaming").unwrap();
+    for (component, scope) in [
+        (
+            &narrowed_component,
+            ConfigKeyScope::Keys(BTreeSet::from([CanonicalAgentConfigPath(vec![
+                "allowed".to_string(),
+            ])])),
+        ),
+        (&empty_component, ConfigKeyScope::Keys(BTreeSet::new())),
+    ] {
+        let mut deployment = native_deployment_state(
+            context.account_id,
+            "ToolStreamingCaller",
+            streaming.clone(),
+            native_test_tool_metadata(),
+        );
+        deployment
+            .tool_bindings
+            .get_mut(&owner)
+            .unwrap()
+            .get_mut(&tool_name)
+            .unwrap()
+            .config_keys_readable = scope;
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            component.id,
+            component.revision,
+            Some(deployment),
+        );
+    }
+
+    let narrowed = agent_id!("ToolStreamingCaller", "native-config-narrowed");
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &narrowed_component,
+                &narrowed,
+                "native_config",
+                data_value!("allowed")
+            )
+            .await?
+            .into_typed::<String>()?,
+        "narrowed-allowed"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &narrowed_component,
+                &narrowed,
+                "native_config",
+                data_value!("denied")
+            )
+            .await?
+            .into_typed::<String>()?,
+        "denied"
+    );
+    let empty = agent_id!("ToolStreamingCaller", "native-config-empty");
+    for key in ["allowed", "denied"] {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&empty_component, &empty, "native_config", data_value!(key))
+                .await?
+                .into_typed::<String>()?,
+            "denied"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
 async fn native_tool_runs_all_modes_streams_cancellation_overlap_and_replay(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -5262,6 +5597,71 @@ async fn rust_generated_client_streams_live_and_handles_edges(
         observer_detach,
         ["invoke-open-stdin", "invoke-and-await-observer-detach"]
     );
+    let raw_oplog = executor
+        .get_oplog(&raw_worker_id, OplogIndex::INITIAL)
+        .await?;
+    let raw_entity_starts = raw_oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(params)
+                    if params.function_name == "golem::entity::invoke"
+            )
+        })
+        .count();
+    assert!(raw_entity_starts >= 9, "{raw_oplog:#?}");
+    for start in raw_oplog.iter().filter_map(|entry| match &entry.entry {
+        PublicOplogEntry::Start(params) if params.function_name == "golem::entity::invoke" => {
+            Some(entry.oplog_index)
+        }
+        _ => None,
+    }) {
+        assert!(
+            raw_oplog.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)
+                    || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == start)
+            }),
+            "raw lifecycle entity Start {start} was not settled"
+        );
+    }
+    executor.simulated_crash(&raw_worker_id).await?;
+    let _: String = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &raw_agent_id,
+            "replay_probe",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    let replayed_raw_oplog = executor
+        .get_oplog(&raw_worker_id, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(
+        replayed_raw_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::Start(params)
+                        if params.function_name == "golem::entity::invoke"
+                )
+            })
+            .count(),
+        raw_entity_starts,
+        "replay after cancellation and observer/output detach repeated a tool effect"
+    );
+    if let Some(active) = executor
+        .active_entity_metadata(&OwnedAgentId::new(
+            context.default_environment_id,
+            &raw_worker_id,
+        ))
+        .await
+    {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
     executor.delete_worker(&raw_worker_id).await?;
 
     eprintln!("starting stdout_drop_preserves_sibling");
@@ -5882,6 +6282,192 @@ async fn guest_trap_fences_a_blocked_sibling_and_drains_the_owner_group(
     );
 
     Ok(())
+}
+
+async fn run_owner_trap_sibling_lifecycle_case(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    lifecycle: &str,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            configure: Some(Arc::new(|config| {
+                config.retry = RetryConfig {
+                    max_attempts: 1,
+                    min_delay: std::time::Duration::from_millis(1),
+                    max_delay: std::time::Duration::from_millis(1),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment_state(
+            context.account_id,
+            provider_component.id,
+            provider_component.revision,
+            "golem-it:tool-streaming-rust-provider",
+            "ToolStreamingCaller",
+            metadata.tools,
+        )),
+    );
+
+    let agent_id = agent_id!("ToolStreamingCaller", format!("trap-{lifecycle}"));
+    let worker_id = executor
+        .start_agent(&caller_component.id, agent_id.clone())
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut disposals = executor.probe_entity_store_disposal(&worker_id);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.invoke_and_await_agent(
+            &caller_component,
+            &agent_id,
+            "trap_with_sibling_lifecycle",
+            data_value!(lifecycle),
+        ),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("{lifecycle} waiter did not wake after owner trap"))?;
+    let error = result.expect_err("the exact guest trap must fail the owner invocation");
+    assert!(
+        error
+            .to_string()
+            .contains("deterministic streaming tool trap"),
+        "the original trap must reach the {lifecycle} waiter: {error:?}"
+    );
+
+    let mut destroyed = Vec::new();
+    for _ in 0..2 {
+        destroyed.push(
+            disposals
+                .try_recv()
+                .expect("both sibling Stores are destroyed before failure notification"),
+        );
+    }
+    destroyed.sort();
+    assert!(disposals.try_recv().is_err());
+    if let Some(active) = executor.active_entity_metadata(&owner).await {
+        assert!(active.tool_operations.operations.is_empty());
+        assert!(active.lane.holder.is_none());
+        assert_eq!(active.lane.active_invocation_count, 0);
+        assert!(active.slots.iter().all(|slot| slot.invocations.is_empty()));
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_start = oplog
+        .iter()
+        .rfind(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .expect("failed invocation has an AgentInvocationStarted entry")
+        .oplog_index;
+    let entity_starts = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.parent_start_index == Some(invocation_start)
+                    && start.function_name == "golem::entity::invoke" =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        entity_starts.len(),
+        2,
+        "the sibling and trap are both admitted"
+    );
+    let mut sorted_starts = entity_starts.clone();
+    sorted_starts.sort();
+    assert_eq!(destroyed, sorted_starts);
+    assert!(
+        oplog.iter().all(|entry| {
+            !matches!(&entry.entry, PublicOplogEntry::End(end) if entity_starts.contains(&end.start_index))
+                && !matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled) if entity_starts.contains(&cancelled.start_index))
+        }),
+        "owner fencing must not fabricate normal terminals for {lifecycle}"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| entry.oplog_index > invocation_start
+                && matches!(entry.entry, PublicOplogEntry::Error(_)))
+            .count(),
+        1
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let settled = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        settled
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Start(start)
+                    if start.parent_start_index == Some(invocation_start)
+                        && start.function_name == "golem::entity::invoke")
+            })
+            .count(),
+        2,
+        "the owner fence must prevent post-termination dispatch"
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn guest_trap_retires_a_detached_child_before_waking_the_owner_waiter(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "detached-child")
+        .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn guest_trap_wakes_an_observed_sibling_future_and_retires_its_store(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_owner_trap_sibling_lifecycle_case(last_unique_id, deps, provider, caller, "observed-future")
+        .await
 }
 
 #[test]

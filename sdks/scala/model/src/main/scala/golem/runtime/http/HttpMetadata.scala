@@ -31,6 +31,7 @@ object PathSegment {
 
 final case class HeaderVariable(headerName: String, variableName: String)
 final case class QueryVariable(queryParamName: String, variableName: String)
+final case class FileResponseHeader(name: String, value: String)
 
 sealed trait HttpMethod extends Product with Serializable
 object HttpMethod {
@@ -75,7 +76,8 @@ final case class HttpMountDetails(
   webhookSuffix: List[PathSegment],
   staticBindings: List[FileMapping],
   filesystemBindings: List[FileMapping],
-  openapiProviderMethod: Option[String]
+  openapiProviderMethod: Option[String],
+  fileResponseHeaders: List[FileResponseHeader] = Nil
 )
 
 final case class HttpEndpointDetails(

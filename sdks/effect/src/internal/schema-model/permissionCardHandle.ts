@@ -21,9 +21,22 @@ interface PermissionCardHandleState {
   readonly tracked: boolean
 }
 
-const states = new WeakMap<GuestPermissionCardHandle, PermissionCardHandleState>()
-const owners = new WeakMap<RawPermissionCard, object>()
-const transferredOwner = Object.freeze({})
+interface PermissionCardHandleRegistry {
+  readonly states: WeakMap<object, PermissionCardHandleState>
+  readonly owners: WeakMap<RawPermissionCard, object>
+  readonly transferredOwner: object
+}
+
+const registryKey = Symbol.for("@effect-golem/permission-card-handle-registry")
+const globals = globalThis as typeof globalThis & {
+  [registryKey]?: PermissionCardHandleRegistry
+}
+const registry = (globals[registryKey] ??= {
+  states: new WeakMap<object, PermissionCardHandleState>(),
+  owners: new WeakMap<RawPermissionCard, object>(),
+  transferredOwner: Object.freeze({}),
+})
+const { states, owners, transferredOwner } = registry
 
 /** Guest-side take-once carrier for an owned, opaque permission-card resource. */
 export class GuestPermissionCardHandle {
@@ -53,6 +66,12 @@ function stateOf(handle: GuestPermissionCardHandle): PermissionCardHandleState {
     throw new Error("invalid permission-card handle")
   }
   return state
+}
+
+export function isGuestPermissionCardHandle(value: unknown): value is GuestPermissionCardHandle {
+  return (
+    typeof value === "object" && value !== null && states.has(value as GuestPermissionCardHandle)
+  )
 }
 
 export function createGuestPermissionCardHandle(

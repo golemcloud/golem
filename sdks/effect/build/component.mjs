@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs"
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { sharedEffectRuntime } from "./shared-effect.mjs"
-import { staticContracts } from "./static-contracts.mjs"
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const manifest = JSON.parse(readFileSync(resolve(packageDirectory, "package.json"), "utf8"))
@@ -97,7 +96,6 @@ export async function componentConfiguration(rollup, optionsFactory) {
     },
   })
   const plugins = [
-    staticContracts(sdkSource, packageEntry),
     makeSdkPlugin(),
     sharedEffectRuntime(input),
     ...(await normalizePlugins(options.plugins)),
@@ -164,12 +162,7 @@ export async function componentConfiguration(rollup, optionsFactory) {
       started = true
     },
   }
-  const finalPlugins = [
-    staticContracts(sdkSource, packageEntry),
-    makeSdkPlugin(),
-    sharedEffectRuntime(input),
-    ...finalCallerPlugins,
-  ]
+  const finalPlugins = [makeSdkPlugin(), sharedEffectRuntime(input), ...finalCallerPlugins]
   return {
     ...finalOptions,
     input: entry,

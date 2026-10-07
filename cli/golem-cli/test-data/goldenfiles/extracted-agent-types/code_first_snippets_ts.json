@@ -3689,31 +3689,9 @@
             {
               "name": "tree",
               "schema": {
-                "kind": "record",
+                "kind": "ref",
                 "value": {
-                  "fields": [
-                    {
-                      "body": {
-                        "kind": "string",
-                        "value": {}
-                      },
-                      "name": "label"
-                    },
-                    {
-                      "body": {
-                        "kind": "list",
-                        "value": {
-                          "element": {
-                            "kind": "ref",
-                            "value": {
-                              "id": "rec:235"
-                            }
-                          }
-                        }
-                      },
-                      "name": "children"
-                    }
-                  ]
+                  "id": "rec:122"
                 }
               },
               "source": {
@@ -3726,31 +3704,9 @@
         "output_schema": {
           "tag": "single",
           "value": {
-            "kind": "record",
+            "kind": "ref",
             "value": {
-              "fields": [
-                {
-                  "body": {
-                    "kind": "string",
-                    "value": {}
-                  },
-                  "name": "label"
-                },
-                {
-                  "body": {
-                    "kind": "list",
-                    "value": {
-                      "element": {
-                        "kind": "ref",
-                        "value": {
-                          "id": "rec:235"
-                        }
-                      }
-                    }
-                  },
-                  "name": "children"
-                }
-              ]
+              "id": "rec:122"
             }
           }
         }
@@ -6648,7 +6604,7 @@
                       "element": {
                         "kind": "ref",
                         "value": {
-                          "id": "rec:235"
+                          "id": "rec:122"
                         }
                       }
                     }
@@ -6658,7 +6614,7 @@
               ]
             }
           },
-          "id": "rec:235"
+          "id": "rec:122"
         }
       ],
       "root": {
@@ -10413,31 +10369,9 @@
             {
               "name": "tree",
               "schema": {
-                "kind": "record",
+                "kind": "ref",
                 "value": {
-                  "fields": [
-                    {
-                      "body": {
-                        "kind": "string",
-                        "value": {}
-                      },
-                      "name": "label"
-                    },
-                    {
-                      "body": {
-                        "kind": "list",
-                        "value": {
-                          "element": {
-                            "kind": "ref",
-                            "value": {
-                              "id": "rec:235"
-                            }
-                          }
-                        }
-                      },
-                      "name": "children"
-                    }
-                  ]
+                  "id": "rec:122"
                 }
               },
               "source": {
@@ -10450,31 +10384,9 @@
         "output_schema": {
           "tag": "single",
           "value": {
-            "kind": "record",
+            "kind": "ref",
             "value": {
-              "fields": [
-                {
-                  "body": {
-                    "kind": "string",
-                    "value": {}
-                  },
-                  "name": "label"
-                },
-                {
-                  "body": {
-                    "kind": "list",
-                    "value": {
-                      "element": {
-                        "kind": "ref",
-                        "value": {
-                          "id": "rec:235"
-                        }
-                      }
-                    }
-                  },
-                  "name": "children"
-                }
-              ]
+              "id": "rec:122"
             }
           }
         }
@@ -13248,7 +13160,7 @@
                       "element": {
                         "kind": "ref",
                         "value": {
-                          "id": "rec:235"
+                          "id": "rec:122"
                         }
                       }
                     }
@@ -13258,7 +13170,7 @@
               ]
             }
           },
-          "id": "rec:235"
+          "id": "rec:122"
         }
       ],
       "root": {
