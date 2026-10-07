@@ -623,6 +623,7 @@ describe('static component exports', () => {
           version: 1,
           principal: { tag: 'anonymous' },
           state: { count: 18 },
+          fileDatabases: {},
         });
         const restored = await instantiate(output.code);
         await restored.loadSnapshot.load(snapshot);
