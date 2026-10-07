@@ -253,7 +253,7 @@ export function agentStreamFromHandle<T>(
   );
 }
 
-/** @internal Lift an owned wire endpoint using a compiler-emitted item reader. */
+/** @internal Lift an owned wire endpoint using the item codec's reader. */
 export function agentStreamFromWire<T>(
   endpoint: GuestSchemaValueStream,
   readItem: (tree: SchemaValueTree) => T,

@@ -1,4 +1,6 @@
 import { command, err, ok, s, toolDefinition } from '@golemcloud/golem-ts-sdk';
+import { schemaGraphToWit } from '@golemcloud/golem-ts-sdk/schema';
+import { getExtendedToolDefinition } from '../../dist/runtime/tool.mjs';
 import { z } from 'zod';
 import * as v from 'valibot';
 
@@ -15,7 +17,7 @@ const ValibotChoice = v.variant('kind', [
   v.object({ kind: v.literal('label'), value: v.string() }),
 ]);
 
-const Definition = toolDefinition('compiled')
+const Definition = toolDefinition(['run', 'time'].join(''))
   .command('nested', (nested) =>
     nested
       .aliases('n')
@@ -49,6 +51,16 @@ const Definition = toolDefinition('compiled')
     ),
   )
   .command('valibot', (valibot) => valibot.body((body) => body.returns(ValibotChoice)));
+
+const tool = getExtendedToolDefinition(Definition);
+(
+  globalThis as typeof globalThis & { __golemRuntimeToolInputs?: unknown }
+).__golemRuntimeToolInputs = Object.fromEntries(
+  tool.root.subcommands.map((node) => [
+    node.name,
+    schemaGraphToWit(tool.canonicalInputModel(node).codec.graph),
+  ]),
+);
 
 Definition.implement({
   nested: command(({ names }) => ok({ kind: 'right', names }), {

@@ -3,10 +3,13 @@ import { z } from 'zod';
 
 const item = z.object({ count: s.u32(), labels: z.array(z.string().optional()) });
 const suffix = z.string();
+function configuration() {
+  return { group: z.object({ title: z.string() }).optional(), key: s.secret(z.string()) };
+}
 const counter = defineAgent({
-  name: 'Counter',
+  name: ['Count', 'er'].join(''),
   id: {},
-  config: { group: z.object({ title: z.string() }).optional(), key: s.secret(z.string()) },
+  config: configuration(),
   methods: {
     scalar: method({ input: { value: s.u32() }, returns: s.u32() }),
     remote: method({ input: { value: s.u32() }, returns: s.u32() }),

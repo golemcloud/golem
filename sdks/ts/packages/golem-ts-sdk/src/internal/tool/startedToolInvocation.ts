@@ -61,20 +61,20 @@ export function settleToolResult<Result>(
 
 export function mapSettledToolResult<Input, Result>(
   settledResult: SettledToolResult<Input> | PromiseLike<SettledToolResult<Input>>,
-  mapValue: (value: Input) => Result,
+  mapValue: (value: Input) => Result | PromiseLike<Result>,
   mapReason: (reason: unknown) => unknown = (reason) => reason,
 ): Promise<SettledToolResult<Result>> {
   return Promise.resolve(settledResult).then(
-    (outcome): SettledToolResult<Result> => {
+    async (outcome): Promise<SettledToolResult<Result>> => {
       if (outcome.status === 'rejected') {
         try {
-          return { status: 'rejected', reason: mapReason(outcome.reason) };
+          return { status: 'rejected', reason: await mapReason(outcome.reason) };
         } catch (reason) {
           return { status: 'rejected', reason };
         }
       }
       try {
-        return { status: 'fulfilled', value: mapValue(outcome.value) };
+        return { status: 'fulfilled', value: await mapValue(outcome.value) };
       } catch (reason) {
         return { status: 'rejected', reason };
       }
