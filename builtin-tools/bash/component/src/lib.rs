@@ -64,7 +64,7 @@ pub enum BashError {
     Internal { reason: String },
 }
 
-#[tool_definition(version = "0.2.0")]
+#[tool_definition(version = "0.2.1")]
 pub trait Bash {
     /// Execute a script in a fresh shell; pass a previous result's cwd to start in that directory.
     /// A script still running after `timeout` seconds (at most 3600) is stopped with TERM, then

@@ -38,7 +38,12 @@ import {
 } from 'golem:agent/common@2.0.0';
 import { parsePath } from './internal/http/path';
 import { parseQuery } from './internal/http/query';
-import { compileFileMappings, type FileExposure } from './httpRouterContract';
+import {
+  compileFileMappings,
+  compileFileResponseHeaders,
+  type FileExposure,
+  type FileResponseHeaders,
+} from './httpRouterContract';
 import { rejectEmptyString, rejectQueryParamsInPath } from './internal/http/validation';
 import type {
   EndpointBound,
@@ -210,6 +215,8 @@ export interface HttpMountSpec<
   readonly phantomAgent?: boolean;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
+  /** Response headers applied by the host when serving exposed files. */
+  readonly fileResponseHeaders?: FileResponseHeaders;
   /** Optional custom webhook-suffix path (same rules as the mount path). */
   readonly webhookSuffix?: PathInput;
 }
@@ -403,6 +410,8 @@ export interface MountOptionsFor<W extends string = string> {
   readonly phantomAgent?: boolean;
   /** Ordered live file mappings, only for durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[];
+  /** Response headers applied by the host when serving exposed files. */
+  readonly fileResponseHeaders?: FileResponseHeaders;
   /**
    * Optional custom webhook suffix path. Validated with the same
    * {@link ValidMountPath} rules as the mount path; a non-literal `string`
@@ -475,6 +484,7 @@ export function compileMount(spec: HttpMountSpec): HttpMountDetails {
     staticBindings: [],
     filesystemBindings: compileFileMappings(spec.exposeFiles ?? []),
     openapiProviderMethod: undefined,
+    fileResponseHeaders: compileFileResponseHeaders(spec.fileResponseHeaders),
   };
 }
 

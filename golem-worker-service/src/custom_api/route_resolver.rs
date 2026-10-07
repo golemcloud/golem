@@ -678,6 +678,7 @@ pub(super) mod tests {
                 openapi_provider_method: None,
                 static_bindings: vec![],
                 file_index: vec![],
+                file_response_headers: vec![],
             }),
             "filesystem" => RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
                 component_id,
@@ -686,6 +687,7 @@ pub(super) mod tests {
                 constructor_input: input(),
                 constructor_parameters: vec![],
                 filesystem_bindings: vec![],
+                file_response_headers: vec![],
             }),
             "reserved" => RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
                 format: OpenApiSpecFormat::Json,

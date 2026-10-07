@@ -62,6 +62,10 @@ declare module 'golem:agent/common@2.0.0' {
     cachePolicy: CachePolicy;
     usesPrincipal: boolean;
   };
+  export type FileResponseHeader = {
+    name: string;
+    value: string;
+  };
   export type ExactFileMapping = {
     publicPath: string[];
     filePath: string;
@@ -183,6 +187,8 @@ declare module 'golem:agent/common@2.0.0' {
     webhookSuffix: PathSegment[];
     staticBindings: FileMapping[];
     filesystemBindings: FileMapping[];
+    /** Additional response headers for files served by static-bindings or filesystem-bindings. */
+    fileResponseHeaders: FileResponseHeader[];
     /** The name of a parameterless router method that returns the OpenAPI document as a string. */
     openapiProviderMethod?: string;
   };

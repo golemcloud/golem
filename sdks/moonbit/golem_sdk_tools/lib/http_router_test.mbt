@@ -171,6 +171,71 @@ test "regular file owners retain typed endpoints clients and mapping order" {
 }
 
 ///|
+test "file response headers survive live and static declarations" {
+  let live = @lib.parse_agents([
+    (
+      "live.mbt",
+      (
+        #|#derive.agent
+        #|#derive.mount("/files/{name}")
+        #|#derive.expose_files("/*", "/public/$1")
+        #|#derive.file_response_header("content-security-policy", "default-src 'none'")
+        #|#derive.file_response_header("referrer-policy", "no-referrer")
+        #|struct Files {}
+        #|fn Files::new(name : String) -> Files { {} }
+        #|
+      ),
+    ),
+  ])
+  assert_eq(live[0].http_mount.unwrap().file_response_headers, [
+    ("content-security-policy", "default-src 'none'"),
+    ("referrer-policy", "no-referrer"),
+  ])
+  let live_metadata = @formatter.impls_to_string(
+    @lib.generate_agent_registration(live),
+  )
+  assert_true(
+    live_metadata.contains(
+      "name: \"content-security-policy\", value: \"default-src 'none'\"",
+    ),
+  )
+  assert_true(
+    live_metadata.contains("name: \"referrer-policy\", value: \"no-referrer\""),
+  )
+  let static_agents = @lib.parse_agents([
+    (
+      "static.mbt",
+      router_source(
+        (
+          #|#derive.static_file("/*", "/public/$1")
+          #|#derive.file_response_header("content-security-policy", "default-src 'self'")
+          #|#derive.file_response_header("referrer-policy", "same-origin")
+          #|
+        ),
+        "",
+      ),
+    ),
+  ])
+  assert_eq(static_agents[0].http_mount.unwrap().file_response_headers, [
+    ("content-security-policy", "default-src 'self'"),
+    ("referrer-policy", "same-origin"),
+  ])
+  let static_metadata = @formatter.impls_to_string(
+    @lib.generate_agent_registration(static_agents),
+  )
+  assert_true(
+    static_metadata.contains(
+      "name: \"content-security-policy\", value: \"default-src 'self'\"",
+    ),
+  )
+  assert_true(
+    static_metadata.contains(
+      "name: \"referrer-policy\", value: \"same-origin\"",
+    ),
+  )
+}
+
+///|
 test "root live mount and snapshot disabled JSON router" {
   let agents = @lib.parse_agents([
     (
@@ -180,6 +245,7 @@ test "root live mount and snapshot disabled JSON router" {
   assert_eq(agents[0].http_mount.unwrap().filesystem_bindings, [
     @lib.Subtree([], "/"),
   ])
+  assert_eq(agents[0].http_mount.unwrap().file_response_headers, [])
   let agents = @lib.parse_agents([
     (
       "router.mbt", "#derive.http_router\n#derive.mount(\"/\")\nstruct Site {} derive(ToJson, FromJson)\nfn Site::new() -> Site { {} }",

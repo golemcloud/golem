@@ -78,7 +78,13 @@ export type {
   RawHttpRouterHandler,
 } from './defineHttpRouter';
 export { withRawHeaders } from './httpRouterWeb';
-export type { HttpRequest, HttpResponse, HttpHeader, FileExposure } from './httpRouterContract';
+export type {
+  HttpRequest,
+  HttpResponse,
+  HttpHeader,
+  FileExposure,
+  FileResponseHeaders,
+} from './httpRouterContract';
 export type {
   AgentDefinition,
   MethodOnlyAgentClientDefinition,
