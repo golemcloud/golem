@@ -2144,8 +2144,21 @@ mod tests {
             )
             .1
         };
+        let restarted = SourceFound {
+            revision: revision(2),
+            start_index: OplogIndex::from_u64(11),
+        };
+        let moved = SourceFound {
+            revision: revision(3),
+            start_index: OplogIndex::from_u64(4),
+        };
         assert_eq!(
-            [details(&stale), details(&source)],
+            [
+                details(&stale),
+                details(&source),
+                details(&restarted),
+                details(&moved)
+            ],
             [
                 "Snapshot-assisted automatic update source became stale: expected revision 2 at \
                  revision start index 4, found revision 3 at revision start index 11"
@@ -2153,7 +2166,54 @@ mod tests {
                 "Snapshot-assisted automatic update from revision 2 to revision 3 is not an \
                  upgrade"
                     .to_string(),
+                "Snapshot-assisted automatic update source became stale: expected revision 2 at \
+                 revision start index 4, found revision 2 at revision start index 11"
+                    .to_string(),
+                "Snapshot-assisted automatic update source became stale: expected revision 2 at \
+                 revision start index 4, found revision 3 at revision start index 4"
+                    .to_string(),
             ]
+        );
+    }
+
+    /// A failure of a start from a pending baseline fails the update of that baseline, whatever
+    /// head the caller passes, and the details of a failed load name the selected record.
+    #[test]
+    fn a_pending_baseline_fails_its_own_update_and_a_failed_load_names_its_record() {
+        let runtime = WorkerExecutorError::runtime("boom");
+        let failed_load = SnapshotRecoveryResult::Failed(runtime);
+        let lost = restore(RestoreClass::Lost);
+        let assisted = assisted_head();
+        let manual = manual_head();
+        let fields = |role: &BaselineRole, head: Option<&PendingUpdateRef>, error| {
+            entry_fields(&failed_entry(decide_now(role, head, error)).0)
+        };
+
+        let (_, details, assisted_details_of_entry, attempt, _) = fields(
+            &BaselineRole::AssistedPending(Box::new(assisted.clone())),
+            None,
+            RawStartError::Load(&failed_load),
+        );
+        assert_eq!(
+            (assisted_details_of_entry, attempt),
+            (Some(assisted_details()), Some(OplogIndex::from_u64(10)))
+        );
+        assert!(
+            details.ends_with(
+                "Snapshot-assisted automatic update failed after the snapshot at 7: Runtime \
+                 error: boom"
+            ),
+            "{details}"
+        );
+
+        let (_, _, manual_details, attempt, _) = fields(
+            &BaselineRole::ManualPending(Box::new(manual)),
+            Some(&assisted),
+            RawStartError::Filesystem(&lost),
+        );
+        assert_eq!(
+            (manual_details, attempt),
+            (None, Some(OplogIndex::from_u64(9)))
         );
     }
 

@@ -1749,6 +1749,24 @@ mod tests {
         );
     }
 
+    /// A start instantiates the first queued update whose source holds: a stale assisted head is
+    /// passed over, a valid one is the head, and an empty queue has none.
+    #[test]
+    fn the_active_head_is_the_first_update_whose_source_holds() {
+        let valid = assisted_head(record_at(7, None), 4, 3);
+        let stale = assisted_head(record_at(7, None), 4, 1);
+        let behind = unselected(13, 4);
+        let queued = |head: PendingUpdateRef| {
+            let mut status = with_head(None, true, None, head);
+            status.pending_updates.push_back(behind.clone());
+            status
+        };
+
+        assert_eq!(active_head(&queued(valid.clone())), Some(&valid));
+        assert_eq!(active_head(&queued(stale)), Some(&behind));
+        assert_eq!(active_head(&status(None, true, None)), None);
+    }
+
     /// The strategy entry refines the head, so a start after it never writes a strategy again.
     #[test]
     fn a_start_after_the_strategy_entry_never_persists_a_strategy() {

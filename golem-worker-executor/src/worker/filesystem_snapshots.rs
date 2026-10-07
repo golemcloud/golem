@@ -1567,6 +1567,23 @@ mod tests {
             (
                 SelectedBaseline::ManualPending {
                     head: manual_head(),
+                    previous: Some(AuthoritativeSnapshot {
+                        index: index(5),
+                        kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    }),
+                },
+                Some(&update),
+                true,
+                Ok(plan(
+                    TreeSource::Store(update.clone()),
+                    Some((index(5), manual)),
+                    Some(index(7)),
+                    BaselineRole::ManualPending(manual_head()),
+                )),
+            ),
+            (
+                SelectedBaseline::ManualPending {
+                    head: manual_head(),
                     previous: None,
                 },
                 Some(&update),
@@ -1684,6 +1701,12 @@ mod tests {
                 true,
             )
         );
+
+        let plain = DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+            index(3)..=index(4),
+        )])
+        .build();
+        assert_eq!(replay(None).skipped_regions(&plain), plain);
     }
 
     #[test]
