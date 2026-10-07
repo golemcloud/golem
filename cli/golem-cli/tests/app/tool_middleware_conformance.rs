@@ -285,6 +285,36 @@ async fn manifest_middleware_merge_matrix_executes_in_live_order() {
 
 #[test]
 #[timeout("20m")]
+async fn universal_middleware_can_be_installed_on_one_tool_binding() {
+    let mut ctx = TestContext::new();
+    prepare_fixture(&mut ctx);
+    configure_manifest(&ctx, &[], None, Some(&[]), MergeMode::Replace);
+    let path = ctx.cwd_path_join("golem.yaml");
+    let mut manifest: Value =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    manifest["agents"]["MiddlewareConformanceAgent"]["tools"]["manifest-probe"]["middleware"] =
+        Value::Array(vec![installation("manifest-universal", Some("SELECTIVE"))]);
+    std::fs::write(path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+    build(&mut ctx).await;
+    ctx.start_server().await;
+    deploy(&mut ctx).await;
+
+    let agent = format!("selective-universal-{}", Uuid::new_v4());
+    let selected = invoke(&mut ctx, &agent, "invoke", &["\"selected\""]).await;
+    assert!(selected.contains("ok:leaf(selected)"), "{selected}");
+    let unselected = invoke(&mut ctx, &agent, "invoke_compat", &["\"unselected\""]).await;
+    assert!(unselected.contains("ok:leaf: unselected"), "{unselected}");
+    let effects = invoke(&mut ctx, &agent, "effects", &[]).await;
+    assert!(
+        effects.contains("SELECTIVE;leaf:selected;compat:unselected;"),
+        "{effects}"
+    );
+    assert_eq!(effects.matches("SELECTIVE;").count(), 1, "{effects}");
+}
+
+#[test]
+#[timeout("20m")]
 async fn middleware_declared_error_retry_transformation_and_replay_are_counted() {
     let mut ctx = TestContext::new();
     prepare_fixture(&mut ctx);

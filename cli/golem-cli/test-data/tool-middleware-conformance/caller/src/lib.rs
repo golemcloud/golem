@@ -6,6 +6,7 @@ use compat_leaf_tool_guest_client::{CompatInput, PresentedAdapterClient};
 pub trait MiddlewareConformanceAgent {
     fn new(name: String) -> Self;
     async fn invoke(&self, value: String) -> String;
+    async fn invoke_compat(&self, value: String) -> String;
     fn effects(&self) -> String;
     fn clear_effects(&self);
 }
@@ -21,6 +22,16 @@ impl MiddlewareConformanceAgent for MiddlewareConformanceAgentImpl {
     async fn invoke(&self, value: String) -> String {
         match ManifestProbeClient::new().apply(value).await {
             Ok(value) => format!("ok:{value}"),
+            Err(error) => format!("err:{error:?}"),
+        }
+    }
+
+    async fn invoke_compat(&self, value: String) -> String {
+        match PresentedAdapterClient::new()
+            .execute(CompatInput { kept: value })
+            .await
+        {
+            Ok(output) => format!("ok:{}", output.kept),
             Err(error) => format!("err:{error:?}"),
         }
     }

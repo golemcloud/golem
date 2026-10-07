@@ -78,7 +78,7 @@ pub fn compile_tool_middleware_chain(
     tool: &Tool,
     binding: &CompiledToolBinding,
     middleware_registrations: &[RegisteredToolMiddleware],
-    universal_installations: &[ToolMiddlewareInstallation],
+    environment_wide_installations: &[ToolMiddlewareInstallation],
     environment_binding: Option<&ToolBindingInput>,
     owner_binding: Option<&ToolBindingInput>,
     compatibility_mode: ToolCompatibilityMode,
@@ -91,7 +91,7 @@ pub fn compile_tool_middleware_chain(
         tool,
         &context,
         middleware_registrations,
-        universal_installations,
+        environment_wide_installations,
         environment_binding,
         owner_binding,
         compatibility_mode,
@@ -113,7 +113,7 @@ pub fn compile_tool_middleware_chains(
     registered_tools: &[RegisteredTool],
     tool_bindings: &[CompiledToolBinding],
     middleware_registrations: &[RegisteredToolMiddleware],
-    universal_installations: &[ToolMiddlewareInstallation],
+    environment_wide_installations: &[ToolMiddlewareInstallation],
     environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
     agent_tool_binding_inputs: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     component_names: &BTreeMap<ComponentId, ComponentName>,
@@ -187,7 +187,7 @@ pub fn compile_tool_middleware_chains(
     // parameter validation merely because no compiled tool binding currently selects it.
     if tool_bindings.is_empty() {
         validate_unselected_parameters(
-            universal_installations,
+            environment_wide_installations,
             middleware_registrations,
             true,
             None,
@@ -273,7 +273,7 @@ pub fn compile_tool_middleware_chains(
             &tool.definition,
             &ChainCompileContext::from(binding),
             middleware_registrations,
-            universal_installations,
+            environment_wide_installations,
             environment,
             owner_binding,
             compatibility_mode,
@@ -296,7 +296,7 @@ fn compile_one_chain(
     tool: &Tool,
     binding: &ChainCompileContext<'_>,
     middleware_registrations: &[RegisteredToolMiddleware],
-    universal_installations: &[ToolMiddlewareInstallation],
+    environment_wide_installations: &[ToolMiddlewareInstallation],
     environment: Option<&ToolBindingInput>,
     owner_binding: Option<&ToolBindingInput>,
     compatibility_mode: ToolCompatibilityMode,
@@ -306,13 +306,13 @@ fn compile_one_chain(
     let per_tool = effective_installations(environment, owner_binding);
     let mut resolved = Vec::new();
     let mut valid = true;
-    for (installation, universal) in universal_installations
+    for (installation, environment_wide) in environment_wide_installations
         .iter()
         .map(|i| (i, true))
         .chain(per_tool.iter().map(|i| (i, false)))
     {
-        match resolve_registration(installation, middleware_registrations, universal) {
-            Ok(registration) => resolved.push((installation, registration, universal)),
+        match resolve_registration(installation, middleware_registrations, environment_wide) {
+            Ok(registration) => resolved.push((installation, registration)),
             Err(message) => {
                 errors.push(diagnostic(
                     binding,
@@ -327,12 +327,10 @@ fn compile_one_chain(
         return None;
     }
 
-    let universal_count = universal_installations.len();
+    let environment_wide_count = environment_wide_installations.len();
     let mut effective = tool.clone();
     let mut compiled_reversed = Vec::with_capacity(resolved.len());
-    for (occurrence_index, (installation, registration, universal)) in
-        resolved.iter().enumerate().rev()
-    {
+    for (occurrence_index, (installation, registration)) in resolved.iter().enumerate().rev() {
         let next = effective.clone();
         let parameters = match compile_parameters(installation, registration) {
             Ok(parameters) => Some(parameters),
@@ -350,8 +348,8 @@ fn compile_one_chain(
             .definition
             .scope
         {
-            ToolMiddlewareScope::Universal if *universal => (None, None, None, next.clone()),
-            ToolMiddlewareScope::Monomorphic(scope) if !*universal => {
+            ToolMiddlewareScope::Universal => (None, None, None, next.clone()),
+            ToolMiddlewareScope::Monomorphic(scope) => {
                 let expected = scope.expected.clone();
                 let compatibility = match &expected {
                     Some(expected) => {
@@ -407,7 +405,6 @@ fn compile_one_chain(
                     synthesized,
                 )
             }
-            _ => unreachable!("scope was checked while resolving"),
         };
         effective = next_effective;
         let Some(parameters) = parameters else {
@@ -480,7 +477,10 @@ fn compile_one_chain(
         return None;
     }
     compiled_reversed.reverse();
-    debug_assert_eq!(compiled_reversed.len(), universal_count + per_tool.len());
+    debug_assert_eq!(
+        compiled_reversed.len(),
+        environment_wide_count + per_tool.len()
+    );
     Some(CompiledToolMiddlewareChain {
         deployment_revision,
         owner: binding.owner.clone(),
@@ -502,7 +502,7 @@ pub fn compile_discovered_tool_middleware_chain(
     secret_keys_readable: &crate::model::tool::SecretKeyScope,
     secret_keys_revealable: &crate::model::tool::SecretKeyScope,
     middleware_registrations: &[RegisteredToolMiddleware],
-    universal_installations: &[ToolMiddlewareInstallation],
+    environment_wide_installations: &[ToolMiddlewareInstallation],
     environment_binding: Option<&ToolBindingInput>,
     owner_binding: Option<&ToolBindingInput>,
     compatibility_mode: ToolCompatibilityMode,
@@ -521,7 +521,7 @@ pub fn compile_discovered_tool_middleware_chain(
         tool,
         &context,
         middleware_registrations,
-        universal_installations,
+        environment_wide_installations,
         environment_binding,
         owner_binding,
         compatibility_mode,
@@ -555,13 +555,13 @@ fn compile_parameters(
 fn validate_unselected_parameters(
     installations: &[ToolMiddlewareInstallation],
     registrations: &[RegisteredToolMiddleware],
-    universal: bool,
+    environment_wide: bool,
     agent_type_name: Option<&AgentTypeName>,
     tool_name: Option<&ToolName>,
     errors: &mut Vec<ToolMiddlewareCompileDiagnostic>,
 ) {
     for (index, installation) in installations.iter().enumerate() {
-        let message = match resolve_registration(installation, registrations, universal) {
+        let message = match resolve_registration(installation, registrations, environment_wide) {
             Ok(registration) => compile_parameters(installation, registration)
                 .err()
                 .map(|message| format!("occurrence {} parameters: {message}", index + 1)),
@@ -579,37 +579,37 @@ fn validate_unselected_parameters(
 
 pub fn effective_installations(
     environment: Option<&ToolBindingInput>,
-    agent: Option<&ToolBindingInput>,
+    owner: Option<&ToolBindingInput>,
 ) -> Vec<ToolMiddlewareInstallation> {
     let environment = environment
         .and_then(|b| b.middleware.as_ref())
         .cloned()
         .unwrap_or_default();
-    let Some(agent_binding) = agent else {
+    let Some(owner_binding) = owner else {
         return environment;
     };
-    let Some(agent_installations) = &agent_binding.middleware else {
+    let Some(owner_installations) = &owner_binding.middleware else {
         return environment;
     };
-    match agent_binding.middleware_merge_mode.unwrap_or_default() {
-        ToolMiddlewareMergeMode::Prepend => agent_installations
+    match owner_binding.middleware_merge_mode.unwrap_or_default() {
+        ToolMiddlewareMergeMode::Prepend => owner_installations
             .iter()
             .chain(&environment)
             .cloned()
             .collect(),
         ToolMiddlewareMergeMode::Append => environment
             .iter()
-            .chain(agent_installations)
+            .chain(owner_installations)
             .cloned()
             .collect(),
-        ToolMiddlewareMergeMode::Replace => agent_installations.clone(),
+        ToolMiddlewareMergeMode::Replace => owner_installations.clone(),
     }
 }
 
 fn resolve_registration<'a>(
     installation: &ToolMiddlewareInstallation,
     registrations: &'a [RegisteredToolMiddleware],
-    universal: bool,
+    environment_wide: bool,
 ) -> Result<&'a RegisteredToolMiddleware, String> {
     let matches = registrations
         .iter()
@@ -649,13 +649,16 @@ fn resolve_registration<'a>(
             registration.owner_account_email
         ));
     }
-    if universal
-        != matches!(
+    if environment_wide
+        && matches!(
             registration.definition.scope,
-            ToolMiddlewareScope::Universal
+            ToolMiddlewareScope::Monomorphic(_)
         )
     {
-        return Err("middleware is installed in the wrong scope".to_string());
+        return Err(
+            "monomorphic middleware cannot be installed in the environment-wide middleware list; install it on a tool binding"
+                .to_string(),
+        );
     }
     Ok(registration)
 }
