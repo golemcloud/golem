@@ -1070,6 +1070,90 @@ async fn automatic_update_without_snapshot_falls_back_to_full_replay(
     Ok(())
 }
 
+/// An interrupt that lands while the start replays the whole history of a pending plain automatic
+/// update of an idle agent on its target, with the replay held at the HTTP call of
+/// `blocking_stable`. The published status of the agent stays `Idle` during the start, so the
+/// interrupt is ignored, and the update completes.
+#[test]
+#[timeout("120s")]
+async fn an_interrupt_during_the_full_replay_of_a_pending_automatic_update_of_an_idle_agent_is_ignored_and_the_update_completes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "blocking_stable",
+            data_value!(903u64),
+        )
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    let mut replaying = executor.gate_next_replay_access_admission(
+        &worker_id,
+        "client::send",
+        golem_worker_executor_test_utils::ReplayAdmissionStage::BeforeScope,
+    );
+    executor
+        .auto_update_worker(&worker_id, target.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), replaying.entered()).await?;
+    let interrupt = executor.interrupt(&worker_id);
+    let interrupted_while_held = tokio::time::timeout(Duration::from_secs(10), interrupt).await;
+    let while_held = executor.get_worker_metadata(&worker_id).await?;
+    replaying.release();
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+    let updated = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let (descriptions, _) = update_entries(&executor, &worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let stable = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+
+    assert!(
+        matches!(interrupted_while_held, Ok(Ok(()))),
+        "{interrupted_while_held:?}"
+    );
+    assert_eq!(while_held.status, AgentStatus::Idle);
+    assert_eq!(update_counts(&while_held), (1, 0, 0));
+    assert_eq!(while_held.component_revision, component.revision);
+    assert_eq!(updated.status, AgentStatus::Idle);
+    assert_eq!(updated.component_revision, target.revision);
+    assert!(all_automatic(&descriptions), "{descriptions:?}");
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::FailedUpdate(_)))
+    );
+    assert_eq!(stable, 7);
+    http_server.abort();
+    Ok(())
+}
+
 async fn assert_automatic_update_rejects_agent_mode_change(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
