@@ -696,10 +696,14 @@ fn absent_on_not_found<T>(read: std::io::Result<T>) -> std::io::Result<Option<T>
     }
 }
 
-/// Gives `None` for a part of a listing that a remove during the listing took away: an entry, its
-/// kind, its metadata or the listing of a directory below it.
+/// Gives `None` for a part of a listing that a change during the listing took away: an entry, its
+/// kind, its metadata or the listing of a directory below it. A remove gives `NotFound`, and a
+/// directory that a write replaced with a file gives `NotADirectory`. Every other error stays.
 fn listed_entry<T>(found: std::io::Result<T>) -> std::io::Result<Option<T>> {
-    absent_on_not_found(found)
+    match found {
+        Err(error) if error.kind() == ErrorKind::NotADirectory => Ok(None),
+        found => absent_on_not_found(found),
+    }
 }
 
 /// Writes `data` as the file at `target`, over the file that was there.
@@ -844,7 +848,8 @@ fn list_files_below(directory: &Path, root: &Path) -> std::io::Result<Box<[Liste
 /// Adds each regular file below the entries of a directory to `listed`, and gives the list back.
 ///
 /// The walk does not follow symlinks, and symlinks are not in the list. An entry that a remove
-/// takes away during the walk is not in the list, and the walk goes on.
+/// takes away, or that a write gives another kind, during the walk can be absent from the list,
+/// the walk goes on, and a directory is never in the list.
 fn add_files(
     mut entries: impl Iterator<Item = std::io::Result<std::fs::DirEntry>>,
     root: &Path,
@@ -863,7 +868,10 @@ fn add_files(
                 None => Ok(listed),
             }
         } else if file_type.is_file() {
-            let Some(metadata) = listed_entry(entry.metadata())? else {
+            // The kind of the entry can be older than the entry, so a directory that a write put
+            // at the path of the file is left out by its metadata.
+            let Some(metadata) = listed_entry(entry.metadata())?.filter(|found| found.is_file())
+            else {
                 return Ok(listed);
             };
             listed.push(ListedBlob {

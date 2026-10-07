@@ -14,8 +14,9 @@
 
 use super::{
     Commit, CommitGate, FileSystemBlobStorage, STAGING_DIRECTORY, STAGING_FILE_AGE,
-    absent_on_not_found, add_files, blob_path_of, copy_staged, encoded_name, first_error,
-    listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
+    absent_on_not_found, add_files, add_names, blob_path_of, copy_staged, encoded_name,
+    first_error, listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent,
+    write_staged,
 };
 use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
@@ -284,15 +285,19 @@ async fn drop_at_the_gate<T>(gate: &mut Gate, call: impl std::future::Future<Out
 }
 
 #[test]
-fn listed_entry_gives_none_only_for_a_missing_entry() {
+fn listed_entry_gives_none_only_for_a_missing_entry_or_a_directory_that_became_a_file() {
     let answers = (
         listed_entry(Ok::<_, std::io::Error>(1)).unwrap(),
         listed_entry::<u8>(Err(not_found())).unwrap(),
+        listed_entry::<u8>(Err(std::io::Error::from(ErrorKind::NotADirectory))).unwrap(),
         listed_entry::<u8>(Err(std::io::Error::from(ErrorKind::PermissionDenied)))
             .map_err(|error| error.kind()),
     );
 
-    assert_eq!(answers, (Some(1), None, Err(ErrorKind::PermissionDenied)));
+    assert_eq!(
+        answers,
+        (Some(1), None, None, Err(ErrorKind::PermissionDenied))
+    );
 }
 
 #[test]
@@ -379,6 +384,88 @@ fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
             path: Path::new("kept").into(),
             size: 4,
         }]
+    );
+}
+
+/// The entries of a directory with the blob `sibling` and the entry `changed`, read while
+/// `changed` is a directory when `was_directory` and a file otherwise. Then `changed` changes its
+/// type. Gives whether the entries saw `changed` with its first type, and the blob paths that
+/// the walk of the entries lists.
+#[cfg(unix)]
+fn listed_after_a_change_of_type(was_directory: bool) -> (bool, Result<Vec<Box<Path>>, ErrorKind>) {
+    let root = tempfile::tempdir().unwrap();
+    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
+    let changed = on_disk("changed");
+    std::fs::write(on_disk("sibling"), b"sibling").unwrap();
+    let make = |directory: bool| match directory {
+        true => std::fs::create_dir(&changed).unwrap(),
+        false => std::fs::write(&changed, b"file").unwrap(),
+    };
+    make(was_directory);
+    let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+    let seen = entries.iter().any(|entry| {
+        let entry = entry.as_ref().unwrap();
+        entry.path() == changed && entry.file_type().unwrap().is_dir() == was_directory
+    });
+    match was_directory {
+        true => std::fs::remove_dir(&changed).unwrap(),
+        false => std::fs::remove_file(&changed).unwrap(),
+    }
+    make(!was_directory);
+
+    let listed = add_files(entries.into_iter(), root.path(), Vec::new())
+        .map(|listed| listed.into_iter().map(|blob| blob.path).collect::<Vec<_>>())
+        .map_err(|error| error.kind());
+    (seen, listed)
+}
+
+/// A directory that a write replaces with a blob after the walk saw it as a directory does not fail
+/// the listing, and the sibling blob is in it.
+#[cfg(unix)]
+#[test]
+fn a_listing_goes_on_when_a_directory_becomes_a_blob_during_the_walk() {
+    assert_eq!(
+        listed_after_a_change_of_type(true),
+        (true, Ok(vec![Box::from(Path::new("sibling"))]))
+    );
+}
+
+/// A file that a write replaces with a directory after the walk saw it as a file is not a blob of
+/// the listing.
+#[cfg(unix)]
+#[test]
+fn a_listing_never_gives_a_directory_that_was_a_file_when_the_walk_saw_it() {
+    assert_eq!(
+        listed_after_a_change_of_type(false),
+        (true, Ok(vec![Box::from(Path::new("sibling"))]))
+    );
+}
+
+/// The walk of the names of a directory goes on when the directory of a part of a long name
+/// becomes a file after the walk saw it, and the sibling name is in the result.
+#[cfg(unix)]
+#[test]
+fn a_listing_of_names_goes_on_when_a_part_directory_becomes_a_file() {
+    let root = tempfile::tempdir().unwrap();
+    let long = "l".repeat(200);
+    let parts = encoded_name(&long).collect::<Vec<_>>();
+    let part = root.path().join(&parts[0]);
+    std::fs::create_dir(&part).unwrap();
+    std::fs::write(
+        root.path()
+            .join(encoded_name("sibling").collect::<PathBuf>()),
+        b"sibling",
+    )
+    .unwrap();
+    let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
+    std::fs::remove_dir(&part).unwrap();
+    std::fs::write(&part, b"file").unwrap();
+
+    let listed = add_names(entries.into_iter(), root.path(), Vec::new()).map_err(|e| e.kind());
+
+    assert_eq!(
+        (parts.len() > 1, listed),
+        (true, Ok(vec![PathBuf::from("sibling")]))
     );
 }
 
