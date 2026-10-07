@@ -26,6 +26,7 @@ import type {
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import { SchemaValueStream } from 'golem:core/types@2.0.0';
 import {
   mapSettledToolResult,
   resultFromSettledToolResult,
@@ -1927,16 +1928,26 @@ function createToolClientMethod(
           commandBody.stderr !== undefined,
         );
       } catch (error) {
-        throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        const failure = mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        if (failure instanceof Promise) {
+          const settled = failure.then(
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+          );
+          return commandBody.stdout || commandBody.stderr
+            ? startedToolInvocation(undefined, undefined, settled, () => {})
+            : resultFromSettledToolResult(settled);
+        }
+        throw failure;
       }
 
       const settledResult = mapSettledToolResult(
         invocation.settledResult,
-        (terminal) => {
+        async (terminal) => {
           try {
-            return decodeToolClientResult(commandBody, terminal, callName);
+            return await decodeToolClientResult(commandBody, terminal, callName);
           } catch (error) {
-            throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+            throw await mapFailure(error, { phase: 'result', body: commandBody, callName });
           }
         },
         (error) => mapFailure(error, { phase: 'result', body: commandBody, callName }),
@@ -2105,7 +2116,7 @@ function createToolUnderlyingMethod(
     try {
       invocation = await transport.invoke(commandPath, input, stdin);
     } catch (error) {
-      throw mapFailure(error, { phase: 'invoke', body, callName });
+      throw await mapFailure(error, { phase: 'invoke', body, callName });
     }
 
     try {
@@ -2117,14 +2128,16 @@ function createToolUnderlyingMethod(
         cancel: () => invocation.cancel(),
         get result() {
           return (result ??= invocation.result.then(
-            (result) => {
+            async (result) => {
               try {
-                return decodeToolUnderlyingResult(body, result, callName);
+                return await decodeToolUnderlyingResult(body, result, callName);
               } catch (error) {
-                throw mapFailure(error, { phase: 'result', body, callName });
+                throw await mapFailure(error, { phase: 'result', body, callName });
               }
             },
-            (error) => Promise.reject(mapFailure(error, { phase: 'result', body, callName })),
+            async (error) => {
+              throw await mapFailure(error, { phase: 'result', body, callName });
+            },
           ));
         },
       };
@@ -2133,7 +2146,7 @@ function createToolUnderlyingMethod(
         closeAsyncIterable(invocation.stdout),
         closeAsyncIterable(invocation.stderr),
       ]);
-      throw mapFailure(error, { phase: 'result', body, callName });
+      throw await mapFailure(error, { phase: 'result', body, callName });
     }
   };
   const invoke = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -2210,6 +2223,7 @@ export function decodeDeclaredToolError(
   wireError: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
   callName: string,
 ):
+  | Promise<never>
   | ToolErr<string, unknown>
   | ToolErr<string>
   | {
@@ -2266,11 +2280,13 @@ function decodeWireValue(
   });
 }
 
-function withWireValueOwnership<T>(
+/** @internal Own wire endpoints until synchronous validation and conversion succeed. */
+export function withWireValueOwnership<T>(
   wire: WireTypedSchemaValue,
   decode: (lift: () => TypedSchemaValue) => T,
-): T {
+): T | Promise<never> {
   const resources = new Map<object, Array<{ val: unknown }>>();
+  const streams = new Set<SchemaValueStream>();
   const nodes = wire?.value?.valueNodes;
   for (const node of Array.isArray(nodes) ? nodes : []) {
     if (
@@ -2283,6 +2299,7 @@ function withWireValueOwnership<T>(
       const aliases = resources.get(node.val) ?? [];
       aliases.push(node);
       resources.set(node.val, aliases);
+      if (node.tag === 'stream-value') streams.add(node.val);
     }
   }
   let typed: TypedSchemaValue | undefined;
@@ -2290,15 +2307,32 @@ function withWireValueOwnership<T>(
     return decode(() => (typed = typedSchemaValueFromWit(wire)));
   } catch (error) {
     if (typed !== undefined) relinquishSchemaValueCapabilities(typed.value);
-    for (const [raw, nodes] of resources) {
-      for (const node of nodes) node.val = undefined;
-      try {
-        (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
-      } catch {
-        // Preserve the decoding failure while attempting every resource disposal.
+    const dispose = (): never => {
+      for (const [raw, nodes] of resources) {
+        for (const node of nodes) node.val = undefined;
+        try {
+          (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+        } catch {
+          // Preserve the decoding failure while attempting every resource disposal.
+        }
       }
-    }
-    throw error;
+      throw error;
+    };
+    if (streams.size === 0) return dispose();
+    return (async () => {
+      // Start every cancellation before joining shared producer finalizers.
+      await Promise.all(
+        [...streams].map(async (stream) => {
+          try {
+            const source = await SchemaValueStream.unwrap(stream);
+            await source[Symbol.asyncIterator]().return?.();
+          } catch {
+            // Preserve the decoding failure while closing every rejected endpoint.
+          }
+        }),
+      );
+      return dispose();
+    })();
   }
 }
 

@@ -42,6 +42,7 @@ import {
 import {
   createToolUnderlyingForExtendedTool,
   decodeDeclaredToolError,
+  withWireValueOwnership,
   getExtendedToolDefinition,
   ToolInvokeError,
   type AnyToolDefinition,
@@ -90,12 +91,14 @@ export class ToolUnderlyingMisuseError extends Error {
 export function decodeUnderlyingToolError<Errors>(
   error: unknown,
   decodeCustomError: (error: Extract<WireToolError, { readonly tag: 'custom-error' }>['val']) =>
+    | PromiseLike<Errors>
     | Errors
     | {
         readonly tag: 'unknown-error';
         readonly name: string;
         readonly payload: WireTypedSchemaValue;
       },
+  ownsPayload = false,
 ): unknown {
   const cause =
     error instanceof ToolInvokeError ? error.cause : isWireToolError(error) ? error : null;
@@ -110,8 +113,20 @@ export function decodeUnderlyingToolError<Errors>(
       if (cause.tag === 'custom-error') throw new Error('malformed named custom error payload');
       return ToolInvokeError.tool(customError as Errors);
     }
-    preflightTypedSchemaValue(customError.payload);
-    const decoded = decodeCustomError(customError);
+    const decoded = ownsPayload
+      ? decodeCustomError(customError)
+      : withWireValueOwnership(customError.payload, () => {
+          preflightTypedSchemaValue(customError.payload, false);
+          return decodeCustomError(customError);
+        });
+    if (isPromiseLike(decoded)) {
+      return Promise.resolve(decoded).then(
+        (value) =>
+          isUnknownToolError(value) ? new ToolInvokeError(value) : ToolInvokeError.tool(value),
+        (decodeError) =>
+          new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(decodeError) }),
+      );
+    }
     return isUnknownToolError(decoded)
       ? new ToolInvokeError(decoded)
       : ToolInvokeError.tool(decoded);
@@ -217,7 +232,7 @@ export async function invokeMonomorphicToolMiddleware(
       try {
         resolved = resolveToolInvocation(source.presented, source.runtime, commandPath);
       } catch (error) {
-        throw decodeUnderlyingToolError(error, (payload) => payload);
+        throw await decodeUnderlyingToolError(error, (payload) => payload);
       }
 
       let prepared;
@@ -225,7 +240,7 @@ export async function invokeMonomorphicToolMiddleware(
         preflightTypedSchemaValue(input);
         prepared = resolved.prepare(typedSchemaValueFromWit(input));
       } catch (error) {
-        const protocolError = decodeUnderlyingToolError(error, (payload) => payload);
+        const protocolError = await decodeUnderlyingToolError(error, (payload) => payload);
         throw protocolError instanceof ToolInvokeError
           ? protocolError
           : new ToolInvokeError({ tag: 'invalid-input', val: errorMessage(error) });
@@ -526,14 +541,20 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
           cancel: () => lease.cancel(),
           get result() {
             return (result ??= lease.observe().then(
-              (structured) => {
+              async (structured) => {
                 try {
-                  return validateInvocationResult({ result: structured });
+                  if (structured !== undefined)
+                    await withWireValueOwnership(structured, () =>
+                      preflightTypedSchemaValue(structured, false),
+                    );
+                  return { result: structured };
                 } catch (error) {
                   throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
                 }
               },
-              (error) => Promise.reject(decodeUnderlyingTerminal(error)),
+              async (error) => {
+                throw await decodeUnderlyingTerminal(error);
+              },
             ));
           },
         };
@@ -542,7 +563,7 @@ class InvocationScopedUnderlying implements UniversalToolUnderlying {
         throw new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
       }
     } catch (error) {
-      throw decodeUnderlyingToolError(error, (payload) => payload);
+      throw await decodeUnderlyingToolError(error, (payload) => payload);
     }
   }
 }
@@ -842,14 +863,18 @@ function mapUnderlyingClientFailure(error: unknown, context: ToolClientFailureCo
       return new ToolInvokeError({ tag: 'invalid-input', val: errorMessage(error) });
     case 'result':
       if (error instanceof ToolInvokeError) {
-        return decodeUnderlyingToolError(error, (payload) =>
-          decodeDeclaredToolError(context.body, payload, context.callName),
+        return decodeUnderlyingToolError(
+          error,
+          (payload) => decodeDeclaredToolError(context.body, payload, context.callName),
+          true,
         );
       }
       return new ToolInvokeError({ tag: 'invalid-result', val: errorMessage(error) });
     case 'invoke':
-      return decodeUnderlyingToolError(error, (payload) =>
-        decodeDeclaredToolError(context.body, payload, context.callName),
+      return decodeUnderlyingToolError(
+        error,
+        (payload) => decodeDeclaredToolError(context.body, payload, context.callName),
+        true,
       );
   }
 }
@@ -1105,7 +1130,7 @@ function invocationOutput(
   }
 }
 
-function preflightTypedSchemaValue(value: WireTypedSchemaValue): void {
+function preflightTypedSchemaValue(value: WireTypedSchemaValue, drainOnFailure = true): void {
   try {
     preflightWitTypedSchemaValue(value);
     const validationValue = typedSchemaValueFromWit({
@@ -1133,7 +1158,7 @@ function preflightTypedSchemaValue(value: WireTypedSchemaValue): void {
   } catch (error) {
     const tree = isObject(value) ? value.value : undefined;
     const nodes = isObject(tree) ? tree.valueNodes : undefined;
-    if (Array.isArray(nodes)) {
+    if (drainOnFailure && Array.isArray(nodes)) {
       drainUnconsumedQuotaAndPermissionCardHandles(
         nodes as Parameters<typeof drainUnconsumedQuotaAndPermissionCardHandles>[0],
       );
