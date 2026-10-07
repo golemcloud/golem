@@ -906,6 +906,29 @@ fn project_quota_retains_state(quota: &FsDiskQuota) -> bool {
         || quota.d_rtbtimer_hi != 0
 }
 
+/// Whether XFS project quotas can hold `limits` exactly: both limits are positive and the byte
+/// limit is a whole number of filesystem blocks.
+fn limits_are_representable(limits: FilesystemLimits, filesystem_block_bytes: NonZeroU64) -> bool {
+    limits.allocated_bytes != 0
+        && limits
+            .allocated_bytes
+            .is_multiple_of(filesystem_block_bytes.get())
+        && limits.filesystem_objects != 0
+}
+
+/// Whether `installed` holds the block hard limit `block_hard_limit` and the inode hard limit
+/// `inode_hard_limit`, and no soft limit.
+fn project_quota_holds_limits(
+    installed: &FsDiskQuota,
+    block_hard_limit: u64,
+    inode_hard_limit: u64,
+) -> bool {
+    installed.d_blk_hardlimit == block_hard_limit
+        && installed.d_blk_softlimit == 0
+        && installed.d_ino_hardlimit == inode_hard_limit
+        && installed.d_ino_softlimit == 0
+}
+
 fn no_reusable_projects() -> std::io::Error {
     std::io::Error::other("no reusable XFS project IDs are available")
 }
@@ -1213,12 +1236,7 @@ pub(super) fn install_project_limits(
     filesystem_block_bytes: NonZeroU64,
     limits: FilesystemLimits,
 ) -> std::io::Result<()> {
-    if limits.allocated_bytes == 0
-        || !limits
-            .allocated_bytes
-            .is_multiple_of(filesystem_block_bytes.get())
-        || limits.filesystem_objects == 0
-    {
+    if !limits_are_representable(limits, filesystem_block_bytes) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "filesystem limits are not exactly representable by managed XFS",
@@ -1237,11 +1255,7 @@ pub(super) fn install_project_limits(
     set_project_quota_record(volume_root(volume), project_id, &mut quota)?;
 
     let installed = project_quota(volume_root(volume), project_id.get())?;
-    if installed.d_blk_hardlimit != block_hard_limit
-        || installed.d_blk_softlimit != 0
-        || installed.d_ino_hardlimit != limits.filesystem_objects
-        || installed.d_ino_softlimit != 0
-    {
+    if !project_quota_holds_limits(&installed, block_hard_limit, limits.filesystem_objects) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("XFS project {project_id} did not retain the complete quota limit pair"),
@@ -2131,6 +2145,50 @@ mod tests {
             change(&mut quota);
             assert!(
                 project_quota_retains_state(&quota),
+                "field {field} of the table is not seen"
+            );
+        });
+    }
+
+    #[test]
+    fn limits_are_representable_only_when_positive_and_whole_blocks() {
+        let block = NonZeroU64::new(4096).unwrap();
+        let limits = |allocated_bytes, filesystem_objects| FilesystemLimits {
+            allocated_bytes,
+            filesystem_objects,
+        };
+
+        assert!(limits_are_representable(limits(8192, 1), block));
+        assert!(limits_are_representable(limits(4096, 100), block));
+        assert!(!limits_are_representable(limits(0, 1), block));
+        assert!(!limits_are_representable(limits(4097, 1), block));
+        assert!(!limits_are_representable(limits(2048, 1), block));
+        assert!(!limits_are_representable(limits(8192, 0), block));
+    }
+
+    #[test]
+    fn a_project_quota_holds_limits_only_with_both_hard_limits_and_no_soft_limit() {
+        let holding = FsDiskQuota {
+            d_blk_hardlimit: 16,
+            d_ino_hardlimit: 100,
+            d_bcount: 8,
+            ..FsDiskQuota::default()
+        };
+        let change: [fn(&mut FsDiskQuota); 4] = [
+            |quota| quota.d_blk_hardlimit = 15,
+            |quota| quota.d_blk_softlimit = 1,
+            |quota| quota.d_ino_hardlimit = 99,
+            |quota| quota.d_ino_softlimit = 1,
+        ];
+
+        assert!(project_quota_holds_limits(&holding, 16, 100));
+        assert!(!project_quota_holds_limits(&holding, 17, 100));
+        assert!(!project_quota_holds_limits(&holding, 16, 101));
+        change.iter().enumerate().for_each(|(field, change)| {
+            let mut quota = holding;
+            change(&mut quota);
+            assert!(
+                !project_quota_holds_limits(&quota, 16, 100),
                 "field {field} of the table is not seen"
             );
         });
