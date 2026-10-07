@@ -13,11 +13,13 @@ The runtime owns terminal setup and one async event loop over:
 - Server, REPL, and Live session events;
 - scheduled spinners, retries, and auto-refresh ticks.
 
-Redraw after state-changing events instead of polling the renderer. Use a
-bounded event channel: state and completion events apply backpressure, while
-replaceable animation ticks may be dropped. Terminal input and provider work
-remain async. Portable PTY reads, waits, writes, resize, and kill calls stay
-behind the existing isolated blocking adapter and bounded control channel.
+Redraw after state-changing events instead of polling the renderer. Terminal
+input and lifecycle/control completions have priority over a separately bounded
+nested-process output channel, so sustained logs apply backpressure without
+starving keyboard or mouse input. Replaceable animation ticks may be dropped.
+Terminal input and provider work remain async. Portable PTY reads, waits,
+writes, resize, and kill calls stay behind the existing isolated blocking
+adapter.
 
 Every async completion carries both a context identity and request generation.
 Views discard stale results rather than applying data from a context or query
@@ -152,9 +154,13 @@ finite Jobs:
 - Live owns exact Agent identity, connection/retry state, follow state, and a
   bounded transient buffer.
 
-Persistent sessions publish compact global status and remain addressable from
-the palette. They are stopped according to context-switch and quit policies,
-not because their pane becomes hidden.
+Persistent sessions publish named compact status in the footer workspace row
+and remain addressable from the palette. Clicking Server or REPL status shows
+and focuses its Dev view without promoting it or handing input to the child.
+Sessions are stopped according to context-switch and quit policies, not because
+their pane becomes hidden.
+Pointer workspace navigation first restores TUI keyboard ownership, so a stale
+terminal-input mode cannot survive a Dev/Ops click.
 
 Plan, Build, Deploy, Clean, Server, and interactive REPL use the nested CLI PTY
 adapter. Other Ops operations use neutral typed helpers from existing handlers
@@ -162,9 +168,12 @@ or clients, retain their cache semantics, and never parse human or ANSI output.
 If a TUI freshness rule conflicts with an existing cache, change the shared
 cache contract with focused tests instead of bypassing it in the renderer.
 
-Finite command and REPL launches initially give keyboard ownership to the PTY.
-Server launches remain TUI-owned until Enter or a pointer click explicitly
-hands input to the child. Each PTY has one TerminalScreen with 2,000 lines of scrollback and is resized to
+Finite command and REPL launches give keyboard ownership to the PTY only when
+their owning view was already visible and focused. Hidden launches and Server
+launches remain TUI-owned until Enter or a pointer click in the visible owning
+pane explicitly hands input to the child. Launching never changes workspace,
+pane visibility, primary view, or focus. Each PTY has one TerminalScreen with
+2,000 lines of scrollback and is resized to
 the exact visible terminal rectangle from LayoutSnapshot after every layout
 change, not only outer-terminal resize. A finite Job keeps its terminal
 after completion. The registry keeps active Jobs and the latest 20 completed
@@ -180,6 +189,9 @@ target. Mouse input routes only through snapshot region IDs.
 unit, while pointer routing, PTY resize, and keyboard layout operations read
 regions through its typed accessors. Application code must not keep a second
 geometry cache or reach through the cache's interior mutability directly.
+Each rendered scrollbar registers its exact pane and slot in this geometry.
+Scrollbar track clicks and drags route before split handling and update that
+pane's logical offset or selection; they cannot begin pane resize.
 
 Dev layout is derived from primary view, visible set, and placement:
 
@@ -192,9 +204,11 @@ Dev layout is derived from primary view, visible set, and placement:
 Ops collection layouts use one collection pane plus an optional right or bottom
 Details pane. Both layout families use the same recursive split representation,
 ratio clamping, mouse dragging, compact fallback, and keyboard Layout mode.
-Divider rectangles are disjoint from pane and scrollbar rectangles and win hit
-testing if a future geometry regression introduces overlap. PaneChrome renders
-their neutral rails plus a short accent grip; the complete rail is draggable.
+Right splits reserve a disjoint one-cell vertical rail. Bottom splits reuse the
+downstream pane title row as their divider, so that typed split region
+intentionally overlaps the title and wins initial hit testing. Drag movement
+resizes; release without movement routes through the title to focus the pane.
+PaneChrome renders a short accent grip only on standalone vertical rails.
 
 Layout mode selects a focused leaf and moves the unique applicable ancestor
 divider in the requested physical direction. Unsupported directions leave

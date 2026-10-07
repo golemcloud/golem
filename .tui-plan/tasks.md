@@ -87,6 +87,16 @@ integration remain open.
 - [x] Move fake Metrics to preview/test data and render truthful production
   unavailability.
 - [x] Offer safe Return and explicit Force quit while active work exists.
+- [x] Keep Return and Force quit side by side so their layout matches
+  left/right selection.
+- [x] Prioritize terminal and control events over bounded nested-process output
+  so sustained logs cannot starve interaction.
+- [x] Add pane-owned scrollbar click/drag behavior without stealing split
+  resize, and restore TUI ownership on pointer workspace changes.
+- [x] Show Agent mode, protect AgentID width, and right-align numeric table
+  columns.
+- [x] Make Layout help workspace-specific and keep nested-terminal summaries
+  free of duplicated handoff shortcuts.
 
 ## Checkpoint 0: Synchronize The Planning Sources
 
@@ -152,8 +162,8 @@ extreme fallback.
 - [x] Reuse the recursive split model for Ops collection/details layouts.
 - [x] Render Dev and Ops through the accepted shared pane titles, neutral
   spines/dividers, semantic status markers, and trailing-right scrollbars;
-  stacked title rows remain disjoint from their explicit horizontal resize
-  divider.
+  stacked layouts reuse the downstream pane title row as the horizontal resize
+  divider without adding a second rule.
 - [x] Implement temporary Layout mode, mouse dragging, one-cell and five-cell
   keyboard movement, placement flip, focus-only, show/hide, clamping, and
   compact retention.
@@ -161,9 +171,9 @@ extreme fallback.
   do not write project files.
 - [x] Render all shell/layout states at wide, short, narrow, compact, and 1x1
   sizes and test hit rectangles, dividers, spines, and scrollbars.
-- [x] Make the complete divider the pointer target, keep it disjoint from pane
-  and scrollbar rectangles, and render a short accent resize grip on its
-  neutral rail.
+- [x] Make the complete divider the pointer target, keep vertical rails
+  disjoint from pane and scrollbar rectangles, render their short accent grip,
+  and let a click without movement on a stacked title/divider focus that pane.
 
 Recommended commit checkpoint: shell, navigation, layout, and preferences.
 
@@ -228,7 +238,8 @@ Planning prerequisite: Dev view-content gate. Complete.
 
 - [x] Show local availability, process state, resolved ports, data
   directory, launch mode, and bounded logs.
-- [x] Support start, stop, restart, and clean-start through reviewed actions.
+- [x] Support state-specific start, stop, restart, and delayed force-stop
+  actions; keep clean as an option in the reviewed start/restart form.
 - [x] Start Server with TUI keyboard ownership, expose Enter-to-CLI input, omit
   ports-file by default, mark successful spawn Running independently of port
   observation, and treat an explicit fresh ports file as optional metadata.
@@ -247,6 +258,17 @@ Planning prerequisite: Dev view-content gate. Complete.
 
 - [x] Test every primary view with zero, one, and two subviews in right/bottom
   and compact layouts.
+- [x] Make direct Dev navigation show and focus its target without replacing
+  the current primary or hiding visible panes; expose independent stable view
+  toggles and focused-view promotion while keeping at least one view visible.
+- [x] Keep process lifecycle independent from layout and input ownership:
+  launching never switches workspace, visibility, primary, or focus, and only
+  an already visible focused finite-command or REPL pane receives CLI input.
+- [x] Align Server and REPL lifecycle actions with state-specific Start, Stop,
+  Restart, and delayed Force Stop commands, and keep Server clean as a reviewed
+  launch option rather than a separate lifecycle verb.
+- [x] Show clickable Server and REPL state in the footer in both workspaces,
+  with full state at normal widths and compact glyphs at narrower widths.
 - [~] Test direct navigation to hidden and visible views, focus restoration,
   hidden-process continuity, context capability reasons, and resize behavior.
   Deterministic state/layout coverage is live; final terminal smoke testing is

@@ -114,6 +114,7 @@ fn preview_app() -> TuiApp {
         context_executor: None,
         auth_prompt: None,
         layout: TuiLayoutState::default(),
+        scrollbar_dragging: None,
         geometry: UiGeometry::default(),
         preferences_path: PathBuf::from("/tmp/golem-tui-preview-preferences.json"),
         preferences_error: None,

@@ -43,7 +43,7 @@ use crate::tui::context_executor::{TuiContextExecutor, TuiContextId, TuiContextT
 use crate::tui::input::encode_key_for_pty;
 use crate::tui::interaction::{InteractionMode, ModeStack};
 use crate::tui::layout::{
-    self, DragTarget, LayoutInput, RegionKind, TuiLayoutState, UiGeometry,
+    self, DragTarget, LayoutInput, RegionKind, ScrollbarTarget, TuiLayoutState, UiGeometry,
     adaptive_data_popup_rect, content_popup_rect,
 };
 use crate::tui::navigation::{DevView, Workspace};
@@ -56,13 +56,14 @@ use crate::tui::visual::active_style;
 use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
     ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow,
-    ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow, HelpRow,
-    JsonDocument, KeyHint, Notice, NoticeKind, OverlayFrame, PaneChrome, PaneEnding, PaneFocus,
-    PaneHeader, PaneHeaderStatus, PaneLayout, PaneScrollbarSlot, PaneStatusTone, PaneTable,
-    PaneTableCell, PaneTableCellSpan, PaneTableColumn, PaneTableState, ReviewFieldRow,
-    ScrollableDocument, SearchInput, SectionHeading, SelectableRow, ShortcutRow, StatusKind,
-    StatusMarker, WorkspaceItem, WorkspaceSelector, fit, pane_table_virtual_width,
-    render_scrollbar, responsive_table_columns, shortcut_line, wrap_styled_line,
+    ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow,
+    FooterStatusCluster, FooterStatusItem, HelpRow, JsonDocument, KeyHint, Notice, NoticeKind,
+    OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout,
+    PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
+    PaneTableColumn, PaneTableState, ReviewFieldRow, ScrollableDocument, SearchInput,
+    SectionHeading, SelectableRow, ShortcutRow, StatusKind, StatusMarker, WorkspaceItem,
+    WorkspaceSelector, fit, pane_table_virtual_width, render_scrollbar, responsive_table_columns,
+    shortcut_line, wrap_styled_line,
 };
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -91,34 +92,78 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Instant, SystemTime};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{
-    mpsc::{self, Sender},
+    mpsc::{self, Receiver, Sender},
     oneshot,
 };
 use tokio::time::{Duration, sleep};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const TUI_EVENT_CHANNEL_CAPACITY: usize = 1024;
+const TUI_OUTPUT_CHANNEL_CAPACITY: usize = 64;
+const TUI_TERMINAL_CHANNEL_CAPACITY: usize = 128;
 const CONTEXT_PICKER_RIGHT_PADDING: usize = 4;
 const AGENT_PAGE_SIZE: u64 = 200;
 const COMPLETED_JOB_LIMIT: usize = 20;
 const FORCE_STOP_DELAY: Duration = Duration::from_secs(5);
 
-type TuiEventSender = Sender<TuiEvent>;
+fn force_stop_available(requested_at: Option<Instant>) -> bool {
+    requested_at.is_some_and(|requested| requested.elapsed() >= FORCE_STOP_DELAY)
+}
+
+#[derive(Clone)]
+struct TuiEventSender {
+    control: Sender<TuiEvent>,
+    output: Sender<TuiEvent>,
+}
+
+impl TuiEventSender {
+    fn new(control: Sender<TuiEvent>, output: Sender<TuiEvent>) -> Self {
+        Self { control, output }
+    }
+
+    async fn send(
+        &self,
+        event: TuiEvent,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<TuiEvent>> {
+        self.control.send(event).await
+    }
+
+    fn try_send(&self, event: TuiEvent) -> Result<(), TrySendError<TuiEvent>> {
+        self.control.try_send(event)
+    }
+
+    fn control(&self) -> Sender<TuiEvent> {
+        self.control.clone()
+    }
+
+    fn output(&self) -> Sender<TuiEvent> {
+        self.output.clone()
+    }
+
+    #[cfg(test)]
+    fn single(sender: Sender<TuiEvent>) -> Self {
+        Self::new(sender.clone(), sender)
+    }
+}
 
 pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow::Result<()> {
     let context_executor = Arc::new(TuiContextExecutor::new(ctx.clone()));
     let mut app = TuiApp::from_launch(TuiLaunchConfig::new(ctx.clone(), global_flags));
     app.context_executor = Some(context_executor);
     let mut terminal = TerminalGuard::enter()?;
-    let (event_tx, mut event_rx) = mpsc::channel::<TuiEvent>(TUI_EVENT_CHANNEL_CAPACITY);
-    spawn_terminal_event_reader(event_tx.clone());
+    let (control_tx, mut control_rx) = mpsc::channel::<TuiEvent>(TUI_EVENT_CHANNEL_CAPACITY);
+    let (output_tx, mut output_rx) = mpsc::channel::<TuiEvent>(TUI_OUTPUT_CHANNEL_CAPACITY);
+    let (terminal_tx, mut terminal_rx) = mpsc::channel::<Event>(TUI_TERMINAL_CHANNEL_CAPACITY);
+    let event_tx = TuiEventSender::new(control_tx, output_tx);
+    spawn_terminal_event_reader(terminal_tx);
     app.refresh_agents(Some(&event_tx));
 
     terminal.draw(|frame| render(frame, &app))?;
     app.sync_nested_session_sizes();
 
     while !app.should_quit {
-        let Some(event) = event_rx.recv().await else {
+        let Some(event) = next_tui_event(&mut terminal_rx, &mut control_rx, &mut output_rx).await
+        else {
             break;
         };
         match event {
@@ -165,6 +210,19 @@ pub async fn run(ctx: Arc<Context>, global_flags: GolemCliGlobalFlags) -> anyhow
     Ok(())
 }
 
+async fn next_tui_event(
+    terminal_rx: &mut Receiver<Event>,
+    control_rx: &mut Receiver<TuiEvent>,
+    output_rx: &mut Receiver<TuiEvent>,
+) -> Option<TuiEvent> {
+    tokio::select! {
+        biased;
+        event = terminal_rx.recv() => event.map(TuiEvent::Terminal),
+        event = control_rx.recv() => event,
+        event = output_rx.recv() => event,
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TuiLaunchConfig {
     initial_context: Arc<Context>,
@@ -180,13 +238,13 @@ impl TuiLaunchConfig {
     }
 }
 
-fn spawn_terminal_event_reader(event_tx: TuiEventSender) {
+fn spawn_terminal_event_reader(event_tx: Sender<Event>) {
     tokio::spawn(async move {
         let mut reader = EventStream::new();
         while let Some(event) = reader.next().await {
             match event {
                 Ok(event) => {
-                    if event_tx.send(TuiEvent::Terminal(event)).await.is_err() {
+                    if event_tx.send(event).await.is_err() {
                         break;
                     }
                 }
@@ -363,6 +421,7 @@ struct TuiApp {
     context_executor: Option<Arc<TuiContextExecutor>>,
     auth_prompt: Option<AuthPromptState>,
     layout: TuiLayoutState,
+    scrollbar_dragging: Option<ScrollbarTarget>,
     geometry: UiGeometry,
     preferences_path: PathBuf,
     preferences_error: Option<String>,
@@ -426,6 +485,7 @@ impl TuiApp {
             context_executor: None,
             auth_prompt: None,
             layout,
+            scrollbar_dragging: None,
             geometry: UiGeometry::default(),
             preferences_path,
             preferences_error,
@@ -996,6 +1056,9 @@ impl TuiApp {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent, event_tx: Option<&TuiEventSender>) {
+        if self.handle_scrollbar_mouse(mouse) {
+            return;
+        }
         if self.mode == InteractionMode::Help {
             match mouse.kind {
                 MouseEventKind::ScrollUp => self.help_scroll = self.help_scroll.saturating_sub(3),
@@ -1036,18 +1099,141 @@ impl TuiApp {
                 self.scroll_region_under_pointer(mouse.column, mouse.row, 3, false)
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                self.layout.dragging = self.drag_target_at(mouse.column, mouse.row);
-                self.click_region(mouse.column, mouse.row, event_tx);
+                let target = self.drag_target_at(mouse.column, mouse.row);
+                self.layout.dragging = target;
+                self.layout.drag_origin = target.map(|_| (mouse.column, mouse.row));
+                self.layout.drag_moved = false;
+                if target.is_none() {
+                    self.click_region(mouse.column, mouse.row, event_tx);
+                }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                self.layout.drag_moved |= self
+                    .layout
+                    .drag_origin
+                    .is_some_and(|origin| origin != (mouse.column, mouse.row));
                 self.drag_layout(mouse.column, mouse.row);
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.layout.drag_moved |= self
+                    .layout
+                    .drag_origin
+                    .is_some_and(|origin| origin != (mouse.column, mouse.row));
                 self.drag_layout(mouse.column, mouse.row);
+                let activate_title = self.layout.dragging.is_some() && !self.layout.drag_moved;
                 self.layout.dragging = None;
+                self.layout.drag_origin = None;
+                self.layout.drag_moved = false;
+                if activate_title {
+                    self.click_region_below_splits(mouse.column, mouse.row, event_tx);
+                }
                 self.save_preferences();
             }
             _ => {}
+        }
+    }
+
+    fn handle_scrollbar_mouse(&mut self, mouse: MouseEvent) -> bool {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(target) = self.scrollbar_target_at(mouse.column, mouse.row) else {
+                    return false;
+                };
+                self.scrollbar_dragging = Some(target);
+                self.layout.dragging = None;
+                self.drag_scrollbar(target, mouse.row);
+                true
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(target) = self.scrollbar_dragging else {
+                    return false;
+                };
+                self.drag_scrollbar(target, mouse.row);
+                true
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let Some(target) = self.scrollbar_dragging.take() else {
+                    return false;
+                };
+                self.drag_scrollbar(target, mouse.row);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn scrollbar_target_at(&self, x: u16, y: u16) -> Option<ScrollbarTarget> {
+        let RegionKind::Scrollbar(target) = self.geometry.hit_test(x, y)? else {
+            return None;
+        };
+        match self.mode.current() {
+            InteractionMode::Help if target == ScrollbarTarget::Help => Some(target),
+            InteractionMode::Normal
+            | InteractionMode::Layout
+            | InteractionMode::AgentFilter
+            | InteractionMode::TerminalInput
+            | InteractionMode::TerminalScrollback
+                if target != ScrollbarTarget::Help =>
+            {
+                Some(target)
+            }
+            _ => None,
+        }
+    }
+
+    fn drag_scrollbar(&mut self, target: ScrollbarTarget, y: u16) {
+        let Some(area) = self.geometry.region(RegionKind::Scrollbar(target)) else {
+            return;
+        };
+        match target {
+            ScrollbarTarget::Dev(view) => {
+                self.active_workspace = Workspace::Dev;
+                self.dev_focus = view;
+                let screen = match view {
+                    DevView::BuildDeploy => self.command_run.as_mut().map(|run| &mut run.terminal),
+                    DevView::Server => Some(&mut self.server.run.terminal),
+                    DevView::Repl => Some(&mut self.repl.run.screen),
+                };
+                if let Some(screen) = screen {
+                    let top_line = scrollbar_value_from_pointer(area, y, screen.max_scrollback());
+                    screen.set_scrollback(screen.max_scrollback().saturating_sub(top_line));
+                    if screen.scrollback() > 0
+                        && self.mode.current() != InteractionMode::TerminalScrollback
+                    {
+                        self.mode.push(InteractionMode::TerminalScrollback);
+                    }
+                }
+            }
+            ScrollbarTarget::OpsList => {
+                let count = self.filtered_agents().len();
+                if count == 0 {
+                    return;
+                }
+                self.agents.focus = AgentOverviewFocus::List;
+                self.agents.selected =
+                    scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                self.agents.table.selected = self.agents.selected;
+                self.agents.details_scroll = 0;
+                self.agents.reveal_selection(count);
+            }
+            ScrollbarTarget::OpsDetails | ScrollbarTarget::OpsDocument => {
+                if target == ScrollbarTarget::OpsDetails {
+                    self.agents.focus = AgentOverviewFocus::Details;
+                }
+                let max = self
+                    .agents
+                    .details_content_height
+                    .get()
+                    .saturating_sub(self.agents.details_viewport_height.get());
+                self.agents.details_scroll = scrollbar_value_from_pointer(area, y, max);
+            }
+            ScrollbarTarget::Help => {
+                let max = self
+                    .help_content_height
+                    .get()
+                    .saturating_sub(self.help_viewport_height.get());
+                self.help_scroll = scrollbar_value_from_pointer(area, y, max);
+            }
         }
     }
 
@@ -1141,6 +1327,21 @@ impl TuiApp {
 
     fn click_region(&mut self, x: u16, y: u16, event_tx: Option<&TuiEventSender>) {
         let hit = self.geometry.hit_test(x, y);
+        self.click_hit(hit, x, y, event_tx);
+    }
+
+    fn click_region_below_splits(&mut self, x: u16, y: u16, event_tx: Option<&TuiEventSender>) {
+        let hit = self.geometry.hit_test_below_splits(x, y);
+        self.click_hit(hit, x, y, event_tx);
+    }
+
+    fn click_hit(
+        &mut self,
+        hit: Option<RegionKind>,
+        _x: u16,
+        y: u16,
+        event_tx: Option<&TuiEventSender>,
+    ) {
         if self.mode == InteractionMode::Palette {
             match hit {
                 Some(RegionKind::PaletteAll) => self.set_palette_scope(PaletteScope::All),
@@ -1164,8 +1365,18 @@ impl TuiApp {
             return;
         }
         match hit {
-            Some(RegionKind::Workspace(Workspace::Ops)) => self.open_ops_workspace(event_tx),
-            Some(RegionKind::Workspace(workspace)) => self.active_workspace = workspace,
+            Some(RegionKind::Workspace(Workspace::Ops)) => {
+                self.restore_default_mode();
+                self.open_ops_workspace(event_tx);
+            }
+            Some(RegionKind::Workspace(workspace)) => {
+                self.restore_default_mode();
+                self.active_workspace = workspace;
+            }
+            Some(RegionKind::DevSessionStatus(view)) => {
+                self.restore_default_mode();
+                self.open_dev_workspace(view);
+            }
             Some(RegionKind::DevViewTitle(view)) => {
                 self.active_workspace = Workspace::Dev;
                 self.dev_focus = view;
@@ -1270,6 +1481,7 @@ impl TuiApp {
         }
         let query_rows = CollectionQueryBar {
             dataset: &self.agents.dataset_label(),
+            mode: self.agents.mode.label(),
             scope: self.agents.query_scope.label(),
             query: &self.agents.query,
             matched: filtered.len(),
@@ -1344,25 +1556,48 @@ impl TuiApp {
                 self.close_palette();
                 self.open_command_form(CommandKind::Clean);
             }
-            ActionId::ToggleServer => {
+            ActionId::SelectDevBuildDeploy => {
                 self.close_palette();
-                self.request_server_toggle();
+                self.open_dev_workspace(DevView::BuildDeploy);
+            }
+            ActionId::SelectDevServer => {
+                self.close_palette();
+                self.open_dev_workspace(DevView::Server);
+            }
+            ActionId::SelectDevRepl => {
+                self.close_palette();
+                self.open_dev_workspace(DevView::Repl);
+            }
+            ActionId::StartServer => {
+                self.close_palette();
+                self.open_server_form(false, false);
+            }
+            ActionId::StopServer | ActionId::ForceStopServer => {
+                self.close_palette();
+                self.stop_server();
             }
             ActionId::RestartServer => {
                 self.close_palette();
                 self.open_server_form(true, false);
             }
-            ActionId::CleanRestartServer => {
-                self.close_palette();
-                self.open_server_form(true, true);
-            }
             ActionId::FlipPanePlacement => {
                 self.layout.dev_placement = self.layout.dev_placement.flipped();
                 self.close_palette();
             }
-            ActionId::ToggleServerSubview => {
-                let visible = self.layout.dev_is_visible(DevView::Server);
-                self.layout.set_dev_visible(DevView::Server, !visible);
+            ActionId::ToggleBuildDeployView => {
+                self.toggle_dev_view(DevView::BuildDeploy);
+                self.close_palette();
+            }
+            ActionId::ToggleServerView => {
+                self.toggle_dev_view(DevView::Server);
+                self.close_palette();
+            }
+            ActionId::ToggleReplView => {
+                self.toggle_dev_view(DevView::Repl);
+                self.close_palette();
+            }
+            ActionId::MakeFocusedDevViewMain => {
+                self.make_focused_dev_view_primary();
                 self.close_palette();
             }
             ActionId::RefreshAgents => {
@@ -1431,15 +1666,11 @@ impl TuiApp {
                 self.close_palette();
                 self.select_ops_root(OpsRootSubject::Server, event_tx);
             }
-            ActionId::StartOrFocusRepl => {
+            ActionId::StartRepl => {
                 self.close_palette();
-                self.start_or_focus_repl(event_tx);
+                self.open_repl_form(false);
             }
-            ActionId::FocusRepl => {
-                self.close_palette();
-                self.focus_repl();
-            }
-            ActionId::StopRepl => {
+            ActionId::StopRepl | ActionId::ForceStopRepl => {
                 self.close_palette();
                 self.stop_repl();
             }
@@ -1481,7 +1712,7 @@ impl TuiApp {
             {
                 ActionAvailability::Unavailable(reason)
             }
-            ActionId::StartOrFocusRepl | ActionId::RestartRepl
+            ActionId::StartRepl | ActionId::RestartRepl
                 if let Err(reason) = self.selected_target.context.capability(DevView::Repl) =>
             {
                 ActionAvailability::Unavailable(reason)
@@ -1510,7 +1741,10 @@ impl TuiApp {
             ActionId::OpenContextPicker if self.context_switch_busy() => {
                 ActionAvailability::Unavailable("context switch already running")
             }
-            ActionId::ToggleServer | ActionId::RestartServer | ActionId::CleanRestartServer
+            ActionId::StartServer
+            | ActionId::StopServer
+            | ActionId::ForceStopServer
+            | ActionId::RestartServer
                 if !self.server.available
                     || self
                         .selected_target
@@ -1519,6 +1753,35 @@ impl TuiApp {
                         .is_err() =>
             {
                 ActionAvailability::Unavailable("requires an available local server target")
+            }
+            ActionId::ToggleBuildDeployView
+                if self.dev_view_visible(DevView::BuildDeploy)
+                    && self.layout.visible_dev_views(self.dev_primary).len() == 1 =>
+            {
+                ActionAvailability::Unavailable("at least one Dev view must remain visible")
+            }
+            ActionId::ToggleServerView
+                if self.dev_view_visible(DevView::Server)
+                    && self.layout.visible_dev_views(self.dev_primary).len() == 1 =>
+            {
+                ActionAvailability::Unavailable("at least one Dev view must remain visible")
+            }
+            ActionId::ToggleReplView
+                if self.dev_view_visible(DevView::Repl)
+                    && self.layout.visible_dev_views(self.dev_primary).len() == 1 =>
+            {
+                ActionAvailability::Unavailable("at least one Dev view must remain visible")
+            }
+            ActionId::MakeFocusedDevViewMain if self.dev_focus == self.dev_primary => {
+                ActionAvailability::Unavailable("focused view is already main")
+            }
+            ActionId::ForceStopServer
+                if !force_stop_available(self.server.run.stop_requested_at) =>
+            {
+                ActionAvailability::Unavailable("available five seconds after stop is requested")
+            }
+            ActionId::ForceStopRepl if !force_stop_available(self.repl.run.stop_requested_at) => {
+                ActionAvailability::Unavailable("available five seconds after stop is requested")
             }
             _ => ActionAvailability::Available,
         }
@@ -1743,13 +2006,16 @@ impl TuiApp {
                 }
             },
             KeyCode::Char('b') if self.active_workspace == Workspace::Dev => {
-                self.toggle_dev_subview(DevView::BuildDeploy)
+                self.toggle_dev_view(DevView::BuildDeploy);
             }
             KeyCode::Char('s') if self.active_workspace == Workspace::Dev => {
-                self.toggle_dev_subview(DevView::Server)
+                self.toggle_dev_view(DevView::Server);
             }
             KeyCode::Char('r') if self.active_workspace == Workspace::Dev => {
-                self.toggle_dev_subview(DevView::Repl)
+                self.toggle_dev_view(DevView::Repl);
+            }
+            KeyCode::Char('m') if self.active_workspace == Workspace::Dev => {
+                self.make_focused_dev_view_primary()
             }
             KeyCode::Char('d') if self.active_workspace == Workspace::Ops => {
                 self.toggle_agent_details()
@@ -1815,23 +2081,54 @@ impl TuiApp {
         usize::from(self.command_run.is_some()) + self.completed_jobs.len()
     }
 
-    fn toggle_dev_subview(&mut self, view: DevView) {
+    fn dev_view_visible(&self, view: DevView) -> bool {
+        view == self.dev_primary || self.layout.dev_is_visible(view)
+    }
+
+    fn toggle_dev_view(&mut self, view: DevView) -> bool {
+        if !self.dev_view_visible(view) {
+            self.layout.set_dev_visible(view, true);
+            self.dev_focus = view;
+            return true;
+        }
+
+        let visible = self.layout.visible_dev_views(self.dev_primary);
+        if visible.len() == 1 {
+            return false;
+        }
+
         if view == self.dev_primary {
-            for other in DevView::ALL {
-                if other != self.dev_primary {
-                    self.layout.set_dev_visible(other, false);
-                }
+            let replacement = if self.dev_focus != view && self.dev_view_visible(self.dev_focus) {
+                self.dev_focus
+            } else {
+                DevView::ALL
+                    .into_iter()
+                    .find(|candidate| *candidate != view && self.dev_view_visible(*candidate))
+                    .expect("multiple visible Dev views require a replacement primary")
+            };
+            self.layout.set_dev_visible(view, false);
+            self.layout.set_dev_visible(replacement, true);
+            self.dev_primary = replacement;
+            if self.dev_focus == view {
+                self.dev_focus = replacement;
             }
-            self.dev_focus = self.dev_primary;
+        } else {
+            self.layout.set_dev_visible(view, false);
+            if self.dev_focus == view {
+                self.dev_focus = self.dev_primary;
+            }
+        }
+        true
+    }
+
+    fn make_focused_dev_view_primary(&mut self) {
+        if self.active_workspace != Workspace::Dev || self.dev_focus == self.dev_primary {
             return;
         }
-        let visible = !self.layout.dev_is_visible(view);
-        self.layout.set_dev_visible(view, visible);
-        if visible {
-            self.dev_focus = view;
-        } else if self.dev_focus == view {
-            self.dev_focus = self.dev_primary;
-        }
+        let old_primary = self.dev_primary;
+        self.layout.set_dev_visible(old_primary, true);
+        self.layout.set_dev_visible(self.dev_focus, true);
+        self.dev_primary = self.dev_focus;
     }
 
     fn move_layout_divider(&mut self, direction: KeyCode, cells: u16) {
@@ -1878,11 +2175,7 @@ impl TuiApp {
 
     fn open_dev_workspace(&mut self, panel: DevView) {
         self.active_workspace = Workspace::Dev;
-        if panel != self.dev_primary && !self.layout.dev_is_visible(panel) {
-            self.layout.set_dev_visible(self.dev_primary, false);
-            self.dev_primary = panel;
-            self.layout.set_dev_visible(panel, true);
-        }
+        self.layout.set_dev_visible(panel, true);
         self.dev_focus = panel;
     }
 
@@ -1904,7 +2197,9 @@ impl TuiApp {
     }
 
     fn dev_panel_focused(&self, panel: DevView) -> bool {
-        self.active_workspace == Workspace::Dev && self.dev_focus == panel
+        self.active_workspace == Workspace::Dev
+            && self.dev_focus == panel
+            && self.dev_view_visible(panel)
     }
 
     fn ops_agents_focused(&self) -> bool {
@@ -2228,7 +2523,7 @@ impl TuiApp {
         let generation = self.context_switcher.generation;
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
-            event_tx,
+            event_tx.control(),
             auth_presenter,
             move |_launch_context| async move {
                 Context::new(request.global_flags.clone(), Some(Output::Captured))
@@ -2268,7 +2563,7 @@ impl TuiApp {
         self.context_switcher.environment_list_spinner_stop = Some(stop);
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
-            event_tx,
+            event_tx.control(),
             auth_presenter,
             move |_launch_context| async move {
                 let context = Arc::new(
@@ -2607,7 +2902,7 @@ impl TuiApp {
         let max_count = self.agents.paging.request_limit(append);
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
-            event_tx,
+            event_tx.control(),
             auth_presenter,
             move |launch_context| async move {
                 let (component_name, agent_type_name) = match &dataset_scope {
@@ -2772,7 +3067,7 @@ impl TuiApp {
         let environment_reference = self.selected_target.environment_reference.clone();
         let auth_presenter = Some(tui_auth_presenter(&event_tx));
         context_executor.spawn(
-            event_tx,
+            event_tx.control(),
             auth_presenter,
             move |launch_context| async move {
                 let environment = launch_context
@@ -2890,7 +3185,6 @@ impl TuiApp {
     }
 
     fn open_command_form(&mut self, kind: CommandKind) {
-        self.open_dev_workspace(DevView::BuildDeploy);
         let key = self.selected_target.context.short_label();
         let values = self
             .command_form_memory
@@ -3023,15 +3317,14 @@ impl TuiApp {
         values: CommandFormValues,
         event_tx: Option<&TuiEventSender>,
     ) {
+        let take_input = self.dev_panel_focused(DevView::BuildDeploy);
         self.command_options = values.command_options();
         if self.command_is_running() {
             self.append_local_command_line("command already running");
-            self.open_dev_workspace(DevView::BuildDeploy);
             return;
         }
         self.archive_current_command();
         if self.dev_context_unavailable() {
-            self.open_dev_workspace(DevView::BuildDeploy);
             self.command_run = Some(CommandRun::new(
                 self.next_command_id,
                 kind,
@@ -3047,8 +3340,11 @@ impl TuiApp {
         let args = self.command_args(kind, &values);
         let command_id = self.next_command_id;
         self.next_command_id += 1;
-        self.open_dev_workspace(DevView::BuildDeploy);
-        self.mode.replace(InteractionMode::TerminalInput);
+        self.mode.replace(if take_input {
+            InteractionMode::TerminalInput
+        } else {
+            InteractionMode::Normal
+        });
         self.command_run = Some(CommandRun::new(
             command_id,
             kind,
@@ -3077,7 +3373,12 @@ impl TuiApp {
             }
         };
 
-        match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Command) {
+        match spawn_nested_cli(
+            spec,
+            event_tx.control(),
+            event_tx.output(),
+            NestedCliTarget::Command,
+        ) {
             Ok(mut runtime) => {
                 if let Some((cols, rows)) = self.dev_pty_size(DevView::BuildDeploy) {
                     let _ = runtime.resize(cols, rows);
@@ -3332,6 +3633,7 @@ impl TuiApp {
             context_picker_selected: self.context_switcher.selected,
             context_picker_prefix_height: context_picker_prefix_height(&self.context_switcher),
             agent_details_visible: self.ops_agents_focused() && self.agents.detail_visible,
+            dev_session_status_widths: footer_session_status_widths(self, cols),
             layout: self.layout.clone(),
         });
         self.geometry.update(snapshot);
@@ -3399,17 +3701,7 @@ impl TuiApp {
         }
     }
 
-    fn request_server_toggle(&mut self) {
-        self.open_dev_workspace(DevView::Server);
-        if self.server.run.is_running() {
-            self.stop_server();
-        } else {
-            self.open_server_form(false, false);
-        }
-    }
-
     fn open_server_form(&mut self, restart: bool, clean: bool) {
-        self.open_dev_workspace(DevView::Server);
         let key = self.selected_target.context.short_label();
         let mut values = self
             .server_form_memory
@@ -3429,7 +3721,6 @@ impl TuiApp {
     }
 
     fn open_repl_form(&mut self, restart: bool) {
-        self.open_dev_workspace(DevView::Repl);
         let key = self.selected_target.context.short_label();
         let mut values = self.repl_form_memory.get(&key).cloned().unwrap_or_default();
         values.yes = false;
@@ -3580,7 +3871,6 @@ impl TuiApp {
                 .run
                 .terminal
                 .feed_local_line("local server is unavailable");
-            self.open_dev_workspace(DevView::Server);
             return;
         }
         if self.server.run.is_running() {
@@ -3588,7 +3878,6 @@ impl TuiApp {
                 .run
                 .terminal
                 .feed_local_line("server already running");
-            self.open_dev_workspace(DevView::Server);
             return;
         }
 
@@ -3600,7 +3889,6 @@ impl TuiApp {
             .as_ref()
             .and_then(|path| std::fs::metadata(path).ok())
             .and_then(|metadata| metadata.modified().ok());
-        self.open_dev_workspace(DevView::Server);
         self.mode.replace(InteractionMode::Normal);
         self.server.run = ServerRun::new(
             self.server.next_id,
@@ -3637,7 +3925,12 @@ impl TuiApp {
             }
         };
 
-        match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Server) {
+        match spawn_nested_cli(
+            spec,
+            event_tx.control(),
+            event_tx.output(),
+            NestedCliTarget::Server,
+        ) {
             Ok(mut runtime) => {
                 if let Some((cols, rows)) = self.dev_pty_size(DevView::Server) {
                     let _ = runtime.resize(cols, rows);
@@ -3778,26 +4071,17 @@ impl TuiApp {
         self.server.run.terminal.scroll_down(amount);
     }
 
-    fn start_or_focus_repl(&mut self, _event_tx: Option<&TuiEventSender>) {
-        self.open_dev_workspace(DevView::Repl);
-        if self.dev_context_unavailable() {
-            self.repl.run.last_error = Some("selected context is ops-only".to_string());
-            self.mode.replace(InteractionMode::Normal);
-            return;
-        }
-        if self.repl.is_running() {
-            self.enter_terminal_input();
-            return;
-        }
-
-        self.open_repl_form(false);
-    }
-
     fn start_repl_with_values(
         &mut self,
         values: ReplFormValues,
         event_tx: Option<&TuiEventSender>,
     ) {
+        let take_input = self.dev_panel_focused(DevView::Repl);
+        if self.dev_context_unavailable() {
+            self.repl.run.last_error = Some("selected context is ops-only".to_string());
+            self.mode.replace(InteractionMode::Normal);
+            return;
+        }
         let args = repl_args_from_values(&values);
         let (screen_cols, screen_rows) = self.dev_pty_size(DevView::Repl).unwrap_or_else(|| {
             let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
@@ -3810,7 +4094,11 @@ impl TuiApp {
             screen_cols,
             self.selected_target.context.short_label(),
         );
-        self.mode.replace(InteractionMode::TerminalInput);
+        self.mode.replace(if take_input {
+            InteractionMode::TerminalInput
+        } else {
+            InteractionMode::Normal
+        });
         self.repl
             .run
             .screen
@@ -3830,7 +4118,12 @@ impl TuiApp {
             }
         };
 
-        match spawn_nested_cli(spec, event_tx.clone(), NestedCliTarget::Repl) {
+        match spawn_nested_cli(
+            spec,
+            event_tx.control(),
+            event_tx.output(),
+            NestedCliTarget::Repl,
+        ) {
             Ok(mut runtime) => {
                 let _ = runtime.resize(screen_cols, screen_rows);
                 self.repl.run.status = ReplStatus::Running;
@@ -3874,13 +4167,6 @@ impl TuiApp {
             cwd: crate::fs::current_dir_lexical()?,
             env,
         })
-    }
-
-    fn focus_repl(&mut self) {
-        self.open_dev_workspace(DevView::Repl);
-        if self.repl.is_running() {
-            self.enter_terminal_input();
-        }
     }
 
     fn handle_terminal_scrollback_key(&mut self, key: KeyEvent) {
@@ -4853,7 +5139,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "agent_id",
         title: "AgentID",
+        minimum_width: 18,
         width: 32,
+        alignment: Alignment::Left,
         required: true,
         default_visible: true,
         policy: CellPolicy::Ellipsis,
@@ -4861,7 +5149,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "status",
         title: "Status",
+        minimum_width: 8,
         width: 14,
+        alignment: Alignment::Left,
         required: true,
         default_visible: true,
         policy: CellPolicy::Ellipsis,
@@ -4869,7 +5159,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "type",
         title: "Type",
+        minimum_width: 10,
         width: 22,
+        alignment: Alignment::Left,
         required: false,
         default_visible: true,
         policy: CellPolicy::Ellipsis,
@@ -4877,7 +5169,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "component",
         title: "Component",
+        minimum_width: 12,
         width: 28,
+        alignment: Alignment::Left,
         required: false,
         default_visible: true,
         policy: CellPolicy::Ellipsis,
@@ -4885,7 +5179,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "revision",
         title: "Revision",
+        minimum_width: 8,
         width: 10,
+        alignment: Alignment::Right,
         required: false,
         default_visible: false,
         policy: CellPolicy::Ellipsis,
@@ -4893,7 +5189,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "pending",
         title: "Pending",
+        minimum_width: 7,
         width: 10,
+        alignment: Alignment::Right,
         required: false,
         default_visible: false,
         policy: CellPolicy::Ellipsis,
@@ -4901,7 +5199,9 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "created_at",
         title: "Created at",
+        minimum_width: 12,
         width: 24,
+        alignment: Alignment::Left,
         required: false,
         default_visible: false,
         policy: CellPolicy::Ellipsis,
@@ -4929,6 +5229,14 @@ impl AgentModeFilter {
             Self::Durable => AgentListMode::Durable,
             Self::Ephemeral => AgentListMode::Ephemeral,
             Self::All => AgentListMode::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Durable => "durable",
+            Self::Ephemeral => "ephemeral",
+            Self::All => "all",
         }
     }
 }
@@ -6638,6 +6946,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
         agent_details_visible: app.ops_agents_focused() && app.agents.detail_visible,
+        dev_session_status_widths: footer_session_status_widths(app, frame.area().width),
         layout: app.layout.clone(),
     });
     app.geometry.update(snapshot.clone());
@@ -6937,6 +7246,12 @@ fn render_ops_document(
         offset: app.agents.details_scroll,
     }
     .render(frame, region, &theme());
+    if let Some(slot) = region.scrollbar {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::OpsDocument),
+            slot.area,
+        );
+    }
     pane_layout.render_body_boundaries(frame, &[region], &theme());
 }
 
@@ -7080,6 +7395,7 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     .height();
     let query_bar = CollectionQueryBar {
         dataset: &app.agents.dataset_label(),
+        mode: app.agents.mode.label(),
         scope: app.agents.query_scope.label(),
         query: &app.agents.query,
         matched: filtered.len(),
@@ -7229,6 +7545,8 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             )
             .viewport_content_length(table_region.content_area.height as usize);
         render_scrollbar(frame, slot, &mut state, &theme());
+        app.geometry
+            .add_region(RegionKind::Scrollbar(ScrollbarTarget::OpsList), slot.area);
     }
     if let (Some(details_body), Some(details_region)) = (details_body, details_region) {
         app.agents.details_content_height.set(details_lines.len());
@@ -7240,6 +7558,12 @@ fn render_ops_agents_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             offset: app.agents.details_scroll,
         }
         .render(frame, details_region, &theme());
+        if let Some(slot) = details_region.scrollbar {
+            app.geometry.add_region(
+                RegionKind::Scrollbar(ScrollbarTarget::OpsDetails),
+                slot.area,
+            );
+        }
         chrome.render_body_boundary(frame, details_body, &theme());
     }
     if let Some(divider) = divider {
@@ -7382,6 +7706,53 @@ fn render_shell_header(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     .render(frame, area, &theme());
 }
 
+#[derive(Clone, Copy)]
+struct FooterSessionPresentation {
+    view: DevView,
+    name: &'static str,
+    state: Option<&'static str>,
+    kind: StatusKind,
+}
+
+impl FooterSessionPresentation {
+    fn width(self) -> u16 {
+        let state_width = self
+            .state
+            .map_or(0, |state| 1 + UnicodeWidthStr::width(state));
+        (UnicodeWidthStr::width(self.name) + 2 + state_width) as u16
+    }
+}
+
+fn footer_session_presentations(app: &TuiApp, width: u16) -> Vec<FooterSessionPresentation> {
+    if width < 40 {
+        return Vec::new();
+    }
+    let show_state = width >= layout::SHELL_COMPACT_WIDTH;
+    vec![
+        FooterSessionPresentation {
+            view: DevView::Server,
+            name: "Server",
+            state: show_state.then_some(app.server.run.status.title()),
+            kind: server_status_kind(app.server.run.status),
+        },
+        FooterSessionPresentation {
+            view: DevView::Repl,
+            name: "REPL",
+            state: show_state.then_some(app.repl.run.status.title()),
+            kind: repl_status_kind(app.repl.run.status),
+        },
+    ]
+}
+
+fn footer_session_status_widths(app: &TuiApp, width: u16) -> [u16; 2] {
+    let presentations = footer_session_presentations(app, width);
+    if let [server, repl] = presentations.as_slice() {
+        [server.width(), repl.width()]
+    } else {
+        [0, 0]
+    }
+}
+
 fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     if area.height == 0 {
         return;
@@ -7406,6 +7777,23 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         junctions: &[],
     }
     .render(frame, rows[0], &theme());
+    let status_items = footer_session_presentations(app, area.width)
+        .into_iter()
+        .filter_map(|presentation| {
+            app.geometry
+                .region(RegionKind::DevSessionStatus(presentation.view))
+                .map(|status_area| FooterStatusItem {
+                    name: presentation.name,
+                    state: presentation.state,
+                    kind: presentation.kind,
+                    area: status_area,
+                })
+        })
+        .collect::<Vec<_>>();
+    FooterStatusCluster {
+        items: &status_items,
+    }
+    .render(frame, &theme());
 
     if app.mode == InteractionMode::Leader {
         let items = leader_key_hints(app);
@@ -7534,14 +7922,48 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 label: "Commands",
             },
         ];
-        let layout_mode = [
+        let dev_layout_mode = [
+            KeyHint {
+                key: "tab / shift+tab",
+                label: "Focus pane",
+            },
             KeyHint {
                 key: "arrows / shift+arrows",
                 label: "Resize 1 / 5",
             },
             KeyHint {
+                key: "b / s / r",
+                label: "Toggle views",
+            },
+            KeyHint {
+                key: "m",
+                label: "Make main",
+            },
+            KeyHint {
                 key: "f",
-                label: "Flip",
+                label: "Right / bottom",
+            },
+            KeyHint {
+                key: "enter / esc",
+                label: "Done",
+            },
+        ];
+        let ops_layout_mode = [
+            KeyHint {
+                key: "tab / shift+tab",
+                label: "Focus pane",
+            },
+            KeyHint {
+                key: "arrows / shift+arrows",
+                label: "Resize 1 / 5",
+            },
+            KeyHint {
+                key: "d",
+                label: "Toggle Details",
+            },
+            KeyHint {
+                key: "f",
+                label: "Right / bottom",
             },
             KeyHint {
                 key: "enter / esc",
@@ -7562,8 +7984,11 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 label: "Return to live input",
             },
         ];
-        let items = if app.mode == InteractionMode::Layout {
-            layout_mode.as_slice()
+        let items = if app.mode == InteractionMode::Layout && app.active_workspace == Workspace::Dev
+        {
+            dev_layout_mode.as_slice()
+        } else if app.mode == InteractionMode::Layout {
+            ops_layout_mode.as_slice()
         } else if app.mode == InteractionMode::TerminalScrollback {
             scrollback_mode.as_slice()
         } else if app.active_workspace == Workspace::Dev {
@@ -7798,6 +8223,7 @@ fn render_dev_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         context_picker_selected: app.context_switcher.selected,
         context_picker_prefix_height: context_picker_prefix_height(&app.context_switcher),
         agent_details_visible: app.agents.detail_visible,
+        dev_session_status_widths: [0, 0],
         layout: app.layout.clone(),
     };
 
@@ -7863,7 +8289,12 @@ fn render_repl_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         Paragraph::new(lines).style(surface_style()),
         terminal_content,
     );
-    render_output_scrollbar(frame, terminal_area, &app.repl.run.screen);
+    if let Some(slot) = render_output_scrollbar(frame, terminal_area, &app.repl.run.screen) {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::Dev(DevView::Repl)),
+            slot.area,
+        );
+    }
 
     render_terminal_cursor(
         frame,
@@ -7883,7 +8314,6 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     frame.render_widget(
         Paragraph::new(server_status_line(
             &app.server,
-            app.server.available,
             terminal_input_label(app, NestedCliTarget::Server),
         ))
         .style(surface_style()),
@@ -7908,7 +8338,12 @@ fn render_server_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .wrap(Wrap { trim: false }),
         output_content,
     );
-    render_output_scrollbar(frame, output_area, &app.server.run.terminal);
+    if let Some(slot) = render_output_scrollbar(frame, output_area, &app.server.run.terminal) {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::Dev(DevView::Server)),
+            slot.area,
+        );
+    }
     render_terminal_cursor(
         frame,
         output_content,
@@ -7988,6 +8423,16 @@ fn render_help(frame: &mut Frame<'_>, app: &TuiApp) {
         );
     }
     render_overlay_scrollbar(frame, body, app.help_content_height.get(), offset);
+    if overflow {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::Help),
+            Rect {
+                x: body.right().saturating_sub(1),
+                width: 1,
+                ..body
+            },
+        );
+    }
 }
 
 fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
@@ -8034,7 +8479,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             &mut lines,
             width,
             "ctrl+x l",
-            "Resize, flip, show, or hide panes",
+            "Resize, place, show, hide, or promote panes",
         );
         push_raw_help(&mut lines, width, "pageup", "Enter terminal scrollback");
         push_raw_help(&mut lines, width, "mouse wheel", "Scroll terminal history");
@@ -8250,7 +8695,12 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         output_content,
     );
     if let Some(run) = run {
-        render_output_scrollbar(frame, output_area, &run.terminal);
+        if let Some(slot) = render_output_scrollbar(frame, output_area, &run.terminal) {
+            app.geometry.add_region(
+                RegionKind::Scrollbar(ScrollbarTarget::Dev(DevView::BuildDeploy)),
+                slot.area,
+            );
+        }
         render_terminal_cursor(
             frame,
             output_content,
@@ -8260,11 +8710,15 @@ fn render_output_view(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
 }
 
-fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalScreen) {
+fn render_output_scrollbar(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    output: &TerminalScreen,
+) -> Option<PaneScrollbarSlot> {
     let visible_height = area.height as usize;
     let total = output.total_lines();
     if output.max_scrollback() == 0 || area.width == 0 || visible_height == 0 {
-        return;
+        return None;
     }
 
     let position = output_scrollbar_position(total, visible_height, output.scrollback());
@@ -8272,14 +8726,11 @@ fn render_output_scrollbar(frame: &mut Frame<'_>, area: Rect, output: &TerminalS
         .position(position)
         .viewport_content_length(visible_height);
 
-    render_scrollbar(
-        frame,
-        PaneScrollbarSlot {
-            area: Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
-        },
-        &mut state,
-        &theme(),
-    );
+    let slot = PaneScrollbarSlot {
+        area: Rect::new(area.right().saturating_sub(1), area.y, 1, area.height),
+    };
+    render_scrollbar(frame, slot, &mut state, &theme());
+    Some(slot)
 }
 
 fn terminal_content_area(area: Rect) -> Rect {
@@ -8319,15 +8770,23 @@ fn output_scrollbar_position(total: usize, visible_height: usize, scroll_offset:
     top_line.saturating_mul(total.saturating_sub(1)) / max_top_line
 }
 
+fn scrollbar_value_from_pointer(area: Rect, y: u16, maximum: usize) -> usize {
+    if maximum == 0 || area.height <= 1 {
+        return 0;
+    }
+    let start = area.y.saturating_add(u16::from(area.height > 2));
+    let end = area.bottom().saturating_sub(1 + u16::from(area.height > 2));
+    if y <= start {
+        return 0;
+    }
+    if y >= end {
+        return maximum;
+    }
+    let length = end.saturating_sub(start) as usize;
+    usize::from(y.saturating_sub(start)).saturating_mul(maximum) / length.max(1)
+}
+
 fn command_status_line(run: &CommandRun, input: &'static str) -> Line<'static> {
-    let hint = if matches!(
-        run.status,
-        CommandStatus::Running | CommandStatus::Cancelling
-    ) {
-        "ctrl+c cancel · ctrl+x → TUI"
-    } else {
-        "ctrl+x a run again"
-    };
     status_summary_line(
         command_status_kind(run.status),
         command_status_display(run),
@@ -8338,16 +8797,11 @@ fn command_status_line(run: &CommandRun, input: &'static str) -> Line<'static> {
             ("reset", flag_state(run.options.reset).to_string()),
             ("command", command_display(&run.args)),
             ("context", run.launch_context.clone()),
-            ("action", hint.to_string()),
         ],
     )
 }
 
-fn server_status_line(
-    server: &LocalServerService,
-    local_server_available: bool,
-    input: &'static str,
-) -> Line<'static> {
+fn server_status_line(server: &LocalServerService, input: &'static str) -> Line<'static> {
     let run = &server.run;
     let clean = run.clean;
     let ports = run.bound_ports.as_ref().map_or_else(
@@ -8375,10 +8829,6 @@ fn server_status_line(
             ("ports", ports.trim_start_matches("ports: ").to_string()),
             ("command", command_display(&run.args)),
             ("context", run.launch_context.clone()),
-            (
-                "action",
-                server_hint(run, local_server_available).to_string(),
-            ),
         ],
     )
 }
@@ -8393,7 +8843,6 @@ fn repl_status_line(repl: &ReplState, input: &'static str) -> Line<'static> {
             ("session", "repl".to_string()),
             ("command", command_display(&run.args)),
             ("context", run.launch_context.clone()),
-            ("action", repl_mode_hint(run).to_string()),
         ],
     )
 }
@@ -8406,18 +8855,11 @@ fn repl_status_kind(status: ReplStatus) -> StatusKind {
     }
 }
 
-fn repl_mode_hint(run: &ReplRun) -> &'static str {
-    match run.is_running() {
-        true => "ctrl+x → TUI",
-        _ => "ctrl+x a start",
-    }
-}
-
 fn terminal_input_label(app: &TuiApp, target: NestedCliTarget) -> &'static str {
     if app.mode == InteractionMode::TerminalScrollback && app.dev_focus == target_dev_view(target) {
         "TUI · scrollback"
     } else if app.terminal_input_owns(target) {
-        "CLI · ctrl+x → TUI"
+        "CLI"
     } else if app.focused_nested_cli_target() == Some(target) {
         "TUI · enter → CLI"
     } else {
@@ -8452,17 +8894,6 @@ fn server_status_kind(status: ServerStatus) -> StatusKind {
         }
         ServerStatus::Stopped => StatusKind::Idle,
         ServerStatus::Failed => StatusKind::Failed,
-    }
-}
-
-fn server_hint(run: &ServerRun, local_server_available: bool) -> &'static str {
-    if !local_server_available {
-        return "local server unavailable";
-    }
-    match run.status {
-        ServerStatus::Starting | ServerStatus::Running => "ctrl+x a stop",
-        ServerStatus::Stopping => "ctrl+x a force stop",
-        ServerStatus::Stopped | ServerStatus::Failed => "ctrl+x a start / restart",
     }
 }
 
@@ -9495,6 +9926,19 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
         active.push("REPL");
     }
     let message = format!("Still running: {}.", active.join(", "));
+    let mut choices = ActionButton {
+        label: "Return",
+        selected: app.quit_choice == QuitChoice::Return,
+    }
+    .spans(&theme());
+    choices.push(Span::raw("   "));
+    choices.extend(
+        ActionButton {
+            label: "Force quit",
+            selected: app.quit_choice == QuitChoice::ForceQuit,
+        }
+        .spans(&theme()),
+    );
     let lines = vec![
         Notice {
             kind: NoticeKind::Warning,
@@ -9508,16 +9952,7 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
         }
         .popup_line(&theme()),
         Line::default(),
-        ActionButton {
-            label: "Return",
-            selected: app.quit_choice == QuitChoice::Return,
-        }
-        .line(&theme()),
-        ActionButton {
-            label: "Force quit",
-            selected: app.quit_choice == QuitChoice::ForceQuit,
-        }
-        .line(&theme()),
+        Line::from(choices).alignment(Alignment::Center),
         Line::default(),
         shortcut_line(
             &[
@@ -9747,11 +10182,18 @@ enum ActionId {
     Build,
     Deploy,
     Clean,
-    ToggleServer,
+    SelectDevBuildDeploy,
+    SelectDevServer,
+    SelectDevRepl,
+    StartServer,
+    StopServer,
+    ForceStopServer,
     RestartServer,
-    CleanRestartServer,
     FlipPanePlacement,
-    ToggleServerSubview,
+    ToggleBuildDeployView,
+    ToggleServerView,
+    ToggleReplView,
+    MakeFocusedDevViewMain,
     RefreshAgents,
     OpenAgentDatasetFilter,
     OpenAgentColumns,
@@ -9769,9 +10211,9 @@ enum ActionId {
     SelectOpsDeployment,
     SelectOpsEnvironment,
     SelectOpsServer,
-    StartOrFocusRepl,
-    FocusRepl,
+    StartRepl,
     StopRepl,
+    ForceStopRepl,
     RestartRepl,
     OpenPalette,
     OpenContextPicker,
@@ -9882,8 +10324,15 @@ impl ActionDefinition {
     fn leader_path(self) -> Option<&'static str> {
         match self.id {
             ActionId::SelectDev | ActionId::SelectOps => Some("ctrl+x w"),
-            ActionId::CycleOpsView => Some("ctrl+x v"),
-            ActionId::FlipPanePlacement | ActionId::ToggleServerSubview => Some("ctrl+x l"),
+            ActionId::CycleOpsView
+            | ActionId::SelectDevBuildDeploy
+            | ActionId::SelectDevServer
+            | ActionId::SelectDevRepl => Some("ctrl+x v"),
+            ActionId::FlipPanePlacement
+            | ActionId::ToggleBuildDeployView
+            | ActionId::ToggleServerView
+            | ActionId::ToggleReplView
+            | ActionId::MakeFocusedDevViewMain => Some("ctrl+x l"),
             ActionId::OpenContextPicker => Some("ctrl+x e"),
             ActionId::OpenPalette | ActionId::ShowHelp | ActionId::Quit => None,
             _ => Some("ctrl+x a"),
@@ -9892,13 +10341,16 @@ impl ActionDefinition {
 
     fn risk(self) -> ActionRisk {
         match self.id {
-            ActionId::Clean | ActionId::CleanRestartServer => ActionRisk::Destructive,
-            ActionId::Deploy | ActionId::RestartServer | ActionId::StopRepl => {
-                ActionRisk::Disruptive
-            }
+            ActionId::Clean => ActionRisk::Destructive,
+            ActionId::Deploy
+            | ActionId::StopServer
+            | ActionId::ForceStopServer
+            | ActionId::RestartServer
+            | ActionId::StopRepl
+            | ActionId::ForceStopRepl => ActionRisk::Disruptive,
             ActionId::Build
-            | ActionId::ToggleServer
-            | ActionId::StartOrFocusRepl
+            | ActionId::StartServer
+            | ActionId::StartRepl
             | ActionId::RestartRepl => ActionRisk::RoutineWrite,
             _ => ActionRisk::ReadOnly,
         }
@@ -9910,10 +10362,9 @@ impl ActionDefinition {
             | ActionId::Build
             | ActionId::Deploy
             | ActionId::Clean
-            | ActionId::ToggleServer
+            | ActionId::StartServer
             | ActionId::RestartServer
-            | ActionId::CleanRestartServer
-            | ActionId::StartOrFocusRepl
+            | ActionId::StartRepl
             | ActionId::RestartRepl => ActionReview::ReviewForm,
             _ => ActionReview::None,
         }
@@ -9925,11 +10376,14 @@ impl ActionDefinition {
             | ActionId::Build
             | ActionId::Deploy
             | ActionId::Clean
-            | ActionId::StartOrFocusRepl
+            | ActionId::StartRepl
+            | ActionId::StopRepl
+            | ActionId::ForceStopRepl
             | ActionId::RestartRepl => ActionTarget::ApplicationEnvironment,
-            ActionId::ToggleServer | ActionId::RestartServer | ActionId::CleanRestartServer => {
-                ActionTarget::LocalServer
-            }
+            ActionId::StartServer
+            | ActionId::StopServer
+            | ActionId::ForceStopServer
+            | ActionId::RestartServer => ActionTarget::LocalServer,
             ActionId::RefreshAgents
             | ActionId::OpenAgentDatasetFilter
             | ActionId::OpenAgentColumns
@@ -9957,7 +10411,7 @@ impl ActionAvailability {
     }
 }
 
-const ACTIONS: [ActionDefinition; 34] = [
+const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::Plan,
         label: "Plan",
@@ -9999,9 +10453,39 @@ const ACTIONS: [ActionDefinition; 34] = [
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::ToggleServer,
-        label: "Start/Stop Server",
-        description: "Focus Dev Server and toggle it",
+        id: ActionId::SelectDevBuildDeploy,
+        label: "Dev / Build & Deploy",
+        description: "Show and focus the Build & Deploy view",
+        shortcut: None,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::SelectDevServer,
+        label: "Dev / Server",
+        description: "Show and focus the Server view",
+        shortcut: None,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::SelectDevRepl,
+        label: "Dev / REPL",
+        description: "Show and focus the REPL view",
+        shortcut: None,
+        category: ActionCategory::Navigation,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::StartServer,
+        label: "Start Server",
+        description: "Review and start the local server",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Global,
@@ -10009,19 +10493,29 @@ const ACTIONS: [ActionDefinition; 34] = [
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::RestartServer,
-        label: "Restart Server",
-        description: "Restart the local server",
+        id: ActionId::StopServer,
+        label: "Stop Server",
+        description: "Request a graceful local-server stop",
         shortcut: None,
         category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
-        execution_kind: ActionExecution::NestedCli,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::CleanRestartServer,
-        label: "Clean Restart Server",
-        description: "Restart local server with --clean",
+        id: ActionId::ForceStopServer,
+        label: "Force Stop Server",
+        description: "Kill the local server after its graceful-stop window",
+        shortcut: None,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Global,
+        execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::RestartServer,
+        label: "Restart Server",
+        description: "Review settings and restart the local server",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -10039,9 +10533,39 @@ const ACTIONS: [ActionDefinition; 34] = [
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::ToggleServerSubview,
-        label: "Toggle Server Subview",
-        description: "Show or hide Server beside the primary Dev view",
+        id: ActionId::ToggleBuildDeployView,
+        label: "Toggle Build & Deploy View",
+        description: "Show or hide the Build & Deploy view",
+        shortcut: None,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::ToggleServerView,
+        label: "Toggle Server View",
+        description: "Show or hide the Server view",
+        shortcut: None,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::ToggleReplView,
+        label: "Toggle REPL View",
+        description: "Show or hide the REPL view",
+        shortcut: None,
+        category: ActionCategory::Dev,
+        scope: ActionSurface::Leader,
+        execution_kind: ActionExecution::Internal,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::MakeFocusedDevViewMain,
+        label: "Make Focused Dev View Main",
+        description: "Promote the focused view without hiding other views",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -10219,9 +10743,9 @@ const ACTIONS: [ActionDefinition; 34] = [
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::StartOrFocusRepl,
-        label: "Start or Focus REPL",
-        description: "Run golem repl and send input there",
+        id: ActionId::StartRepl,
+        label: "Start REPL",
+        description: "Review settings and start the application REPL",
         shortcut: None,
         category: ActionCategory::Repl,
         scope: ActionSurface::Global,
@@ -10229,19 +10753,19 @@ const ACTIONS: [ActionDefinition; 34] = [
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::FocusRepl,
-        label: "Focus REPL",
-        description: "Send keyboard input to the running REPL",
+        id: ActionId::StopRepl,
+        label: "Stop REPL",
+        description: "Request a graceful REPL stop",
         shortcut: None,
         category: ActionCategory::Repl,
         scope: ActionSurface::Repl,
         execution_kind: ActionExecution::Internal,
-        palette_visible: false,
+        palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::StopRepl,
-        label: "Stop REPL",
-        description: "Send ctrl+c to the embedded REPL",
+        id: ActionId::ForceStopRepl,
+        label: "Force Stop REPL",
+        description: "Kill the REPL after its graceful-stop window",
         shortcut: None,
         category: ActionCategory::Repl,
         scope: ActionSurface::Repl,
@@ -10312,16 +10836,56 @@ fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
         .iter()
         .copied()
         .filter(|action| action.palette_visible)
+        .filter(|action| action_visible_for_state(action.id, app))
         .filter(|action| scope == PaletteScope::All || action_relevant_to_context(action, app))
         .collect()
 }
 
+fn action_visible_for_state(id: ActionId, app: &TuiApp) -> bool {
+    match id {
+        ActionId::StartServer => matches!(
+            app.server.run.status,
+            ServerStatus::Stopped | ServerStatus::Failed
+        ),
+        ActionId::StopServer => matches!(
+            app.server.run.status,
+            ServerStatus::Starting | ServerStatus::Running
+        ),
+        ActionId::ForceStopServer => app.server.run.status == ServerStatus::Stopping,
+        ActionId::RestartServer => matches!(
+            app.server.run.status,
+            ServerStatus::Starting | ServerStatus::Running
+        ),
+        ActionId::StartRepl => matches!(
+            app.repl.run.status,
+            ReplStatus::Stopped | ReplStatus::Failed
+        ),
+        ActionId::StopRepl => matches!(
+            app.repl.run.status,
+            ReplStatus::Starting | ReplStatus::Running
+        ),
+        ActionId::ForceStopRepl => app.repl.run.status == ReplStatus::Stopping,
+        ActionId::RestartRepl => matches!(
+            app.repl.run.status,
+            ReplStatus::Starting | ReplStatus::Running
+        ),
+        _ => true,
+    }
+}
+
 fn action_relevant_to_context(action: &ActionDefinition, app: &TuiApp) -> bool {
     match app.active_workspace {
-        Workspace::Dev => matches!(
-            action.category,
-            ActionCategory::Dev | ActionCategory::Repl | ActionCategory::Settings
-        ),
+        Workspace::Dev => {
+            matches!(
+                action.category,
+                ActionCategory::Dev | ActionCategory::Repl | ActionCategory::Settings
+            ) || matches!(
+                action.id,
+                ActionId::SelectDevBuildDeploy
+                    | ActionId::SelectDevServer
+                    | ActionId::SelectDevRepl
+            )
+        }
         Workspace::Ops => {
             action.category == ActionCategory::Ops || matches!(action.id, ActionId::CycleOpsView)
         }
@@ -10643,6 +11207,144 @@ mod tests {
     }
 
     #[test]
+    fn dev_navigation_adds_and_focuses_without_replacing_the_main_view() {
+        let mut app = test_app();
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, false, false];
+
+        app.open_dev_workspace(DevView::Server);
+
+        assert_eq!(app.active_workspace, Workspace::Dev);
+        assert_eq!(app.dev_primary, DevView::BuildDeploy);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert_eq!(
+            app.layout.visible_dev_views(app.dev_primary),
+            vec![DevView::BuildDeploy, DevView::Server]
+        );
+    }
+
+    #[test]
+    fn dev_view_toggles_keep_one_view_and_promote_the_focused_replacement() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, false, false];
+
+        assert!(!app.toggle_dev_view(DevView::BuildDeploy));
+        app.open_dev_workspace(DevView::Server);
+        assert!(app.toggle_dev_view(DevView::BuildDeploy));
+
+        assert_eq!(app.dev_primary, DevView::Server);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert_eq!(
+            app.layout.visible_dev_views(app.dev_primary),
+            vec![DevView::Server]
+        );
+    }
+
+    #[test]
+    fn promoting_the_focused_dev_view_preserves_every_visible_view() {
+        let mut app = test_app();
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, false, false];
+        app.open_dev_workspace(DevView::Server);
+        app.open_dev_workspace(DevView::Repl);
+
+        app.make_focused_dev_view_primary();
+
+        assert_eq!(app.dev_primary, DevView::Repl);
+        assert_eq!(app.dev_focus, DevView::Repl);
+        assert_eq!(
+            app.layout.visible_dev_views(app.dev_primary),
+            vec![DevView::Repl, DevView::BuildDeploy, DevView::Server]
+        );
+    }
+
+    #[test]
+    fn stacked_title_row_is_the_split_and_supports_click_or_drag() {
+        let mut click_app = test_app();
+        click_app.active_workspace = Workspace::Dev;
+        click_app.dev_primary = DevView::BuildDeploy;
+        click_app.dev_focus = DevView::BuildDeploy;
+        click_app.layout.dev_visible = [true, false, false];
+        click_app.layout.dev_placement = layout::PanePlacement::Bottom;
+        click_app.layout.set_dev_visible(DevView::Server, true);
+        let frame = render_app_text_at(&click_app, 120, 32);
+        let divider = snapshot_region(&click_app, RegionKind::DevPrimarySplit);
+        let server_title = snapshot_region(&click_app, RegionKind::DevViewTitle(DevView::Server));
+        assert_eq!(divider.y, server_title.y);
+        assert_eq!(divider.height, 1);
+        assert!(
+            !frame
+                .lines()
+                .nth(usize::from(divider.y))
+                .unwrap_or_default()
+                .contains('━'),
+            "stacked title row must not add a second resize-grip language: {frame}"
+        );
+
+        let title_x = server_title.x.saturating_add(2);
+        click_app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                title_x,
+                server_title.y,
+            ),
+            None,
+        );
+        assert_eq!(click_app.dev_focus, DevView::BuildDeploy);
+        click_app.handle_mouse(
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                title_x,
+                server_title.y,
+            ),
+            None,
+        );
+        assert_eq!(click_app.dev_focus, DevView::Server);
+
+        let mut drag_app = test_app();
+        drag_app.active_workspace = Workspace::Dev;
+        drag_app.dev_primary = DevView::BuildDeploy;
+        drag_app.dev_focus = DevView::BuildDeploy;
+        drag_app.layout.dev_visible = [true, false, false];
+        drag_app.layout.dev_placement = layout::PanePlacement::Bottom;
+        drag_app.layout.set_dev_visible(DevView::Server, true);
+        render_app_text_at(&drag_app, 120, 32);
+        let divider = snapshot_region(&drag_app, RegionKind::DevPrimarySplit);
+        let before = drag_app.layout.dev_primary_ratio;
+        drag_app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                divider.x + 2,
+                divider.y,
+            ),
+            None,
+        );
+        drag_app.handle_mouse(
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                divider.x + 2,
+                divider.y.saturating_add(2),
+            ),
+            None,
+        );
+        drag_app.handle_mouse(
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                divider.x + 2,
+                divider.y.saturating_add(2),
+            ),
+            None,
+        );
+        assert_ne!(drag_app.layout.dev_primary_ratio, before);
+        assert_eq!(drag_app.dev_focus, DevView::BuildDeploy);
+    }
+
+    #[test]
     fn recursive_pane_junctions_match_right_and_bottom_layouts() {
         for (placement, expected) in [
             (layout::PanePlacement::Right, "├"),
@@ -10700,7 +11402,90 @@ mod tests {
     }
 
     #[test]
-    fn legacy_dev_runtime_state_does_not_leak_into_ops_navigation() {
+    fn terminal_scrollbar_dragging_scrolls_without_resizing_the_pane() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, true, false];
+        app.server.run.status = ServerStatus::Running;
+        for index in 0..80 {
+            app.server
+                .run
+                .terminal
+                .feed(format!("server line {index}\r\n").as_bytes());
+        }
+
+        render_app_text_at(&app, 120, 30);
+        let scrollbar = snapshot_region(
+            &app,
+            RegionKind::Scrollbar(ScrollbarTarget::Dev(DevView::Server)),
+        );
+        let ratio = app.layout.dev_primary_ratio;
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.y,
+            ),
+            None,
+        );
+
+        assert!(app.server.run.terminal.scrollback() > 0);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert_eq!(app.layout.dev_primary_ratio, ratio);
+
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Drag(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Up(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+
+        assert_eq!(app.server.run.terminal.scrollback(), 0);
+        assert_eq!(app.layout.dev_primary_ratio, ratio);
+        assert!(app.scrollbar_dragging.is_none());
+    }
+
+    #[test]
+    fn agent_list_scrollbar_click_selects_the_corresponding_loaded_row() {
+        let mut app = test_app();
+        app.agents.agents = (0..60)
+            .map(|index| {
+                let mut agent = sample_agents()[0].clone();
+                agent.agent_id = format!("cart-{index:02}");
+                agent
+            })
+            .collect();
+
+        render_app_text_at(&app, 100, 24);
+        let scrollbar = snapshot_region(&app, RegionKind::Scrollbar(ScrollbarTarget::OpsList));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                scrollbar.x,
+                scrollbar.bottom().saturating_sub(1),
+            ),
+            None,
+        );
+
+        assert_eq!(app.agents.selected, 59);
+        assert_eq!(app.agents.table.selected, 59);
+        assert_eq!(app.agents.focus, AgentOverviewFocus::List);
+    }
+
+    #[test]
+    fn hidden_dev_sessions_publish_status_without_leaking_terminal_content_into_ops() {
         let mut app = test_app();
         app.command_run = Some(CommandRun::new(
             1,
@@ -10714,8 +11499,80 @@ mod tests {
 
         let frame = render_app_text(&app);
         assert!(!frame.contains("golem build"), "{frame}");
-        assert!(!frame.contains("REPL"), "{frame}");
+        assert!(frame.contains("Server ● running"), "{frame}");
+        assert!(frame.contains("REPL ● running"), "{frame}");
+        assert!(
+            frame.contains("─(Server ● running · REPL ● running)─"),
+            "{frame}"
+        );
         assert!(frame.contains("[ Ops ]"), "{frame}");
+    }
+
+    #[test]
+    fn footer_session_status_click_shows_and_focuses_without_promoting() {
+        let mut app = test_app();
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, false, false];
+        app.server.run.status = ServerStatus::Running;
+        render_app_text_at(&app, 120, 32);
+        let status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Server));
+
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), status.x, status.y),
+            None,
+        );
+
+        assert_eq!(app.active_workspace, Workspace::Dev);
+        assert_eq!(app.dev_primary, DevView::BuildDeploy);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert!(app.dev_view_visible(DevView::Server));
+        assert_eq!(app.mode, InteractionMode::Normal);
+    }
+
+    #[test]
+    fn compact_footer_keeps_named_session_glyphs_before_omitting_the_cluster() {
+        let mut app = test_app();
+        app.server.run.status = ServerStatus::Running;
+        app.repl.run.status = ReplStatus::Stopped;
+
+        let compact = render_app_text_at(&app, 64, 18);
+        assert!(compact.contains("Server ●"), "{compact}");
+        assert!(compact.contains("REPL ○"), "{compact}");
+        assert!(!compact.contains("Server ● running"), "{compact}");
+
+        let narrow = render_app_text_at(&app, 32, 12);
+        assert!(!narrow.contains("Server ●"), "{narrow}");
+        assert!(!narrow.contains("REPL ○"), "{narrow}");
+    }
+
+    #[test]
+    fn clicking_ops_while_cli_input_is_active_returns_control_to_the_tui() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        app.dev_primary = DevView::BuildDeploy;
+        app.dev_focus = DevView::BuildDeploy;
+        app.layout.dev_visible = [true, false, false];
+        app.command_run = Some(CommandRun::new(
+            1,
+            CommandKind::Build,
+            vec!["build".to_string()],
+            CommandOptions::default(),
+            "sample-app:local".to_string(),
+        ));
+        app.mode.replace(InteractionMode::TerminalInput);
+        render_app_text_at(&app, 120, 32);
+        let ops = snapshot_region(&app, RegionKind::Workspace(Workspace::Ops));
+
+        app.handle_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), ops.x + 1, ops.y),
+            None,
+        );
+        let frame = render_app_text_at(&app, 120, 32);
+
+        assert_eq!(app.active_workspace, Workspace::Ops);
+        assert_eq!(app.mode, InteractionMode::Normal);
+        assert!(!frame.contains("TUI control"), "{frame}");
     }
 
     #[test]
@@ -10816,6 +11673,9 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        for character in "refresh".chars() {
+            app.handle_key(key(KeyCode::Char(character)));
+        }
         let frame = render_app_text(&app);
 
         assert!(frame.contains("Commands"), "{frame}");
@@ -11008,6 +11868,23 @@ mod tests {
         assert!(footer.contains("ctrl+p Commands"), "{footer}");
         assert!(footer.contains("ctrl+h Help"), "{footer}");
         assert!(!footer.contains("ctrl+x b"), "{footer}");
+    }
+
+    #[test]
+    fn layout_footer_shows_only_controls_for_the_active_workspace() {
+        let mut app = test_app();
+        app.mode.replace(InteractionMode::Layout);
+
+        let ops = render_app_text_at(&app, 180, 30);
+        assert!(ops.contains("d Toggle Details"), "{ops}");
+        assert!(!ops.contains("b / s / r Toggle views"), "{ops}");
+        assert!(!ops.contains("m Make main"), "{ops}");
+
+        app.active_workspace = Workspace::Dev;
+        let dev = render_app_text_at(&app, 180, 30);
+        assert!(dev.contains("b / s / r Toggle views"), "{dev}");
+        assert!(dev.contains("m Make main"), "{dev}");
+        assert!(!dev.contains("d Toggle Details"), "{dev}");
     }
 
     #[test]
@@ -11280,6 +12157,13 @@ mod tests {
         assert_eq!(app.mode, InteractionMode::QuitBlocked);
         assert_eq!(app.quit_choice, QuitChoice::Return);
         assert!(!app.should_quit);
+        let frame = render_app_text_at(&app, 100, 24);
+        assert!(
+            frame
+                .lines()
+                .any(|line| line.contains("Return") && line.contains("Force quit")),
+            "{frame}"
+        );
 
         app.handle_key(key(KeyCode::Right));
         assert_eq!(app.quit_choice, QuitChoice::ForceQuit);
@@ -11537,7 +12421,7 @@ mod tests {
         app.selected_target.context.dev_eligible = false;
 
         assert_eq!(
-            app.action_availability(action(ActionId::ToggleServer)),
+            app.action_availability(action(ActionId::StartServer)),
             ActionAvailability::Unavailable("requires an available local server target")
         );
 
@@ -12310,6 +13194,8 @@ mod tests {
         assert_eq!(app.agents.mode, AgentModeFilter::Ephemeral);
         assert_eq!(app.agents.query, "cart");
         assert_eq!(app.agents.selected, 0);
+        let frame = render_app_text_at(&app, 120, 30);
+        assert!(frame.contains("Mode  ephemeral"), "{frame}");
     }
 
     #[test]
@@ -13245,6 +14131,20 @@ mod tests {
     }
 
     #[test]
+    fn nested_cli_summary_does_not_repeat_input_handoff_shortcuts() {
+        let mut app = test_app();
+        app.open_dev_workspace(DevView::Repl);
+        app.start_repl_with_values(ReplFormValues::default(), None);
+
+        let frame = render_app_text_at(&app, 140, 30);
+
+        assert!(frame.contains("input CLI · session repl"), "{frame}");
+        assert!(!frame.contains("input CLI · ctrl+x"), "{frame}");
+        assert!(!frame.contains("action ctrl+x"), "{frame}");
+        assert!(frame.contains("ctrl+x TUI control"), "{frame}");
+    }
+
+    #[test]
     fn command_stop_action_cancels_then_force_kills_running_command() {
         let mut app = test_app();
 
@@ -13281,7 +14181,7 @@ mod tests {
             app.command_run.as_ref().map(|run| run.spinner_frame),
             Some(1)
         );
-        assert_eq!(app.active_workspace, Workspace::Dev);
+        assert_eq!(app.active_workspace, Workspace::Ops);
     }
 
     #[test]
@@ -13307,6 +14207,59 @@ mod tests {
         tx.try_send(TuiEvent::SpinnerTick(1)).expect("first tick");
 
         assert!(!event_channel_closed(tx.try_send(TuiEvent::SpinnerTick(2))));
+    }
+
+    #[test]
+    async fn terminal_and_control_events_preempt_buffered_nested_cli_output() {
+        let (terminal_tx, mut terminal_rx) = mpsc::channel(4);
+        let (control_tx, mut control_rx) = mpsc::channel(4);
+        let (output_tx, mut output_rx) = mpsc::channel(4);
+        output_tx
+            .send(TuiEvent::NestedCli {
+                target: NestedCliTarget::Server,
+                event: NestedCliEvent::Output(b"bulk server output".to_vec()),
+            })
+            .await
+            .unwrap();
+        control_tx.send(TuiEvent::SpinnerTick(7)).await.unwrap();
+        terminal_tx.send(Event::Resize(101, 37)).await.unwrap();
+
+        assert!(matches!(
+            next_tui_event(&mut terminal_rx, &mut control_rx, &mut output_rx).await,
+            Some(TuiEvent::Terminal(Event::Resize(101, 37)))
+        ));
+        assert!(matches!(
+            next_tui_event(&mut terminal_rx, &mut control_rx, &mut output_rx).await,
+            Some(TuiEvent::SpinnerTick(7))
+        ));
+        assert!(matches!(
+            next_tui_event(&mut terminal_rx, &mut control_rx, &mut output_rx).await,
+            Some(TuiEvent::NestedCli {
+                target: NestedCliTarget::Server,
+                event: NestedCliEvent::Output(_),
+            })
+        ));
+    }
+
+    #[test]
+    fn tight_agent_tables_reserve_more_width_for_agent_id() {
+        let state = PaneTableState::new(&AGENT_COLUMNS, 0);
+        let rows: &[&[&str]] = &[&[
+            "agent-with-a-long-structured-identifier",
+            "Running",
+            "LongAgentType",
+            "long-component-name",
+            "123",
+            "42",
+            "2026-10-07T12:00:00Z",
+        ]];
+
+        let resolved = responsive_table_columns(&AGENT_COLUMNS, rows, &state, 48);
+
+        assert_eq!(resolved[0].width, 18);
+        assert!(resolved[0].width > resolved[1].width);
+        assert!(resolved[0].width > resolved[2].width);
+        assert!(resolved[0].width > resolved[3].width);
     }
 
     #[test]
@@ -13361,6 +14314,11 @@ mod tests {
 
         app.server.run.mark_spawned();
         assert_eq!(app.server.run.status, ServerStatus::Running);
+        let hidden_frame = render_app_text_at(&app, 120, 30);
+        assert!(hidden_frame.contains("Server ● running"), "{hidden_frame}");
+        assert!(!hidden_frame.contains("enter CLI input"), "{hidden_frame}");
+
+        app.open_dev_workspace(DevView::Server);
         let frame = render_app_text_at(&app, 120, 30);
         assert!(frame.contains("enter CLI input"), "{frame}");
         assert!(frame.contains("TUI · enter → CLI"), "{frame}");
@@ -13579,7 +14537,7 @@ mod tests {
     #[test]
     fn server_start_and_restart_always_open_review_forms() {
         let mut app = test_app();
-        app.request_server_toggle();
+        app.open_server_form(false, false);
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
         assert_eq!(app.mode, InteractionMode::SessionForm);
         assert!(matches!(
@@ -13614,15 +14572,107 @@ mod tests {
     }
 
     #[test]
-    fn server_palette_action_switches_to_server_and_opens_review() {
+    fn server_start_action_opens_review_without_rearranging_views() {
         let mut app = test_app();
+        let workspace = app.active_workspace;
+        let focus = app.dev_focus;
+        let visible = app.layout.dev_visible;
 
-        app.execute_action(ActionId::ToggleServer, None);
+        app.execute_action(ActionId::StartServer, None);
 
-        assert_eq!(app.active_workspace, Workspace::Dev);
-        assert_eq!(app.dev_focus, DevView::Server);
+        assert_eq!(app.active_workspace, workspace);
+        assert_eq!(app.dev_focus, focus);
+        assert_eq!(app.layout.dev_visible, visible);
         assert_eq!(app.server.run.status, ServerStatus::Stopped);
         assert_eq!(app.mode, InteractionMode::SessionForm);
+    }
+
+    #[test]
+    fn lifecycle_palette_exposes_only_state_valid_verbs() {
+        let mut app = test_app();
+        let ids = |app: &TuiApp| {
+            palette_actions(PaletteScope::All, app)
+                .into_iter()
+                .map(|action| action.id)
+                .collect::<HashSet<_>>()
+        };
+
+        let stopped = ids(&app);
+        assert!(stopped.contains(&ActionId::StartServer));
+        assert!(stopped.contains(&ActionId::StartRepl));
+        assert!(!stopped.contains(&ActionId::StopServer));
+        assert!(!stopped.contains(&ActionId::RestartServer));
+
+        app.server.run.status = ServerStatus::Running;
+        app.repl.run.status = ReplStatus::Running;
+        let running = ids(&app);
+        assert!(running.contains(&ActionId::StopServer));
+        assert!(running.contains(&ActionId::RestartServer));
+        assert!(running.contains(&ActionId::StopRepl));
+        assert!(running.contains(&ActionId::RestartRepl));
+        assert!(!running.contains(&ActionId::StartServer));
+        assert!(!running.contains(&ActionId::StartRepl));
+
+        app.server.run.status = ServerStatus::Stopping;
+        app.server.run.stop_requested_at = Some(Instant::now());
+        app.repl.run.status = ReplStatus::Stopping;
+        app.repl.run.stop_requested_at = Some(Instant::now() - FORCE_STOP_DELAY);
+        let stopping = ids(&app);
+        assert!(stopping.contains(&ActionId::ForceStopServer));
+        assert!(stopping.contains(&ActionId::ForceStopRepl));
+        assert_eq!(
+            app.action_availability(action(ActionId::ForceStopServer)),
+            ActionAvailability::Unavailable("available five seconds after stop is requested")
+        );
+        assert_eq!(
+            app.action_availability(action(ActionId::ForceStopRepl)),
+            ActionAvailability::Available
+        );
+    }
+
+    #[test]
+    fn hidden_dev_execution_keeps_workspace_layout_and_tui_input() {
+        let mut command = test_app();
+        let command_primary = command.dev_primary;
+        let command_focus = command.dev_focus;
+        let command_visible = command.layout.dev_visible;
+        command.start_command(CommandKind::Build, None);
+        assert_eq!(command.active_workspace, Workspace::Ops);
+        assert_eq!(command.layout.dev_visible, command_visible);
+        assert_eq!(command.dev_primary, command_primary);
+        assert_eq!(command.dev_focus, command_focus);
+        assert_eq!(command.mode, InteractionMode::Normal);
+
+        let mut repl = test_app();
+        let repl_primary = repl.dev_primary;
+        let repl_focus = repl.dev_focus;
+        let repl_visible = repl.layout.dev_visible;
+        repl.start_repl_with_values(ReplFormValues::default(), None);
+        assert_eq!(repl.active_workspace, Workspace::Ops);
+        assert_eq!(repl.layout.dev_visible, repl_visible);
+        assert_eq!(repl.dev_primary, repl_primary);
+        assert_eq!(repl.dev_focus, repl_focus);
+        assert_eq!(repl.mode, InteractionMode::Normal);
+    }
+
+    #[test]
+    fn focused_visible_nested_cli_may_take_input_without_rearranging() {
+        let mut command = test_app();
+        command.active_workspace = Workspace::Dev;
+        command.dev_primary = DevView::BuildDeploy;
+        command.dev_focus = DevView::BuildDeploy;
+        command.layout.dev_visible = [true, false, false];
+        command.start_command(CommandKind::Build, None);
+        assert_eq!(command.mode, InteractionMode::TerminalInput);
+
+        let mut repl = test_app();
+        repl.open_dev_workspace(DevView::Repl);
+        let primary = repl.dev_primary;
+        let visible = repl.layout.dev_visible;
+        repl.start_repl_with_values(ReplFormValues::default(), None);
+        assert_eq!(repl.dev_primary, primary);
+        assert_eq!(repl.layout.dev_visible, visible);
+        assert_eq!(repl.mode, InteractionMode::TerminalInput);
     }
 
     #[test]
@@ -13652,12 +14702,13 @@ mod tests {
                 .feed(format!("server line {index}\r\n").as_bytes());
         }
         render_app_text(&app);
+        let server = snapshot_region(&app, RegionKind::DevViewBody(DevView::Server));
 
         app.handle_mouse(
             MouseEvent {
                 kind: MouseEventKind::ScrollUp,
-                column: 10,
-                row: 10,
+                column: server.x.saturating_add(1),
+                row: server.y.saturating_add(2),
                 modifiers: KeyModifiers::empty(),
             },
             None,
@@ -14041,6 +15092,7 @@ mod tests {
             context_executor: None,
             auth_prompt: None,
             layout: TuiLayoutState::default(),
+            scrollbar_dragging: None,
             geometry: UiGeometry::default(),
             preferences_path: PathBuf::from("/tmp/golem-tui-test-preferences.json"),
             preferences_error: None,
@@ -14176,7 +15228,8 @@ environments:
     }
 
     fn test_event_channel() -> (TuiEventSender, mpsc::Receiver<TuiEvent>) {
-        mpsc::channel(16)
+        let (tx, rx) = mpsc::channel(16);
+        (TuiEventSender::single(tx), rx)
     }
 
     fn agent_refresh_success(

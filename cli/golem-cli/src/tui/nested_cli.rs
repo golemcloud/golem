@@ -92,6 +92,7 @@ struct NestedCliControlRuntime {
 pub fn spawn_nested_cli(
     spec: NestedCliSpec,
     event_tx: Sender<TuiEvent>,
+    output_tx: Sender<TuiEvent>,
     target: NestedCliTarget,
 ) -> anyhow::Result<NestedCliRuntime> {
     let pty_system = native_pty_system();
@@ -129,17 +130,17 @@ pub fn spawn_nested_cli(
     let (control_tx, control_rx) = mpsc::channel::<NestedCliControl>(PTY_CONTROL_CHANNEL_CAPACITY);
 
     spawn_blocking_pty_reader({
-        let event_tx = event_tx.clone();
+        let output_closed_tx = event_tx.clone();
         move || {
             let mut buffer = [0_u8; 4096];
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => {
-                        let _ = event_tx.blocking_send(output_closed_event(target, None));
+                        let _ = output_closed_tx.blocking_send(output_closed_event(target, None));
                         return;
                     }
                     Ok(n) => {
-                        if event_tx
+                        if output_tx
                             .blocking_send(output_event(target, buffer[..n].to_vec()))
                             .is_err()
                         {
@@ -147,7 +148,7 @@ pub fn spawn_nested_cli(
                         }
                     }
                     Err(error) => {
-                        let _ = event_tx
+                        let _ = output_closed_tx
                             .blocking_send(output_closed_event(target, Some(error.to_string())));
                         return;
                     }

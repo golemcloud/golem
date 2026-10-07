@@ -1,5 +1,62 @@
 # Progress
 
+## 2026-10-07: Fair Input, Interactive Scrollbars, And Table Polish
+
+- Split terminal/control events from bounded nested-process output and biased
+  dispatch toward input and lifecycle events, preventing sustained Server logs
+  from starving keyboard and pointer interaction.
+- Added pane-owned scrollbar track clicks and thumb dragging for nested
+  terminals, Agent rows, Details, Ops documents, and Help without overlapping
+  split-resize behavior.
+- Favored AgentID in constrained table widths, right-aligned numeric columns,
+  and exposed the active Durable/Ephemeral/All mode beside Dataset and Find.
+- Kept active-work quit choices side by side, wrapped Server and REPL state in
+  one footer status decorator, and made Layout hints specific to Dev or Ops.
+- Restored TUI keyboard ownership when workspace tabs are clicked and removed
+  repeated ctrl+x handoff instructions from nested-terminal status summaries.
+
+Validation:
+
+- `cargo test -p golem-cli --lib -- tui:: --report-time` (253 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `cargo fmt --package golem-cli -- --check`
+- `git diff --check`
+- `cargo make install-golem-dev-release`
+- `/home/noise64/.cargo/bin/golem --version`
+
+## 2026-10-07: Dev View And Persistent-Session Interaction Alignment
+
+- Made direct Build & Deploy, Server, and REPL navigation additive: a hidden
+  destination is shown and focused without replacing the main view or hiding
+  another visible view.
+- Added stable independent view toggles plus focused-view promotion, preserving
+  the visible set and refusing to hide the final Dev view.
+- Reused the downstream pane title row as the complete draggable divider for
+  bottom layouts. Clicking without movement focuses the pane; dragging resizes
+  it, and the former duplicate heavy horizontal grip is gone.
+- Kept command and session lifecycle independent from workspace layout. A
+  launch no longer switches workspace, visibility, main view, or focus, and a
+  finite command or REPL receives CLI input only when its pane was already
+  visible and focused. Server always starts under TUI input ownership.
+- Aligned Server and REPL lifecycle actions to their actual states: Start when
+  stopped or failed, Stop and Restart while starting or running, and Force Stop
+  after a five-second stopping grace period. Server clean remains a reviewed
+  start/restart option.
+- Added shared clickable Server and REPL status items to the footer in both
+  workspaces, with full state at normal widths and compact named glyphs at
+  narrower widths. Clicking shows and focuses the corresponding Dev view
+  without promoting it or transferring terminal input.
+- Updated the product contract, architecture, design system, and task ledger
+  to record the locked navigation, layout, lifecycle, and input rules.
+
+Validation:
+
+- `cargo fmt --package golem-cli -- --check`
+- `cargo test -p golem-cli --lib -- tui:: --report-time` (245 passed)
+- `cargo check -p golem-cli --features tui-preview`
+- `git diff --check`
+- `cargo make install-golem-dev-release`
+
 ## 2026-10-06: Locked Review Editing, Palette Search, And Server Input
 
 - Centered semantic notice lines in content-sized review and quit popups while

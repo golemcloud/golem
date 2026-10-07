@@ -58,6 +58,15 @@ pub(super) enum DragTarget {
     OpsDetails,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScrollbarTarget {
+    Dev(DevView),
+    OpsList,
+    OpsDetails,
+    OpsDocument,
+    Help,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct TuiLayoutState {
     pub(super) dev_visible: [bool; 3],
@@ -67,6 +76,8 @@ pub(super) struct TuiLayoutState {
     pub(super) ops_details_placement: PanePlacement,
     pub(super) ops_details_ratio: u16,
     pub(super) dragging: Option<DragTarget>,
+    pub(super) drag_origin: Option<(u16, u16)>,
+    pub(super) drag_moved: bool,
 }
 
 impl Default for TuiLayoutState {
@@ -79,6 +90,8 @@ impl Default for TuiLayoutState {
             ops_details_placement: PanePlacement::Right,
             ops_details_ratio: 60,
             dragging: None,
+            drag_origin: None,
+            drag_moved: false,
         }
     }
 }
@@ -115,6 +128,8 @@ pub(super) enum RegionKind {
     OpsList,
     OpsDetails,
     OpsDetailsSplit,
+    Scrollbar(ScrollbarTarget),
+    DevSessionStatus(DevView),
     ContextPickerRow(usize),
     ContextConfirm,
     ContextCancel,
@@ -148,6 +163,16 @@ impl UiGeometry {
         self.snapshot.replace(Some(snapshot));
     }
 
+    pub(super) fn add_region(&self, kind: RegionKind, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        if let Some(snapshot) = self.snapshot.borrow_mut().as_mut() {
+            snapshot.regions.retain(|region| region.kind != kind);
+            snapshot.regions.push(Region { kind, area });
+        }
+    }
+
     pub(super) fn snapshot(&self) -> Option<LayoutSnapshot> {
         self.snapshot.borrow().clone()
     }
@@ -164,6 +189,13 @@ impl UiGeometry {
             .borrow()
             .as_ref()
             .and_then(|snapshot| snapshot.hit_test(x, y))
+    }
+
+    pub(super) fn hit_test_below_splits(&self, x: u16, y: u16) -> Option<RegionKind> {
+        self.snapshot
+            .borrow()
+            .as_ref()
+            .and_then(|snapshot| snapshot.hit_test_below_splits(x, y))
     }
 
     pub(super) fn workspace_body(&self) -> Option<Rect> {
@@ -193,6 +225,21 @@ impl LayoutSnapshot {
             .map(|region| region.kind)
     }
 
+    fn hit_test_below_splits(&self, x: u16, y: u16) -> Option<RegionKind> {
+        self.regions
+            .iter()
+            .rev()
+            .find(|region| {
+                !matches!(
+                    region.kind,
+                    RegionKind::DevPrimarySplit
+                        | RegionKind::DevSecondarySplit
+                        | RegionKind::OpsDetailsSplit
+                ) && contains(region.area, x, y)
+            })
+            .map(|region| region.kind)
+    }
+
     pub(super) fn region(&self, kind: RegionKind) -> Option<Rect> {
         self.regions
             .iter()
@@ -212,6 +259,7 @@ pub(super) struct LayoutInput {
     pub(super) context_picker_selected: usize,
     pub(super) context_picker_prefix_height: usize,
     pub(super) agent_details_visible: bool,
+    pub(super) dev_session_status_widths: [u16; 2],
     pub(super) layout: TuiLayoutState,
 }
 
@@ -232,6 +280,11 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
         },
     ];
     add_workspace_regions(workspace_selector, &mut regions);
+    add_dev_session_status_regions(
+        workspace_selector,
+        input.dev_session_status_widths,
+        &mut regions,
+    );
     match input.active_workspace {
         Workspace::Dev => add_dev_regions(body, &input, &mut regions),
         Workspace::Ops => add_ops_regions(body, &input, &mut regions),
@@ -282,6 +335,34 @@ fn add_workspace_regions(area: Rect, regions: &mut Vec<Region>) {
             ),
         });
         x = x.saturating_add(width + 1);
+    }
+}
+
+fn add_dev_session_status_regions(area: Rect, widths: [u16; 2], regions: &mut Vec<Region>) {
+    const SELECTOR_MIN_WIDTH: u16 = 20;
+    const GAP: u16 = 3;
+    const DECORATOR_WIDTH: u16 = 4;
+
+    let total = widths[0]
+        .saturating_add(widths[1])
+        .saturating_add(GAP)
+        .saturating_add(DECORATOR_WIDTH)
+        .saturating_add(1);
+    if widths.contains(&0) || area.width < SELECTOR_MIN_WIDTH.saturating_add(total) {
+        return;
+    }
+
+    let mut right = area.right().saturating_sub(3);
+    for (view, width) in [DevView::Repl, DevView::Server]
+        .into_iter()
+        .zip(widths.into_iter().rev())
+    {
+        let x = right.saturating_sub(width);
+        regions.push(Region {
+            kind: RegionKind::DevSessionStatus(view),
+            area: Rect::new(x, area.y, width, area.height.min(1)),
+        });
+        right = x.saturating_sub(GAP);
     }
 }
 
@@ -418,9 +499,7 @@ pub(super) fn ops_details_visible(area: Rect, requested: bool, placement: PanePl
         PanePlacement::Right => {
             area.width >= OPS_LIST_MIN_WIDTH + OPS_DETAILS_MIN_WIDTH + SPLIT_SIZE
         }
-        PanePlacement::Bottom => {
-            area.height >= OPS_LIST_MIN_HEIGHT + OPS_DETAILS_MIN_HEIGHT + SPLIT_SIZE
-        }
+        PanePlacement::Bottom => area.height >= OPS_LIST_MIN_HEIGHT + OPS_DETAILS_MIN_HEIGHT,
     }
 }
 
@@ -429,7 +508,12 @@ pub(super) fn clamp_dev_primary_ratio(area: Rect, placement: PanePlacement, rati
         PanePlacement::Right => (area.width, DEV_MIN_PRIMARY_WIDTH, DEV_MIN_SUBVIEW_WIDTH),
         PanePlacement::Bottom => (area.height, DEV_MIN_PRIMARY_HEIGHT, DEV_MIN_SUBVIEW_HEIGHT),
     };
-    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, first, second)
+    clamp_ratio_for_min(
+        total.saturating_sub(u16::from(placement == PanePlacement::Right)),
+        ratio,
+        first,
+        second,
+    )
 }
 
 pub(super) fn clamp_dev_secondary_ratio(area: Rect, placement: PanePlacement, ratio: u16) -> u16 {
@@ -437,7 +521,13 @@ pub(super) fn clamp_dev_secondary_ratio(area: Rect, placement: PanePlacement, ra
         PanePlacement::Right => (area.height, DEV_MIN_SUBVIEW_HEIGHT),
         PanePlacement::Bottom => (area.width, DEV_MIN_SUBVIEW_WIDTH),
     };
-    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, minimum, minimum)
+    let split_is_right = placement == PanePlacement::Bottom;
+    clamp_ratio_for_min(
+        total.saturating_sub(u16::from(split_is_right)),
+        ratio,
+        minimum,
+        minimum,
+    )
 }
 
 pub(super) fn clamp_ops_details_ratio(area: Rect, placement: PanePlacement, ratio: u16) -> u16 {
@@ -445,7 +535,12 @@ pub(super) fn clamp_ops_details_ratio(area: Rect, placement: PanePlacement, rati
         PanePlacement::Right => (area.width, OPS_LIST_MIN_WIDTH, OPS_DETAILS_MIN_WIDTH),
         PanePlacement::Bottom => (area.height, OPS_LIST_MIN_HEIGHT, OPS_DETAILS_MIN_HEIGHT),
     };
-    clamp_ratio_for_min(total.saturating_sub(SPLIT_SIZE), ratio, first, second)
+    clamp_ratio_for_min(
+        total.saturating_sub(u16::from(placement == PanePlacement::Right)),
+        ratio,
+        first,
+        second,
+    )
 }
 
 pub(super) fn dev_primary_ratio_from_pointer(
@@ -485,10 +580,7 @@ fn pointer_ratio(area: Rect, placement: PanePlacement, x: u16, y: u16) -> u16 {
             x.saturating_sub(area.x),
             area.width.saturating_sub(SPLIT_SIZE),
         ),
-        PanePlacement::Bottom => ratio(
-            y.saturating_sub(area.y),
-            area.height.saturating_sub(SPLIT_SIZE),
-        ),
+        PanePlacement::Bottom => ratio(y.saturating_sub(area.y), area.height),
     }
 }
 
@@ -516,24 +608,19 @@ fn split_area(area: Rect, placement: PanePlacement, ratio_value: u16) -> (Rect, 
             (first, divider, second)
         }
         PanePlacement::Bottom => {
-            let total = area.height.saturating_sub(SPLIT_SIZE);
+            let total = area.height;
             let first_height = (u32::from(total) * u32::from(ratio_value) / 100) as u16;
             let first = Rect {
                 height: first_height,
                 ..area
             };
-            let divider = Rect::new(
+            let second = Rect::new(
                 area.x,
                 first.bottom(),
                 area.width,
-                SPLIT_SIZE.min(area.height.saturating_sub(first_height)),
+                area.bottom().saturating_sub(first.bottom()),
             );
-            let second = Rect::new(
-                area.x,
-                divider.bottom(),
-                area.width,
-                area.bottom().saturating_sub(divider.bottom()),
-            );
+            let divider = Rect::new(area.x, second.y, area.width, SPLIT_SIZE.min(second.height));
             (first, divider, second)
         }
     }
@@ -679,13 +766,20 @@ fn add_modal_regions(input: &LayoutInput, regions: &mut Vec<Region>) {
                 width: area.width.saturating_sub(4),
                 height: area.height.saturating_sub(4),
             };
+            let gap = u16::from(content.width > 1);
+            let return_width = content.width.saturating_sub(gap) / 2;
             regions.push(Region {
                 kind: RegionKind::QuitReturn,
-                area: Rect::new(content.x, content.y.saturating_add(4), content.width, 1),
+                area: Rect::new(content.x, content.y.saturating_add(4), return_width, 1),
             });
             regions.push(Region {
                 kind: RegionKind::QuitForce,
-                area: Rect::new(content.x, content.y.saturating_add(5), content.width, 1),
+                area: Rect::new(
+                    content.x.saturating_add(return_width).saturating_add(gap),
+                    content.y.saturating_add(4),
+                    content.width.saturating_sub(return_width + gap),
+                    1,
+                ),
             });
         }
         _ => {}
@@ -774,6 +868,7 @@ mod tests {
             context_picker_selected: 0,
             context_picker_prefix_height: 2,
             agent_details_visible: true,
+            dev_session_status_widths: [0, 0],
             layout: TuiLayoutState::default(),
         }
     }
@@ -867,14 +962,15 @@ mod tests {
     }
 
     #[test]
-    fn bottom_split_reserves_a_disjoint_divider_row() {
+    fn bottom_split_reuses_the_second_pane_title_row() {
         let area = Rect::new(3, 4, 80, 20);
         let (first, divider, second) = split_area(area, PanePlacement::Bottom, 60);
 
         assert_eq!(first.bottom(), divider.y);
-        assert_eq!(second.y, divider.bottom());
-        assert_eq!(second.height, area.bottom() - divider.bottom());
-        assert_eq!(first.height + divider.height + second.height, area.height);
+        assert_eq!(second.y, divider.y);
+        assert_eq!(divider.height, 1);
+        assert_eq!(second.height, area.bottom() - divider.y);
+        assert_eq!(first.height + second.height, area.height);
     }
 
     #[test]
@@ -901,7 +997,7 @@ mod tests {
                 PanePlacement::Bottom => {
                     assert!(list.y < details.y);
                     let divider = snapshot.region(RegionKind::OpsDetailsSplit).unwrap();
-                    assert_eq!(details.y, divider.bottom());
+                    assert_eq!(details.y, divider.y);
                     assert_eq!(
                         snapshot.hit_test(divider.x, divider.y),
                         Some(RegionKind::OpsDetailsSplit)
@@ -979,7 +1075,10 @@ mod tests {
         let mut quit = input();
         quit.mode = InteractionMode::QuitBlocked;
         let quit = compute(quit);
-        assert!(quit.region(RegionKind::QuitReturn).is_some());
-        assert!(quit.region(RegionKind::QuitForce).is_some());
+        let return_action = quit.region(RegionKind::QuitReturn).unwrap();
+        let force_action = quit.region(RegionKind::QuitForce).unwrap();
+        assert_eq!(return_action.y, force_action.y);
+        assert!(return_action.right() < force_action.right());
+        assert!(return_action.right() <= force_action.x);
     }
 }

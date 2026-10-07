@@ -91,7 +91,7 @@ pub(super) struct ActionButton<'a> {
 }
 
 impl ActionButton<'_> {
-    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
+    pub fn spans(self, visual: &TuiVisualStyle) -> Vec<Span<'static>> {
         let style = if self.selected {
             Style::default()
                 .fg(visual.selection_text)
@@ -103,12 +103,15 @@ impl ActionButton<'_> {
                 .bg(visual.overlay_background)
                 .add_modifier(Modifier::BOLD)
         };
-        Line::from(vec![
+        vec![
             Span::styled("[ ", style),
             Span::styled(self.label.to_string(), style),
             Span::styled(" ]", style),
-        ])
-        .alignment(Alignment::Center)
+        ]
+    }
+
+    pub fn line(self, visual: &TuiVisualStyle) -> Line<'static> {
+        Line::from(self.spans(visual)).alignment(Alignment::Center)
     }
 }
 
@@ -161,6 +164,81 @@ impl StatusMarker<'_> {
             Span::styled(self.kind.glyph(), self.kind.style(visual)),
             Span::styled(format!(" {}", self.label), Style::default().fg(visual.text)),
         ]
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct FooterStatusItem<'a> {
+    pub name: &'a str,
+    pub state: Option<&'a str>,
+    pub kind: StatusKind,
+    pub area: Rect,
+}
+
+pub(super) struct FooterStatusCluster<'a> {
+    pub items: &'a [FooterStatusItem<'a>],
+}
+
+impl FooterStatusCluster<'_> {
+    pub fn render(self, frame: &mut Frame<'_>, visual: &TuiVisualStyle) {
+        let surface = Style::default().bg(visual.footer_background);
+        if let (Some(first), Some(last)) = (self.items.first(), self.items.last()) {
+            let left = Rect::new(first.area.x.saturating_sub(2), first.area.y, 2, 1);
+            let right = Rect::new(last.area.right(), last.area.y, 2, 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled("─", surface.fg(visual.footer_rule)),
+                    Span::styled("(", surface.fg(visual.text_muted)),
+                ])),
+                left,
+            );
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(")", surface.fg(visual.text_muted)),
+                    Span::styled("─", surface.fg(visual.footer_rule)),
+                ])),
+                right,
+            );
+        }
+        for (index, item) in self.items.iter().enumerate() {
+            if item.area.width == 0 || item.area.height == 0 {
+                continue;
+            }
+            let mut spans = vec![
+                Span::styled(item.name.to_string(), surface.fg(visual.text_muted)),
+                Span::styled(" ", surface),
+                Span::styled(
+                    item.kind.glyph(),
+                    item.kind.style(visual).bg(visual.footer_background),
+                ),
+            ];
+            if let Some(state) = item.state {
+                spans.push(Span::styled(" ", surface));
+                spans.push(Span::styled(
+                    state.to_string(),
+                    surface.fg(visual.text_secondary),
+                ));
+            }
+            frame.render_widget(Paragraph::new(Line::from(spans)).style(surface), item.area);
+
+            if index > 0 {
+                let previous = self.items[index - 1];
+                let gap = Rect::new(
+                    previous.area.right(),
+                    item.area.y,
+                    item.area.x.saturating_sub(previous.area.right()),
+                    1,
+                );
+                if gap.width > 0 {
+                    frame.render_widget(
+                        Paragraph::new(" · ")
+                            .style(surface.fg(visual.footer_rule))
+                            .alignment(Alignment::Center),
+                        gap,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -329,7 +407,9 @@ pub(super) struct PaneTableCell {
 pub(super) struct PaneTableColumn<'a> {
     pub id: &'a str,
     pub title: &'a str,
+    pub minimum_width: u16,
     pub width: u16,
+    pub alignment: Alignment,
     pub required: bool,
     pub default_visible: bool,
     pub policy: CellPolicy,
@@ -483,7 +563,7 @@ pub(super) fn responsive_table_columns<'a>(
         .filter(|(_, column)| state.column_visible(column.id))
         .map(|(index, column)| {
             let title_width = UnicodeWidthStr::width(column.title) as u16;
-            let minimum = title_width.max(column.width.min(12));
+            let minimum = title_width.max(column.minimum_width).min(column.width);
             let content_width = rows
                 .iter()
                 .map(|row| {
@@ -863,13 +943,14 @@ impl PaneTable<'_> {
                 spans.extend(fit_rich_cell(
                     cell,
                     column.width as usize,
+                    column.alignment,
                     color,
                     background,
                     visual,
                 ));
             } else {
                 spans.push(Span::styled(
-                    fit(value, column.width as usize),
+                    fit_aligned(value, column.width as usize, column.alignment),
                     Style::default()
                         .fg(color)
                         .bg(background)
@@ -888,6 +969,7 @@ impl PaneTable<'_> {
 fn fit_rich_cell(
     cell: &PaneTableCell,
     width: usize,
+    alignment: Alignment,
     default_color: Color,
     background: Color,
     visual: &TuiVisualStyle,
@@ -902,8 +984,19 @@ fn fit_rich_cell(
         .sum::<usize>();
     let truncated = full_width > width;
     let target_width = width.saturating_sub(usize::from(truncated));
-    let mut used = 0usize;
     let mut result = Vec::new();
+    let leading_padding = if alignment == Alignment::Right && !truncated {
+        width.saturating_sub(full_width)
+    } else {
+        0
+    };
+    let mut used = leading_padding;
+    if leading_padding > 0 {
+        result.push(Span::styled(
+            " ".repeat(leading_padding),
+            Style::default().fg(default_color).bg(background),
+        ));
+    }
     for fragment in &cell.spans {
         let mut text = String::new();
         let mut fragment_truncated = false;
@@ -944,6 +1037,20 @@ fn fit_rich_cell(
         ));
     }
     result
+}
+
+fn fit_aligned(text: &str, width: usize, alignment: Alignment) -> String {
+    let fitted = fit(text, width);
+    if alignment != Alignment::Right {
+        return fitted;
+    }
+    let content = fitted.trim_end_matches(' ');
+    let content_width = UnicodeWidthStr::width(content);
+    format!(
+        "{}{}",
+        " ".repeat(width.saturating_sub(content_width)),
+        content
+    )
 }
 
 fn table_virtual_width(columns: &[PaneTableColumn<'_>], state: &PaneTableState) -> u16 {
@@ -1208,15 +1315,6 @@ impl PaneChrome {
             }
         }
 
-        for divider in &horizontal {
-            for x in divider.x..divider.right() {
-                let cell = &mut frame.buffer_mut()[(x, divider.y)];
-                if !matches!(cell.symbol(), "┬" | "├" | "┤" | "┼" | "┴") {
-                    cell.set_symbol("─").set_style(style);
-                }
-            }
-        }
-
         let grip_style = Style::default().fg(visual.accent).bg(visual.surface);
         for divider in &vertical {
             let center = divider.y.saturating_add(divider.height / 2);
@@ -1228,17 +1326,6 @@ impl PaneChrome {
                 }
             }
         }
-        for divider in &horizontal {
-            let center = divider.x.saturating_add(divider.width / 2);
-            let start = center.saturating_sub(1).max(divider.x);
-            for x in start..start.saturating_add(3).min(divider.right()) {
-                let cell = &mut frame.buffer_mut()[(x, divider.y)];
-                if cell.symbol() == "─" {
-                    cell.set_symbol("━").set_style(grip_style);
-                }
-            }
-        }
-
         for vertical in vertical {
             for horizontal in &horizontal {
                 if horizontal.y < vertical.y || horizontal.y >= vertical.bottom() {
@@ -1972,6 +2059,7 @@ impl SearchInput<'_> {
 
 pub(super) struct CollectionQueryBar<'a> {
     pub dataset: &'a str,
+    pub mode: &'a str,
     pub scope: &'a str,
     pub query: &'a str,
     pub matched: usize,
@@ -1994,6 +2082,8 @@ impl CollectionQueryBar<'_> {
         let mut lines = vec![Line::from(vec![
             Span::styled("Dataset  ", Style::default().fg(visual.text_muted)),
             Span::styled(self.dataset.to_string(), Style::default().fg(visual.text)),
+            Span::styled("   Mode  ", Style::default().fg(visual.text_muted)),
+            Span::styled(self.mode.to_string(), Style::default().fg(visual.text)),
             Span::styled(
                 format!("   {} loaded{more}", self.loaded),
                 Style::default().fg(visual.text_muted),
@@ -3008,7 +3098,9 @@ mod tests {
             PaneTableColumn {
                 id: "name",
                 title: "Name",
+                minimum_width: 6,
                 width: 6,
+                alignment: Alignment::Left,
                 required: true,
                 default_visible: true,
                 policy: CellPolicy::Ellipsis,
@@ -3016,7 +3108,9 @@ mod tests {
             PaneTableColumn {
                 id: "owner",
                 title: "Owner",
+                minimum_width: 5,
                 width: 5,
+                alignment: Alignment::Left,
                 required: false,
                 default_visible: false,
                 policy: CellPolicy::Ellipsis,
@@ -3024,7 +3118,9 @@ mod tests {
             PaneTableColumn {
                 id: "description",
                 title: "Description",
+                minimum_width: 8,
                 width: 8,
+                alignment: Alignment::Left,
                 required: false,
                 default_visible: true,
                 policy: CellPolicy::WrapSelected,
@@ -3212,6 +3308,39 @@ mod tests {
     }
 
     #[test]
+    fn pane_table_right_aligns_numeric_headers_and_cells() {
+        let visual = TuiVisualStyle::production();
+        let columns = [PaneTableColumn {
+            id: "count",
+            title: "Count",
+            minimum_width: 8,
+            width: 8,
+            alignment: Alignment::Right,
+            required: true,
+            default_visible: true,
+            policy: CellPolicy::Ellipsis,
+        }];
+        let state = PaneTableState::new(&columns, 0);
+        let rows: &[&[&str]] = &[&["42"]];
+        let buffer = render(10, 2, |frame| {
+            PaneTable {
+                columns: &columns,
+                rows,
+                state: &state,
+                cell_tones: None,
+                rich_cells: None,
+                row_markers: None,
+                first_row_index: 0,
+            }
+            .render(frame, frame.area(), &visual);
+        });
+
+        assert_eq!(buffer[(5, 0)].symbol(), "C");
+        assert_eq!(buffer[(8, 1)].symbol(), "4");
+        assert_eq!(buffer[(9, 1)].symbol(), "2");
+    }
+
+    #[test]
     fn help_and_command_rows_are_left_aligned_single_line_tables() {
         let visual = TuiVisualStyle::production();
         let help = HelpRow {
@@ -3282,7 +3411,9 @@ mod tests {
         let columns = [PaneTableColumn {
             id: "agent-id",
             title: "AgentID",
+            minimum_width: 10,
             width: 10,
+            alignment: Alignment::Left,
             required: true,
             default_visible: true,
             policy: CellPolicy::Ellipsis,

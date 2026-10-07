@@ -68,6 +68,12 @@ impl TerminalScreen {
         self.parser.screen_mut().set_scrollback(0);
     }
 
+    pub fn set_scrollback(&mut self, rows: usize) {
+        self.parser
+            .screen_mut()
+            .set_scrollback(rows.min(self.max_scrollback));
+    }
+
     pub fn scrollback(&self) -> usize {
         self.parser.screen().scrollback()
     }
@@ -264,5 +270,8 @@ mod tests {
         screen.scroll_bottom();
         assert_eq!(screen.scrollback(), 0);
         assert!(screen.plain_text().contains("four"));
+
+        screen.set_scrollback(usize::MAX);
+        assert_eq!(screen.scrollback(), screen.max_scrollback());
     }
 }

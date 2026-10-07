@@ -80,12 +80,14 @@ TUI interactions have passed visual and terminal review.
 
 ## Shell And Navigation
 
-- The header exposes workspace, current view or subject, app/env/server, remote
-  write-lock state, active Live state, and running or failed Jobs as space
-  permits.
+- The header is context-only and exposes app/env/server. Workspace identity and
+  activity do not compete with context in this row.
 - The compact header uses the same app/env/server grammar and drops lower
   priority metadata before inventing another identity format.
 - The footer stays compact and never duplicates a shortcut on multiple rows.
+  Its workspace row publishes named Server and REPL lifecycle state in Dev and
+  Ops inside one `─( … )─` cluster when width permits; the selector always has
+  priority.
 - Tab and shift+tab move pane focus only.
 - Enter opens a selected resource subject. Esc closes a transient mode first,
   then unwinds one breadcrumb level.
@@ -153,22 +155,27 @@ session.
   layout presets.
 - With three visible views, right-side subviews stack vertically and bottom
   subviews arrange horizontally.
-- Direct navigation focuses a visible target. A hidden target replaces the
-  primary without increasing the visible pane count.
+- Direct navigation shows and focuses its target without hiding another view or
+  changing the primary view.
+- Layout controls toggle any of the three views and can promote the focused
+  view to primary without changing the visible set. At least one view remains
+  visible.
 - Hidden Server and REPL sessions continue running.
-- Focus Only hides subviews without stopping them.
 
 ### Layout control
 
 - Mouse dragging resizes every internal divider.
-- The full divider cell is the drag target. A short orange grip identifies the
-  resize affordance without turning the complete structural rail into accent.
+- A right-side split owns a standalone one-cell vertical rail with a short
+  orange grip. A bottom split reuses the downstream pane's existing title row;
+  the complete title rule is draggable and a click without movement focuses
+  the pane.
 - ctrl+x l enters temporary Layout mode.
 - Tab and shift+tab choose a pane in Layout mode.
 - Arrows move the applicable divider by one cell in the physical direction;
   shift+arrow moves five cells.
-- Layout mode can flip right/bottom placement and show or hide subviews or Ops
-  details.
+- Layout mode can flip right/bottom placement, show or hide Dev views or Ops
+  details, and make the focused Dev view primary.
+- Layout-mode hints expose only controls valid for the active workspace.
 - Enter or esc exits Layout mode.
 - Minimum sizes prevent unusable panes.
 - Compact mode renders one pane while retaining wider-layout preferences.
@@ -181,13 +188,17 @@ session.
 - Each launch uses an immutable context, the application root as working
   directory, and a fresh terminal. The PTY receives the actual pane content
   size rather than the outer terminal size.
-- A newly launched finite command or REPL automatically owns input until it
-  stops. Server starts with TUI input ownership so prompts cannot capture the
-  shell unexpectedly. Every pane labels the owner as CLI or TUI. While CLI owns
-  input, every key, including tab and ctrl+c, reaches the PTY except ctrl+x.
+- Launching a command never changes workspace, pane visibility, primary view,
+  or focus. A newly launched finite command or REPL owns input only when its
+  pane was already visible and focused. Hidden launches and Server starts keep
+  TUI input ownership. Every pane labels the owner as CLI or TUI. While CLI
+  owns input, every key, including tab and ctrl+c, reaches the PTY except
+  ctrl+x.
 - ctrl+x returns input to persistent TUI control. Enter or a click in the
   running terminal pane returns input to the CLI. A second ctrl+x from TUI
   control opens the visible leader menu.
+- Terminal summaries name the current input owner and launch identity without
+  repeating handoff shortcuts already present in the footer help.
 - Mouse wheel scrolls terminal history. Explicit Scrollback mode gives arrows,
   pageup, pagedown, home, and end to history; esc returns to live input.
 - Terminal scrollback is bounded to 2,000 lines. Build & Deploy retains the
@@ -221,6 +232,10 @@ session.
 
 ### Server
 
+- Lifecycle and view controls are separate. Commands expose Start while
+  stopped or failed, Stop and Restart while starting or running, and Force Stop
+  while stopping. Force Stop remains unavailable until the five-second grace
+  period ends.
 - Start and Restart always review system-memory override, router address,
   router/custom/MCP ports, ports file, data directory, clean,
   agent-filesystem root, and per-launch --yes.
@@ -236,6 +251,9 @@ session.
 
 ### REPL
 
+- REPL uses the same Start, Stop, Restart, and delayed Force Stop lifecycle
+  vocabulary as Server. Showing or focusing the REPL is a separate navigation
+  action.
 - Start and Restart always review language, log streaming, automatic imports,
   one post-deploy Agent policy, and per-launch --yes.
 - The embedded view runs interactive REPL only. Script and script-file modes
@@ -305,6 +323,8 @@ minimal local UI.
 - Long values use content-aware widths, ellipsis, horizontal pan, and full
   values in Details.
 - Columns are stable, toggleable, and persisted as preferences.
+- Numeric columns are right-aligned. AgentID receives the largest useful share
+  of constrained widths before lower-priority identity columns.
 - Details follow selection as a preview. Enter opens the selected subject.
 - Details may be placed right or bottom, focused, independently scrolled, and
   resized.
@@ -315,12 +335,16 @@ minimal local UI.
   never all remaining resources.
 - Refresh preserves stable selection identity, loaded depth, and viewport when
   possible. Failed refresh retains stale rows and explains the error.
+- The active Agent mode filter is always visible beside the Dataset and Find
+  state.
 
 The accepted table visuals remain in force: odd/even row surfaces, distinct
 selected odd/even colors, restrained colored selection fill, a continuous
 accent selection rail, semantic status colors, AgentID syntax coloring,
 unpadded cell separators where enabled, a consistent outer-left spine, and
 structurally reserved right scrollbars.
+Visible scrollbars accept thumb dragging and track clicks for their own pane;
+their hit regions never resize an adjacent split.
 
 ## Activity
 
@@ -461,4 +485,5 @@ these decision groups, which tasks.md tracks before their checkpoints:
 
 When finite Jobs or TUI-owned sessions are active, ctrl+q opens a compact
 choice with Return selected by default and Force quit as the explicit second
-choice. Force quit stops every TUI-owned child process during normal cleanup.
+choice. The two choices share one horizontal row because left/right changes the
+selection. Force quit stops every TUI-owned child process during normal cleanup.

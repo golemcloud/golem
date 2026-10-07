@@ -53,8 +53,10 @@ Pane content must not add a rail beside an internal divider. The
 terminal-facing right edge remains title-only `┐` plus the workspace-row `┘`,
 with no body rail. Body boundaries render after pane content so content cannot
 punch blank cells through the outer left spine or shared dividers. Each visible
-divider has a short orange heavy-line grip centered on the otherwise neutral
-rail; the entire divider rectangle remains the resize hit target.
+right-side divider has a short orange heavy-line grip centered on the otherwise
+neutral rail. A bottom divider reuses the downstream pane's title row instead
+of adding another horizontal rule or grip. The entire vertical rail or reused
+title row remains the resize hit target.
 
 When a decision is revisited, change its existing representation and focused
 tests. Temporary lab alternatives are removed when the choice is locked.
@@ -188,6 +190,13 @@ be shown as right or bottom subviews. There are no named presets. The first Dev
 visit shows Build & Deploy alone when available. Hidden Server and REPL sessions
 continue running, and returning to Dev restores the session layout.
 
+Direct navigation to a Dev view shows and focuses it without hiding any other
+view or changing which view is primary. Layout actions independently toggle
+Build & Deploy, Server, and REPL visibility, refuse to hide the final visible
+view, and can promote the focused view to primary without changing the visible
+set. The visible set and primary view are session state; placement and split
+ratios are visual preferences.
+
 Build & Deploy owns Plan, Build, Deploy, Clean, and their finite Jobs. Server
 owns local lifecycle, process state, bound ports, data directory, and logs. REPL owns its
 interactive PTY. View capability is independent: unavailable views stay
@@ -214,7 +223,9 @@ previous, list, and direct mnemonic destinations and must scale beyond Dev and
 Ops. It avoids alt+number, ctrl+arrow, and punctuation-heavy bindings.
 
 View navigation lives under ctrl+x v. Workspace selectors and view selectors
-represent stable product destinations, not user-opened documents.
+represent stable product destinations, not user-opened documents. In Dev, the
+three direct destinations always mean show and focus Build & Deploy, Server, or
+REPL. They do not start a process and do not silently rotate the layout.
 
 Dev split geometry is derived from primary view, visible subviews, and right or
 bottom placement. Ops uses the same split machinery for collection/details.
@@ -234,9 +245,10 @@ split handles are resizable by pointer.
 
 ctrl+x l enters temporary Layout mode. Tab and shift+tab choose a pane;
 arrows move the applicable divider one cell and shift+arrow moves five cells.
-Layout mode also flips right/bottom placement and shows or hides subviews or
-Details. Enter or esc exits. Compact rendering may temporarily hide panes but
-retains the wider-layout ratios and visibility preferences.
+In Dev, `b`, `s`, and `r` toggle the three views, `m` promotes the focused view
+to primary, and `f` flips right/bottom placement. In Ops, `d` toggles Details
+and `f` flips placement. Enter or esc exits. Compact rendering may temporarily
+hide panes but retains the wider-layout ratios and visibility preferences.
 
 Breadcrumbs should be used inside Ops drilldowns and other nested resource
 views. Breadcrumbs are for orientation and jumping back up the current resource
@@ -316,7 +328,11 @@ label, shortcut, and description columns. Long content ellipsizes within its
 column; it must not wrap one action across multiple visual records.
 
 The persistent footer names concrete scoped actions rather than a generic More
-leader entry. At narrow widths it keeps whole actions in priority order
+leader entry. It also carries one `─( Server … · REPL … )─` session-status
+cluster in both workspaces. A status item uses the full state at normal widths and a semantic
+glyph at compact widths; clicking it shows and focuses the owning Dev view but
+does not promote it, start it, or transfer terminal input. At narrow widths the
+footer keeps whole actions in priority order
 and exposes `ctrl+p Commands` when lower-priority actions do not fit. A fallback
 belongs only to the row that owns that action; contextual overflow uses a
 neutral ellipsis and must not duplicate a global shortcut in another row.
@@ -339,8 +355,9 @@ keeps the canonical short workspace name without clipping.
 production render tests are the executable contract for these reductions.
 
 Structural decorators never change color to communicate focus or mode. Rails,
-junctions, rules, and popup borders use one neutral decorator color; the short
-resize grip is an accent affordance on top of a neutral divider. Semantic
+junctions, rules, and popup borders use one neutral decorator color. The short
+resize grip is an accent affordance on a standalone vertical divider; a stacked
+pane's title rule is itself the horizontal resize affordance. Semantic
 status glyphs and active pane titles may still use semantic or accent colors.
 The top terminal-facing pane-title rule ends with `┐`, additional stacked title
 rules end with `┤`, and the workspace-selector row ends with `┘`.
@@ -359,7 +376,9 @@ visible scrollbar structurally reserves exactly one column from that pane's
 content rectangle; it never overlays text, the outer-left spine, or a resize
 divider. The pane region that owns the content rectangle also owns its
 scrollbar slot, boundary rectangles, role, and hit metadata, including for
-stacked panes.
+stacked panes. Clicking the track or dragging the thumb scrolls only that pane;
+scrollbar hit regions take precedence over and remain disjoint from split
+resize handling.
 
 Popups and modals use a complete four-sided border with the same narrow
 box-drawing weight as pane decorators. Border cells and the inset interior share
@@ -455,6 +474,8 @@ positive color, numbers the informational color, literals the warning color,
 and punctuation the muted color. The same token colors apply to the inline or
 structured multiline AgentID in Details. Ellipsis and row selection preserve
 those foreground distinctions over the selected row background.
+Numeric data columns are right-aligned. Responsive sizing protects AgentID's
+minimum and useful width ahead of Type and Component when space is tight.
 
 When enabled columns exceed the pane width, plain left and right arrows pan the
 table's actual rendered data viewport while it owns focus. Required columns
@@ -521,6 +542,8 @@ already requested depth without discovering the next batch. A pane-header
 status separately shows refreshing, loading-next, auto-refresh-active, or
 auto-refresh-off state. Active and loading statuses use square brackets; idle
 statuses use parentheses. Refresh and loading-next states animate their spinner.
+The current Durable/Ephemeral/All Agent mode is rendered in the same bar and is
+never left implicit.
 
 Active and success use the positive green semantic family. Orange remains the
 focus/accent family and is not used to color active operational state.
@@ -549,11 +572,15 @@ escape, control keys, leader commands, and explicit accept/cancel keys should
 interrupt text entry.
 
 All nested terminals use the same explicit ownership model and display the
-current owner. Finite commands and REPL give input to the CLI on launch; Server
-starts in TUI control so an unexpected server prompt cannot capture shell
-navigation. ctrl+x returns to persistent TUI control; Enter or clicking a
-running pane gives input to the CLI. While the CLI owns input, every other key,
-including tab and ctrl+c, reaches the PTY.
+current owner. Launching a command or session never changes workspace, pane
+visibility, primary view, or focus. A finite command or REPL receives CLI input
+on launch only when its owning pane is already visible and focused. A hidden or
+unfocused launch remains in TUI control. Server always starts in TUI control so
+an unexpected server prompt cannot capture shell navigation. ctrl+x returns to
+persistent TUI control; Enter or clicking a running focused pane gives input to
+the CLI. While the CLI owns input, every other key, including tab and ctrl+c,
+reaches the PTY. The terminal summary reports `input CLI` or `input TUI` but
+does not repeat the ctrl+x handoff action shown in the footer.
 
 Lists and tables should use arrow-first navigation:
 
@@ -589,6 +616,13 @@ are disabled with the active Job named and are never queued automatically.
 Server, REPL, and Live are persistent sessions rather than Jobs. Each has its
 own status, buffer or terminal state, and stop policy. Hiding its pane or
 switching workspaces does not stop it.
+
+Server and REPL lifecycle commands are state-specific and never double as
+navigation. Stopped and failed sessions expose Start. Starting and running
+sessions expose Stop and Restart. Stopping sessions expose Force Stop only
+after a five-second grace period. Starting, stopping, or restarting a session
+does not rearrange the Dev workspace. The footer status cluster is the global
+visibility affordance for these two sessions; Live remains scoped to Activity.
 
 Context switching confirms and stops context-bound Jobs and REPL. Server may
 continue only when the server target is unchanged. Live closes on context
