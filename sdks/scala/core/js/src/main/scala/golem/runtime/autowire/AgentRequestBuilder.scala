@@ -167,6 +167,10 @@ private[autowire] object AgentRequestBuilder {
     JsHttpMountDetails(
       pathPrefix = encodePathSegments(mount.pathPrefix),
       phantomAgent = mount.phantomAgent,
+      phantomIdBinding = mount.phantomIdBinding.map {
+        case PhantomIdBinding.Path(name, optional)  => JsPhantomIdBinding.path(name, optional)
+        case PhantomIdBinding.Query(name, optional) => JsPhantomIdBinding.query(name, optional)
+      }.orUndefined,
       corsOptions = JsCorsOptions(js.Array(mount.corsAllowedPatterns: _*)),
       webhookSuffix = encodePathSegments(mount.webhookSuffix),
       staticBindings = encodeFileMappings(mount.staticBindings),

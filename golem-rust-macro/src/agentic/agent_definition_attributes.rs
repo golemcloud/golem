@@ -57,6 +57,7 @@ pub fn parse_agent_definition_attributes(
         cors: vec![],
         auth: false,
         phantom_agent: false,
+        phantom_id_binding: None,
         webhook_suffix: None,
         static_files: vec![],
         filesystem_bindings: vec![],
@@ -90,6 +91,9 @@ pub fn parse_agent_definition_attributes(
                 if path.path.is_ident("ephemeral") || path.path.is_ident("durable") =>
             {
                 Some("mode".into())
+            }
+            Expr::Call(call) if matches!(&*call.func, Expr::Path(path) if path.path.is_ident("phantom_id")) => {
+                Some("phantom_id".into())
             }
             _ => None,
         };
@@ -183,6 +187,14 @@ pub fn parse_agent_definition_attributes(
     }
 
     let has_filesystem = !http.filesystem_bindings.is_empty();
+    if http.phantom_id_binding.is_some()
+        && (!agent_is_durable || kind == "HttpRouter" || has_filesystem || http.mount.is_none())
+    {
+        return Err(Error::new(
+            proc_macro2::Span::call_site(),
+            "phantom_id requires a regular durable HTTP mount without filesystem exposure",
+        ));
+    }
     if let Some(name) = &name
         && kind != "HttpRouter"
     {
@@ -248,6 +260,10 @@ pub fn parse_agent_definition_attributes(
         let cors = http.cors;
         let auth = http.auth;
         let phantom_agent = http.phantom_agent;
+        let phantom_id_binding = match http.phantom_id_binding {
+            Some(binding) => quote! { Some(#binding) },
+            None => quote! { None },
+        };
         let exposure_path = exposure_path.map(|path| quote! { mount.path_prefix = #path; });
         let static_files = http.static_files;
         let filesystem_bindings = http.filesystem_bindings;
@@ -273,6 +289,7 @@ pub fn parse_agent_definition_attributes(
                 #webhook_suffix,
             ).expect("Invalid HTTP mount configuration");
             #exposure_path
+            mount.phantom_id_binding = #phantom_id_binding;
             mount.static_bindings = vec![#(#static_files),*];
             mount.filesystem_bindings = vec![#(#filesystem_bindings),*];
             mount.openapi_provider_method = #provider;
@@ -298,6 +315,7 @@ struct ParsedHttpMount {
     cors: Vec<syn::LitStr>,
     auth: bool,
     phantom_agent: bool,
+    phantom_id_binding: Option<TokenStream>,
     webhook_suffix: Option<syn::LitStr>,
     static_files: Vec<TokenStream>,
     filesystem_bindings: Vec<TokenStream>,
@@ -305,6 +323,78 @@ struct ParsedHttpMount {
 }
 
 fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> {
+    if let Expr::Call(call) = expr
+        && matches!(&*call.func, Expr::Path(path) if path.path.is_ident("phantom_id"))
+    {
+        let mut source = None;
+        let mut optional = false;
+        let mut seen = std::collections::HashSet::new();
+        for arg in &call.args {
+            let Expr::Assign(assign) = arg else {
+                return Err(Error::new_spanned(
+                    arg,
+                    "expected path/query = name or optional = bool",
+                ));
+            };
+            let Expr::Path(key) = &*assign.left else {
+                return Err(Error::new_spanned(arg, "invalid phantom_id option"));
+            };
+            let key = quote! { #key }.to_string();
+            if !seen.insert(key.clone()) {
+                return Err(Error::new_spanned(arg, "duplicate phantom_id option"));
+            }
+            match key.as_str() {
+                "path" | "query" => {
+                    if source.is_some() {
+                        return Err(Error::new_spanned(
+                            arg,
+                            "declare exactly one phantom_id source",
+                        ));
+                    }
+                    let Expr::Lit(ExprLit {
+                        lit: Lit::Str(name),
+                        ..
+                    }) = &*assign.right
+                    else {
+                        return Err(Error::new_spanned(
+                            arg,
+                            "selector name must be a string literal",
+                        ));
+                    };
+                    if name.value().is_empty() {
+                        return Err(Error::new_spanned(name, "selector name must not be empty"));
+                    }
+                    source = Some((key, name.clone()));
+                }
+                "optional" => {
+                    let Expr::Lit(ExprLit {
+                        lit: Lit::Bool(value),
+                        ..
+                    }) = &*assign.right
+                    else {
+                        return Err(Error::new_spanned(
+                            arg,
+                            "optional must be a boolean literal",
+                        ));
+                    };
+                    optional = value.value;
+                }
+                _ => return Err(Error::new_spanned(arg, "unknown phantom_id option")),
+            }
+        }
+        let (source, name) = source
+            .ok_or_else(|| Error::new_spanned(expr, "declare exactly one phantom_id source"))?;
+        let variant = syn::Ident::new(
+            if source == "path" { "Path" } else { "Query" },
+            proc_macro2::Span::call_site(),
+        );
+        out.phantom_id_binding = Some(quote! {
+            golem_rust::golem_agentic::golem::agent::common::PhantomIdBinding::#variant(
+                golem_rust::golem_agentic::golem::agent::common::PhantomIdBindingDetails { name: #name.to_string(), optional: #optional }
+            )
+        });
+        return Ok(());
+    }
     if let Expr::Assign(assign) = expr
         && let Expr::Path(left) = &*assign.left
         && let Some(ident) = left.path.get_ident()
@@ -551,6 +641,66 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use test_r::test;
+
+    #[test]
+    fn phantom_selector_options_and_restrictions() {
+        for (attrs, variant, optional) in [
+            (
+                quote! { mount = "/c/{id}/{instance}", phantom_id(path = "instance") },
+                "Path",
+                false,
+            ),
+            (
+                quote! { mount = "/c/{id}/{instance}", phantom_id(path = "instance", optional = true) },
+                "Path",
+                true,
+            ),
+            (
+                quote! { mount = "/c/{id}", phantom_id(query = "instance") },
+                "Query",
+                false,
+            ),
+            (
+                quote! { mount = "/c/{id}", phantom_id(query = "instance", optional = true) },
+                "Query",
+                true,
+            ),
+        ] {
+            let parsed =
+                parse_agent_definition_attributes(attrs, AgentDefinitionKind::Regular).unwrap();
+            let tokens = parsed.http_mount.unwrap().to_string();
+            assert!(
+                tokens.contains(&format!("PhantomIdBinding :: {variant}")),
+                "{tokens}"
+            );
+            assert!(
+                tokens.contains(&format!("optional : {optional}")),
+                "{tokens}"
+            );
+        }
+        for attrs in [
+            quote! { mount = "/c", phantom_id() },
+            quote! { mount = "/c", phantom_id(query = "") },
+            quote! { mount = "/c", phantom_id(path = "a", query = "b") },
+            quote! { mount = "/c", phantom_id(query = "a", optional = "true") },
+            quote! { mount = "/c", phantom_id(query = "a", optional = false, optional = true) },
+            quote! { mount = "/c", phantom_id(query = "a"), phantom_id(query = "b") },
+            quote! { ephemeral, mount = "/c", phantom_id(query = "a") },
+            quote! { phantom_id(query = "a") },
+            quote! { mount = "/c", filesystem_bindings = [("/*", "/public/$1")], phantom_id(query = "a") },
+        ] {
+            assert!(
+                parse_agent_definition_attributes(attrs, AgentDefinitionKind::Regular).is_err()
+            );
+        }
+        assert!(
+            parse_agent_definition_attributes(
+                quote! { ephemeral, mount = "/c", phantom_id(query = "a") },
+                AgentDefinitionKind::HttpRouter
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn mapping_corpus_emits_structural_metadata_in_order() {

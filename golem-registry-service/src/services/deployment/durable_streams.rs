@@ -14,7 +14,7 @@
 
 use golem_common::model::agent::{
     DurableStreamRouteOptions, DurableStreamSlotSource, HttpEndpointDetails, HttpMountDetails,
-    PathSegment,
+    PathSegment, PhantomIdBinding,
 };
 use golem_common::schema::agent::contains_stream_in_graph;
 use golem_common::schema::{
@@ -46,6 +46,14 @@ pub(super) fn validate_route(
     endpoint: &HttpEndpointDetails,
 ) -> Result<(InputSchema, DurableStreamRoutePolicy), String> {
     validate_path(mount, endpoint)?;
+    if let Some(PhantomIdBinding::Query(details)) = &mount.phantom_id_binding
+        && ["offset", "live", "cursor"].contains(&details.name.as_str())
+    {
+        return Err(format!(
+            "Phantom selector '{}' conflicts with a Durable Streams query control",
+            details.name
+        ));
+    }
 
     let graph = &agent.schema;
     let mut slot_names = HashSet::new();
@@ -544,6 +552,7 @@ mod tests {
                 })],
                 auth_details: None,
                 phantom_agent: false,
+                phantom_id_binding: None,
                 cors_options: CorsOptions {
                     allowed_patterns: vec![],
                 },

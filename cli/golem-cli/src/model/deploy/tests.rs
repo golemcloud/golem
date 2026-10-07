@@ -17,6 +17,53 @@ use test_r::test;
 use uuid::Uuid;
 
 #[test]
+fn deploy_display_preserves_phantom_selector() {
+    use golem_common::model::agent::{PhantomIdBinding, PhantomIdBindingDetails};
+
+    for optional in [false, true] {
+        for path in [false, true] {
+            let details = PhantomIdBindingDetails {
+                name: "instance".into(),
+                optional,
+            };
+            let binding = if path {
+                PhantomIdBinding::Path(details)
+            } else {
+                PhantomIdBinding::Query(details)
+            };
+            let mount = HttpMountDetails {
+                path_prefix: vec![],
+                auth_details: None,
+                phantom_agent: true,
+                phantom_id_binding: Some(binding.clone()),
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                webhook_suffix: vec![],
+                static_bindings: vec![],
+                filesystem_bindings: vec![],
+                openapi_provider_method: None,
+            };
+            let value = serde_json::to_value(display_http_mount(&mount)).unwrap();
+            assert_eq!(
+                value["phantomIdBinding"],
+                serde_json::json!({
+                    "type": if path { "Path" } else { "Query" },
+                    "name": "instance",
+                    "optional": optional,
+                })
+            );
+            let unbound = HttpMountDetails {
+                phantom_id_binding: None,
+                ..mount
+            };
+            let value = serde_json::to_value(display_http_mount(&unbound)).unwrap();
+            assert!(value.get("phantomIdBinding").is_none());
+        }
+    }
+}
+
+#[test]
 fn mcp_import_only_yaml_diff_preserves_configuration_and_hides_credentials() {
     use golem_common::model::diff::Diffable;
     use golem_common::model::mcp_import::{McpImportAuthInput, McpImportDeployment};

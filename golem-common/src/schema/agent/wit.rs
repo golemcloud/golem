@@ -36,9 +36,10 @@ use crate::base_model::agent::{
     DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
     DurableStreamSlotOptions, DurableStreamSlotSource, ExactFileMapping, FileMapping,
     GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    LiteralSegment, OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable,
-    ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, SubtreeFileMapping, SystemVariable, SystemVariableSegment,
+    LiteralSegment, OidcPrincipal, PathSegment, PathVariable, PhantomIdBinding,
+    PhantomIdBindingDetails, Principal, QueryVariable, ReadOnlyConfig, Snapshotting,
+    SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic, SubtreeFileMapping,
+    SystemVariable, SystemVariableSegment,
 };
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
@@ -631,6 +632,7 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
+            phantom_id_binding: value.phantom_id_binding.map(Into::into),
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -650,6 +652,7 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
             path_prefix: value.path_prefix.into_iter().map(Into::into).collect(),
             auth_details: value.auth_details.map(Into::into),
             phantom_agent: value.phantom_agent,
+            phantom_id_binding: value.phantom_id_binding.map(Into::into),
             cors_options: value.cors_options.into(),
             webhook_suffix: value.webhook_suffix.into_iter().map(Into::into).collect(),
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
@@ -659,6 +662,36 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
                 .map(Into::into)
                 .collect(),
             openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl From<PhantomIdBinding> for wire::PhantomIdBinding {
+    fn from(value: PhantomIdBinding) -> Self {
+        match value {
+            PhantomIdBinding::Path(value) => Self::Path(wire::PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            }),
+            PhantomIdBinding::Query(value) => Self::Query(wire::PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            }),
+        }
+    }
+}
+
+impl From<wire::PhantomIdBinding> for PhantomIdBinding {
+    fn from(value: wire::PhantomIdBinding) -> Self {
+        match value {
+            wire::PhantomIdBinding::Path(value) => Self::Path(PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            }),
+            wire::PhantomIdBinding::Query(value) => Self::Query(PhantomIdBindingDetails {
+                name: value.name,
+                optional: value.optional,
+            }),
         }
     }
 }
@@ -1297,6 +1330,7 @@ mod tests {
                 })],
                 auth_details: Some(AgentHttpAuthDetails { required: true }),
                 phantom_agent: false,
+                phantom_id_binding: None,
                 cors_options: CorsOptions {
                     allowed_patterns: vec!["https://example.com".into()],
                 },
@@ -1338,6 +1372,54 @@ mod tests {
                 original.http_mount
             );
         }
+    }
+
+    #[test]
+    fn phantom_binding_round_trips_through_all_transports() {
+        for optional in [false, true] {
+            for binding in [
+                PhantomIdBinding::Path(PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional,
+                }),
+                PhantomIdBinding::Query(PhantomIdBindingDetails {
+                    name: "other-instance".into(),
+                    optional,
+                }),
+            ] {
+                let mut original = sample_agent_type();
+                original.http_mount = Some(HttpMountDetails {
+                    path_prefix: vec![],
+                    auth_details: None,
+                    phantom_agent: true,
+                    phantom_id_binding: Some(binding),
+                    cors_options: CorsOptions {
+                        allowed_patterns: vec![],
+                    },
+                    webhook_suffix: vec![],
+                    static_bindings: vec![],
+                    filesystem_bindings: vec![],
+                    openapi_provider_method: None,
+                });
+                let wire = encode_agent_type(&original).unwrap();
+                assert_eq!(decode_agent_type(&wire).unwrap(), original);
+                let proto: golem_api_grpc::proto::golem::schema::AgentTypeSchema =
+                    original.clone().into();
+                assert_eq!(AgentTypeSchema::try_from(proto).unwrap(), original);
+                let json = serde_json::to_value(&original).unwrap();
+                assert_eq!(
+                    serde_json::from_value::<AgentTypeSchema>(json).unwrap(),
+                    original
+                );
+                let bytes = desert_rust::serialize_to_byte_vec(&original).unwrap();
+                assert_eq!(
+                    desert_rust::deserialize::<AgentTypeSchema>(&bytes).unwrap(),
+                    original
+                );
+            }
+        }
+        let malformed = golem_api_grpc::proto::golem::component::PhantomIdBinding { source: None };
+        assert!(PhantomIdBinding::try_from(malformed).is_err());
     }
 
     #[test]

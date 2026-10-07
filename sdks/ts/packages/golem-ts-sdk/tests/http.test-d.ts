@@ -43,6 +43,32 @@ void http.mount('/agents/v1');
 void http.mount('/counters/{name}');
 void http.mount('/c/{agent-type}/{name}');
 
+const selectedMount: http.HttpMountSpec<'name'> = http.mount('/c/{name}/{instance}', {
+  phantomId: http.phantomId.path('instance', { optional: true }),
+});
+void selectedMount;
+// @ts-expect-error the selector must refer to an ordinary literal mount capture
+void http.mount('/c/{name}', { phantomId: http.phantomId.path('missing') });
+// @ts-expect-error a system variable cannot be the selector
+void http.mount('/c/{agent-type}', { phantomId: http.phantomId.path('agent-type') });
+void defineAgent({
+  name: 'SelectedConstructorHole',
+  id: { name: z.string(), missing: z.string() },
+  // @ts-expect-error selection cannot hide an uncovered constructor field
+  http: selectedMount,
+  methods: { read: method({ input: {}, returns: z.string(), http: http.get('/read') }) },
+});
+// @ts-expect-error only the declared selector is exempt, not the other capture
+const extraCapture: http.HttpMountSpec<'name'> = http.mount('/c/{name}/{instance}/{other}', {
+  phantomId: http.phantomId.path('instance'),
+});
+void extraCapture;
+// @ts-expect-error a query selector does not exempt a path capture
+const queryCapture: http.HttpMountSpec<'name'> = http.mount('/c/{name}/{instance}', {
+  phantomId: http.phantomId.query('instance'),
+});
+void queryCapture;
+
 // @ts-expect-error missing leading '/'
 void http.mount('agents');
 // @ts-expect-error empty string is not a valid mount path

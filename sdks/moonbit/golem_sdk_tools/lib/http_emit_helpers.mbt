@@ -185,6 +185,13 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           )
       }
       let path_prefix = path_segments_str(segments)
+      let phantom_id_binding = match info.phantom_id_binding {
+        None => "None"
+        Some(Path(name, optional)) =>
+          "Some(@common.PhantomIdBinding::Path({ name: \"\{escape_string_lit(name)}\", optional: \{optional} }))"
+        Some(Query(name, optional)) =>
+          "Some(@common.PhantomIdBinding::Query({ name: \"\{escape_string_lit(name)}\", optional: \{optional} }))"
+      }
       let webhook_suffix = match info.webhook_suffix {
         None => "[]"
         Some(suffix) => {
@@ -197,7 +204,7 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           path_segments_str(s)
         }
       }
-      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)} })"
+      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)}, phantom_id_binding: \{phantom_id_binding} })"
     }
   }
 }

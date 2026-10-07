@@ -37,6 +37,46 @@ object HttpDispatchSpec extends ZIOSpecDefault {
   )
 
   def spec = suite("HttpDispatchSpec")(
+    test("compiled metadata encodes path/query selectors in the guest bridge") {
+      val selectors = List(
+        PhantomIdBinding.Path("instance"),
+        PhantomIdBinding.Path("instance", true),
+        PhantomIdBinding.Query("instance"),
+        PhantomIdBinding.Query("instance", true)
+      )
+      val actual = selectors.map { selector =>
+        val mount = HttpMountDetails(Nil, false, true, Nil, Nil, Nil, Nil, None, Some(selector))
+        val agent = AgentMetadata(
+          "Selected",
+          AgentTypeKind.Regular,
+          None,
+          Some("durable"),
+          Nil,
+          ConstructorMetadata(None, "", None),
+          Some(mount)
+        )
+        val encoded = AgentRequestBuilder
+          .fromWire(WireAgentMetadata.fromModel(agent), "durable")
+          .httpMount
+          .get
+          .phantomIdBinding
+          .get
+          .asInstanceOf[scala.scalajs.js.Dynamic]
+        (
+          encoded.tag.asInstanceOf[String],
+          encoded.`val`.name.asInstanceOf[String],
+          encoded.`val`.optional.asInstanceOf[Boolean]
+        )
+      }
+      assertTrue(
+        actual == List(
+          ("path", "instance", false),
+          ("path", "instance", true),
+          ("query", "instance", false),
+          ("query", "instance", true)
+        )
+      )
+    },
     suite("suppressed bodies")(
       List(("HEAD", 200), ("GET", 204), ("GET", 205), ("GET", 304)).map { case (verb, status) =>
         test(s"$verb/$status disposes without pulling and waits for cleanup") {

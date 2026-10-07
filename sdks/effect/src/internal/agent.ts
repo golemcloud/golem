@@ -799,6 +799,11 @@ export const registerAgent = <
     }
 
     // Validate + compile HTTP routes (mount + per-method endpoints).
+    if (metadata.http?.phantomId && metadata.mode === "ephemeral") {
+      return yield* Effect.fail(
+        new HttpRouteError("Phantom selectors require a regular durable agent"),
+      )
+    }
     if (
       metadata.http?.exposeFiles?.length &&
       (metadata.mode === "ephemeral" || metadata.http.phantomAgent)

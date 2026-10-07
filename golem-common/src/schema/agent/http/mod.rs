@@ -15,7 +15,8 @@
 use super::{AgentMethodSchema, AgentTypeKind, AgentTypeSchema, FieldSource};
 use crate::base_model::agent::http_files::valid_decoded_segment;
 use crate::base_model::agent::{
-    AgentMode, FileMapping, HttpMethod, HttpMountDetails, PathSegment, Snapshotting,
+    AgentMode, FileMapping, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
+    Snapshotting,
 };
 use crate::schema::validation::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaType};
@@ -39,6 +40,7 @@ pub enum HttpAgentValidationError {
     HandlerEndpointPolicy(String),
     HandlerSchema(String),
     UnboundConstructor(String),
+    InvalidPhantomBinding(String),
 }
 
 impl Display for HttpAgentValidationError {
@@ -89,6 +91,7 @@ impl Display for HttpAgentValidationError {
                 f,
                 "HTTP filesystem owner constructor parameter or path capture '{name}' is invalid or unbound"
             ),
+            InvalidPhantomBinding(error) => write!(f, "invalid HTTP phantom ID binding: {error}"),
         }
     }
 }
@@ -142,6 +145,7 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
         FileMapping::validate_list(&mount.filesystem_bindings)
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
+        validate_phantom_binding(agent, mount)?;
     }
     match agent.kind {
         AgentTypeKind::HttpRouter => validate_router(agent),
@@ -170,6 +174,88 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
             Ok(())
         }
     }
+}
+
+fn validate_phantom_binding(
+    agent: &AgentTypeSchema,
+    mount: &HttpMountDetails,
+) -> Result<(), HttpAgentValidationError> {
+    let Some(binding) = &mount.phantom_id_binding else {
+        return Ok(());
+    };
+    let invalid = |message: &str| HttpAgentValidationError::InvalidPhantomBinding(message.into());
+    if agent.mode != AgentMode::Durable || agent.kind != AgentTypeKind::Regular {
+        return Err(invalid("selectors require a durable regular agent"));
+    }
+    if !mount.filesystem_bindings.is_empty() {
+        return Err(invalid(
+            "selectors cannot be combined with filesystem bindings",
+        ));
+    }
+    let details = match binding {
+        PhantomIdBinding::Path(details) | PhantomIdBinding::Query(details) => details,
+    };
+    if details.name.is_empty() {
+        return Err(invalid("selector name cannot be empty"));
+    }
+    match binding {
+        PhantomIdBinding::Path(details) => {
+            let captures: Vec<_> = mount
+                .path_prefix
+                .iter()
+                .filter(|segment| {
+                    matches!(
+                        segment,
+                        PathSegment::PathVariable(variable)
+                            | PathSegment::RemainingPathVariable(variable)
+                            if variable.variable_name == details.name
+                    )
+                })
+                .collect();
+            if !matches!(captures.as_slice(), [PathSegment::PathVariable(_)]) {
+                return Err(invalid(
+                    "path selector must name exactly one ordinary mount capture",
+                ));
+            }
+            let constructor_capture = agent
+                .constructor
+                .input_schema
+                .fields()
+                .iter()
+                .any(|field| field.name == details.name);
+            let method_capture = agent.methods.iter().any(|method| {
+                method.http_endpoint.iter().any(|endpoint| {
+                    endpoint.path_suffix.iter().any(|segment| match segment {
+                        PathSegment::PathVariable(variable)
+                        | PathSegment::RemainingPathVariable(variable) => {
+                            variable.variable_name == details.name
+                        }
+                        _ => false,
+                    })
+                })
+            });
+            if constructor_capture || method_capture {
+                return Err(invalid(
+                    "path selector cannot also bind an application argument",
+                ));
+            }
+        }
+        PhantomIdBinding::Query(details) => {
+            if agent.methods.iter().any(|method| {
+                method.http_endpoint.iter().any(|endpoint| {
+                    endpoint
+                        .query_vars
+                        .iter()
+                        .any(|variable| variable.query_param_name == details.name)
+                })
+            }) {
+                return Err(invalid(
+                    "query selector conflicts with an application query parameter",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_router(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidationError> {

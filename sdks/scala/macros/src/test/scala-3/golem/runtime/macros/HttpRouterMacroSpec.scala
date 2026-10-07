@@ -39,7 +39,85 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     @endpoint("GET", "/latest") def latest(): String
   }
 
+  @agentDefinition(mount = "/c/{customer}/{instance}", phantomIdPath = "instance")
+  trait SelectedPath {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+  @agentDefinition(mount = "/c/{customer}/{instance}", phantomIdPath = "instance", phantomIdOptional = true)
+  trait OptionalPath {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = "instance")
+  trait SelectedQuery {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = "instance", phantomIdOptional = true)
+  trait OptionalQuery {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+
+  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = " instance ")
+  trait PaddedQuery {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = " ", phantomAgent = true)
+  trait WhitespaceQuery {
+    class Id(val customer: String)
+    @endpoint("GET", "/read") def read(): String
+  }
+
   def spec = suite("HttpRouterMacroSpec")(
+    test("query selector names are preserved exactly, including whitespace-only names") {
+      val padded     = AgentDefinitionMacro.generateWire[PaddedQuery]
+      val whitespace = AgentDefinitionMacro.generateWire[WhitespaceQuery]
+      assertTrue(
+        padded.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query(" instance ")),
+        whitespace.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query(" ")),
+        whitespace.httpMount.get.phantomAgent
+      )
+    },
+    test("selector annotations survive compiled wire metadata without constructor arguments") {
+      val path          = AgentDefinitionMacro.generateWire[SelectedPath]
+      val optionalPath  = AgentDefinitionMacro.generateWire[OptionalPath]
+      val query         = AgentDefinitionMacro.generateWire[SelectedQuery]
+      val optionalQuery = AgentDefinitionMacro.generateWire[OptionalQuery]
+      assertTrue(
+        path.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Path("instance")),
+        optionalPath.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Path("instance", true)),
+        query.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query("instance")),
+        optionalQuery.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query("instance", true))
+      )
+    },
+    test("phantom selectors reject ambiguous ownership and restricted modes at compile time") {
+      val extra: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c/{instance}/{other}", phantomIdPath="instance")
+        trait A { class Id(); @endpoint("GET", "/read") def read(): String }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val conflict: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c/{instance}", phantomIdPath="instance")
+        trait A { class Id(val instance: String); @endpoint("GET", "/read") def read(): String }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val ephemeral: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c", phantomIdQuery="instance", mode=DurabilityMode.Ephemeral)
+        trait A { class Id(); @endpoint("GET", "/read") def read(): String }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        extra.exists(_.message.contains("other")),
+        conflict.exists(_.message.contains("constructor parameter")),
+        ephemeral.exists(_.message.contains("durable"))
+      )
+    },
     test("combined router uses normal named methods and ordered mappings") {
       val metadata = AgentDefinitionMacro.generate[Website]
       val wire     = AgentDefinitionMacro.generateWire[Website]

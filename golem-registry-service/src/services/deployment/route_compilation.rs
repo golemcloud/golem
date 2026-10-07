@@ -23,7 +23,7 @@ use crate::model::api_definition::{
 use golem_common::model::Empty;
 use golem_common::model::agent::{
     AgentMode, AgentTypeName, CachePolicy, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    RegisteredAgentTypeImplementer, SystemVariable,
+    PhantomIdBinding, RegisteredAgentTypeImplementer, SystemVariable,
 };
 use golem_common::model::deployment::{
     HttpApiReadOnlyMethodBoundToNonGetVerb, HttpApiReadOnlyTtlBelowOneSecond,
@@ -42,8 +42,8 @@ use golem_service_base::custom_api::{
     AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
     CompiledOutputSchema, ConstructorParameter, CorsOptions, CorsPreflightBehaviour,
     CorsPreflightMethodPolicy, HttpRouterBehaviour, OpenApiSpecBehaviour, OpenApiSpecFormat,
-    OriginPattern, PathSegment, RequestBodySchema, RouteBehaviour, RouteMatch, RouterMethod,
-    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
+    OriginPattern, PathSegment, PhantomSelection, RequestBodySchema, RouteBehaviour, RouteMatch,
+    RouterMethod, SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use heck::ToKebabCase;
 use itertools::Itertools;
@@ -186,6 +186,22 @@ pub fn compile_fallback_mount(
     }))
 }
 
+pub(super) fn expand_http_mount(mount: &HttpMountDetails) -> Vec<HttpMountDetails> {
+    let mut alternatives = vec![mount.clone()];
+    if let Some(PhantomIdBinding::Path(details)) = &mount.phantom_id_binding
+        && details.optional
+    {
+        let mut absent = mount.clone();
+        absent.path_prefix.retain(|segment| {
+            !matches!(segment,
+            golem_common::model::agent::PathSegment::PathVariable(variable)
+                if variable.variable_name == details.name)
+        });
+        alternatives.push(absent);
+    }
+    alternatives
+}
+
 pub fn add_agent_method_http_routes(
     environment: &Environment,
     deployment: &HttpApiDeployment,
@@ -201,6 +217,46 @@ pub fn add_agent_method_http_routes(
     warnings: &mut Vec<DeployValidationWarning>,
 ) {
     let constructor_input = compiled_input(agent, &agent.constructor.input_schema);
+    let phantom_selection = match &http_mount.phantom_id_binding {
+        None => PhantomSelection::Policy {
+            phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
+        },
+        Some(PhantomIdBinding::Query(details)) => PhantomSelection::Query {
+            name: details.name.clone(),
+            optional: details.optional,
+        },
+        Some(PhantomIdBinding::Path(details)) => {
+            let index = http_mount
+                .path_prefix
+                .iter()
+                .filter(|segment| {
+                    matches!(
+                        segment,
+                        golem_common::model::agent::PathSegment::PathVariable(_)
+                            | golem_common::model::agent::PathSegment::RemainingPathVariable(_)
+                    )
+                })
+                .position(|segment| {
+                    matches!(segment,
+                    golem_common::model::agent::PathSegment::PathVariable(variable)
+                        if variable.variable_name == details.name)
+                });
+            match index {
+                Some(index) => PhantomSelection::Path {
+                    index: (index as u32).into(),
+                },
+                None if details.optional => PhantomSelection::Original,
+                None => {
+                    errors.push(make_invalid_agent_mount_error_maker(
+                        deployment, http_mount, agent,
+                    )(
+                        "Required phantom path selector is missing from mount".into(),
+                    ));
+                    return;
+                }
+            }
+        }
+    };
 
     for agent_method in agent_methods {
         let route_mode = if agent_method.uses_streams(&agent.schema) {
@@ -330,7 +386,7 @@ pub fn add_agent_method_http_routes(
                 agent_type: agent.type_name.clone(),
                 agent_mode: agent.mode,
                 method_name: agent_method.name.clone(),
-                phantom: http_mount.phantom_agent || agent.mode == AgentMode::Ephemeral,
+                phantom_selection: phantom_selection.clone(),
                 constructor_input: constructor_input.clone(),
                 constructor_parameters: constructor_parameters.clone(),
                 method_input: compiled_input(agent, &agent_method.input_schema),
@@ -1159,6 +1215,7 @@ mod tests {
                 )],
                 auth_details: None,
                 phantom_agent,
+                phantom_id_binding: None,
                 cors_options: AgentCorsOptions {
                     allowed_patterns: vec![],
                 },
@@ -1734,7 +1791,9 @@ mod tests {
                     agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
-                    phantom: false,
+                    phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
+                        phantom: false,
+                    },
                     method_name: "list".to_string(),
                     method_input: empty_compiled_input(),
                     body: RequestBodySchema::Unused,
@@ -1770,7 +1829,9 @@ mod tests {
                     agent_mode: AgentMode::Durable,
                     constructor_input: empty_compiled_input(),
                     constructor_parameters: vec![],
-                    phantom: false,
+                    phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
+                        phantom: false,
+                    },
                     method_name: "add".to_string(),
                     method_input: empty_compiled_input(),
                     body: RequestBodySchema::JsonBody {
@@ -1857,14 +1918,20 @@ mod tests {
     #[test]
     fn ephemeral_agents_force_http_routes_to_be_phantom() {
         let behaviour = compiled_call_agent_behaviour(AgentMode::Ephemeral, false);
-        assert!(behaviour.phantom);
+        assert_eq!(
+            behaviour.phantom_selection,
+            golem_service_base::custom_api::PhantomSelection::Policy { phantom: true }
+        );
         assert_eq!(behaviour.agent_mode, AgentMode::Ephemeral);
     }
 
     #[test]
     fn durable_agents_keep_explicit_http_phantom_flag() {
         let behaviour = compiled_call_agent_behaviour(AgentMode::Durable, true);
-        assert!(behaviour.phantom);
+        assert_eq!(
+            behaviour.phantom_selection,
+            golem_service_base::custom_api::PhantomSelection::Policy { phantom: true }
+        );
         assert_eq!(behaviour.agent_mode, AgentMode::Durable);
     }
 

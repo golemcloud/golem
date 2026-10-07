@@ -20,6 +20,7 @@ fn validate_http_type_annotations(
   mount : String?,
 ) -> Unit raise AgentParseError {
   if router ||
+    has_http_annotation(attrs, "mount_phantom_id") ||
     has_http_annotation(attrs, "static_file") ||
     has_http_annotation(attrs, "expose_files") {
     if mount is None {

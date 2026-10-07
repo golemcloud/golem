@@ -202,6 +202,7 @@ test "router metadata is preserved exactly" {
       Exact({ public_path: ["health"], file_path: "/data/health", }),
     ],
     openapi_provider_method: Some("provider text"),
+    phantom_id_binding: None,
   }
   let def : AgentTypeDef = {
     type_name: "Router",

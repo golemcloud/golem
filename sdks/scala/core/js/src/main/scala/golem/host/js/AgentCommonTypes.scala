@@ -261,15 +261,26 @@ object JsCorsOptions {
 }
 
 @js.native
+sealed trait JsPhantomIdBinding extends js.Object
+
+object JsPhantomIdBinding {
+  def path(name: String, optional: Boolean): JsPhantomIdBinding                            = binding("path", name, optional)
+  def query(name: String, optional: Boolean): JsPhantomIdBinding                           = binding("query", name, optional)
+  private def binding(source: String, name: String, optional: Boolean): JsPhantomIdBinding =
+    JsShape.tagged[JsPhantomIdBinding](source, js.Dynamic.literal("name" -> name, "optional" -> optional))
+}
+
+@js.native
 sealed trait JsHttpMountDetails extends js.Object {
-  def pathPrefix: js.Array[JsPathSegment]         = js.native
-  def authDetails: js.UndefOr[JsAuthDetails]      = js.native
-  def phantomAgent: Boolean                       = js.native
-  def corsOptions: JsCorsOptions                  = js.native
-  def webhookSuffix: js.Array[JsPathSegment]      = js.native
-  def staticBindings: js.Array[JsFileMapping]     = js.native
-  def filesystemBindings: js.Array[JsFileMapping] = js.native
-  def openapiProviderMethod: js.UndefOr[String]   = js.native
+  def pathPrefix: js.Array[JsPathSegment]              = js.native
+  def authDetails: js.UndefOr[JsAuthDetails]           = js.native
+  def phantomAgent: Boolean                            = js.native
+  def phantomIdBinding: js.UndefOr[JsPhantomIdBinding] = js.native
+  def corsOptions: JsCorsOptions                       = js.native
+  def webhookSuffix: js.Array[JsPathSegment]           = js.native
+  def staticBindings: js.Array[JsFileMapping]          = js.native
+  def filesystemBindings: js.Array[JsFileMapping]      = js.native
+  def openapiProviderMethod: js.UndefOr[String]        = js.native
 }
 
 object JsHttpMountDetails {
@@ -281,11 +292,13 @@ object JsHttpMountDetails {
     staticBindings: js.Array[JsFileMapping],
     filesystemBindings: js.Array[JsFileMapping],
     openapiProviderMethod: js.UndefOr[String],
-    authDetails: js.UndefOr[JsAuthDetails] = js.undefined
+    authDetails: js.UndefOr[JsAuthDetails] = js.undefined,
+    phantomIdBinding: js.UndefOr[JsPhantomIdBinding] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
       "pathPrefix"         -> pathPrefix,
       "phantomAgent"       -> phantomAgent,
+      "phantomIdBinding"   -> phantomIdBinding,
       "corsOptions"        -> corsOptions,
       "webhookSuffix"      -> webhookSuffix,
       "staticBindings"     -> staticBindings,

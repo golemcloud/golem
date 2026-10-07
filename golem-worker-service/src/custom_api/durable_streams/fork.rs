@@ -56,13 +56,17 @@ impl DurableStreamsHandler {
         let Some(source) = header!("stream-forked-from") else {
             return Ok(response(StatusCode::BAD_REQUEST));
         };
-        let parsed = match parse_source_path(
-            request.underlying.uri().path(),
-            &source,
-            target_fork,
-            session,
-            public_slot,
-        ) {
+        let paths =
+            super::canonical_selector_path(request.underlying.uri().path(), route, behaviour)
+                .and_then(|current| {
+                    super::canonical_selector_path(&source, route, behaviour)
+                        .map(|source| (current, source))
+                });
+        let (current, source) = match paths {
+            Ok(paths) => paths,
+            Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
+        };
+        let parsed = match parse_source_path(&current, &source, target_fork, session, public_slot) {
             Ok(parsed) => parsed,
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
@@ -175,12 +179,14 @@ impl DurableStreamsHandler {
                 };
                 out.headers.insert(
                     http::header::LOCATION,
-                    request
-                        .underlying
-                        .uri()
-                        .path()
-                        .parse()
-                        .map_err(anyhow::Error::from)?,
+                    super::resource_url(
+                        request,
+                        route,
+                        behaviour,
+                        request.underlying.uri().path(),
+                    )?
+                    .parse()
+                    .map_err(anyhow::Error::from)?,
                 );
                 Ok(out)
             }

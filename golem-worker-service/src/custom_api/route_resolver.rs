@@ -701,7 +701,9 @@ pub(super) mod tests {
                 agent_mode: AgentMode::Durable,
                 constructor_input: input(),
                 constructor_parameters: vec![],
-                phantom: false,
+                phantom_selection: golem_service_base::custom_api::PhantomSelection::Policy {
+                    phantom: false,
+                },
                 method_name: "run".into(),
                 method_input: input(),
                 body: RequestBodySchema::Unused,

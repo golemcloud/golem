@@ -255,6 +255,7 @@ fn agent(input: &Value) -> AgentTypeSchema {
             path_prefix: path(mounts[0].as_str().unwrap()),
             auth_details: None,
             phantom_agent: input["phantom"] == true,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },
@@ -287,7 +288,81 @@ fn corpus_category(error: &HttpAgentValidationError) -> &'static str {
         HttpAgentValidationError::HandlerEndpointPolicy(_) => "handler-endpoint-policy",
         HttpAgentValidationError::HandlerSchema(_) => "handler-schema",
         HttpAgentValidationError::UnboundConstructor(_) => "unbound-constructor",
+        HttpAgentValidationError::InvalidPhantomBinding(_) => "phantom-binding",
     }
+}
+
+#[test]
+fn phantom_selector_metadata_validation() {
+    use crate::base_model::agent::{PhantomIdBindingDetails, QueryVariable};
+    let mut original = from_case("metadata-live-typed-overlap");
+    let mount = original.http_mount.as_mut().unwrap();
+    mount.filesystem_bindings.clear();
+    mount.path_prefix = path("/users/{id}/{instance}");
+    mount.phantom_id_binding = Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+        name: "instance".into(),
+        optional: true,
+    }));
+    original.validate().unwrap();
+    for replacement in [
+        path("/users/{id}"),
+        path("/users/{id}/{instance}/{instance}"),
+        vec![PathSegment::RemainingPathVariable(PathVariable {
+            variable_name: "instance".into(),
+        })],
+        vec![
+            PathSegment::PathVariable(PathVariable {
+                variable_name: "instance".into(),
+            }),
+            PathSegment::RemainingPathVariable(PathVariable {
+                variable_name: "instance".into(),
+            }),
+        ],
+    ] {
+        let mut invalid = original.clone();
+        invalid.http_mount.as_mut().unwrap().path_prefix = replacement;
+        assert!(invalid.validate().is_err());
+    }
+    let mut invalid = original.clone();
+    invalid.mode = AgentMode::Ephemeral;
+    assert!(invalid.validate().is_err());
+    let mut invalid = original.clone();
+    invalid.kind = AgentTypeKind::HttpRouter;
+    assert!(invalid.validate().is_err());
+    let mut invalid = original.clone();
+    invalid.http_mount.as_mut().unwrap().filesystem_bindings =
+        from_case("metadata-live-typed-overlap")
+            .http_mount
+            .unwrap()
+            .filesystem_bindings;
+    assert!(invalid.validate().is_err());
+    let mut invalid = original.clone();
+    invalid.http_mount.as_mut().unwrap().phantom_id_binding =
+        Some(PhantomIdBinding::Path(PhantomIdBindingDetails {
+            name: "id".into(),
+            optional: false,
+        }));
+    assert!(invalid.validate().is_err());
+    original.http_mount.as_mut().unwrap().phantom_id_binding =
+        Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "instance".into(),
+            optional: false,
+        }));
+    original.validate().unwrap();
+    original.methods[0].http_endpoint[0]
+        .query_vars
+        .push(QueryVariable {
+            query_param_name: "instance".into(),
+            variable_name: "different-field".into(),
+        });
+    assert!(original.validate().is_err());
+    original.methods[0].http_endpoint[0].query_vars.clear();
+    original.http_mount.as_mut().unwrap().phantom_id_binding =
+        Some(PhantomIdBinding::Query(PhantomIdBindingDetails {
+            name: "".into(),
+            optional: false,
+        }));
+    assert!(original.validate().is_err());
 }
 
 #[test]

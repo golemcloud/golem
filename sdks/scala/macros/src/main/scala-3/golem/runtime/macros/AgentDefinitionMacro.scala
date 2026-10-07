@@ -50,6 +50,7 @@ import golem.runtime.http.{
   HttpRouteParser,
   HttpValidation,
   PathSegment,
+  PhantomIdBinding,
   QueryVariable
 }
 
@@ -820,7 +821,7 @@ object AgentDefinitionMacro {
    */
   private def extractAgentDefinitionStringArg(using
     Quotes
-  )(symbol: quotes.reflect.Symbol, argName: String, positionalIndex: Int): Option[String] = {
+  )(symbol: quotes.reflect.Symbol, argName: String, positionalIndex: Int, trim: Boolean = true): Option[String] = {
     import quotes.reflect.*
     symbol.annotations.collectFirst {
       case Apply(Select(New(tpt), _), args)
@@ -831,7 +832,7 @@ object AgentDefinitionMacro {
           if (positionalIndex >= 0) args.lift(positionalIndex).collect { case Literal(StringConstant(v)) => v }
           else None
         }
-    }.flatten.map(_.trim).filter(_.nonEmpty)
+    }.flatten.map(value => if (trim) value.trim else value).filter(_.nonEmpty)
   }
 
   /**
@@ -903,12 +904,23 @@ object AgentDefinitionMacro {
   )(symbol: quotes.reflect.Symbol, agentName: String): Option[HttpMountDetails] = {
     import quotes.reflect.*
 
-    val filesystem = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
-    val mountPath  = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val filesystem       = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
+    val mountPath        = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val selectorPath     = extractAgentDefinitionStringArg(symbol, "phantomIdPath", 9, trim = false)
+    val selectorQuery    = extractAgentDefinitionStringArg(symbol, "phantomIdQuery", 10, trim = false)
+    val selectorOptional = extractAgentDefinitionBoolArg(symbol, "phantomIdOptional", 11).getOrElse(false)
+    if (
+      (selectorPath.nonEmpty && selectorQuery.nonEmpty) || (selectorOptional && selectorPath.isEmpty && selectorQuery.isEmpty)
+    )
+      report.errorAndAbort("Declare exactly one phantomIdPath or phantomIdQuery source")
+    val selector = selectorPath
+      .map(PhantomIdBinding.Path(_, selectorOptional))
+      .orElse(selectorQuery.map(PhantomIdBinding.Query(_, selectorOptional)))
     mountPath match {
-      case None if filesystem.nonEmpty => report.errorAndAbort("exposeFiles requires an HTTP mount")
-      case None                        => None
-      case Some(mp)                    =>
+      case None if filesystem.nonEmpty || selector.nonEmpty =>
+        report.errorAndAbort("exposeFiles and phantom selectors require an HTTP mount")
+      case None     => None
+      case Some(mp) =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
           case Left(err)                                                    => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
           case Right(segments) if HttpDeclarationMacro.exposesFiles(symbol) =>
@@ -945,7 +957,8 @@ object AgentDefinitionMacro {
           webhookSuffix = webhookSuffix,
           staticBindings = Nil,
           filesystemBindings = filesystem,
-          openapiProviderMethod = None
+          openapiProviderMethod = None,
+          phantomIdBinding = selector
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {
           case Left(err) => report.errorAndAbort(err)
