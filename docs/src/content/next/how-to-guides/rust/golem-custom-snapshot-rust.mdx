@@ -13,7 +13,7 @@ Snapshotting solves two distinct problems:
 
 ## Enabling Snapshotting
 
-Snapshotting must be enabled via the `snapshotting` attribute on `#[agent_definition]`. Without it, no snapshot exports are generated:
+Snapshotting must be enabled via the `snapshotting` attribute on `#[agent_definition]`. Without it, snapshotting is disabled:
 
 ```rust
 #[agent_definition(mount = "/counters/{name}", snapshotting = "every(1)")]
@@ -36,6 +36,8 @@ The `snapshotting` attribute accepts these values:
 | `"every(N)"` | `snapshotting = "every(1)"` | Snapshot every N successful function calls (use `"every(1)"` for every invocation) |
 | `"periodic(duration)"` | `snapshotting = "periodic(30s)"` | Snapshot at most once per time interval (uses `humantime` durations) |
 
+An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+
 ```rust
 #[agent_definition(mount = "/periodic/{name}", snapshotting = "periodic(30s)")]
 pub trait PeriodicAgent { ... }
@@ -46,7 +48,7 @@ pub trait BatchAgent { ... }
 
 ## Automatic Snapshotting (Default)
 
-If the agent's struct implements `serde::Serialize` and `serde::de::DeserializeOwned`, the SDK automatically provides JSON-based snapshotting — no custom code needed. The `#[agent_implementation]` macro detects `Serialize`/`DeserializeOwned` on the agent type and auto-generates snapshot handlers.
+When snapshotting is enabled and the implementation has no custom `save_snapshot`/`load_snapshot`, the SDK provides JSON-based snapshotting — no custom code needed. The agent struct must then implement `serde::Serialize` and `serde::de::DeserializeOwned`; otherwise the build fails. The macros generate the snapshot handlers.
 
 ```rust
 use serde::{Serialize, Deserialize};
@@ -152,7 +154,7 @@ impl CounterWithSnapshotAgent for CounterImpl {
 - Restoration does not call `new`. Use the context's `parameters`, `principal`, `agent_type`, and `phantom_id` fields to reconstruct identity-dependent state. Agent config can be read through `Config::<T>::new().get()` while restoring.
 - `parameters` is a `SchemaValueTree`. Pass it to `DirectAgentInput::new`, call `take::<T>()` once for each constructor parameter in declaration order, then call `finish()` to reject extra values and incomplete wire data. Each method returns a `WireError` on malformed input.
 - Both methods are `async` — they can perform asynchronous operations during serialization/deserialization.
-- Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay.
+- Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
 ## Method Signatures
 

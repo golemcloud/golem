@@ -13,7 +13,7 @@ Snapshotting solves two distinct problems:
 
 ## Enabling Snapshotting
 
-Snapshotting must be enabled in the `@agentDefinition` annotation. Without it, no snapshot exports are generated:
+Snapshotting must be enabled in the `@agentDefinition` annotation. Without it, snapshotting is disabled:
 
 ```scala
 @agentDefinition(snapshotting = "every(1)")
@@ -33,6 +33,8 @@ The `snapshotting` parameter accepts these values:
 | `"enabled"` | Enable snapshot support with the server's default policy. **The server default is `disabled`**, so this may have no effect. Use `"every(N)"` or `"periodic(…)"` to guarantee snapshotting is active. |
 | `"every(N)"` | Snapshot every N successful function calls (use `"every(1)"` for every invocation) |
 | `"periodic(duration)"` | Snapshot at most once per time interval (e.g., `"periodic(30s)"`) |
+
+An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
 
 ```scala
 @agentDefinition(snapshotting = "periodic(30s)")
@@ -177,7 +179,7 @@ The macro detects these convention methods and wires them into the snapshot expo
 
 Snapshot loading runs in read-only mode and writes nothing to the oplog. Decoding, local computation, config reads, and other permitted reads can be used to construct the instance. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
 
-If the factory fails, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay.
+If the factory fails, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
 ## Best Practices
 
