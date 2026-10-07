@@ -17,8 +17,31 @@
 // before any subpackage function can run.
 package link
 
-import "github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+)
 
 // Engine is the root package's type system: the variants, enums, flags,
 // unions and pins every package encodes values against.
 var Engine *engine.Engine
+
+// The root package's own types, built and read from subpackages. Each returns
+// or takes the root type as any: a subpackage asserts it back.
+var (
+	// TypedValue wraps a wire value as a golem.TypedValue.
+	TypedValue func(types.TypedSchemaValue) any
+	// TypedValueWit unwraps a golem.TypedValue.
+	TypedValueWit func(any) types.TypedSchemaValue
+	// AgentError converts a host agent-error into a *golem.AgentError.
+	AgentError func(common.AgentError) error
+	// RemoteCallError converts a host rpc-error into a *golem.RemoteCallError.
+	RemoteCallError func(target, method string, e host.RpcError) error
+	// LocalAgentTypes derives the agent types this component defines, as
+	// discovery publishes them.
+	LocalAgentTypes func() ([]common.AgentType, error)
+	// ScheduledInvocation builds a *golem.ScheduledInvocation.
+	ScheduledInvocation func(agentID, idempotencyKey string, token *host.CancellationToken) any
+)

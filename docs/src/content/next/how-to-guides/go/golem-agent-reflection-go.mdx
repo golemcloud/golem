@@ -6,10 +6,10 @@ Normal RPC through the callee's definition package or a generated guest client (
 |---|---|---|
 | Caller-defined, method-only | Many agent types share a method shape; you have an id | `golem.DefineAgentClient[Shape]()` + `Method[In, Out]`, `Bind(id)` |
 | Caller-defined, full | You own Go types for one target type, without its definition | `golem.DefineFullAgentClient[Id](name, spec)` + `Method[In, Out]` |
-| Discovered | The type or method is chosen at runtime and should be validated | `golem.DiscoverAgentType` → `Get` / `Bind` → `Call` |
-| Fully dynamic | Values are already packed; no schema authority kept | `golem.BindAgentID(id)` → `Call` |
+| Discovered | The type or method is chosen at runtime and should be validated | `reflection.DiscoverAgentType` → `Get` / `Bind` → `Call` |
+| Fully dynamic | Values are already packed; no schema authority kept | `reflection.BindAgentID(id)` → `Call` |
 
-Every level uses the same verbs: `Call` waits for the result, `Trigger` does not, `Schedule` runs it later.
+Every level uses the same verbs: `Call` waits for the result, `Trigger` does not, `Schedule` runs it later. Discovered and dynamic clients live in the `reflection` package (`github.com/golemcloud/golem/sdks/go/golem/reflection`).
 
 ## Method-Only Clients
 
@@ -64,14 +64,14 @@ Generated guest clients are built on full clients.
 ## Discover and Inspect
 
 ```go
-for _, t := range golem.DiscoverAgentTypes() {
+for _, t := range reflection.DiscoverAgentTypes() {
 	fmt.Println(t.Name(), t.Mode(), t.SourceLanguage())
 	for _, m := range t.Methods() {
 		fmt.Println("  ", m.Name(), m.Description(), m.ReadOnly())
 	}
 }
 
-counter, found := golem.DiscoverAgentType("CounterAgent")
+counter, found := reflection.DiscoverAgentType("CounterAgent")
 if !found {
 	panic("CounterAgent is not deployed in this environment")
 }
@@ -103,10 +103,10 @@ if err != nil {
 fmt.Println(client.AgentID(), total, invocation.IdempotencyKey)
 ```
 
-- `Get` takes the constructor arguments by name and creates the agent if it does not exist; `golem.WithPhantomID(uuid)` addresses a phantom instance and `NewPhantom` allocates one. `Bind(agentID)` addresses an existing id of this type.
-- `golem.WithConfigJSON(path, value)` overrides one declared configuration value at creation, as canonical JSON (`golem.WithConfigValue(path, schema.SchemaValue)` takes a schema-model value); `Get`, `NewPhantom` and `Bind` accept it. Undeclared paths, secrets and invalid values are refused before anything is sent. An agent that already exists keeps the configuration it was created with.
+- `Get` takes the constructor arguments by name and creates the agent if it does not exist; `reflection.WithPhantomID(uuid)` addresses a phantom instance and `NewPhantom` allocates one. `Bind(agentID)` addresses an existing id of this type.
+- `reflection.WithConfigJSON(path, value)` overrides one declared configuration value at creation, as canonical JSON (`reflection.WithConfigValue(path, schema.SchemaValue)` takes a schema-model value); `Get`, `NewPhantom` and `Bind` accept it. Undeclared paths, secrets and invalid values are refused before anything is sent. An agent that already exists keeps the configuration it was created with.
 - `Call`, `Trigger` and `Schedule` return the invocation's `golem.InvocationID` (agent id and idempotency key) — for an ephemeral agent, the only record of which instance ran.
-- `CallAsync` returns a `*golem.PendingCall`: its `ID` is known at once, `Wait()` returns the result, and `Cancel()` stops waiting (the call may already have run; `Wait` then reports `golem.ErrCallCancelled`). A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
+- `CallAsync` returns a `*reflection.PendingCall`: its `ID` is known at once, `Wait()` returns the result, and `Cancel()` stops waiting (the call may already have run; `Wait` then reports `reflection.ErrCallCancelled`). A scheduled call is cancelled through the `*golem.ScheduledInvocation` that `Schedule` returns.
 - Missing, unexpected or invalid arguments fail with `*schema.ValidationError`, listing every problem, before anything is sent.
 - Remote failures are `*golem.RemoteCallError`; for a remote agent error, its `Cause` is a `*golem.AgentError`.
 
@@ -116,10 +116,10 @@ fmt.Println(client.AgentID(), total, invocation.IdempotencyKey)
 typed := golem.Must(golem.ParseAgentID[CounterID](agentID))
 fmt.Println(typed.TypeName, typed.ID.Name, typed.PhantomID.IsSome())
 
-raw := golem.Must(golem.ParseRawAgentID(agentID)) // no Go type needed
+raw := golem.Must(reflection.ParseRawAgentID(agentID)) // no Go type needed
 fmt.Println(raw.TypeName, golem.Must(raw.ConstructorJSON()))
 
-t, found := golem.DiscoverAgentTypeByID(agentID) // the type behind an existing agent
+t, found := reflection.DiscoverAgentTypeByID(agentID) // the type behind an existing agent
 id := golem.Must(t.AgentID(map[string]any{"name": "other"}, golem.None[golem.UUID]()))
 ```
 
@@ -130,11 +130,11 @@ Parsing is strict and reports malformed ids; lookup by id never creates the agen
 A dynamic client sends values the caller packed itself and validates nothing. Keep a discovered snapshot beside it for validation:
 
 ```go
-t, _ := golem.DiscoverAgentType(agentType)
+t, _ := reflection.DiscoverAgentType(agentType)
 m, _ := t.Method(method)
 input := golem.Must(golem.Must(m.Input()).PackJSON(args))
 
-client := golem.Must(golem.BindAgentID(agentID))
+client := golem.Must(reflection.BindAgentID(agentID))
 out, _, err := client.Call(method, input)
 if err != nil {
 	panic(err)
@@ -146,7 +146,7 @@ if v, has := out.Get(); has {
 }
 ```
 
-A dynamic client also has `CallAsync`, `Trigger` and `Schedule`. `golem.MakeAgentID(typeName, constructor, phantom)` builds an id from a packed constructor, so a dynamic caller can address any instance; the first call to it creates a durable agent.
+A dynamic client also has `CallAsync`, `Trigger` and `Schedule`. `reflection.MakeAgentID(typeName, constructor, phantom)` builds an id from a packed constructor, so a dynamic caller can address any instance; the first call to it creates a durable agent.
 
 ## Canonical JSON
 

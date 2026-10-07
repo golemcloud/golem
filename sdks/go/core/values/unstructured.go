@@ -84,7 +84,9 @@ type Modality interface{ isModality() }
 type TextModality struct{ Value UnstructuredText[AnyLanguage] }
 
 // BinaryModality is a binary item of a [Multimodal] list.
-type BinaryModality struct{ Value UnstructuredBinary[AnyMimeType] }
+type BinaryModality struct {
+	Value UnstructuredBinary[AnyMimeType]
+}
 
 func (TextModality) isModality()   {}
 func (BinaryModality) isModality() {}

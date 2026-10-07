@@ -15,7 +15,10 @@
 package golem
 
 import (
+	"errors"
 	"fmt"
+	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	"reflect"
 	"slices"
 	"strings"
@@ -61,7 +64,23 @@ func newDefinitions() *definitions {
 // the per-instance tests.
 var defs = newDefinitions()
 
-func init() { link.Engine = defs.Engine }
+func init() {
+	link.Engine = defs.Engine
+	link.TypedValue = func(w types.TypedSchemaValue) any { return TypedValue{wit: w} }
+	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
+	link.AgentError = agentErrorToGo
+	link.LocalAgentTypes = func() ([]common.AgentType, error) {
+		found, errs := defs.discover()
+		if len(errs) > 0 {
+			return found, errors.New(allDefErrors(errs))
+		}
+		return found, nil
+	}
+	link.RemoteCallError = rpcErrorToGo
+	link.ScheduledInvocation = func(agentID, idempotencyKey string, token *host.CancellationToken) any {
+		return &ScheduledInvocation{ID: InvocationID{AgentID: agentID, IdempotencyKey: idempotencyKey}, token: token}
+	}
+}
 
 // discover derives every agent type and collects every problem, purely: it reads
 // d but does not mutate it, so it is idempotent and safe to call repeatedly. The

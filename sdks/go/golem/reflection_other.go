@@ -16,43 +16,8 @@
 
 package golem
 
-import "fmt"
-
-// Off the wasm target there is no deployment to discover, and binding the
-// generated host calls here would drag their //go:wasmimport declarations into
-// a native link that has no bodies for them. The snapshot handling itself is
-// target-independent and tested directly.
-
-var errOutsideComponent = fmt.Errorf("golem: agent discovery and binding are only available inside a component")
-
-func DiscoverAgentTypes() []ReflectedAgentType { return nil }
-
-func DiscoverAgentType(string) (ReflectedAgentType, bool) { return ReflectedAgentType{}, false }
-
-func DiscoverAgentTypeByID(string) (ReflectedAgentType, bool) { return ReflectedAgentType{}, false }
-
-func (r ReflectedAgentType) Get(map[string]any, ...ClientOpt) (*ReflectedAgentClient, error) {
-	return nil, errOutsideComponent
-}
-
-func (r ReflectedAgentType) NewPhantom(map[string]any, ...ClientOpt) (*ReflectedAgentClient, error) {
-	return nil, errOutsideComponent
-}
-
-func (r ReflectedAgentType) Bind(string, ...ClientOpt) (*ReflectedAgentClient, error) {
-	return nil, errOutsideComponent
-}
-
-func (r ReflectedAgentType) AgentID(map[string]any, Option[UUID]) (string, error) {
-	return "", errOutsideComponent
-}
+// Off the wasm target there is no deployment to discover.
 
 func DiscoverTools() []ReflectedTool { return nil }
 
 func DiscoverTool(string) (ReflectedTool, bool) { return ReflectedTool{}, false }
-
-func ParseRawAgentID(string) (RawAgentID, error) { return RawAgentID{}, errOutsideComponent }
-
-func BindAgentID(string) (*DynamicAgentClient, error) { return nil, errOutsideComponent }
-
-func MakeAgentID(string, TypedValue, Option[UUID]) (string, error) { return "", errOutsideComponent }

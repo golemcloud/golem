@@ -11,6 +11,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	"github.com/golemcloud/golem/sdks/go/golem/oplog"
+	"github.com/golemcloud/golem/sdks/go/golem/reflection"
 	"github.com/golemcloud/golem/sdks/go/golem/retry"
 )
 
@@ -233,15 +234,15 @@ func init() {
 	// A reflected caller creates a configured agent with an override, calls it
 	// both ways, and is refused an undeclared configuration path locally.
 	ops.Handle(Reflected, func(*golem.Context[opsState], golem.Unit) string {
-		t, found := golem.DiscoverAgentType("ConfiguredGreeter")
+		t, found := reflection.DiscoverAgentType("ConfiguredGreeter")
 		if !found {
 			return "not discovered"
 		}
-		_, err := t.Get(map[string]any{"name": "x"}, golem.WithConfigJSON([]string{"greting"}, "typo"))
+		_, err := t.Get(map[string]any{"name": "x"}, reflection.WithConfigJSON([]string{"greting"}, "typo"))
 		if err == nil {
 			return "an undeclared path was accepted"
 		}
-		c, err := t.Get(map[string]any{"name": "r"}, golem.WithConfigJSON([]string{"greeting"}, "hej"))
+		c, err := t.Get(map[string]any{"name": "r"}, reflection.WithConfigJSON([]string{"greeting"}, "hej"))
 		if err != nil {
 			return "get: " + err.Error()
 		}

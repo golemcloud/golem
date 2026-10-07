@@ -56,8 +56,6 @@ type ClientOpt func(*clientOpts)
 type clientOpts struct {
 	phantomID witTypes.Option[types.Uuid]
 	configs   []configOverrideFn
-	// overrides are untyped configuration entries, for reflected clients.
-	overrides []configOverride
 }
 
 // WithPhantomID addresses a specific phantom instance of the target agent.
@@ -95,9 +93,6 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Cli
 	}
 	if err := requireIdentity(e, o.phantomID.IsSome()); err != nil {
 		panic(err)
-	}
-	if len(o.overrides) > 0 {
-		panic(fmt.Errorf("golem: Get %s: WithConfigJSON and WithConfigValue configure reflected clients; use WithConfig", name))
 	}
 
 	idVal := reflect.ValueOf(&id).Elem()
