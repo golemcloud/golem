@@ -505,13 +505,9 @@ impl MultiSqliteIndexedStorage {
         if let Some(storage) = self.root.cache.get(&db).await {
             golem_common::metrics::caching::record_cache_hit("multi-sqlite-indexed");
             let result = operation(storage).await;
-            if matches!(
-                &result,
-                Err(IndexedStorageError::Other(_)
-                    | IndexedStorageError::Transient(_)
-                    | IndexedStorageError::Indeterminate(_))
-            ) {
-                file.poison();
+            if result.is_err() {
+                // A replacement waits for this generation to retire; do not wait under a shared lease.
+                self.root.cache.remove(&db).await;
             }
             completion.complete = true;
             return result.map(Some);
@@ -550,6 +546,7 @@ impl MultiSqliteIndexedStorage {
                 file: file.clone(),
                 complete: false,
             };
+            let mut authority_transfer = false;
             let work = async {
                 let mut cached = root.cache.get(&db).await;
                 if cached.is_none() && exclusive.is_none() {
@@ -580,20 +577,30 @@ impl MultiSqliteIndexedStorage {
                             {
                                 let mut epochs = snapshot.unwrap_or_default();
                                 access.absent(&mut epochs)?;
+                                let empty_snapshot = epochs.is_empty();
                                 if has_snapshot
                                     && matches!(
                                         access,
                                         Access::Delete { .. } | Access::SetEpoch { .. }
                                     )
                                 {
+                                    authority_transfer = true;
                                     metadata.save_database_epoch_snapshot(&db, epochs).await?;
                                 }
+                                if has_snapshot && empty_snapshot && !file.is_poisoned() {
+                                    // A snapshot can still cover an old physical file after a crash.
+                                    authority_transfer = true;
+                                    root.unlink(&file, &db).await?;
+                                    metadata.delete_database_epoch_snapshot(&db).await?;
+                                }
+                                authority_transfer = false;
                                 return Ok(None);
                             }
                             if snapshot.is_some() {
                                 if file.is_poisoned() {
                                     return Err(IndexedStorageError::Other("Database recovery requires a process restart after uncertain retirement".into()));
                                 }
+                                authority_transfer = true;
                                 root.unlink(&file, &db).await?;
                             }
                         }
@@ -620,9 +627,12 @@ impl MultiSqliteIndexedStorage {
                         if created {
                             root.invalidate_creation(&db).await;
                         }
-                        root.cache
+                        let storage = root
+                            .cache
                             .get_or_insert_simple(&db, async || Ok(storage))
-                            .await?
+                            .await?;
+                        authority_transfer = false;
+                        storage
                     }
                 };
                 if !access.exclusive()
@@ -637,6 +647,8 @@ impl MultiSqliteIndexedStorage {
                 {
                     // Even an ambiguous metadata write must not leave a warm authoritative bypass.
                     root.cache.remove(&db).await;
+                    let empty_snapshot = epochs.is_empty();
+                    authority_transfer = true;
                     root.epoch_storage()
                         .await?
                         .save_database_epoch_snapshot(&db, epochs)
@@ -647,18 +659,23 @@ impl MultiSqliteIndexedStorage {
                     file.wait_retired().await;
                     if !file.is_poisoned() {
                         root.unlink(&file, &db).await?;
+                        if empty_snapshot {
+                            root.epoch_storage()
+                                .await?
+                                .delete_database_epoch_snapshot(&db)
+                                .await?;
+                        }
                     }
+                    authority_transfer = false;
                 }
                 Ok(Some(value))
             };
             let result = work.await;
-            if matches!(
-                &result,
-                Err(IndexedStorageError::Other(_)
-                    | IndexedStorageError::Transient(_)
-                    | IndexedStorageError::Indeterminate(_))
-            ) {
-                file.poison();
+            if result.is_err() {
+                root.cache.remove(&db).await;
+                if authority_transfer {
+                    file.poison();
+                }
             }
             completion.complete = true;
             result
@@ -1550,31 +1567,46 @@ mod tests {
 
     #[test]
     #[test_r::timeout("30s")]
-    async fn infrastructure_poison_survives_root_and_lifetime_reconstruction() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
-        let path = storage.root.root_dir.join("poison.db");
-        let file = FileLifetime::get(path.clone());
-        let error = storage
-            .with_database("poison.db".into(), |_| async {
-                Err::<(), _>(IndexedStorageError::Transient(
-                    "controlled infrastructure failure".into(),
-                ))
-            })
-            .await;
-        assert!(error.is_err());
-        storage.root.cache.remove(&"poison.db".to_string()).await;
-        file.wait_retired().await;
-        let old = Arc::downgrade(&file);
-        drop(file);
-        drop(storage);
-        while old.upgrade().is_some() {
-            tokio::task::yield_now().await;
+    async fn completed_errors_retire_without_poison_and_reopening_waits() {
+        use golem_service_base::db::LabelledPoolTransaction;
+        for warm_read in [false, true] {
+            for kind in 0..3 {
+                let dir = tempfile::tempdir().unwrap();
+                let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+                let db = "failed.db".to_string();
+                warm(&storage, &db).await;
+                let file = FileLifetime::get(storage.root.root_dir.join(&db));
+                let cached = storage.root.cache.get(&db).await.unwrap();
+                let connection = cached.hold_connection_for_test().await;
+                drop(cached);
+                let failure = move |_| async move {
+                    Err::<(), _>(match kind {
+                        0 => IndexedStorageError::Transient("completed failure".into()),
+                        1 => IndexedStorageError::Indeterminate("completed failure".into()),
+                        _ => IndexedStorageError::Other("completed failure".into()),
+                    })
+                };
+                let result = if warm_read {
+                    storage.with_existing(db.clone(), failure).await
+                } else {
+                    storage
+                        .with_access(db.clone(), Access::Create, failure)
+                        .await
+                };
+                assert!(result.is_err());
+                assert!(!file.is_poisoned());
+                assert!(storage.root.cache.get(&db).await.is_none());
+                assert!(file.path.exists());
+                let worker = storage.clone();
+                let reopened = tokio::spawn(async move { warm(&worker, &db).await });
+                file.waiting_retired.notified().await;
+                assert!(!reopened.is_finished());
+                assert_eq!(file.registrations.load(Ordering::Acquire), 1);
+                connection.rollback().await.unwrap();
+                reopened.await.unwrap();
+                assert!(!file.is_poisoned());
+            }
         }
-        assert!(old.upgrade().is_none());
-        let replacement = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
-        warm(&replacement, "poison.db").await;
-        assert!(FileLifetime::get(path).is_poisoned());
     }
 
     #[test]
@@ -1591,19 +1623,6 @@ mod tests {
         );
         drop(storage);
         assert!(FileLifetime::get(path).is_poisoned());
-    }
-
-    #[test]
-    async fn rollback_infrastructure_failure_is_not_hidden_by_fencing() {
-        let dir = tempfile::tempdir().unwrap();
-        let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
-        let result = storage
-            .with_database("rollback.db".into(), |s| async move {
-                s.fail_rollback_for_test().await
-            })
-            .await;
-        assert!(matches!(result, Err(IndexedStorageError::Other(_))));
-        assert!(FileLifetime::get(storage.root.root_dir.join("rollback.db")).is_poisoned());
     }
 
     #[test]
@@ -1826,6 +1845,277 @@ mod tests {
             .await
             .unwrap();
         assert!(!storage.root.root_dir.join(db).exists());
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn failed_staging_move_rolls_back_and_later_drain_reclaims() {
+        for cold in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+            let visible = oplog_namespace("invalid-move");
+            let IndexedStorageNamespace::OpLog {
+                agent_id,
+                agent_mode,
+            } = visible.clone()
+            else {
+                unreachable!()
+            };
+            let stage = IndexedStorageNamespace::StagedOpLog {
+                agent_id,
+                agent_mode,
+            };
+            for id in [1, 3] {
+                storage
+                    .append(
+                        "test",
+                        "seed",
+                        "entry",
+                        stage.clone(),
+                        "source",
+                        id,
+                        vec![id as u8],
+                        None,
+                    )
+                    .await
+                    .unwrap();
+            }
+            let db = storage.namespace_to_db(&stage).await;
+            let file = FileLifetime::get(storage.root.root_dir.join(&db));
+            if cold {
+                storage.root.cache.remove(&db).await;
+                file.wait_retired().await;
+            }
+            assert!(matches!(
+                storage
+                    .move_if_absent(
+                        "test",
+                        "move",
+                        stage.clone(),
+                        "source",
+                        visible.clone(),
+                        "target",
+                        3
+                    )
+                    .await,
+                Err(IndexedStorageError::Other(_))
+            ));
+            assert!(!file.is_poisoned());
+            assert!(storage.root.cache.get(&db).await.is_none());
+            assert!(
+                !storage
+                    .exists("test", "target", visible, "target")
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                storage
+                    .read("test", "source", "entry", stage.clone(), "source", 1, 3)
+                    .await
+                    .unwrap(),
+                vec![(1, vec![1]), (3, vec![3])]
+            );
+            storage
+                .delete("test", "drain", stage, "source")
+                .await
+                .unwrap();
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                assert!(!storage.root.root_dir.join(format!("{db}{suffix}")).exists());
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
+        use golem_service_base::db::{LabelledPoolTransaction, PoolApi};
+        let dir = tempfile::tempdir().unwrap();
+        let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+        for agent in 0..9 {
+            let mut ns = oplog_namespace(&format!("churn-{agent}"));
+            if agent % 3 == 2 {
+                let IndexedStorageNamespace::OpLog {
+                    agent_id,
+                    agent_mode,
+                } = ns
+                else {
+                    unreachable!()
+                };
+                ns = IndexedStorageNamespace::CompressedOpLog {
+                    agent_id,
+                    agent_mode,
+                    level: 1,
+                };
+            }
+            let epoch = (agent % 3 == 1).then_some(ShardEpoch(17));
+            if let Some(epoch) = epoch {
+                storage
+                    .set_key_epoch("test", "epoch", ns.clone(), "key", epoch)
+                    .await
+                    .unwrap();
+            }
+            storage
+                .append(
+                    "test",
+                    "seed",
+                    "entry",
+                    ns.clone(),
+                    "key",
+                    1,
+                    vec![37],
+                    epoch,
+                )
+                .await
+                .unwrap();
+            let db = storage.namespace_to_db(&ns).await;
+            match agent % 3 {
+                0 => storage.delete("test", "drain", ns, "key").await.unwrap(),
+                1 => storage
+                    .delete_with_epoch("test", "drain", ns, "key", epoch)
+                    .await
+                    .unwrap(),
+                _ => storage
+                    .drop_prefix("test", "drain", ns, "key", 1, None)
+                    .await
+                    .unwrap(),
+            }
+            assert!(!storage.root.root_dir.join(&db).exists());
+            assert!(
+                storage
+                    .root
+                    .epoch_storage()
+                    .await
+                    .unwrap()
+                    .database_epoch_snapshot(&db)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let mut connection = storage
+            .root
+            .epoch_storage()
+            .await
+            .unwrap()
+            .hold_connection_for_test()
+            .await;
+        let (rows,): (i64,) = connection
+            .fetch_one_as(sqlx::query_as(
+                "SELECT COUNT(*) FROM index_storage WHERE namespace = 'database-epochs';",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows, 0);
+        connection.rollback().await.unwrap();
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn deleting_last_snapshot_epoch_cleans_residual_files_before_metadata() {
+        for fail_unlink in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+            let ns = oplog_namespace("last-epoch");
+            storage
+                .append(
+                    "test",
+                    "seed",
+                    "entry",
+                    ns.clone(),
+                    "key",
+                    1,
+                    vec![53],
+                    None,
+                )
+                .await
+                .unwrap();
+            let db = storage.namespace_to_db(&ns).await;
+            let file = FileLifetime::get(storage.root.root_dir.join(&db));
+            storage.root.cache.remove(&db).await;
+            file.wait_retired().await;
+            let metadata = storage.root.epoch_storage().await.unwrap();
+            metadata
+                .save_database_epoch_snapshot(
+                    &db,
+                    vec![(
+                        SqliteIndexedStorage::namespace(ns.clone()),
+                        "key".into(),
+                        17,
+                    )],
+                )
+                .await
+                .unwrap();
+            if fail_unlink {
+                std::fs::create_dir(storage.root.root_dir.join(format!("{db}-shm"))).unwrap();
+            }
+            let result = storage
+                .delete_with_epoch("test", "delete", ns, "key", Some(ShardEpoch(17)))
+                .await;
+            if fail_unlink {
+                assert!(result.is_err());
+                assert!(file.path.exists());
+                assert!(file.is_poisoned());
+                assert_eq!(
+                    metadata.database_epoch_snapshot(&db).await.unwrap(),
+                    Some(Vec::new())
+                );
+            } else {
+                result.unwrap();
+                assert!(!file.path.exists());
+                assert!(!file.is_poisoned());
+                assert!(
+                    metadata
+                        .database_epoch_snapshot(&db)
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn trailing_read_cleans_empty_snapshot_after_interrupted_unlink_handoff() {
+        for residual_file in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
+            let ns = oplog_namespace("empty-handoff");
+            let db = storage.namespace_to_db(&ns).await;
+            if residual_file {
+                storage
+                    .append(
+                        "test",
+                        "seed",
+                        "entry",
+                        ns.clone(),
+                        "key",
+                        1,
+                        vec![97],
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                storage.root.cache.remove(&db).await;
+                FileLifetime::get(storage.root.root_dir.join(&db))
+                    .wait_retired()
+                    .await;
+            }
+            let metadata = storage.root.epoch_storage().await.unwrap();
+            metadata
+                .save_database_epoch_snapshot(&db, Vec::new())
+                .await
+                .unwrap();
+            assert_eq!(storage.length("test", "read", ns, "key").await.unwrap(), 0);
+            assert!(!storage.root.root_dir.join(&db).exists());
+            assert!(
+                metadata
+                    .database_epoch_snapshot(&db)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -2258,7 +2548,7 @@ mod tests {
                     .await
                     .unwrap()
             );
-            assert!(file.path.exists());
+            assert_eq!(file.path.exists(), !authoritative.is_empty());
             assert!(storage.root.cache.get(&db).await.is_none());
             storage
                 .append(
@@ -2611,6 +2901,7 @@ mod tests {
             } else {
                 let cached = storage.root.cache.get(&db).await.unwrap();
                 assert_eq!(cached.empty_database_epochs().await.unwrap(), Some(records));
+                drop(cached);
                 assert!(matches!(
                     storage
                         .append(

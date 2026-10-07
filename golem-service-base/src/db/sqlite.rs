@@ -99,39 +99,6 @@ impl SqlitePool {
         }
     }
 
-    /// Managed files cannot hide a failed rollback behind a business error: retirement would
-    /// otherwise mistake a fencing rejection for a fully settled transaction.
-    pub async fn with_managed_tx_err<R, E, F>(
-        &self,
-        svc_name: &'static str,
-        api_name: &'static str,
-        f: F,
-    ) -> Result<R, E>
-    where
-        R: Send,
-        E: std::fmt::Debug + Send + From<RepoError>,
-        F: for<'f> FnOnce(
-                &'f mut SqliteLabelledTransaction,
-            ) -> futures::future::BoxFuture<'f, Result<R, E>>
-            + Send,
-    {
-        if !self.managed_file {
-            return super::Pool::with_tx_err(self, svc_name, api_name, f).await;
-        }
-        use super::{LabelledPoolApi, LabelledPoolTransaction};
-        let mut tx = self.with_rw(svc_name, api_name).begin().await?;
-        match f(&mut tx).await {
-            Ok(result) => {
-                tx.commit().await?;
-                Ok(result)
-            }
-            Err(error) => {
-                tx.rollback().await?;
-                Err(error)
-            }
-        }
-    }
-
     /// Pins a read connection for SQLite incremental BLOB I/O.
     pub(crate) async fn acquire_blob_reader(
         &self,
