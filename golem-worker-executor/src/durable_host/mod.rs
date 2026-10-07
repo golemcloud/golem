@@ -2921,12 +2921,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.memory_grow_failed();
     }
 
-    /// Returns the deterministic, policy-independent recovery decision for a
-    /// trap type — i.e. the cases where the answer does not depend on retry
-    /// state or any retry policy. For trap-error variants whose decision is
-    /// driven by named retry policies (`Unknown`, `TransientError`, and
-    /// `DeterministicTrap` inside an atomic region), this returns `None` and
-    /// the caller falls through to policy-based resolution.
     /// The retry of an error trap during a speculative replay: the fixed decision of the trap
     /// when it retries, as for an out-of-memory. Any other error, and a trap that is not an
     /// error, gives `None`.
@@ -2938,6 +2932,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// The retry of a start whose load of an application snapshot ended with `result`: the fixed
+    /// decision of an interrupt, and the retry of an error trap that every invocation retries, as
+    /// [`Self::speculative_retry`] gives it. Any other result gives `None`.
+    pub(crate) fn load_retry(result: &InvokeResult) -> Option<RetryDecision> {
+        match result {
+            InvokeResult::Interrupted { interrupt_kind, .. } => {
+                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(*interrupt_kind))
+            }
+            result => result
+                .as_trap_type::<Ctx>()
+                .as_ref()
+                .and_then(Self::speculative_retry),
+        }
+    }
+
+    /// Returns the deterministic, policy-independent recovery decision for a
+    /// trap type — i.e. the cases where the answer does not depend on retry
+    /// state or any retry policy. For trap-error variants whose decision is
+    /// driven by named retry policies (`Unknown`, `TransientError`, and
+    /// `DeterministicTrap` inside an atomic region), this returns `None` and
+    /// the caller falls through to policy-based resolution.
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
@@ -4559,14 +4574,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let snapshot_divergence = load_result
             .as_ref()
             .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
+        if let Some(decision) = load_result.as_ref().ok().and_then(Self::load_retry) {
+            return SnapshotRecoveryResult::Retry(decision);
+        }
         let failed = match load_result {
             Err(error) => return SnapshotRecoveryResult::Unavailable(error),
-            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                return SnapshotRecoveryResult::Retry(
-                    Self::fixed_decision_for_trap_type(&TrapType::Interrupt(interrupt_kind))
-                        .expect("interrupts have a fixed retry decision"),
-                );
-            }
             Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
                 return SnapshotRecoveryResult::Unavailable(
                     WorkerExecutorError::InvocationFailed {
@@ -7689,6 +7701,98 @@ mod tests {
             }
             other => panic!("a lost payload fails the update, got {other:?}"),
         }
+    }
+
+    /// An out-of-memory trap while the application snapshot loads retries the start with its
+    /// permits reacquired, as during any invocation, in a snapshot-assisted attempt and in the
+    /// start of a plain automatic update after a promoted baseline: the outcome table writes no
+    /// failed update for it. An interrupt keeps its fixed decision; any other trap does not retry.
+    #[test]
+    fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_start() {
+        let failed = |error: AgentError| InvokeResult::Failed {
+            consumed_fuel: 0,
+            error,
+            timed_out: false,
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+        let retry = |result: &InvokeResult| {
+            DurableWorkerCtx::<crate::workerctx::default::Context>::load_retry(result)
+        };
+        let pending = |kind: PendingUpdateKind| PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind,
+        };
+        let assisted = pending(PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(
+            golem_common::model::AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: golem_common::model::UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            },
+        )));
+        let automatic = pending(PendingUpdateKind::Automatic);
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "load".to_string(),
+        };
+        let out_of_memory = SnapshotRecoveryResult::Retry(
+            retry(&failed(AgentError::OutOfMemory)).expect("an out-of-memory trap retries"),
+        );
+        let decide = |role: start_outcome::BaselineRole, head: &PendingUpdateRef| {
+            start_outcome::decide(
+                &role,
+                Some(head),
+                start_outcome::RawStartError::Load(&out_of_memory),
+                &agent_id,
+                false,
+            )
+        };
+
+        assert_eq!(
+            [
+                retry(&failed(AgentError::OutOfMemory)),
+                retry(&failed(AgentError::InternalError("diverged".to_string()))),
+                retry(&failed(AgentError::Unknown("transient".to_string()))),
+                retry(&InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+                retry(&InvokeResult::Exited { consumed_fuel: 0 }),
+            ],
+            [
+                Some(RetryDecision::ReacquirePermits),
+                None,
+                None,
+                Some(RetryDecision::Immediate),
+                None,
+            ]
+        );
+        assert!(matches!(
+            decide(
+                start_outcome::BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                &assisted
+            ),
+            start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+        ));
+        [
+            start_outcome::BaselineRole::AssistedPromoted,
+            start_outcome::BaselineRole::ManualPromoted,
+        ]
+        .into_iter()
+        .for_each(|role| {
+            assert!(matches!(
+                decide(role, &automatic),
+                start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+            ))
+        });
     }
 
     /// An interrupt that ends a start, for example the restart of a revert while the start after
