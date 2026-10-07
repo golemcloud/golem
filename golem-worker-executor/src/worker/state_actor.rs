@@ -1473,7 +1473,9 @@ mod tests {
             confirmation_after_append(false, &after, &own),
             ConfirmOutcome::Confirmed
         );
-        assert_eq!(names_in_use(&after), Box::from([own, previous]));
+        let mut kept = [own, previous];
+        kept.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+        assert_eq!(names_in_use(&after), Box::from(kept));
     }
 
     #[test]

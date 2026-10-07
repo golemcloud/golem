@@ -684,9 +684,9 @@ pub(crate) fn start_candidates(
 }
 
 /// The filesystem snapshot names that retention keeps whatever their age: the names of the two
-/// records that a start can select, the last record first, of the successful updates, of the
-/// pending updates, and of the authoritative snapshot-assisted baseline. A revert rebuilds the
-/// status, so the names of updates in its dropped region are not in it. Each name is given once.
+/// records that a start can select, of the successful updates, of the pending updates, and of the
+/// authoritative snapshot-assisted baseline. A revert rebuilds the status, so the names of updates
+/// in its dropped region are not in it. Each name is given once, in the order of its text.
 pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
     let authoritative = status
         .authoritative_snapshot
@@ -697,7 +697,7 @@ pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapsho
             } => filesystem_snapshot.as_ref(),
             AuthoritativeSnapshotKind::ManualUpdate => None,
         });
-    start_candidates(status)
+    let mut names = start_candidates(status)
         .into_iter()
         .flatten()
         .filter_map(|(_, name)| name)
@@ -714,15 +714,11 @@ pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapsho
                 .filter_map(|update| update.kind.filesystem_snapshot()),
         )
         .chain(authoritative)
-        .fold(Vec::new(), |mut names, name| {
-            if !names.contains(&name) {
-                names.push(name);
-            }
-            names
-        })
-        .into_iter()
-        .cloned()
-        .collect()
+        .collect::<Vec<_>>();
+    // A sort and a dedup take O(k log k) for k names, and need no hash set.
+    names.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+    names.dedup();
+    names.into_iter().cloned().collect()
 }
 
 #[cfg(test)]
@@ -1107,18 +1103,70 @@ mod tests {
                 names_in_use(&repeated),
             ],
             [
-                Box::from([first.clone(), second.clone(), pending.clone()]),
+                by_text([first.clone(), second.clone(), pending.clone()]),
                 Box::from([]),
-                Box::from([
+                by_text([
                     last.clone(),
                     first.clone(),
                     second.clone(),
                     pending.clone(),
                     assisted.clone()
                 ]),
-                Box::from([last, first, second, assisted, pending]),
+                by_text([last, first, second, assisted, pending]),
             ]
         );
+    }
+
+    /// The names in the order of their text.
+    fn by_text<const N: usize>(
+        mut names: [FilesystemSnapshotName; N],
+    ) -> Box<[FilesystemSnapshotName]> {
+        names.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+        Box::from(names)
+    }
+
+    /// Each place of the status gets a name, and the later places repeat names of the earlier
+    /// ones. The names go into the status in the reverse order of their text, so a result in the
+    /// order of the status differs from a result in the order of the text.
+    #[test]
+    fn the_names_in_use_give_each_name_of_the_status_once_in_the_order_of_their_text() {
+        let names = by_text(std::array::from_fn::<_, 5, _>(|index| match index % 2 {
+            0 => FilesystemSnapshotName::periodic(),
+            _ => FilesystemSnapshotName::update(),
+        }));
+        let [first, second, third, fourth, fifth] =
+            std::array::from_fn(|index| names[names.len() - 1 - index].clone());
+        let status = AgentStatusRecord {
+            successful_updates: vec![
+                successful_update(3, Some(third.clone())),
+                successful_update(4, Some(first.clone())),
+                successful_update(6, Some(third.clone())),
+            ],
+            pending_updates: [
+                pending_update(
+                    11,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: Some(fourth.clone()),
+                    },
+                ),
+                pending_update(
+                    12,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: Some(second.clone()),
+                    },
+                ),
+            ]
+            .into(),
+            authoritative_snapshot: Some(AuthoritativeSnapshot {
+                index: OplogIndex::from_u64(2),
+                kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                    filesystem_snapshot: Some(fifth.clone()),
+                },
+            }),
+            ..status(Some(first), true, Some(Some(second)))
+        };
+
+        assert_eq!(names_in_use(&status), names);
     }
 
     fn indexes(indexes: &[u64]) -> BTreeSet<OplogIndex> {

@@ -7553,13 +7553,17 @@ mod region_fold {
         ]
         .map(|status| names_in_use(&status));
 
+        let by_text = |mut names: Vec<FilesystemSnapshotName>| {
+            names.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+            names.into_boxed_slice()
+        };
         assert_eq!(
             names,
             [
-                Box::from([newest.clone(), newer.clone(), selected.clone()]),
-                Box::from([selected.clone()]),
-                Box::from([newest, newer, selected.clone()]),
-                Box::from([selected, later]),
+                by_text(vec![newest.clone(), newer.clone(), selected.clone()]),
+                by_text(vec![selected.clone()]),
+                by_text(vec![newest, newer, selected.clone()]),
+                by_text(vec![selected, later]),
             ]
         );
     }
