@@ -7827,6 +7827,105 @@ mod region_fold {
     }
 }
 
+mod invocation_payload_decodes {
+    use super::region_fold::{idx, manual_invocation, revision};
+    use super::*;
+    use crate::worker::status::update_queue::INVOCATION_PAYLOAD_DECODES;
+    use pretty_assertions::assert_eq;
+    use test_r::test;
+
+    fn serialized(entry: OplogEntry) -> OplogEntry {
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload: OplogPayload::Inline(payload),
+                trace_id,
+                trace_states,
+                invocation_context,
+            } => OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload: OplogPayload::SerializedInline {
+                    bytes: golem_common::serialization::serialize(payload.as_ref()).unwrap(),
+                    cached: None,
+                },
+                trace_id,
+                trace_states,
+                invocation_context,
+            },
+            other => other,
+        }
+    }
+
+    fn method_invocation() -> OplogEntry {
+        serialized(OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            idempotency_key: IdempotencyKey::fresh(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::AgentMethod {
+                method_name: "a".to_string(),
+                input: SchemaValue::Record {
+                    fields: vec![SchemaValue::String("input".to_string())],
+                },
+                principal: Principal::anonymous(),
+                scope_card: None,
+            })),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        })
+    }
+
+    /// Three uncached method invocations and one uncached manual update invocation.
+    fn history() -> BTreeMap<OplogIndex, OplogEntry> {
+        BTreeMap::from([
+            (idx(2), method_invocation()),
+            (idx(3), method_invocation()),
+            (idx(4), serialized(manual_invocation(2))),
+            (idx(5), method_invocation()),
+        ])
+    }
+
+    fn decodes_of(fold: impl FnOnce()) -> usize {
+        INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(0));
+        fold();
+        INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.get())
+    }
+
+    #[test]
+    fn a_status_fold_decodes_each_uncached_invocation_payload_once() {
+        let mut status = None;
+        let decodes = decodes_of(|| {
+            status = super::super::update_status_with_new_entries(
+                AgentMode::Durable,
+                AgentStatusRecord::default(),
+                history(),
+                &RetryConfig::default(),
+            )
+            .unwrap();
+        });
+        let pending = status.unwrap().pending_invocations;
+
+        assert_eq!(decodes, 4);
+        assert_eq!(
+            pending
+                .iter()
+                .map(|invocation| (
+                    invocation.oplog_index,
+                    invocation.manual_update_target_revision,
+                    invocation.idempotency_key.is_some()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (idx(2), None, true),
+                (idx(3), None, true),
+                (idx(4), Some(revision(2)), false),
+                (idx(5), None, true),
+            ]
+        );
+    }
+}
+
 mod update_entry_sequences {
     use super::region_fold::{
         assisted_strategy, automatic_admission, failed, fold_status, idx, manual_invocation,

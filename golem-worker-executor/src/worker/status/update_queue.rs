@@ -56,6 +56,8 @@ pub(crate) struct UpdateQueue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateStep {
     Unchanged,
+    /// A manual update invocation added a manual admission for this target revision.
+    ManualAdmitted(ComponentRevision),
     /// A `PendingUpdate` added a queue element. `consumed` is the manual admission that a
     /// `SnapshotBased` entry with an attempt index paired.
     Admitted {
@@ -86,10 +88,25 @@ impl UpdateStep {
             | Self::ConsumedInDeletedRegion(index) => Some(*index),
             Self::FailedAdmission(admission) => Some(admission.index),
             Self::Unchanged
+            | Self::ManualAdmitted(_)
             | Self::Admitted { consumed: None }
             | Self::Selected
             | Self::Succeeded(_)
             | Self::FailedQueued(_) => None,
+        }
+    }
+
+    /// The target revision of the manual update invocation that this step admitted.
+    pub(crate) fn manual_admission_target(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::ManualAdmitted(target_revision) => Some(*target_revision),
+            Self::Unchanged
+            | Self::Admitted { .. }
+            | Self::Selected
+            | Self::Succeeded(_)
+            | Self::FailedQueued(_)
+            | Self::FailedAdmission(_)
+            | Self::ConsumedInDeletedRegion(_) => None,
         }
     }
 
@@ -98,6 +115,7 @@ impl UpdateStep {
         match self {
             Self::Succeeded(Some(update)) | Self::FailedQueued(Some(update)) => Some(update),
             Self::Unchanged
+            | Self::ManualAdmitted(_)
             | Self::Admitted { .. }
             | Self::Selected
             | Self::Succeeded(None)
@@ -133,7 +151,8 @@ impl UpdateQueue {
     /// The queue after `entry` at `index`, and what the entry did to it. `deleted` tells whether
     /// `entry` is in a deleted region: such an entry changes only the manual admissions.
     ///
-    /// - A manual update invocation adds a manual admission.
+    /// - A manual update invocation adds a manual admission, and its step carries the target
+    ///   revision, so a later reader of the step need not decode the invocation again.
     /// - A `PendingUpdate` without an attempt index adds a queue element.
     /// - A `SnapshotBased` `PendingUpdate` with an attempt index adds a queue element and pairs
     ///   the manual admission with that index.
@@ -153,16 +172,17 @@ impl UpdateQueue {
         let step = match entry {
             OplogEntry::PendingAgentInvocation {
                 timestamp, payload, ..
-            } => {
-                if let Some(target_revision) = manual_update_target_revision_of(payload) {
+            } => match manual_update_target_revision_of(payload) {
+                Some(target_revision) => {
                     self.manual_admissions.push_back(ManualAdmission {
                         timestamp: *timestamp,
                         index,
                         target_revision,
                     });
+                    UpdateStep::ManualAdmitted(target_revision)
                 }
-                UpdateStep::Unchanged
-            }
+                None => UpdateStep::Unchanged,
+            },
             OplogEntry::PendingUpdate {
                 update_attempt_index: Some(attempt_index),
                 ..
@@ -280,6 +300,13 @@ impl UpdateQueue {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many invocation payloads this thread decoded to classify them.
+    pub(crate) static INVOCATION_PAYLOAD_DECODES: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
 /// The target revision of a pending agent invocation payload when it is a manual update.
 ///
 /// Manual update payloads are tiny and always stored inline, so this never needs to download an
@@ -300,6 +327,8 @@ pub(crate) fn manual_update_target_revision_of(
             cached: Some(v), ..
         } => target_revision(v),
         OplogPayload::SerializedInline { bytes, .. } => {
+            #[cfg(test)]
+            INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
             deserialize::<AgentInvocationPayload>(bytes)
                 .map_err(|e| {
                     tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
@@ -592,7 +621,7 @@ mod tests {
         assert_eq!(
             steps,
             vec![
-                UpdateStep::Unchanged,
+                UpdateStep::ManualAdmitted(revision(5)),
                 UpdateStep::Unchanged,
                 UpdateStep::Unchanged,
                 UpdateStep::ConsumedInDeletedRegion(idx(3)),

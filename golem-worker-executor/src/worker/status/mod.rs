@@ -1174,10 +1174,10 @@ async fn read_region_entries(
     Some(regions)
 }
 
-/// The pending invocations after `entries`. The update entries act through their `steps`: a
-/// manual update invocation leaves the list when a `PendingUpdate` pairs it, when a
-/// `FailedUpdate` ends it, or when an entry in a deleted region consumes it, so a revert does not
-/// make it run again.
+/// The pending invocations after `entries`. The update entries act through their `steps`, which
+/// must hold the step of every manual update invocation of `entries`: a manual update invocation
+/// leaves the list when a `PendingUpdate` pairs it, when a `FailedUpdate` ends it, or when an
+/// entry in a deleted region consumes it, so a revert does not make it run again.
 ///
 /// Skipped regions do not matter here: they represent jumps and updates, and anything that happens
 /// in them is part of the history (for example a new pending invocation arrives during an earlier
@@ -1194,23 +1194,22 @@ fn calculate_pending_invocations(
     entries
         .iter()
         .fold(initial, |mut result, (oplog_idx, entry)| {
-            if let Some(index) = steps
-                .get(oplog_idx)
-                .and_then(UpdateStep::consumed_admission)
-            {
+            let step = steps.get(oplog_idx);
+            if let Some(index) = step.and_then(UpdateStep::consumed_admission) {
                 result.retain(|invocation| invocation.oplog_index != index);
             }
             match entry {
                 OplogEntry::PendingAgentInvocation {
                     timestamp,
                     idempotency_key,
-                    payload,
                     ..
                 } => {
                     // A manual update is the only invocation variant without a semantic
                     // idempotency key, so we capture its target revision and drop the (freshly
-                    // generated, unused) idempotency key for it.
-                    let manual_update_target_revision = manual_update_target_revision_of(payload);
+                    // generated, unused) idempotency key for it. The region fold decoded the
+                    // invocation and gave a manual update its step.
+                    let manual_update_target_revision =
+                        step.and_then(UpdateStep::manual_admission_target);
                     let idempotency_key = if manual_update_target_revision.is_some() {
                         None
                     } else {
