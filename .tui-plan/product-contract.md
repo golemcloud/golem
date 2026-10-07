@@ -8,10 +8,12 @@ belongs in architecture.md; executable work belongs in tasks.md.
 ## Status
 
 The visual foundation, rebuilt Dev/Ops shell, complete local Dev loop, and
-accepted read-only Ops subset are implemented. Ops includes the live Agents
-collection, individual Agent Overview, and current Deployment, Environment, and
-Server overviews. Activity, real Metrics providers, resource catalogs, and Ops
-mutations remain later work.
+read-only Ops foundation are implemented. Ops includes the live Agents
+collection, individual Agent Overview, current Deployment, Environment, and
+Server overviews, direct bounded oplog snapshots, Deployment and Environment
+resource catalogs, and a real built-in-local Metrics provider. Ops mutations,
+Deployment History/Diff, deeper resource drill-downs, and transient Live remain
+later work.
 
 Selected-target identity, launch arguments, environment reference, and Server
 identity now move together, and a context switch to a different Server target
@@ -19,9 +21,11 @@ requires stopping the supervised Server or cancelling the switch. Candidate
 discovery still uses resolved CLI flags where the current CLI has no neutral
 target materializer. Final manual terminal acceptance also remains outstanding.
 
-The metrics acquisition backend and any companion Docker or web UI are
-deliberately undecided. They will be planned only after the provider-independent
-TUI interactions have passed visual and terminal review.
+The minimal local Metrics acquisition decision is locked: the built-in `golem`
+server owns a bounded local collector and store. This does not select a general
+remote observability architecture. A companion Docker stack or web UI is not
+part of the minimal flow and will be considered only when it provides a clear
+Golem-specific benefit.
 
 ## Vocabulary
 
@@ -280,21 +284,26 @@ environment resource kinds or items are drill-down subjects. Components and
 Agent Types remain reachable through breadcrumbs and the palette without
 becoming permanent root entries.
 
-The first rebuilt Ops slice is intentionally read-only beyond the existing
+The implemented Ops slice is intentionally read-only beyond the existing
 Agents collection:
 
 - Enter opens an individual Agent Overview and esc unwinds to Agents.
-- Deployment Overview shows the current deployment identity only.
+- Deployment Overview shows current deployment identity. Resources shows the
+  current Components, Agent Types, HTTP/MCP deployments, deployed Tools, and
+  Tool Middleware as typed homogeneous collections.
 - Environment Overview shows selected-environment identity and configuration.
+  Resources shows Secrets, Retry Policies, Resource Definitions, Domains,
+  Security Schemes, and plugin/tool/middleware Grants without exposing secret
+  values.
 - Server Overview shows selected target provenance, endpoints, transport
   configuration, and matching TUI-owned local process/bound-port state.
 - These providers call neutral typed handler/client operations directly. They
   preserve the CLI cache behavior and change shared caching only when a tested
   TUI freshness requirement exposes a mismatch.
 - Read-only environment discovery must never use a get-or-create helper.
-- Deployment History, revision Diff, Environment Resources, Components, Agent
-  Types, Activity, and all Ops mutations remain discoverable only where a clear
-  unavailable reason can be shown.
+- Deployment History and revision Diff, standalone Component and Agent Type
+  subjects, deeper resource item documents, and all Ops mutations remain
+  discoverable only where a clear unavailable reason can be shown.
 
 ### View matrix
 
@@ -302,7 +311,7 @@ Agents collection:
 |---|---|
 | Agents collection | Overview, Activity, Metrics |
 | Individual Agent | Overview, Activity, Metrics |
-| Deployment | Overview, History |
+| Deployment | Overview, Resources, History |
 | Deployment Revision | Overview, Diff |
 | Environment | Overview, Resources |
 | Server | Overview, Metrics |
@@ -315,10 +324,11 @@ Overview and Diff; Diff defaults to the previous revision and may compare to an
 explicitly selected revision.
 
 Environment Resources is a catalog of resource kinds: secrets, retry policies,
-quota or resource definitions, API deployments, domains, security schemes,
-tools, middleware, and grants. Opening a kind produces a homogeneous collection.
-Account-level resources are part of the future resource contract but not the
-minimal local UI.
+resource definitions, domains, security schemes, and plugin/tool/middleware
+grants. Deployment Resources owns Components, Agent Types, HTTP/MCP API
+deployments, Tools, and Tool Middleware. Selecting a kind produces a
+homogeneous collection and safe details projection. Account-level resources
+are part of the future resource contract but not the minimal local UI.
 
 ### Collection and details contract
 
@@ -358,6 +368,13 @@ Activity has three representations:
 - Journal shows exact durable entries with AgentID, component, per-agent oplog
   index, timestamp, entry kind, and syntax-highlighted payload.
 - Live shows transient stream output for one concrete Agent only.
+
+Timeline and Journal are implemented from direct typed oplog snapshots. The
+current bound is the latest 200 entries per Agent, with a soft warning above 10 Agents, a
+hard maximum of 50 Agents, and at most four Agent reads in flight. Individual
+failures produce a partial-result warning. Live remains visible as a locked
+representation but truthfully reports that its direct transient stream provider
+is not implemented; bounded oplog refresh is never labelled Live.
 
 Timeline and Journal share one explicit signal scope. Timestamp merging is a
 presentation order only; per-agent oplog index is authoritative unless a real
@@ -403,9 +420,33 @@ trace or invocation link establishes causality.
   UI review and must be unmistakably synthetic. None are retained currently;
   Production never mixes invented measurements with live context data.
 
-Metrics acquisition, retention, query storage, Docker integration, and a
-possible web UI remain a post-TUI decision. The UI must depend on a typed
-provider boundary rather than a chosen storage implementation.
+### Minimal local provider
+
+- Local Metrics is enabled by default with `localServer.observability: true`.
+  `golem server run --observability true|false` is the explicit run override.
+- Generated manifests use `localServer.dataDir: .golem/local-server-data`,
+  ignore `/.golem`, and show how to opt out. Existing manifests without the
+  field retain the enabled default.
+- The built-in `golem` server samples its Prometheus registry every five
+  seconds and accepts authenticated OTLP/HTTP JSON metrics on `/v1/metrics`.
+- On a normal local deploy, the CLI discovers the private capability and adds
+  the built-in metrics exporter only when that Agent Type has no explicit
+  exporter configuration. Existing deployments are not rewritten at server
+  startup and begin exporting on their next normal deploy.
+- The store is `<dataDir>/observability.db`, with seven-day and 1 GiB bounds.
+  `golem server clean --observability-only` removes it without deleting other
+  local-server data.
+- Private authenticated capability/family/series/sample routes back the TUI.
+  The public `/metrics` endpoint and public HTTP API contract are unchanged.
+- The first receiver accepts numeric OTLP JSON sum and gauge points with valid
+  Golem Component and Agent identity. Known Golem families are categorized;
+  other valid numeric families appear under Other. OTLP protobuf, Agent
+  histogram/exponential-histogram/summary points, and custom SDK metrics are
+  deferred rather than silently approximated.
+- Metrics Now uses a fixed 15-minute range and refreshes every five seconds.
+  Agents, individual Agent, and Server subjects are supported. Range,
+  aggregation, follow, arbitrary filters, remote providers, Docker, and a web
+  UI remain follow-up decisions.
 
 ## Actions And Safety
 
@@ -479,12 +520,12 @@ these decision groups, which tasks.md tracks before their checkpoints:
 - final wide, short, narrow, and extreme header/footer priority rules,
   including Jobs, Live, and remote-lock status;
 - exact action coverage and risk class for each minimal resource subject;
-- concrete soft/default and hard bounds plus overflow review for multi-agent
-  Activity;
-- Metrics time-range, aggregation, refresh, auto-refresh, and follow controls;
-- typed provider interfaces and final implementation ordering;
-- Metrics acquisition and companion tooling, deliberately postponed until the
-  provider-independent TUI passes review.
+- richer Activity scope resolution, cursor paging, Timeline interpretation,
+  and transient Live lifecycle;
+- generalized Metrics range, aggregation, auto-refresh, follow, and filter
+  controls beyond the fixed local Now-15m slice;
+- remote Metrics providers and companion tooling, only when a non-local Golem
+  workflow justifies them.
 
 When finite Jobs or TUI-owned sessions are active, ctrl+q opens a compact
 choice with Return selected by default and Force quit as the explicit second

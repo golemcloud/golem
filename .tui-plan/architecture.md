@@ -1,7 +1,7 @@
 # Architecture
 
 This document defines the internal boundaries required to implement the product
-contract. It does not choose the deferred Metrics acquisition backend.
+contract, including the selected minimal built-in-local Metrics backend.
 
 ## Runtime
 
@@ -290,8 +290,10 @@ AgentID/Component/Agent Type filter into a reviewed bounded Agent set. The
 resolver reports total or more-available truth supported by the API and never
 silently chooses an unreviewed unbounded set.
 
-Live uses the direct Agent connection rather than nested CLI output. It is a
-single-Agent persistent session and is not inserted into the durable Journal.
+Live must use the direct Agent connection rather than nested CLI output. It is
+a single-Agent persistent session and is not inserted into the durable Journal.
+That provider is not implemented yet; the current UI reports this explicitly
+and does not substitute periodically refreshed oplog snapshots.
 
 ### Metrics
 
@@ -305,10 +307,29 @@ Metrics depends on a provider-neutral query contract that can:
 - refresh a selected range without inventing unavailable history.
 
 Golem service Prometheus and Agent OTLP are separate sources at this boundary.
-The receiver, storage, query engine, retention policy, and companion UI are not
-selected in this milestone. Fake providers are compiled or constructed only by
-preview/test fixtures; production uses real providers or truthful unavailable
-states.
+For the built-in local server, the selected provider is:
+
+- a `local-observability` feature on the `golem` binary, enabled by default;
+- an in-process sampler over the server Prometheus registry every five seconds;
+- an authenticated OTLP/HTTP JSON `/v1/metrics` receiver for Agent sum/gauge
+  points carrying Golem Component and Agent identity;
+- a dedicated SQLite `<dataDir>/observability.db`, bounded by seven days and
+  1 GiB;
+- authenticated private capability, family, series, and sample endpoints used
+  by the CLI/TUI typed client;
+- a deploy-time overlay that adds the built-in metrics exporter only for local
+  deployments without an explicitly configured exporter.
+
+The collector starts and degrades independently from the main server. A store
+failure produces a failed capability and discarded-point count rather than
+changing the public `/metrics` endpoint or public REST contract. Existing
+deployments are never mutated at server startup. The overlay is applied on the
+next normal local deployment and is never written back to the manifest.
+
+The initial query UI uses a fixed 15-minute range and five-second refresh.
+Remote providers, OTLP protobuf, Agent histogram-style types, custom SDK metric
+semantics, generalized filters/ranges/aggregation/follow, Docker, and a web UI
+remain outside this local slice. Production never uses invented measurements.
 
 ## Persistence
 

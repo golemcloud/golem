@@ -89,9 +89,14 @@ High-value scenarios:
   ignore stale generations, retain stale snapshots on failure, and never
   create a missing application or environment;
 - Activity scope is an explicit bounded snapshot, Timeline and Journal retain
-  AgentID plus per-Agent oplog index, and Live never silently retargets;
+  AgentID plus per-Agent oplog index, partial Agent failures remain visible,
+  and the unimplemented Live provider is never simulated with oplog polling;
 - Metrics navigates family to concrete series, distinguishes service and Agent
-  OTLP sources, and renders every provider-availability state truthfully;
+  OTLP sources, renders every provider-availability state truthfully, and never
+  injects the local exporter outside normal local deploy resolution;
+- local observability tests cover opt-out/default/CLI precedence, OTLP JSON
+  identity validation, bounded store queries and cleanup, explicit exporter
+  precedence, and authenticated private routes;
 - Metrics fixtures are introduced only for an active provider-independent UI
   review and must remain unmistakably synthetic;
 - stale typed refresh results are ignored by request and context generation;

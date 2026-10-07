@@ -44,8 +44,8 @@ in progress.md; this file describes only the current rebuild and its gates.
 - [x] Use Jobs as a global finite-operation overlay; do not make it a workspace.
 - [x] Allow one mutating Job per environment and do not queue later mutations.
 - [x] Persist visual preferences only; keep operational state session-local.
-- [x] Defer Metrics acquisition and companion UI until the TUI contract passes
-  visual and terminal acceptance.
+- [x] Use an embedded bounded provider for the minimal built-in-local Metrics
+  flow; defer remote acquisition, Docker, and companion UI until justified.
 
 ### Planning gates still open
 
@@ -57,19 +57,21 @@ in progress.md; this file describes only the current rebuild and its gates.
   explicit and stops all TUI-owned child processes during cleanup.
 - [ ] Inventory exact contextual action coverage and risk class for each
   minimal resource subject.
-- [ ] Choose Activity soft/default and hard maximum Agent counts plus overflow
-  review behavior.
-- [ ] Lock Metrics time-range, aggregation, refresh, auto-refresh, and follow
-  controls without assuming a backend.
-- [ ] Review the typed provider models and finalize implementation ordering at
-  the end of the TUI-only design session.
-- [-] Choose OTLP receiver, storage, retention, query backend, Docker stack, or
-  web UI only after TUI acceptance.
+- [x] Choose Activity soft/default and hard maximum Agent counts plus overflow
+  review behavior: warn above 10, reject above 50, read 200 entries per Agent,
+  and allow four concurrent reads.
+- [~] Lock Metrics time-range, aggregation, refresh, auto-refresh, and follow
+  controls. Now 15m with five-second refresh is locked for the local slice;
+  general controls remain open.
+- [x] Review the typed provider models and implementation ordering for the
+  local resource, Activity snapshot, and Metrics slices.
+- [x] Choose the minimal local OTLP receiver, bounded storage, retention, and
+  query backend. Remote providers, Docker, and web UI remain deferred.
 
 The rebuild is not globally decision-complete until every non-deferred planning
-gate is checked. The accepted local Dev and read-only Ops slice may proceed
-while later mutation, Activity, Metrics, final shell priorities, and Live
-integration remain open.
+gate is checked. The local Dev and read-only Ops foundation may proceed while
+later mutations, generalized Metrics controls, final shell priorities, deeper
+resource navigation, and Live integration remain open.
 
 ## Accepted Implementation Slice
 
@@ -293,9 +295,12 @@ read-only root subset below may proceed first.
 - [~] Add Agent, Component, Agent Type, and Deployment Revision drill-down
   subjects with direct palette navigation. Individual Agent is live; the other
   drill-down subjects remain later work.
-- [ ] Add Deployment Overview/History and revision Overview/Diff.
-- [ ] Add Environment Overview/Resources, resource-kind catalogs, homogeneous
+- [~] Add Deployment Overview/Resources/History and revision Overview/Diff.
+  Overview plus current Components, Agent Types, HTTP/MCP deployments, Tools,
+  and Tool Middleware catalogs are live; History/Diff remain open.
+- [~] Add Environment Overview/Resources, resource-kind catalogs, homogeneous
   collections, masked secret handling, and contextual CRUD where planned.
+  The read-only safe catalog is live; item drill-down and CRUD remain open.
 - [x] Add Server Overview/capability data without duplicating Dev server
   lifecycle controls.
 - [ ] Implement relevant Invoke, Interrupt, Resume, Update, Redeploy, Delete,
@@ -312,8 +317,10 @@ Server and action coverage.
 - [x] Preserve the complete Agents collection interaction model.
 - [x] Open a read-only individual Agent Overview from Enter and remove the old
   nested oplog/stream Inspect path.
-- [x] Show current Deployment identity without implementing History or Diff.
-- [x] Show selected Environment identity/configuration without Resources.
+- [x] Show current Deployment identity and current typed resource catalog
+  without implementing History or Diff.
+- [x] Show selected Environment identity/configuration and a safe typed
+  resource catalog without exposing secret values.
 - [x] Show Server provenance/endpoints and matching local process/port state,
   without an HTTP readiness claim or lifecycle duplication.
 - [x] Keep all Ops writes unavailable until their inventory and risk review.
@@ -322,15 +329,19 @@ Server and action coverage.
 
 Planning prerequisite: concrete Agent-scope bounds.
 
-- [ ] Replace nested agent oplog execution with direct typed cursor/index
-  providers.
-- [ ] Implement explicit signal scope initialized from, but not bound to, the
-  current Agents selection.
-- [ ] Resolve included Agents and exact AgentID/Component/Agent Type filters to
-  a reviewed bounded set.
-- [ ] Implement Timeline mapping with retained AgentID and oplog index.
-- [ ] Implement exact Journal rows, payload details, per-Agent cursors, bounded
-  older/newer loading, and visible ordering semantics.
+- [~] Replace nested agent oplog execution with direct typed cursor/index
+  providers. Direct bounded snapshots are live; cursor paging is open.
+- [~] Implement explicit signal scope initialized from, but not bound to, the
+  current Agents selection. Selected and explicitly included Agent identities
+  are snapshotted; a dedicated scope editor is open.
+- [~] Resolve included Agents and exact AgentID/Component/Agent Type filters to
+  a reviewed bounded set. Included identities use soft 10/hard 50 bounds and
+  concurrency 4; server-side filter resolution remains open.
+- [~] Implement Timeline mapping with retained AgentID and oplog index. Stable
+  merged rows are live; richer interpretation/grouping is open.
+- [~] Implement exact Journal rows, payload details, per-Agent cursors, bounded
+  older/newer loading, and visible ordering semantics. Exact serialized details
+  and identity/index are live; cursors and older/newer paging are open.
 - [ ] Replace nested agent stream execution with one exact direct Live session.
 - [ ] Keep Live connected visibly across navigation, provide close/clear/go-to
   actions, replacement confirmation, bounded scrollback, and bounded retry.
@@ -343,20 +354,25 @@ Recommended commit checkpoints: Journal provider; Timeline mapping; Live.
 
 ## Checkpoint 7: Provider-Independent Metrics UI
 
-Planning prerequisite: Metrics control gate. Acquisition remains deferred.
+The fixed local first slice uses Now 15m and five-second refresh. General range,
+aggregation, follow, and filter controls remain a review gate.
 
-- [x] Replace the production fake explorer with truthful source availability
-  and retire the synthetic OTLP lab until Metrics UI review resumes.
-- [ ] Define typed metric-family, concrete-series, sample, attributes, scope,
+- [x] Replace the production fake explorer with real source availability and
+  keep synthetic measurements out of production.
+- [x] Define typed metric-family, concrete-series, sample, attributes, scope,
   time-coverage, and availability models.
-- [ ] Implement family collection, series drill-down, sample/details document,
-  sparklines, filters, range controls, and visible refresh state.
-- [ ] Expose Golem service and Agent OTLP as separate sources with unsupported,
-  unconfigured, unreachable, no-match, and no-samples states.
-- [ ] Apply explicit Agent scope without enumerating unbounded agents when a
-  provider can query equivalent attributes directly.
-- [ ] Add Agents, Agent, Agent Type, and Server Metrics views from the shared
-  primitives.
+- [~] Implement family collection, series drill-down, sample/details document,
+  sparklines, filters, range controls, and visible refresh state. The fixed
+  Now-15m path is live; arbitrary controls remain open.
+- [~] Expose Golem service and Agent OTLP as separate sources with unsupported,
+  unconfigured, unreachable, no-match, and no-samples states. The two local
+  sources and core states are live; remote/provider-specific states remain open.
+- [~] Apply explicit Agent scope without enumerating unbounded agents when a
+  provider can query equivalent attributes directly. Individual Agent and
+  local environment scopes are query filters; the scope editor remains open.
+- [~] Add Agents, Agent, Agent Type, and Server Metrics views from the shared
+  primitives. Agents, individual Agent, and Server are live; Agent Type awaits
+  its subject.
 - [ ] Test family/series cardinality, long attributes, empty/error states,
   range coverage, auto-refresh, focus, details placement, and compact layouts.
 - [ ] Complete a terminal visual review before choosing acquisition/storage.
@@ -364,16 +380,22 @@ Planning prerequisite: Metrics control gate. Acquisition remains deferred.
 Recommended commit checkpoint: real-provider-ready Metrics UI with truthful
 unavailable production state.
 
-## Checkpoint 8: Metrics Acquisition Decision
+## Checkpoint 8: Minimal Local Metrics Acquisition
 
-- [-] Validate real Agent exporter connectivity and capture OTLP payload/batch
-  shapes after Checkpoint 7 acceptance.
-- [-] Compare direct Prometheus scraping, an external standard stack, and an
-  embedded receiver/store against the accepted TUI query contract.
-- [-] Decide retention, pruning, size limits, query semantics, degradation, and
-  whether Docker or a browser companion adds enough value.
-- [-] Create a separate decision-complete implementation plan for GOL-162 data
-  acquisition. Do not inherit the removed observability.db decision by default.
+- [x] Add `localServer.observability`, the `golem server run --observability`
+  override, template opt-out guidance, and `.golem/local-server-data`.
+- [x] Add the default-on `local-observability` server feature, isolated startup
+  failure, five-second service sampling, authenticated OTLP/HTTP JSON receiver,
+  and private typed query routes without changing public `/metrics`.
+- [x] Store points in `<dataDir>/observability.db` with seven-day and 1 GiB
+  bounds, plus `golem server clean --observability-only`.
+- [x] Add the normal-deploy local exporter overlay; explicit user exporter
+  configuration wins and existing deployments change only on their next deploy.
+- [~] Validate real Agent exporter connectivity and payload batches in the demo
+  application. Parser and overlay tests exist; an installed-binary smoke test
+  remains.
+- [ ] Decide a remote provider only when a non-local workflow requires it.
+  Docker and a browser companion remain unselected for the minimal local flow.
 
 ## Checkpoint 9: Cleanup And Final Acceptance
 

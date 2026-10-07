@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-10-07: Ops Resources, Activity Snapshots, And Local Metrics
+
+- Added subject-aware Ops view navigation. Agents and individual Agents expose
+  Overview/Activity/Metrics, Server exposes Overview/Metrics, and Deployment
+  and Environment expose Overview/Resources without cycling through invalid
+  views.
+- Added read-only Deployment and Environment resource catalogs through typed
+  clients. Resource kinds open homogeneous item panes and use safe projections;
+  secret values are never serialized into TUI rows or details.
+- Added direct typed oplog snapshots for Timeline and Journal with the latest
+  200 entries per Agent, soft warning above 10 Agents, hard maximum 50, concurrency 4,
+  partial-failure reporting, retained AgentID/component/index, and exact JSON
+  details. True transient Live remains explicit follow-up and is not imitated
+  by polling oplogs.
+- Added a default-on, feature-gated local observability service to `golem` with
+  five-second service sampling, authenticated OTLP/HTTP JSON Agent ingestion,
+  private typed query routes, and a seven-day/1-GiB SQLite store under the local
+  server data directory.
+- Added `localServer.observability`, run-time CLI override, observability-only
+  clean, `.golem/local-server-data` templates, and opt-out comments.
+- Added a normal-deploy-only local metrics exporter overlay. Existing deployed
+  Agents are left untouched until their next deploy and explicit user exporter
+  configuration wins.
+- Added production Metrics family→series→chart/details views for local Agents,
+  individual Agents, and Server over a fixed Now-15m range with five-second
+  refresh. No Docker stack or companion web UI is required for this slice.
+
+Still open in this area: installed-binary exporter smoke testing, Deployment
+History/Diff, deeper resource item navigation/actions, server-side Activity
+scope resolution and cursors, true Live, and generalized Metrics controls or
+remote providers.
+
 ## 2026-10-07: Fair Input, Interactive Scrollbars, And Table Polish
 
 - Split terminal/control events from bounded nested-process output and biased

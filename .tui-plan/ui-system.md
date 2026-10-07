@@ -785,22 +785,23 @@ They must not grow TUI-specific methods such as `for_tui`.
 Production has Dev and Ops workspaces. Dev owns reviewed nested-CLI Plan,
 Build, Deploy, Clean, Server, and REPL sessions. Ops has the accepted Agents
 collection/details surface plus read-only Agent, Deployment, Environment, and
-Server overviews. Recursive right/bottom pane layouts, focus, resize, terminal
-scrollback, context switching, and the bounded finite-Job history are live.
+Server overviews, Deployment/Environment Resources catalogs, bounded Activity
+snapshots, and local Metrics. Recursive right/bottom pane layouts, focus,
+resize, terminal scrollback, context switching, and bounded finite-Job history
+are live.
 
 Production composes the accepted `ContextHeader`, `PaneHeader`, status,
 boundary, scrollbar, workspace-selector, shortcut-row, notice, table, and
 overlay primitives. Dev and Ops share one context-only header, title grammar,
 neutral structural chrome, and semantic status colors. The fake OTLP lab was
-retired; production Metrics truthfully reports that no provider is configured.
+retired; production Metrics uses only live local-server data.
 
-Activity/Live, real Metrics providers, remote unlock, generalized Ops
-mutations, and neutral target materializers beyond resolved CLI flags remain
-gated follow-up work. Selected-target launch material is consolidated and
+True transient Live, generalized Metrics controls/remote providers, remote
+unlock, generalized Ops mutations, and neutral target materializers beyond
+resolved CLI flags remain gated follow-up work. Selected-target launch material is consolidated and
 cross-Server switching now stops the supervised Server while same-Server
 app/environment switches preserve it. Agent oplog and stream acquisition must
-follow the direct typed or streaming provider rules when Activity is
-implemented.
+continue to use direct typed or streaming provider rules.
 
 ## Review Status
 
@@ -820,10 +821,11 @@ The executable order is maintained in phases.md and tasks.md:
 2. replace product state, action metadata, shell, and recursive layout;
 3. introduce finite Jobs, persistent sessions, and mutation safeguards;
 4. rebuild the minimal Dev loop;
-5. expand Ops subjects and resource actions;
-6. add Activity through direct providers;
-7. accept the provider-independent Metrics UI;
-8. only then choose Metrics acquisition and companion tooling;
+5. complete Ops subject drill-downs and resource actions;
+6. finish Activity cursor/scope behavior and direct Live;
+7. complete generalized Metrics controls and visual acceptance;
+8. validate minimal local acquisition and decide remote/companion tooling only
+   when required;
 9. remove replaced paths and pass final terminal acceptance.
 
 ## Open Questions
@@ -837,13 +839,11 @@ These are required planning gates, not implementation details to infer:
 - integration of the accepted active-work quit behavior with the future Live
   session;
 - exact contextual action and risk inventory for each minimal Ops subject;
-- Activity soft/default and hard Agent bounds and overflow review;
-- backend-independent Metrics range, aggregation, refresh, auto-refresh, and
-  follow controls;
+- generalized Metrics range, aggregation, auto-refresh, and follow controls;
 - final typed provider boundaries and implementation ordering.
 
-Metrics receiver, storage, retention, Docker integration, and a possible web UI
-are deliberately deferred until the TUI contract is accepted.
+The minimal local receiver/store is locked. Remote acquisition, Docker
+integration, and a possible web UI remain deliberately deferred.
 
 ## Accessibility And Stability
 

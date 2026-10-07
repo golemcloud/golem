@@ -9,20 +9,24 @@ golem tui and golem-cli tui.
 - The accepted visual foundation and rebuilt Dev/Ops shell are in production.
 - Dev provides reviewed nested-CLI Plan, Build, Deploy, Clean, Server, and REPL
   workflows with bounded Jobs and persistent terminal sessions.
-- Ops preserves the live typed Agents collection and adds individual Agent plus
-  current Deployment, Environment, and Server read-only overviews.
-- Production Metrics truthfully reports that no provider is configured. The
-  retired fake OTLP explorer is not retained as dormant preview code.
+- Ops preserves the live typed Agents collection and adds individual Agent,
+  current Deployment, Environment, and Server overviews, bounded Activity
+  snapshots, Deployment/Environment resource catalogs, and local Metrics.
+- The built-in local server owns the minimal Metrics provider: five-second
+  service samples plus OTLP/HTTP JSON Agent metrics in a bounded SQLite store.
+  The retired fake OTLP explorer is not retained as dormant preview code.
 - The optional `tui-preview` feature keeps one real production-rendered Ops
   Agents fixture plus browser, terminal, and export tooling. Focused lab cases
   are added only while a new design question is active.
 - Replaced Home, Output, Agents Dev panel, named layout presets, global Server
   drawer, and nested Agent Inspect paths are implementation history rather than
   compatibility behavior.
-- The current `UX-024` focus is real-terminal acceptance of this slice. Exact
-  remaining implementation gaps are marked `[~]` in tasks.md.
-- Metrics acquisition, persistence, Docker integration, and a possible web UI
-  are intentionally deferred until the provider-independent TUI feels right.
+- The current focus is focused verification and real-terminal acceptance of
+  this Ops slice. Exact remaining implementation gaps are marked `[~]` in
+  tasks.md.
+- True transient Live Activity, Deployment History/Diff, richer resource
+  drill-downs/actions, Metrics controls, remote providers, Docker integration,
+  and a possible web UI remain explicit follow-up work.
 
 ## Locked Direction
 

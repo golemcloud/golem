@@ -6,9 +6,10 @@ ends only after behavior, rendering, focused tests, and its recommended commit
 boundary are complete.
 
 Implementation checkpoint `721390b80` completes the accepted local Dev and
-read-only Ops subset across checkpoints 1-5 and the truthful-unavailable first
-item of checkpoint 7. `tasks.md` is authoritative for partial items and open
-gates; `UX-024` owns the remaining real-terminal acceptance pass.
+initial read-only Ops subset across checkpoints 1-5. The current work extends
+that base with resource catalogs, bounded Activity snapshots, and minimal local
+Metrics acquisition. `tasks.md` is authoritative for partial items and open
+gates.
 
 ## 0. Contract And Readiness
 
@@ -114,10 +115,11 @@ Acceptance:
 - server Dataset paging and local Find remain visibly distinct and bounded;
 - local and remote mutations follow the same explicit risk contract.
 
-The first implementation pass through this checkpoint is read-only: it adds
-the four root subjects, individual Agent Overview, current Deployment identity,
-selected Environment configuration, and Server target/capability information.
-History, Diff, Resources, deeper drilldowns, and mutations remain gated.
+The implemented pass through this checkpoint is read-only: it adds the four
+root subjects, individual Agent Overview, current Deployment identity and
+resource catalog, selected Environment configuration and safe resource catalog,
+and Server target/capability information. History, Diff, deeper drilldowns, and
+mutations remain gated.
 
 ## 6. Activity
 
@@ -130,13 +132,18 @@ Deliverables:
 - Timeline and Journal;
 - direct single-Agent Live session.
 
+Current implementation: the direct typed provider, fixed bounded Agent fan-out,
+Timeline rows, and Journal details are present. Server-side scope resolution,
+cursor paging, richer Timeline interpretation, and true transient Live remain
+open; Live is not emulated with oplog polling.
+
 Acceptance:
 
 - Journal never loses AgentID or per-Agent oplog index;
 - Timeline ordering is labelled as presentation rather than global causality;
 - Live remains visibly bound to one exact Agent and never silently retargets.
 
-## 7. Provider-Independent Metrics
+## 7. Metrics UI
 
 Prerequisite: backend-independent range, aggregation, refresh, auto-refresh,
 and follow controls.
@@ -146,22 +153,28 @@ Deliverables:
 - family then series navigation;
 - samples, attributes, details, filters, ranges, refresh, and sparklines;
 - distinct Golem service and Agent OTLP source availability;
-- truthful production unavailable states; focused synthetic fixtures are added
-  only when provider-independent Metrics UI review resumes.
+- truthful production availability states; focused synthetic fixtures are added
+  only for explicit Metrics UI review.
+
+Current implementation: local Agents, individual Agent, and Server views use a
+family→series→chart/details path over a fixed 15-minute range with five-second
+refresh. Filters, range/aggregation controls, follow, and high-cardinality
+continuation remain open.
 
 Acceptance:
 
 - the TUI interaction model is visually accepted without assuming receiver,
-  storage, retention, or companion tooling;
+  storage internals or companion tooling;
 - high-cardinality series do not flatten into an unbounded primary table.
 
-## 8. Metrics Acquisition Decision
+## 8. Minimal Local Metrics Acquisition
 
-This checkpoint begins only after checkpoint 7 acceptance. Validate real
-payloads and connectivity, compare backend choices against the typed query
-contract, and produce a separate implementation plan for GOL-162 acquisition.
-Docker, embedded storage, and a custom web UI remain options rather than
-assumptions.
+The minimal local decision is implemented in the built-in `golem` server: an
+opt-out manifest setting, CLI override, private authenticated typed query
+routes, five-second service sampling, metrics-only deploy overlay, OTLP/HTTP
+JSON receiver, and bounded `observability.db`. It deliberately does not solve a
+general remote-provider architecture. Docker and a custom web UI remain
+unselected because the minimal local flow does not require them.
 
 ## 9. Cleanup And Final Acceptance
 
