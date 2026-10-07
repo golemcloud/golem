@@ -175,3 +175,33 @@ func anyErrContains(errs []engine.DefError, want string) bool {
 	}
 	return false
 }
+
+func TestFileResponseHeadersArePublishedInOrder(t *testing.T) {
+	e := agent("Owner", &Mount{
+		Path:        "/users/{id}",
+		ExposeFiles: []FileMapping{{Route: "/*", Path: "/public/$1"}},
+		FileResponseHeaders: []FileResponseHeader{
+			{Name: "content-security-policy", Value: "default-src 'none'"},
+			{Name: "referrer-policy", Value: "no-referrer"},
+		},
+	}, fields("id"))
+	mount, _, errs := buildHTTP(e)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	got := mount.Some().FileResponseHeaders
+	if len(got) != 2 || got[0].Name != "content-security-policy" || got[1].Value != "no-referrer" {
+		t.Fatalf("headers = %+v", got)
+	}
+}
+
+func TestFileResponseHeadersNeedFileMappings(t *testing.T) {
+	e := agent("Owner", &Mount{
+		Path:                "/users/{id}",
+		FileResponseHeaders: []FileResponseHeader{{Name: "referrer-policy", Value: "no-referrer"}},
+	}, fields("id"))
+	_, _, errs := buildHTTP(e)
+	if !containsDefErr(errs, "file response headers need file mappings") {
+		t.Fatalf("errors = %v", errs)
+	}
+}

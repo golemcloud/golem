@@ -122,6 +122,7 @@ var Agent = golem.DefineAgent[ID](golem.Spec{
 - Mappings are tried in order; repeating a route with another path gives a fallback. A subtree route ends in `/*` and its path in `/$1`.
 - Only `GET` and `HEAD` are served, with ranges and conditional requests. There is no directory listing, implicit index file or symlink following — expose only directories meant for HTTP.
 - Files the constructor or a method writes (with `os.WriteFile`) are served as they change.
+- `Mount.FileResponseHeaders` adds response headers, in order, to every file served: `[]golem.FileResponseHeader{{Name: "content-security-policy", Value: "default-src 'none'"}}`. Headers the platform manages itself (`content-type`, `cache-control`, `etag`, the CORS headers, …) are rejected at deploy.
 
 ## Key Constraints
 

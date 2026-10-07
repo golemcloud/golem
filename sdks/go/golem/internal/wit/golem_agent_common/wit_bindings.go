@@ -194,6 +194,11 @@ type ReadOnlyConfig struct {
 	UsesPrincipal bool
 }
 
+type FileResponseHeader struct {
+	Name  string
+	Value string
+}
+
 type ExactFileMapping struct {
 	PublicPath []string
 	FilePath   string
@@ -447,6 +452,8 @@ type HttpMountDetails struct {
 	WebhookSuffix      []PathSegment
 	StaticBindings     []FileMapping
 	FilesystemBindings []FileMapping
+	// Additional response headers for files served by static-bindings or filesystem-bindings.
+	FileResponseHeaders []FileResponseHeader
 	// The name of a parameterless router method that returns the OpenAPI document as a string.
 	OpenapiProviderMethod witTypes.Option[string]
 }

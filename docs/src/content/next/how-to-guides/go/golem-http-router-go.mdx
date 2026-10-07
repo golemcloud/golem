@@ -125,7 +125,7 @@ var Site = golem.DefineHTTPRouter(golem.RouterSpec{
 })
 ```
 
-A matching GET or HEAD is answered from the file; a missing file falls through to the handler. A router may have static files and no handler at all. To serve files an ordinary agent writes at runtime, use `Mount.ExposeFiles` instead (see [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go)).
+A matching GET or HEAD is answered from the file; a missing file falls through to the handler. A router may have static files and no handler at all. `FileResponseHeaders` adds response headers, in order, to every static file served, e.g. `[]golem.FileResponseHeader{{Name: "content-security-policy", Value: "default-src 'self'"}}`; headers the platform manages itself (`content-type`, `cache-control`, the CORS headers, …) are rejected at deploy. To serve files an ordinary agent writes at runtime, use `Mount.ExposeFiles` instead (see [`golem-add-http-endpoint-go`](/next/how-to-guides/go/golem-add-http-endpoint-go)).
 
 ## OpenAPI
 

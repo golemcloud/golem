@@ -61,6 +61,8 @@ type RouterSpec struct {
 	// handler is consulted: a GET or HEAD that matches a mapping is answered
 	// from the file, and a missing file falls through to the handler.
 	StaticFiles []FileMapping
+	// FileResponseHeaders are added to every response StaticFiles serves.
+	FileResponseHeaders []FileResponseHeader
 }
 
 // HTTPHeader is one header field as it travels: a lowercase name and its raw
@@ -115,6 +117,7 @@ func DefineConfiguredHTTPRouter[Cfg any](spec RouterSpec) *HTTPRouter[Cfg] {
 // routerEntry is what an agent entry carries when it is a router.
 type routerEntry struct {
 	staticFiles []FileMapping
+	fileHeaders []FileResponseHeader
 	// openAPI is set once a provider is registered.
 	openAPI bool
 }
@@ -160,7 +163,7 @@ func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg]
 		idType:   reflect.TypeFor[routerID](),
 		methods:  map[string]*methodEntry{},
 		newState: func(reflect.Value, string, Principal) any { return &routerState{} },
-		router:   &routerEntry{staticFiles: spec.StaticFiles},
+		router:   &routerEntry{staticFiles: spec.StaticFiles, fileHeaders: spec.FileResponseHeaders},
 	}
 	d.agents[spec.Name] = e
 	d.order = append(d.order, spec.Name)
@@ -303,6 +306,10 @@ func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format strin
 	for _, fe := range ferrs {
 		rec("", "StaticFiles %s", fe)
 	}
+	fileHeaders, herrs := compileFileResponseHeaders(e.router.fileHeaders, len(e.router.staticFiles) > 0)
+	for _, he := range herrs {
+		rec("", "%s", he)
+	}
 	provider := witTypes.None[string]()
 	if e.router.openAPI {
 		provider = witTypes.Some(routerOpenAPIMethod)
@@ -316,6 +323,7 @@ func buildRouterHTTP(e *agentEntry, mp parsedPath, rec func(method, format strin
 
 		StaticBindings:        files,
 		FilesystemBindings:    []common.FileMapping{},
+		FileResponseHeaders:   fileHeaders,
 		OpenapiProviderMethod: provider,
 	}
 	endpoints := map[string][]common.HttpEndpointDetails{}

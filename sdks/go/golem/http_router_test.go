@@ -342,3 +342,21 @@ func TestAnUntypedResponseIsSniffed(t *testing.T) {
 	}
 	t.Fatalf("headers %v", resp.Headers)
 }
+
+func TestARouterPublishesItsFileResponseHeaders(t *testing.T) {
+	d := newDefinitions()
+	defineRouterInto[NoConfig](d, RouterSpec{
+		Name:                "Static",
+		Mount:               "/",
+		StaticFiles:         []FileMapping{{Route: "/*", Path: "/$1"}},
+		FileResponseHeaders: []FileResponseHeader{{Name: "content-security-policy", Value: "default-src 'self'"}},
+	})
+	at, errs := discoverOne(t, d, "Static")
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	got := at.HttpMount.Some().FileResponseHeaders
+	if len(got) != 1 || got[0].Value != "default-src 'self'" {
+		t.Fatalf("headers = %+v", got)
+	}
+}

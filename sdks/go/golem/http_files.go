@@ -43,6 +43,30 @@ type FileMapping struct {
 	Path  string
 }
 
+// FileResponseHeader is a response header added to every file a mount or
+// router serves from its file mappings, such as a content security policy.
+// Headers are sent in order. The platform rejects headers it manages itself
+// (content-type, cache-control, the CORS headers, …) when the agent is
+// deployed.
+type FileResponseHeader struct {
+	Name  string
+	Value string
+}
+
+// compileFileResponseHeaders turns headers into their WIT form. Headers
+// without any file mapping to apply to are a definition error.
+func compileFileResponseHeaders(headers []FileResponseHeader, hasMappings bool) ([]common.FileResponseHeader, []string) {
+	out := make([]common.FileResponseHeader, 0, len(headers))
+	var errs []string
+	if len(headers) > 0 && !hasMappings {
+		errs = append(errs, "file response headers need file mappings to apply to")
+	}
+	for _, h := range headers {
+		out = append(out, common.FileResponseHeader{Name: h.Name, Value: h.Value})
+	}
+	return out, errs
+}
+
 // compileFileMappings turns mappings into their WIT form. A mapping that does not
 // compile yields an error naming it and one of the shared contract's categories
 // (source-path, source-wildcard, target-placeholder, target-path,

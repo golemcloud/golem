@@ -62,6 +62,8 @@ type Mount struct {
 	// in order. Only a durable, non-phantom agent whose Id fields are all
 	// captured by the mount path may expose files.
 	ExposeFiles []FileMapping
+	// FileResponseHeaders are added to every response ExposeFiles serves.
+	FileResponseHeaders []FileResponseHeader
 }
 
 // Endpoint is one HTTP route for a method: a verb plus a path suffix (appended
@@ -370,6 +372,10 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 	for _, fe := range ferrs {
 		rec("", "ExposeFiles %s", fe)
 	}
+	fileHeaders, herrs := compileFileResponseHeaders(e.mount.FileResponseHeaders, len(e.mount.ExposeFiles) > 0)
+	for _, he := range herrs {
+		rec("", "%s", he)
+	}
 	if len(e.mount.ExposeFiles) > 0 {
 		for _, oe := range validateFileOwner(e, mp) {
 			rec("", "%s", oe)
@@ -385,6 +391,7 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 
 		StaticBindings:        []common.FileMapping{},
 		FilesystemBindings:    files,
+		FileResponseHeaders:   fileHeaders,
 		OpenapiProviderMethod: witTypes.None[string](),
 	}
 
