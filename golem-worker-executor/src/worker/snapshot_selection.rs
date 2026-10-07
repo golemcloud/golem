@@ -1442,6 +1442,26 @@ mod tests {
         assert_eq!(reads.get(), 2);
     }
 
+    /// A newest record that is unavailable for the start, or an executor without filesystem
+    /// snapshots, gives no upload to wait for.
+    #[test]
+    fn a_loaded_agent_does_not_wait_for_an_unavailable_record_or_without_filesystem_snapshots() {
+        let name = FilesystemSnapshotName::periodic();
+        let mut unselected_head = status(Some(name.clone()), false, None);
+        unselected_head.pending_updates.push_back(unselected(12, 4));
+        let none = SnapshotExclusions::default();
+        let unavailable = SnapshotExclusions::default().with_unavailable(OplogIndex::from_u64(10));
+
+        assert_eq!(
+            [
+                upload_before_an_automatic_update(&unselected_head, true, || &none),
+                upload_before_an_automatic_update(&unselected_head, true, || &unavailable),
+                upload_before_an_automatic_update(&unselected_head, false, || &none),
+            ],
+            [Some(name), None, None]
+        );
+    }
+
     #[test]
     fn the_periodic_baseline_is_the_periodic_record_of_the_start_selection() {
         let name = FilesystemSnapshotName::periodic();

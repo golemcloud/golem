@@ -2455,7 +2455,9 @@ mod tests {
 
         slot.record(Some(&name), later);
         let before_start = slot.since(Some(&selected_name), None);
+        let generation_before_start = slot.generation();
         slot.start(first, None);
+        let running_generation = slot.generation();
         slot.record(Some(&name), other);
         let of_other_generation = slot.since(Some(&selected_name), None);
         slot.record(Some(&name), later);
@@ -2464,6 +2466,14 @@ mod tests {
         slot.end();
         let ended = (slot.since(Some(&selected_name), None), slot.owns(later));
 
+        assert_eq!(
+            (
+                generation_before_start,
+                running_generation,
+                slot.generation()
+            ),
+            (None, Some(first), None)
+        );
         assert_eq!(before_start, None);
         assert_eq!(of_other_generation, None);
         assert_eq!(of_own_generation, Some(confirmed(&name, later)));

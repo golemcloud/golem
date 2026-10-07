@@ -405,6 +405,20 @@ mod tests {
         );
     }
 
+    /// The executor reads the mask of its thread and clears only the owner write bit of it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn keeping_the_owner_write_permission_clears_only_the_owner_write_bit_of_the_mask() {
+        let mask = with_private_file_creation_mask(0o277, || {
+            keep_owner_write_permission();
+            thread_file_creation_mask()
+        });
+        assert_eq!(
+            mask, 0o077,
+            "the mask 277 must become 77, and the mask is {mask:o}"
+        );
+    }
+
     struct BindingSpaceObservationGuard(Option<FilesystemSpace>);
 
     impl Drop for BindingSpaceObservationGuard {

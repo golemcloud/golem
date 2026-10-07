@@ -867,6 +867,36 @@ fn a_copy_from_a_directory_or_from_below_a_file_gives_false_and_makes_nothing() 
     );
 }
 
+/// A source that does not open for another reason than a missing file fails the copy, and the copy
+/// makes nothing.
+#[cfg(unix)]
+#[test]
+fn a_copy_from_a_source_that_does_not_open_fails_and_makes_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let commit = Commit {
+        dropped: Arc::new(AtomicBool::new(false)),
+        gate: None,
+    };
+    let staging = root.path().join(STAGING_DIRECTORY);
+    let looped = root.path().join("looped");
+    let other = root.path().join("other");
+    std::os::unix::fs::symlink(&other, &looped).unwrap();
+    std::os::unix::fs::symlink(&looped, &other).unwrap();
+
+    let copied = copy_staged(
+        &commit,
+        &looped,
+        &staging,
+        &root.path().join("target").join("blob"),
+    );
+
+    assert!(copied.is_err(), "{copied:?}");
+    assert_eq!(
+        (root.path().join("target").exists(), staging.exists()),
+        (false, false)
+    );
+}
+
 /// A copy and a move give the target the permissions of the source: to an absent target, over a
 /// target with other permissions, to another namespace, and in a move, which then removes the
 /// source.
