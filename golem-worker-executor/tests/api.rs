@@ -787,7 +787,7 @@ test_r::tag_suite!(fenced_outcome, group5);
 test_r::tag_suite!(p2_ready, group5);
 
 mod fenced_outcome;
-mod monthly;
+mod interruption;
 mod p2_ready;
 
 #[test]
