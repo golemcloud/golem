@@ -406,7 +406,9 @@ Invalid components, exports, snapshot baselines, replay divergence, and other pe
 An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
 terminal, because recovery has no compatible replay fallback. A payload download failure is
 terminal for the manual-update baseline too; for the promoted snapshot-assisted baseline it passes
-to the recovery path, which retries. The
+to the recovery path, which retries. Under a pending plain automatic update the baseline load
+has the purpose `AutomaticUpdate`: a store failure of the payload retries (`RecoveryRequired`), and
+a missing or undecodable payload fails the update with `UPDATE_REPLAY_FAILED`. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
@@ -911,9 +913,29 @@ on the source revision. The codes are `pub(crate) const` items of `start_outcome
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots.
 
-Transient causes of a pending update (`RestoreClass::Transient`, a reconstruction error, a full
-quota, `RecoveryRequired`, `Interrupted`, an interrupted instantiation, the load's `Retry`) write
-no failed update; a frozen assisted head retries with the same `S`. No retry counter exists. Once
+Transient causes write no failed update, and the start retries: for every pending column,
+`RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
+the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupted`, so a frozen
+assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
+store failure of the baseline payload). An `Interrupted` error that reaches `decide` fails a plain
+automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
+pending manual update. A plain automatic head whose authoritative baseline does not restore
+(`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
+with a visible cause and writes no failed update.
+
+The replay of a start with `SnapshotReplayPurpose` other than `None` is speculative:
+`PeriodicRecovery` (after a periodic record), `AssistedUpdate` (after the record of a pending
+snapshot-assisted update) and `AutomaticUpdate` (the replay for a pending plain automatic update,
+from the authoritative baseline or from the start). A trap while such a replay still replays
+recorded entries writes no invocation `Error` for the recorded work. An error trap whose fixed
+decision retries, such as `OutOfMemory` (`ReacquirePermits`), keeps that retry
+(`DurableWorkerCtx::speculative_retry`). Any other error trap ends the replay with its error, and
+the start outcome decides: `UPDATE_REPLAY_FAILED` for `AutomaticUpdate`, a divergence or a plain
+failure for `AssistedUpdate`, a rejection or a pass-through for `PeriodicRecovery`. An
+`Interrupt` trap takes its fixed decision and writes no `Interrupted` entry: the folded status is
+not `Interrupted`, the pending update stays pending, and a restart of the executor or a shard
+move runs the attempt again. This holds for all three purposes. The purpose is `None` again when
+the replay finishes. No retry counter exists. Once
 `S` is selected, an attempt never tries another record or a full replay. On success the fold sets
 `authoritative_snapshot` to `{ S, SnapshotAssistedAutomatic { filesystem_snapshot } }` and
 `component_revision_for_replay` to the source revision. A later start may use a newer periodic
@@ -1037,6 +1059,17 @@ the wait. A start that finds no whole snapshot falls back to the previous usable
 agent whose automatic update restarts it in place waits the same way before its generation ends
 (`Worker::confirm_filesystem_snapshot_before_an_update`); a stop, a retirement of the owner and a
 terminal interrupt end that wait, and the unload deadline of the restart moves by the time of the
+wait.
+
+A loaded agent that restarts in place for an automatic update waits the same way before it ends
+its generation (`Worker::confirm_filesystem_snapshot_before_an_update`, from the invocation loop
+when the final decision is `RetryDecision::Immediate`). When the head of the queue is an automatic
+update without a strategy and the newest record that the update would select once confirmed is
+not confirmed (`snapshot_selection::upload_before_an_automatic_update`), it waits for the upload of
+that record for at most `confirmation_wait`, or asks the store once for at most
+`store_check_limit` when no upload runs. When the store holds the whole snapshot, the running
+generation appends `SnapshotConfirmed` (`Confirmer::Running`), so the strategy can select that
+record. A terminal interrupt, such as a lost shard, ends the wait. A `Delayed` retry does not
 wait.
 
 `create_instance` restores the tree of the selected baseline. `StartFilesystem::load_and_plan`

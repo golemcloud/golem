@@ -46,9 +46,11 @@ The snapshot-assisted strategy limits the **replayed history** to the history af
 
 ### When an automatic update fails
 
-When an attempt fails, Golem writes one `FailedUpdate` and starts the agent again on the source revision. This is also true when a full replay diverges at a host call: the update fails with `UPDATE_REPLAY_FAILED`, and the agent runs on its source revision. In the same attempt, Golem does not try another snapshot record, and it does not change to a full replay. The details of some failures start with a code that tells you what to do next. See [Failure codes](#failure-codes).
+When an attempt fails, Golem writes one `FailedUpdate` and starts the agent again on the source revision. This is also true when a full replay diverges at a host call: the update fails with `UPDATE_REPLAY_FAILED`, and the agent runs on its source revision. There is one exception. A full replay starts from the authoritative recovery baseline. When the filesystem snapshot of that baseline is lost, does not restore, or needs filesystem snapshots that the executor does not have, the start of the agent fails with a visible cause, as every start from that baseline does, and Golem writes no `FailedUpdate`. In the same attempt, Golem does not try another snapshot record, and it does not change to a full replay. The details of some failures start with a code that tells you what to do next. See [Failure codes](#failure-codes).
 
-Some failures do not fail the update. When the component service does not answer, or when blob storage has a temporary error, Golem writes no `FailedUpdate`. The update stays pending, and Golem tries the start again with the same strategy.
+Some failures do not fail the update. When the component service does not answer, when blob storage has a temporary error, or when the executor has no free memory for the agent, Golem writes no `FailedUpdate`. The update stays pending, and Golem tries the start again with the same strategy.
+
+An interrupt of the agent while the start replays its history for a pending automatic update also writes no `FailedUpdate`, and the agent does not get the status `Interrupted`. The update stays pending. When the executor restarts or another executor takes over the agent, the agent starts again and runs the update attempt again. An interrupt during the replay after an automatic snapshot, without a pending update, has the same effect.
 
 ## Manual snapshot-based update
 
@@ -218,7 +220,7 @@ When an update fails, Golem writes a `FailedUpdate` entry. For the causes below,
 | --- | --- | --- | --- |
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | Automatic | The store lost the filesystem snapshot or the application snapshot of the selected record. Golem rejects the record. | Request the update again. Golem uses an earlier snapshot record, or a full replay. |
 | `UPDATE_SNAPSHOT_INCOMPATIBLE` | Automatic | The target revision could not load the selected snapshot, or the replay of the history after it diverged. | Request the update again. A new request for the same target revision from the same source revision replays the full history. If the target revision cannot replay the history of the agent, use a manual update. |
-| `UPDATE_REPLAY_FAILED` | Automatic | The target revision could not replay the history of the agent in a full replay. | Use a manual update. |
+| `UPDATE_REPLAY_FAILED` | Automatic | The target revision could not replay the history of the agent in a full replay, from the authoritative recovery baseline or from the start of the oplog. A missing application snapshot of that baseline gives this code too. | Use a manual update. |
 | `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` | Manual | The executor has no filesystem snapshots, and the agent's files are not its initial files. Golem cannot take a snapshot for the update. | Run the update on an executor with filesystem snapshots. |
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | Manual | The store lost the filesystem snapshot of the manual update. | Request the manual update again. It takes a new snapshot. |
 | `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | Automatic, manual | The snapshot of the update names a filesystem snapshot, and the executor that starts the update has no filesystem snapshots. | Run the update on an executor with filesystem snapshots. |
