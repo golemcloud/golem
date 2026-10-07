@@ -27,17 +27,9 @@ use tracing::{Instrument, info};
 pub async fn start_health_and_metrics_server(
     addr: impl ToSocketAddrs,
     registry: Registry,
-    runtime_metrics_sampling_interval: Duration,
     body_message: &'static str,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> Result<u16, anyhow::Error> {
-    install_runtime_metrics(
-        Handle::current(),
-        registry.clone(),
-        runtime_metrics_sampling_interval,
-        join_set,
-    );
-
     let app = Router::new()
         .route("/healthcheck", get(move || async move { body_message }))
         .route(
@@ -74,7 +66,11 @@ pub fn prometheus_metrics(registry: Registry) -> impl IntoResponse {
         .unwrap()
 }
 
-fn install_runtime_metrics(
+/// Installs the process-global metrics recorder and starts reporting metrics for `runtime`.
+///
+/// This must be called at most once by the owner of a process, regardless of how many services
+/// share the runtime.
+pub fn install_runtime_metrics(
     runtime: Handle,
     registry: Registry,
     sampling_interval: Duration,

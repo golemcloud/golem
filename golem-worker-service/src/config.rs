@@ -38,6 +38,8 @@ pub struct WorkerServiceConfig {
     pub gateway_session_storage: SessionStoreConfig,
     pub blob_storage: BlobStorageConfig,
     pub port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub custom_request_port: u16,
     pub grpc: GrpcApiConfig,
     pub shard_manager: GrpcShardManagerConfig,
@@ -85,6 +87,11 @@ impl SafeDisplay for WorkerServiceConfig {
             self.gateway_session_storage.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "HTTP port: {}", self.port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
         let _ = writeln!(
             &mut result,
             "Custom request port: {}",
@@ -188,6 +195,7 @@ impl Default for WorkerServiceConfig {
             blob_storage: BlobStorageConfig::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             port: 9005,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             custom_request_port: 9006,
             mcp_port: 9007,
             grpc: GrpcApiConfig::default(),

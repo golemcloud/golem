@@ -6315,6 +6315,12 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         .instrument(span)
                         .await;
 
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
+
                         // Invocation-owned spans are closed by AgentInvocationFinished in the
                         // oplog processor; removing their resident context records no transition.
                         for span_id in local_span_ids {
@@ -6324,11 +6330,6 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
 
-                        let invoke_result = if uses_streams {
-                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
-                        } else {
-                            invoke_result
-                        };
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
                                 result: invocation_result,
