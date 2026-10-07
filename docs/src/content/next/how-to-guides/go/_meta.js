@@ -40,6 +40,7 @@ export default {
   "golem-streaming-agent-go": "Streaming Agent Methods in Go",
   "golem-tools-middleware-go": "Tool Middleware in Go",
   "golem-trigger-agent-go": "Triggering a Fire-and-Forget Agent Invocation",
+  "golem-unit-test-go": "Unit Testing a Go Golem Component",
   "golem-add-mysql-go": "Using MySQL from a Go Agent",
   "golem-add-postgres-go": "Using PostgreSQL from a Go Agent",
   "golem-add-webhook-go": "Using Webhooks in a Go Golem Agent",

@@ -72,6 +72,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-create-agent-instance-go` | Creating an agent instance with `golem agent new` |
 | `golem-interactive-repl-go` | Interactive testing/scripting of agents via the REPL |
 | `golem-add-go-module` | Adding a Go module dependency |
+| `golem-unit-test-go` | Unit testing agents and tools natively with `go test` |
 
 # Golem Application Development Guide (Go)
 
