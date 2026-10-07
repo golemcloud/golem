@@ -38,12 +38,53 @@ macro_rules! pending_case {
                 http_tests,
                 Resource::$resource,
                 AgentMode::$mode,
-                false,
+                Scenario::MonthlyStop,
             )
             .await
         }
     };
 }
+
+#[derive(Clone, Copy, PartialEq)]
+enum Scenario {
+    MonthlyStop,
+    CompletionBeforeStop,
+    FailedRecoveryAssertion,
+}
+
+const RECOVERY_ASSERTION_FAILURE: &str = "intentional recovered-history assertion failure";
+
+macro_rules! cleanup_case {
+    ($name:ident, $resource:ident, $pre_subscription:expr) => {
+        #[test]
+        #[timeout("2m")]
+        async fn $name(
+            last_unique_id: &LastUniqueId,
+            deps: &WorkerExecutorTestDependencies,
+            #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+            _tracing: &Tracing,
+        ) -> anyhow::Result<()> {
+            let error = run_skip(
+                last_unique_id,
+                deps,
+                http_tests,
+                Resource::$resource,
+                AgentMode::Durable,
+                Scenario::FailedRecoveryAssertion,
+                $pre_subscription,
+            )
+            .await
+            .expect_err("the recovered-history assertion must fail");
+            ensure!(error.to_string() == RECOVERY_ASSERTION_FAILURE, "{error:#}");
+            Ok(())
+        }
+    };
+}
+
+cleanup_case!(cleanup_after_recovery_memory, Memory, false);
+cleanup_case!(cleanup_after_recovery_compute_prepaid, Compute, false);
+cleanup_case!(cleanup_after_recovery_scripted_storage, Storage, false);
+cleanup_case!(cleanup_after_recovery_pre_subscription, Memory, true);
 
 pending_case!(durable_p2_http_skip_monthly_memory, Memory, Durable);
 
@@ -61,7 +102,7 @@ async fn durable_p2_http_skip_stop_before_subscription(
         http_tests,
         Resource::Memory,
         AgentMode::Durable,
-        false,
+        Scenario::MonthlyStop,
         true,
     )
     .await
@@ -102,7 +143,7 @@ async fn durable_p2_http_skip_completion_before_stop(
         http_tests,
         Resource::Memory,
         AgentMode::Durable,
-        true,
+        Scenario::CompletionBeforeStop,
     )
     .await
 }
@@ -113,7 +154,7 @@ async fn pending_skip(
     http_tests: &PrecompiledComponent,
     resource: Resource,
     mode: AgentMode,
-    completion_before_stop: bool,
+    scenario: Scenario,
 ) -> anyhow::Result<()> {
     run_skip(
         last_unique_id,
@@ -121,7 +162,7 @@ async fn pending_skip(
         http_tests,
         resource,
         mode,
-        completion_before_stop,
+        scenario,
         false,
     )
     .await
@@ -133,9 +174,10 @@ async fn run_skip(
     http_tests: &PrecompiledComponent,
     resource: Resource,
     mode: AgentMode,
-    completion_before_stop: bool,
+    scenario: Scenario,
     pre_subscription: bool,
 ) -> anyhow::Result<()> {
+    let completion_before_stop = scenario == Scenario::CompletionBeforeStop;
     let policy = resource.policy();
     let registry = Arc::new(MutableResourceLimitsRegistry::new(policy.clone()));
     let metering = resource.metering();
@@ -516,6 +558,14 @@ async fn run_skip(
         ensure!(resumed?.into_typed::<String>()? == "200 h skipped 1");
         let recovered = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
         assert_repaired_shape(&recovered, &key, scope_start, body_start)?;
+        if scenario == Scenario::FailedRecoveryAssertion {
+            let status = tokio::time::timeout(Duration::from_secs(10), worker.get_last_known_status())
+                .await.context("recovered invocation status")?;
+            ensure!(status.status == AgentStatus::Idle && status.pending_invocations.is_empty(),
+                "reconstructed invocation did not become Idle: {status:?}");
+            ensure!(worker.is_loaded().await, "reconstructed worker already unloaded");
+            ensure!(false, "{RECOVERY_ASSERTION_FAILURE}");
+        }
         ensure!(count_agent_invocation_pair_since(&recovered, OplogIndex::INITIAL) == (2, 2));
         peer.assert_counts(2)?;
         let cached = executor.invoke_and_await_agent_with_key(&component, &name, &key,
@@ -597,6 +647,11 @@ async fn run_skip(
             Ok(Ok(())) => {}
             other => cleanup_errors.push(anyhow!("cleanup stop join: {other:?}")),
         }
+        // Public interrupt leaves Idle workers loaded; join their physical unload explicitly.
+        if let Err(error) = tokio::time::timeout(Duration::from_secs(10), worker.test_stop()).await
+        {
+            cleanup_errors.push(anyhow!("cleanup physical stop: {error:#}"));
+        }
         match tokio::time::timeout(Duration::from_secs(10), worker.retained_cleanup_for_test())
             .await
         {
@@ -621,6 +676,21 @@ async fn run_skip(
     }
     if let Err(error) = peer.finish().await {
         cleanup_errors.push(anyhow!("peer join: {error:#}"));
+    }
+    if scenario == Scenario::FailedRecoveryAssertion && cleanup_errors.is_empty() {
+        ensure!(
+            !worker.is_loaded().await && !worker.concurrent_agent_permit_is_held().await,
+            "assertion-failure cleanup retained a loaded runtime or permit"
+        );
+        ensure!(
+            worker.unload_succeeded_for_test(),
+            "assertion-failure unload did not succeed"
+        );
+        let account = limits.initialize_account(context.account_id).await?;
+        ensure!(
+            clock.active_sleeps() == 0 && account.monthly_observer_count_for_test() == 0,
+            "assertion-failure cleanup retained a monitor or observer"
+        );
     }
     match (result, cleanup_errors.is_empty()) {
         (Ok(()), true) => Ok(()),
@@ -850,10 +920,11 @@ fn assert_repaired_shape(
     );
     let (jump_idx, jump) = jumps[0];
     ensure!(
-        jump.jump.start == scope.next() && jump.jump.end == jump_idx,
-        "inclusive replacement of request children: {jump:?}"
+        jump.jump.start == scope.next() && jump.jump.end.next() == jump_idx,
+        "replace the complete attempt suffix through the pre-Jump horizon: {jump:?}"
     );
     ensure!(scope < abandoned && abandoned < jump_idx && terminal_count(entries, abandoned) == 0);
+    assert_repair_suffix(entries, scope, abandoned, jump_idx)?;
     info!(%scope, %abandoned, %jump_idx, deleted_start = %jump.jump.start,
         deleted_end = %jump.jump.end, "P2 body request scope retained and interrupted child Jump-replaced");
     let reads = starts(entries, BODY_READ);
@@ -905,6 +976,7 @@ fn assert_settled_history(
     entries: &[PublicOplogEntryWithIndex],
     deleted: OplogIndex,
 ) -> anyhow::Result<()> {
+    assert_surviving_references(entries)?;
     let finished = entries
         .iter()
         .rev()
@@ -924,6 +996,108 @@ fn assert_settled_history(
             PublicOplogEntry::End(_) => ensure!(entry.oplog_index < finished),
             PublicOplogEntry::Cancelled(_) | PublicOplogEntry::Error(_) => {
                 anyhow::bail!("unexpected terminal: {entry:?}");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn assert_repair_suffix(
+    entries: &[PublicOplogEntryWithIndex],
+    scope: OplogIndex,
+    abandoned: OplogIndex,
+    jump_index: OplogIndex,
+) -> anyhow::Result<()> {
+    let suffix = entries
+        .iter()
+        .filter(|entry| entry.oplog_index > scope && entry.oplog_index <= jump_index)
+        .collect::<Vec<_>>();
+    ensure!(
+        suffix
+            .first()
+            .is_some_and(|entry| entry.oplog_index == scope.next())
+    );
+    ensure!(
+        suffix
+            .last()
+            .is_some_and(|entry| entry.oplog_index == jump_index)
+    );
+    ensure!(
+        suffix
+            .windows(2)
+            .all(|pair| pair[0].oplog_index.next() == pair[1].oplog_index)
+    );
+    let PublicOplogEntry::Jump(jump) = &suffix.last().unwrap().entry else {
+        anyhow::bail!("repair horizon not followed by Jump");
+    };
+    ensure!(jump.jump.contains(abandoned) && !jump.jump.contains(scope));
+    ensure!(
+        suffix[..suffix.len() - 1]
+            .iter()
+            .all(|entry| jump.jump.contains(entry.oplog_index)),
+        "the complete physical attempt suffix must be deleted"
+    );
+    ensure!(
+        entries.iter().all(|entry| !matches!(
+            entry.entry,
+            PublicOplogEntry::BeginAtomicRegion(_) | PublicOplogEntry::EndAtomicRegion(_)
+        )),
+        "isolated HTTP fixture must have no crossing atomic interval"
+    );
+    assert_surviving_references(entries)
+}
+
+fn assert_surviving_references(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
+    let deleted = |index| {
+        entries.iter().any(|entry| {
+            matches!(&entry.entry,
+        PublicOplogEntry::Jump(jump) if jump.jump.contains(index))
+        })
+    };
+    let survives = |index| {
+        !deleted(index)
+            && entries.iter().any(|entry| {
+                entry.oplog_index == index && matches!(entry.entry, PublicOplogEntry::Start(_))
+            })
+    };
+    for entry in entries.iter().filter(|entry| !deleted(entry.oplog_index)) {
+        match &entry.entry {
+            PublicOplogEntry::Start(start) => {
+                ensure!(
+                    start.parent_start_index.is_none_or(survives),
+                    "orphaned parent: {entry:?}"
+                );
+                ensure!(
+                    start.observational_owner.is_none_or(survives),
+                    "orphaned owner: {entry:?}"
+                );
+                if let PublicDurableFunctionType::WriteRemoteBatched(params) =
+                    &start.durable_function_type
+                {
+                    ensure!(
+                        params.index.is_none_or(survives),
+                        "orphaned HTTP scope: {entry:?}"
+                    );
+                }
+            }
+            PublicOplogEntry::End(end) => {
+                ensure!(survives(end.start_index), "orphaned End: {entry:?}")
+            }
+            PublicOplogEntry::Cancelled(cancelled) => {
+                ensure!(
+                    survives(cancelled.start_index),
+                    "orphaned Cancelled: {entry:?}"
+                );
+                anyhow::bail!("direct P2 HTTP must not invent cancellation: {entry:?}");
+            }
+            PublicOplogEntry::CompletionDelivered(marker) => {
+                ensure!(survives(marker.start_index), "orphaned delivery: {entry:?}");
+                anyhow::bail!("direct P2 HTTP must not invent delivery markers: {entry:?}");
+            }
+            PublicOplogEntry::CompletionDiscarded(marker) => {
+                ensure!(survives(marker.start_index), "orphaned discard: {entry:?}");
+                anyhow::bail!("direct P2 HTTP must not invent discard markers: {entry:?}");
             }
             _ => {}
         }

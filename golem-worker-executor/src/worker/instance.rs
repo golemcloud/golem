@@ -250,7 +250,7 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<ReplayState, WorkerExecutorError> {
-        self.install_replay_generation(deleted_regions, initial_snapshot_skip_end)
+        self.install_replay_cursor(deleted_regions, initial_snapshot_skip_end)
             .await?;
         self.replay().await
     }
@@ -263,14 +263,32 @@ impl OwnerExecution {
         deleted_regions: DeletedRegions,
         initial_snapshot_skip_end: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
+        self.join_previous_generation().await?;
+        self.begin_generation()?;
+        self.install_replay_cursor(deleted_regions, initial_snapshot_skip_end)
+            .await
+    }
+
+    pub(crate) async fn join_previous_generation(&self) -> Result<(), WorkerExecutorError> {
         if let Some(replay) = self.replay.read().await.as_ref() {
             replay.ensure_reconstruction_claims_empty()?;
         }
-        self.tool_operations.join_owner_failure_cleanup().await?;
+        self.tool_operations.join_owner_failure_cleanup().await
+    }
+
+    pub(crate) fn begin_generation(&self) -> Result<(), WorkerExecutorError> {
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
         self.reached_oplog_marker
             .store(OplogIndex::NONE.into(), Ordering::Release);
+        Ok(())
+    }
+
+    async fn install_replay_cursor(
+        &self,
+        deleted_regions: DeletedRegions,
+        initial_snapshot_skip_end: Option<OplogIndex>,
+    ) -> Result<(), WorkerExecutorError> {
         let replay = ReplayState::new_for_owner(
             self.owner_id.clone(),
             self.oplog.clone(),

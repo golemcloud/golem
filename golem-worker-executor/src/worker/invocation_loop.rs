@@ -518,6 +518,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     // invocation was running either — the status marker is all that is needed.
                     match kind {
                         InterruptKind::Restart | InterruptKind::Jump => {
+                            self.parent.acknowledge_startup_interruption(kind).await;
                             debug!("Instantiation interrupted for restart, retrying");
                             continue;
                         }
@@ -1290,7 +1291,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
         }
         match decision {
-            RetryDecision::Immediate => false,
+            RetryDecision::Immediate => {
+                self.parent.acknowledge_startup_interruption(kind).await;
+                false
+            }
             RetryDecision::None => {
                 self.stop_closed(None, None, PendingLiveInvocationDisposition::Fail)
                     .await;
@@ -1521,11 +1525,26 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     ) -> CreateInstanceResult<Ctx> {
         async {
             debug!("Creating the worker instance");
-            if let Err(error) = self.parent.begin_resident_generation().await {
-                self.parent
-                    .complete_startup(self.start_attempt, Err(error.clone()));
-                self.stop_cleanup_failed(error).await;
-                return CreateInstanceResult::Failed;
+            match self
+                .parent
+                .begin_resident_generation(self.start_attempt)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.stop_unloaded(None, PendingLiveInvocationDisposition::Fail)
+                        .await;
+                    return CreateInstanceResult::Failed;
+                }
+                Err(WorkerExecutorError::Interrupted { kind }) => {
+                    return CreateInstanceResult::Interrupted(kind);
+                }
+                Err(error) => {
+                    self.parent
+                        .complete_startup(self.start_attempt, Err(error.clone()));
+                    self.stop_cleanup_failed(error).await;
+                    return CreateInstanceResult::Failed;
+                }
             }
             self.parent.unload_cleanup.lock().unwrap().take();
             match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode())

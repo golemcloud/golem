@@ -82,25 +82,34 @@ async fn loaded_compute_election(
     let active = executor.production_active_agent(&owned).await.unwrap();
     let worker = active.primary();
     let entry = limits.initialize_account(context.account_id).await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while worker.concurrent_agent_permit_is_held().await
-            || entry.monthly_observer_count_for_test() != 0
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
+    assert!(
+        worker
+            .get_last_known_status()
+            .await
+            .pending_invocations
+            .is_empty()
+    );
+    worker.drain_lifecycle_for_test().await?;
     assert!(worker.is_loaded().await);
     let generation = worker.resident_generation_for_test();
     let fingerprint = worker.get_initial_worker_metadata().fingerprint;
-    let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
-    let (_, driver, release_driver) = worker.pause_next_stop_driver_for_test();
     let mut exhausted = policy.clone();
     exhausted.available_fuel = 0;
     registry.set_policy(exhausted.clone());
-    limits.run_batch_for_test().await;
+    tokio::time::timeout(Duration::from_secs(10), limits.run_batch_for_test()).await?;
+    worker.drain_lifecycle_for_test().await?;
+    assert!(worker.is_loaded().await);
+    assert_eq!(worker.resident_generation_for_test(), generation);
+    assert!(!worker.concurrent_agent_permit_is_held().await);
+    assert_eq!(entry.monthly_observer_count_for_test(), 0);
+    assert_eq!(worker.monthly_stop_for_test(), None);
+    assert_eq!(worker.pending_stop_for_test().await, None);
+    assert_eq!(worker.frozen_stop_for_test(), None);
+    assert_eq!(worker.selected_owner_failure_for_test().await, None);
     let key = IdempotencyKey::fresh();
     let before = executor.oplog_max_index(&id).await?;
+    let (teardown, release_teardown) = worker.pause_next_teardown_fence_for_test();
+    let (_, driver, release_driver) = worker.pause_next_stop_driver_for_test();
     executor
         .invoke_agent_with_key(&component, &name, &key, "increment", data_value!())
         .await?;

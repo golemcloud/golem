@@ -634,10 +634,11 @@ fn assert_repaired_shape(
     );
     let (jump_idx, jump) = jumps[0];
     ensure!(
-        jump.jump.start == scope.next() && jump.jump.end == jump_idx,
-        "inclusive replacement of request children: {jump:?}"
+        jump.jump.start == scope.next() && jump.jump.end.next() == jump_idx,
+        "replace the complete attempt suffix through the pre-Jump horizon: {jump:?}"
     );
     ensure!(scope < abandoned && abandoned < jump_idx && terminal_count(entries, abandoned) == 0);
+    assert_repair_suffix(entries, scope, abandoned, jump_idx)?;
     info!(%scope, %abandoned, %jump_idx, deleted_start = %jump.jump.start,
         deleted_end = %jump.jump.end, "P2 body request scope retained and interrupted child Jump-replaced");
     let reads = starts(entries, BODY_READ);
@@ -682,6 +683,7 @@ fn assert_settled_history(
     entries: &[PublicOplogEntryWithIndex],
     deleted: OplogIndex,
 ) -> anyhow::Result<()> {
+    assert_surviving_references(entries)?;
     let finished = entries
         .iter()
         .rev()
@@ -701,6 +703,108 @@ fn assert_settled_history(
             PublicOplogEntry::End(_) => ensure!(entry.oplog_index < finished),
             PublicOplogEntry::Cancelled(_) | PublicOplogEntry::Error(_) => {
                 anyhow::bail!("unexpected terminal: {entry:?}");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn assert_repair_suffix(
+    entries: &[PublicOplogEntryWithIndex],
+    scope: OplogIndex,
+    abandoned: OplogIndex,
+    jump_index: OplogIndex,
+) -> anyhow::Result<()> {
+    let suffix = entries
+        .iter()
+        .filter(|entry| entry.oplog_index > scope && entry.oplog_index <= jump_index)
+        .collect::<Vec<_>>();
+    ensure!(
+        suffix
+            .first()
+            .is_some_and(|entry| entry.oplog_index == scope.next())
+    );
+    ensure!(
+        suffix
+            .last()
+            .is_some_and(|entry| entry.oplog_index == jump_index)
+    );
+    ensure!(
+        suffix
+            .windows(2)
+            .all(|pair| pair[0].oplog_index.next() == pair[1].oplog_index)
+    );
+    let PublicOplogEntry::Jump(jump) = &suffix.last().unwrap().entry else {
+        anyhow::bail!("repair horizon not followed by Jump");
+    };
+    ensure!(jump.jump.contains(abandoned) && !jump.jump.contains(scope));
+    ensure!(
+        suffix[..suffix.len() - 1]
+            .iter()
+            .all(|entry| jump.jump.contains(entry.oplog_index)),
+        "the complete physical attempt suffix must be deleted"
+    );
+    ensure!(
+        entries.iter().all(|entry| !matches!(
+            entry.entry,
+            PublicOplogEntry::BeginAtomicRegion(_) | PublicOplogEntry::EndAtomicRegion(_)
+        )),
+        "isolated HTTP fixture must have no crossing atomic interval"
+    );
+    assert_surviving_references(entries)
+}
+
+fn assert_surviving_references(entries: &[PublicOplogEntryWithIndex]) -> anyhow::Result<()> {
+    let deleted = |index| {
+        entries.iter().any(|entry| {
+            matches!(&entry.entry,
+        PublicOplogEntry::Jump(jump) if jump.jump.contains(index))
+        })
+    };
+    let survives = |index| {
+        !deleted(index)
+            && entries.iter().any(|entry| {
+                entry.oplog_index == index && matches!(entry.entry, PublicOplogEntry::Start(_))
+            })
+    };
+    for entry in entries.iter().filter(|entry| !deleted(entry.oplog_index)) {
+        match &entry.entry {
+            PublicOplogEntry::Start(start) => {
+                ensure!(
+                    start.parent_start_index.is_none_or(survives),
+                    "orphaned parent: {entry:?}"
+                );
+                ensure!(
+                    start.observational_owner.is_none_or(survives),
+                    "orphaned owner: {entry:?}"
+                );
+                if let PublicDurableFunctionType::WriteRemoteBatched(params) =
+                    &start.durable_function_type
+                {
+                    ensure!(
+                        params.index.is_none_or(survives),
+                        "orphaned HTTP scope: {entry:?}"
+                    );
+                }
+            }
+            PublicOplogEntry::End(end) => {
+                ensure!(survives(end.start_index), "orphaned End: {entry:?}")
+            }
+            PublicOplogEntry::Cancelled(cancelled) => {
+                ensure!(
+                    survives(cancelled.start_index),
+                    "orphaned Cancelled: {entry:?}"
+                );
+                anyhow::bail!("direct P2 HTTP must not invent cancellation: {entry:?}");
+            }
+            PublicOplogEntry::CompletionDelivered(marker) => {
+                ensure!(survives(marker.start_index), "orphaned delivery: {entry:?}");
+                anyhow::bail!("direct P2 HTTP must not invent delivery markers: {entry:?}");
+            }
+            PublicOplogEntry::CompletionDiscarded(marker) => {
+                ensure!(survives(marker.start_index), "orphaned discard: {entry:?}");
+                anyhow::bail!("direct P2 HTTP must not invent discard markers: {entry:?}");
             }
             _ => {}
         }
