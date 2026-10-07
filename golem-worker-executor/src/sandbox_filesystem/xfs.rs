@@ -3531,4 +3531,42 @@ mod tests {
             "{error}"
         );
     }
+
+    /// A host directory that inherits a project identity from the root after the binding fails
+    /// the setup of the host directories, because reflink XFS storage checks that each host
+    /// directory has no project identity.
+    #[test]
+    #[ignore = "requires the unprivileged reflink XFS test runner"]
+    #[timeout("60s")]
+    async fn reflink_xfs_refuses_a_host_directory_with_a_project_identity() {
+        let root = reflink_test_root();
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &reflink_storage(root.clone()),
+            RetryConfig::default(),
+        )
+        .unwrap();
+        let directory = File::open(&root).unwrap();
+        let original = get_fsxattr(&directory).unwrap();
+        let _restored = RestoredProjectAttributes {
+            directory: directory.try_clone().unwrap(),
+            attributes: original,
+        };
+        let mut with_project = original;
+        with_project.fsx_projid = 7;
+        with_project.fsx_xflags |= linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
+        set_fsxattr(&directory, with_project).unwrap();
+
+        let error =
+            match crate::sandbox_filesystem::host_directory::make_host_directories(&provisioning)
+                .await
+            {
+                Ok(_) => panic!("a host directory with a project identity must be refused"),
+                Err(error) => error.to_string(),
+            };
+
+        assert!(
+            error.contains("verify XFS host directory has no project identity"),
+            "{error}"
+        );
+    }
 }

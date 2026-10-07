@@ -859,6 +859,11 @@ run_unprivileged_test \
   sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
 
 run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_host_directory_with_a_project_identity
+
+run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
   filesystem_snapshots::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
