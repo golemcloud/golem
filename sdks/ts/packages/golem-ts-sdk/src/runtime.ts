@@ -39,6 +39,7 @@ import {
   SchemaGraph,
   schemaShapesMatch,
   schemaValueFromWit,
+  schemaValueToWit,
   schemaValueToWitAsync,
 } from './internal/schema-model';
 import { AgentClassName } from './agentClassName';
@@ -243,43 +244,47 @@ export function registerAgentType(
     configDeclarations,
     configTree,
     snapshotStateSchema,
-    readId: (input, principal) => readNamedInputs(idCodecs, input, principal),
+    readId: compileNamedInputReader(idCodecs),
     runtimeMethods: new Map(
-      [...methodCodecs].map(([methodName, mc]) => [
-        methodName,
-        {
-          hasInput: mc.inputCodecs.length !== 0,
-          read: (input: SchemaValueTree, principal: HostPrincipal) =>
-            readNamedInputs(mc.inputCodecs, input, principal),
-          write: async (value: unknown) =>
-            mc.output.tag === 'unit'
-              ? undefined
-              : schemaValueToWitAsync(mc.output.codec.toValue(value)),
-        },
-      ]),
+      [...methodCodecs].map(([methodName, mc]) => {
+        const output = mc.output;
+        // Direct codecs cannot contain owned resources, so no asynchronous
+        // stream preparation is needed. Retain the ordinary value codec.
+        const encode =
+          output.tag === 'single' && output.codec.direct ? schemaValueToWit : schemaValueToWitAsync;
+        return [
+          methodName,
+          {
+            hasInput: mc.inputCodecs.length !== 0,
+            read: compileNamedInputReader(mc.inputCodecs),
+            write: async (value: unknown) =>
+              output.tag === 'unit' ? undefined : encode(output.codec.toValue(value)),
+          },
+        ];
+      }),
     ),
     configAccessor: () => buildConfigAccessor(configTree),
   };
 }
 
-function readNamedInputs(
+function compileNamedInputReader(
   codecs: NamedCodec[],
-  input: SchemaValueTree,
-  principal: HostPrincipal,
-): Record<string, unknown> {
-  const value = schemaValueFromWit(input);
+): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
   const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
-  if (value.tag !== 'record' || value.fields.length !== expected)
-    throw new TypeError(`expected a record with ${expected} user-supplied fields`);
-  let index = 0;
-  return Object.fromEntries(
-    codecs.map(({ name, codec }) => [
-      name,
-      codec.autoInjected === 'principal'
-        ? sdkPrincipalFromHost(principal)
-        : codec.fromValue(value.fields[index++]),
-    ]),
-  );
+  return (input, principal) => {
+    const value = schemaValueFromWit(input);
+    if (value.tag !== 'record' || value.fields.length !== expected)
+      throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+    let index = 0;
+    return Object.fromEntries(
+      codecs.map(({ name, codec }) => [
+        name,
+        codec.autoInjected === 'principal'
+          ? sdkPrincipalFromHost(principal)
+          : codec.fromValue(value.fields[index++]),
+      ]),
+    );
+  };
 }
 
 /**

@@ -1754,22 +1754,26 @@ const wireSchemaError = (error: unknown): Schema.SchemaError =>
 export const compile = <S extends Schema.Top>(
   schema: S,
 ): Effect.Effect<CompiledWitCodec<S>, UnsupportedSchemaError> =>
-  Effect.map(toWitCodec(schema), (compiled) => ({
-    ...compiled,
-    schemaGraph: schemaGraphToWit(compiled.graph),
-    encode: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.try({ try: () => schemaValueToWit(encoded), catch: wireSchemaError }),
-      ),
-    encodeAsync: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.tryPromise({
-          try: (signal) => schemaValueToWitAsync(encoded, signal),
-          catch: wireSchemaError,
-        }),
-      ),
-    decode: (value) => decodeFromWire(compiled.codec, value),
-  }))
+  Effect.map(toWitCodec(schema), (compiled) => {
+    const encode = Schema.encodeEffect(compiled.codec)
+    const decode = makeWireDecoder(compiled.codec)
+    return {
+      ...compiled,
+      schemaGraph: schemaGraphToWit(compiled.graph),
+      encode: (value) =>
+        Effect.flatMap(encode(value), (encoded) =>
+          Effect.try({ try: () => schemaValueToWit(encoded), catch: wireSchemaError }),
+        ),
+      encodeAsync: (value) =>
+        Effect.flatMap(encode(value), (encoded) =>
+          Effect.tryPromise({
+            try: (signal) => schemaValueToWitAsync(encoded, signal),
+            catch: wireSchemaError,
+          }),
+        ),
+      decode,
+    }
+  })
 
 /** Compile an Effect Schema to its validated canonical JSON boundary. */
 export const compileJson = <S extends Schema.Top>(
@@ -1805,13 +1809,21 @@ export const compileJson = <S extends Schema.Top>(
 export const decodeFromWire = <A, RD, RE>(
   codec: Schema.Codec<A, SchemaValue, RD, RE>,
   value: CoreTypes.SchemaValueTree,
-): Effect.Effect<A, Schema.SchemaError, RD> =>
-  withCapabilityTransaction((transaction) =>
-    Effect.flatMap(
-      Effect.try({
-        try: () => schemaValueFromWit(value, transaction),
-        catch: wireSchemaError,
-      }),
-      Schema.decodeEffect(codec),
-    ),
-  )
+): Effect.Effect<A, Schema.SchemaError, RD> => makeWireDecoder(codec)(value)
+
+/** Prepare a wire decoder once, with a fresh ownership transaction for every execution.
+ * @since 1.6.0 @category codecs
+ */
+export const makeWireDecoder = <A, RD, RE>(codec: Schema.Codec<A, SchemaValue, RD, RE>) => {
+  const decode = Schema.decodeEffect(codec)
+  return (value: CoreTypes.SchemaValueTree): Effect.Effect<A, Schema.SchemaError, RD> =>
+    withCapabilityTransaction((transaction) =>
+      Effect.flatMap(
+        Effect.try({
+          try: () => schemaValueFromWit(value, transaction),
+          catch: wireSchemaError,
+        }),
+        decode,
+      ),
+    )
+}

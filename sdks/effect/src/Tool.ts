@@ -5,7 +5,7 @@ export { toolGuest } from "./internal/tool/runtime.js"
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Host from "golem:tool/host@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
-import { Cause, Context, Deferred, Effect, Exit, Schema, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Duration, Effect, Exit, Schema, Scope, Stream } from "effect"
 import { AbortableStreamIterable } from "./internal/abortableStreamIterable.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
@@ -15,7 +15,7 @@ import {
   type ToolDefinition,
   registerToolClientFactory,
 } from "./internal/tool/model.js"
-import { compile, type CompiledWitCodec } from "./WitCodec.js"
+import { compile } from "./WitCodec.js"
 import { withCapabilityTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import { schemaValueFromWit } from "./internal/schema-model/wit.js"
 import { abandonGuestQuotaTokenWireHandle } from "./internal/schema-model/quotaTokenHandle.js"
@@ -176,6 +176,17 @@ export const liveToolStart = (
     }
   })
 
+const cachedCompile = <S extends Schema.Top>(schema: S) =>
+  Effect.runSync(
+    Effect.cachedWithTTL(
+      Effect.map(compile(schema), (compiled) => ({
+        ...compiled,
+        decodeModel: Schema.decodeEffect(compiled.codec),
+      })),
+      (exit) => (Exit.hasInterrupts(exit) ? Duration.zero : Duration.infinity),
+    ),
+  )
+
 /** Construct an Effect client from a local definition. @since 1.6.0 @category constructors */
 export function client<D extends ToolDefinition<any, any>>(
   definition: D,
@@ -198,11 +209,11 @@ export function client<D extends ToolDefinition<any, any>>(
         fields: Object.keys(fields),
         stdout: !!model.body.stdout,
         stderr: !!model.body.stderr,
-        input: compile(Schema.Struct(fields)),
-        output: model.body.output ? compile(model.body.output) : undefined,
+        input: cachedCompile(Schema.Struct(fields)),
+        output: model.body.output ? cachedCompile(model.body.output) : undefined,
         errors: model.body.errors.map((entry) => ({
           name: entry.name,
-          codec: compile(entry.schema),
+          codec: cachedCompile(entry.schema),
         })),
       })
     }
@@ -212,10 +223,7 @@ export function client<D extends ToolDefinition<any, any>>(
   return clientCompiled(definition.name, commands, options)
 }
 
-type ClientWireCodec = Pick<
-  CompiledWitCodec<any>,
-  "schemaGraph" | "encodeAsync" | "decode" | "codec"
->
+type ClientWireCodec = Effect.Success<ReturnType<typeof cachedCompile<any>>>
 
 interface CompiledToolCommand {
   readonly path: readonly string[]
@@ -448,9 +456,9 @@ function clientCompiled(
                     const model = yield* Effect.try(() =>
                       schemaValueFromWit(result.result!.value, transaction),
                     ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
-                    const decoded = yield* Schema.decodeEffect(output.codec)(model).pipe(
-                      Effect.mapError((cause) => new ToolClientError("result", cause)),
-                    )
+                    const decoded = yield* output
+                      .decodeModel(model)
+                      .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
                     yield* consumeSucceeded
                     return decoded
                   }),
