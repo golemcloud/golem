@@ -46,6 +46,16 @@ impl SqlitePool {
         let write_pool = SqlitePoolOptions::new()
             .min_connections(0)
             .max_connections(1)
+            .after_release(|connection, _| {
+                Box::pin(async move {
+                    if connection.is_in_transaction() {
+                        // Flush queued rollback before checking for a transaction left behind by
+                        // cancellation during custom BEGIN validation.
+                        connection.ping().await?;
+                    }
+                    Ok(!connection.is_in_transaction())
+                })
+            })
             .connect_with(config.connect_options())
             .await?;
 
@@ -325,7 +335,56 @@ pub async fn migrate(
 mod tests {
     use super::*;
     use crate::db::{LabelledPoolApi, LabelledPoolTransaction};
+    use std::future::Future;
+    use std::task::Poll;
     use std::time::Duration;
+
+    #[test_r::test]
+    async fn cancelling_write_transaction_begin_releases_the_writer() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let config = DbSqliteConfig {
+            database: tempdir
+                .path()
+                .join("shared.db")
+                .to_string_lossy()
+                .into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        };
+        let first = SqlitePool::configured(&config).await.unwrap();
+        let second = SqlitePool::configured(&config).await.unwrap();
+
+        let mut completed = 0;
+        for attempt in 0..100 {
+            let mut connection = first.write_pool.acquire().await.unwrap();
+            let mut begin = Box::pin(connection.begin_with("BEGIN IMMEDIATE"));
+            for _ in 0..(attempt % 16 + 1) {
+                let ready = std::future::poll_fn(|cx| match begin.as_mut().poll(cx) {
+                    Poll::Ready(result) => Poll::Ready(Some(result)),
+                    Poll::Pending => Poll::Ready(None),
+                })
+                .await;
+                if let Some(result) = ready {
+                    completed += 1;
+                    result.unwrap().rollback().await.unwrap();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            drop(begin);
+            drop(connection);
+
+            let transaction = tokio::time::timeout(
+                Duration::from_millis(250),
+                second.with_rw("test", "next_writer").begin(),
+            )
+            .await
+            .expect("cancelled BEGIN retained the SQLite write reservation")
+            .unwrap();
+            transaction.rollback().await.unwrap();
+        }
+        assert!(completed > 0, "the test never completed a BEGIN");
+    }
 
     #[test_r::test]
     async fn write_transactions_wait_for_a_writer_from_another_pool() {
