@@ -4366,7 +4366,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             start_outcome::StartAction::RejectPeriodic(index) => {
                 warn!(
                     snapshot_index = %index,
-                    "The application snapshot of a periodic record does not load; the start uses the authoritative baseline"
+                    "The application snapshot of a periodic record does not load; the start selects its baseline again without this record: the previous usable periodic record, or else the authoritative baseline"
                 );
                 store
                     .as_context()
@@ -4659,7 +4659,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_snapshot_index
             .expect("an automatic snapshot tail is only replayed after loading a snapshot");
         let error = format!(
-            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying from the authoritative baseline"
+            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying without this snapshot, from the previous usable periodic record or else the authoritative baseline"
         );
         warn!(%error, "Abandoning periodic snapshot");
         if emit_failure

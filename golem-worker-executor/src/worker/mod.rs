@@ -5445,7 +5445,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     // The target revision cannot load; create_instance will fail
                     // the update and load the current revision, so charge that.
                     debug!(
-                        "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
+                        "Pending-update target revision {component_revision} cannot load; charging against current revision and letting create_instance fail the update and recover"
                     );
                     let canonical_bytes = metadata.last_known_status.total_linear_memory_size;
                     let current = self.current_component.load();
