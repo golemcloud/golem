@@ -1033,7 +1033,11 @@ it waits for an upload of that record on this executor, for at most
 `confirmation_wait`. Then it asks the store once whether the snapshot is whole, for at most what is
 left of `confirmation_wait`, or for at most `store_check_limit` when it did not wait. When the store
 holds it, the start appends `SnapshotConfirmed` as the owner of the agent. A terminal interrupt ends
-the wait. A start that finds no whole snapshot falls back to the previous usable record.
+the wait. A start that finds no whole snapshot falls back to the previous usable record. A loaded
+agent whose automatic update restarts it in place waits the same way before its generation ends
+(`Worker::confirm_filesystem_snapshot_before_an_update`); a stop, a retirement of the owner and a
+terminal interrupt end that wait, and the unload deadline of the restart moves by the time of the
+wait.
 
 `create_instance` restores the tree of the selected baseline. `StartFilesystem::load_and_plan`
 plans the baseline with `plan_start` and makes its restore, and `StartFilesystem::materialize`

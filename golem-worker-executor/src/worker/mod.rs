@@ -5741,27 +5741,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
+    /// The name of the newest record whose upload a loaded agent waits for before it ends its
+    /// generation to start the automatic update at the head of its queue: the record that the
+    /// update selects once confirmed. `None` when no unselected automatic update is at the head or
+    /// its record is confirmed.
+    pub(crate) fn upload_before_an_update(&self) -> Option<FilesystemSnapshotName> {
+        let status = self.last_known_status.load_full();
+        let selection = self.selection_in_memory(&status);
+        snapshot_selection::upload_before_an_automatic_update(&status, &selection).cloned()
+    }
+
     /// Waits, before a loaded agent ends the generation with `mark` to start the automatic update
-    /// at the head of its queue, for the upload of the newest record that the update selects once
-    /// confirmed, as a start of an unloaded agent does before it takes its permits. The upload
-    /// confirms its record as the generation that took it. When the store holds the whole
-    /// snapshot, the generation with `mark` confirms it too, which changes nothing when the upload
-    /// already did. The wait ends at `confirmation_wait` or at a terminal interrupt. Nothing waits
-    /// when no unselected automatic update is at the head or its record is confirmed. When the
-    /// record is not confirmed and no upload of it runs, the call asks the store once, for at most
+    /// at the head of its queue, for the upload of the record `name` that
+    /// [`Self::upload_before_an_update`] gives, as a start of an unloaded agent does before it
+    /// takes its permits. The upload confirms its record as the generation that took it. When the
+    /// store holds the whole snapshot, the generation with `mark` confirms it too, which changes
+    /// nothing when the upload already did. The wait ends at `confirmation_wait` or at a terminal
+    /// interrupt; the invocation loop that awaits the call also ends it at a requested retirement
+    /// or a stop. When no upload of the record runs, the call asks the store once, for at most
     /// `store_check_limit`.
     pub(crate) async fn confirm_filesystem_snapshot_before_an_update(
         self: &Arc<Self>,
-        mark: Option<crate::services::agent_filesystem::TreeMark>,
+        name: FilesystemSnapshotName,
+        mark: crate::services::agent_filesystem::TreeMark,
     ) {
-        let status = self.last_known_status.load_full();
-        let selection = self.selection_in_memory(&status);
-        let (Some(name), Some(mark)) = (
-            snapshot_selection::upload_before_an_automatic_update(&status, &selection).cloned(),
-            mark,
-        ) else {
-            return;
-        };
         let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
             &self.owned_agent_id,
             self.initial_worker_metadata.fingerprint,

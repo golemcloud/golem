@@ -832,14 +832,25 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
             });
             // An automatic update that restarts the agent in place selects its record when this
-            // generation ends; the newest record counts only once its upload confirmed it.
-            if matches!(final_decision, Some(RetryDecision::Immediate)) {
-                self.parent
-                    .confirm_filesystem_snapshot_before_an_update(
-                        self.filesystem_snapshot_slot.generation(),
+            // generation ends; the newest record counts only once its upload confirmed it. The
+            // unload deadline moves by the time of the wait, so the wait does not use it up.
+            let upload = matches!(final_decision, Some(RetryDecision::Immediate))
+                .then(|| self.parent.upload_before_an_update())
+                .flatten()
+                .and_then(|name| Some((name, self.filesystem_snapshot_slot.generation()?)));
+            let deadline = match upload {
+                Some((name, mark)) => {
+                    let waiting = Instant::now();
+                    self.confirm_filesystem_snapshot_before_an_update(
+                        name,
+                        mark,
+                        &mut deferred_wakeups,
                     )
                     .await;
-            }
+                    deadline + waiting.elapsed()
+                }
+                None => deadline,
+            };
             self.end_snapshot_generation();
             let unloading = Self::unload_running_agent(
                 agent,
@@ -1444,6 +1455,43 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .data_mut()
             .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
             .await;
+    }
+
+    /// Waits, before this generation, with `mark`, ends for the automatic update at the head of
+    /// the queue, for the upload of the record `name` that the update selects once confirmed, as
+    /// [`Worker::confirm_filesystem_snapshot_before_an_update`] says. A requested retirement of
+    /// the owner and a stop of the running worker, which closes its command channel, end the
+    /// wait, or skip it when they came first. Commands that arrive during the wait are kept in
+    /// `deferred_wakeups` for the next generation.
+    async fn confirm_filesystem_snapshot_before_an_update(
+        &mut self,
+        name: FilesystemSnapshotName,
+        mark: TreeMark,
+        deferred_wakeups: &mut VecDeque<WorkerCommand>,
+    ) {
+        let retiring = self.parent.owner_retirement_requested.clone();
+        let parent = self.parent.clone();
+        let confirmation = parent.confirm_filesystem_snapshot_before_an_update(name, mark);
+        tokio::pin!(confirmation);
+        loop {
+            tokio::select! {
+                biased;
+                () = retiring.cancelled() => return,
+                command = self.receiver.recv() => match command {
+                    Some(WorkerCommand::InternalStatusChanged) => {
+                        if !deferred_wakeups
+                            .iter()
+                            .any(|command| matches!(command, WorkerCommand::InternalStatusChanged))
+                        {
+                            deferred_wakeups.push_back(WorkerCommand::InternalStatusChanged);
+                        }
+                    }
+                    Some(command) => Self::defer_wakeup(deferred_wakeups, command),
+                    None => return,
+                },
+                () = &mut confirmation => return,
+            }
+        }
     }
 
     fn defer_wakeup(deferred_wakeups: &mut VecDeque<WorkerCommand>, command: WorkerCommand) {

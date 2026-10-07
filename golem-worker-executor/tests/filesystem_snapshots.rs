@@ -31,6 +31,7 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
@@ -41,6 +42,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadValues, FilesystemSnapshotsConfig, FilesystemStorageMode,
     SnapshotPolicy,
 };
+use golem_worker_executor::worker::{WorkerDeletionHook, WorkerDeletionStage};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start_with_overrides, take_agent_oplog_over_at_epoch,
@@ -6192,6 +6194,164 @@ async fn an_automatic_update_of_a_loaded_agent_waits_for_the_upload_of_the_newes
                 written("latest.txt")
             ]
         );
+        Ok(())
+    })
+    .await
+}
+
+/// Gives one agent an unload deadline of `budget` from the unload.
+struct ShortUnloadDeadline {
+    target: OwnedAgentId,
+    budget: Duration,
+}
+
+#[async_trait::async_trait]
+impl WorkerDeletionHook for ShortUnloadDeadline {
+    fn unload_deadline(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        deadline: std::time::Instant,
+    ) -> std::time::Instant {
+        if owned_agent_id == &self.target {
+            std::time::Instant::now() + self.budget
+        } else {
+            deadline
+        }
+    }
+
+    async fn before_stage(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _stage: WorkerDeletionStage,
+    ) -> Result<(), WorkerExecutorError> {
+        Ok(())
+    }
+}
+
+/// The wait of an automatic update of a loaded agent for an upload does not use up the unload
+/// deadline of the restart: an upload held for longer than that deadline still lets the update
+/// select its record and restart the agent in place.
+#[test]
+#[timeout("4m")]
+async fn an_automatic_update_that_waits_for_an_upload_longer_than_the_unload_deadline_restarts_the_agent_in_place(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-slow-upload",
+            &[],
+        )
+        .await?;
+        executor.set_worker_deletion_hook(Arc::new(ShortUnloadDeadline {
+            target: agent.owned(&context),
+            budget: Duration::from_secs(1),
+        }));
+        agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let held = store.hold_next_save();
+        agent.apply_all(&executor, &[write("after.txt")]).await?;
+        let uploading = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let uploading_index = agent.newest_record(&executor).await?;
+        let first = agent.new_revision(&executor).await?;
+
+        executor
+            .auto_update_worker(&agent.worker_id, first.revision, false)
+            .await?;
+        // The upload stays held for longer than the unload deadline.
+        let chosen_while_held = strategy_within(&agent, &executor, 1, Duration::from_secs(4)).await;
+        held.release();
+        executor
+            .wait_for_component_revision(&agent.worker_id, first.revision, Duration::from_secs(60))
+            .await?;
+        let updated = agent.on(&first);
+        let selection = updated.assisted_selection(&executor).await?;
+        let tree = updated.describe(&executor).await?;
+
+        assert!(
+            !chosen_while_held,
+            "the update chose its strategy while the upload of the newest record was held"
+        );
+        assert_eq!(selection, Some((uploading_index, Some(uploading))));
+        assert_eq!(tree, [written("after.txt"), written("before.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+/// A revert or a delete of a loaded agent whose automatic update waits for an upload ends the
+/// wait: neither waits for the upload or for `confirmation_wait`.
+#[test]
+#[timeout("4m")]
+async fn a_revert_or_a_delete_during_the_wait_of_an_automatic_update_for_an_upload_does_not_wait_for_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let mut outcomes = Vec::new();
+        for revert in [true, false] {
+            let name = if revert {
+                "revert-during-wait"
+            } else {
+                "delete-during-wait"
+            };
+            let agent = Agent::start(&executor, &context, initial_file_system, name, &[]).await?;
+            agent
+                .apply_and_confirm(&executor, write("before.txt"))
+                .await?;
+            let held = store.hold_next_save();
+            agent.apply_all(&executor, &[write("after.txt")]).await?;
+            eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+            let uploading_index = agent.newest_record(&executor).await?;
+            let first = agent.new_revision(&executor).await?;
+            executor
+                .auto_update_worker(&agent.worker_id, first.revision, false)
+                .await?;
+            let chosen_while_held =
+                strategy_within(&agent, &executor, 1, Duration::from_secs(3)).await;
+            let (stopped, took) = timed(tokio::time::timeout(Duration::from_secs(20), async {
+                if revert {
+                    executor
+                        .revert(
+                            &agent.worker_id,
+                            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                                last_oplog_index: uploading_index,
+                            }),
+                        )
+                        .await
+                } else {
+                    executor.delete_worker(&agent.worker_id).await
+                }
+            }))
+            .await;
+            held.release();
+            outcomes.push((name, chosen_while_held, stopped.is_ok(), took));
+            stopped.context(name)??;
+        }
+
+        outcomes
+            .iter()
+            .for_each(|(name, chosen_while_held, stopped, took)| {
+                assert!(!chosen_while_held, "{name}: the update did not wait");
+                assert!(
+                    *stopped && *took < Duration::from_secs(10),
+                    "{name} took {took:?}"
+                );
+            });
         Ok(())
     })
     .await
