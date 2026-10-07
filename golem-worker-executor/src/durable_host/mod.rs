@@ -2927,6 +2927,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// driven by named retry policies (`Unknown`, `TransientError`, and
     /// `DeterministicTrap` inside an atomic region), this returns `None` and
     /// the caller falls through to policy-based resolution.
+    /// The retry of an error trap during a speculative replay: the fixed decision of the trap
+    /// when it retries, as for an out-of-memory. Any other error, and a trap that is not an
+    /// error, gives `None`.
+    pub(crate) fn speculative_retry(trap_type: &TrapType) -> Option<RetryDecision> {
+        match trap_type {
+            TrapType::Error { .. } => Self::fixed_decision_for_trap_type(trap_type)
+                .filter(|decision| *decision != RetryDecision::None),
+            TrapType::Interrupt(_) | TrapType::Exit => None,
+        }
+    }
+
     pub(crate) fn fixed_decision_for_trap_type(trap_type: &TrapType) -> Option<RetryDecision> {
         match trap_type {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(RetryDecision::None),
@@ -6329,6 +6340,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                         // The failure of the replay says whether it diverged.
                                         diverged = snapshot_divergence;
                                         match trap_type {
+                                            // A trap that every invocation retries, such as an
+                                            // out-of-memory under the memory admission, keeps its
+                                            // retry: it says nothing about the replay.
+                                            TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
                                             TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
                                                 error,
                                                 stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
@@ -7413,8 +7428,9 @@ fn selected_replay_recovery_error(
 /// does not decode, rather than that its store failed. A periodic record is skipped for the start
 /// attempt and the start retries at once (the caller marks it unavailable). A snapshot-assisted
 /// attempt whose store failed retries with the same record through the recovery path, and
-/// nothing marks the record; one whose payload is lost reports the selected record as lost. Any
-/// other baseline gets the runtime error.
+/// nothing marks the record; one whose payload is lost reports the selected record as lost. The
+/// replay for a pending automatic update retries a failed store through the recovery path too,
+/// and gets the runtime error for a lost payload. Any other baseline gets the runtime error.
 fn payload_download_failure(
     purpose: SnapshotReplayPurpose,
     lost: bool,
@@ -7428,6 +7444,12 @@ fn payload_download_failure(
             SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
         }
         SnapshotReplayPurpose::AssistedUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::AutomaticUpdate if !lost => {
             SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
                 retry_from: None,
                 details: error,
@@ -7616,6 +7638,22 @@ mod tests {
                 SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
             ));
         });
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                false,
+                "blob store unavailable".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                true,
+                "referenced oplog payload is missing".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+        ));
         assert!(matches!(
             unavailable,
             SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })

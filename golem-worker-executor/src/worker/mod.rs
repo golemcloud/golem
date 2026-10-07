@@ -5746,8 +5746,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// confirmed, as a start of an unloaded agent does before it takes its permits. The upload
     /// confirms its record as the generation that took it. When the store holds the whole
     /// snapshot, the generation with `mark` confirms it too, which changes nothing when the upload
-    /// already did. The wait ends at `confirmation_wait` or at a terminal interrupt, and nothing
-    /// waits when no update is at the head or no upload is in flight for its record.
+    /// already did. The wait ends at `confirmation_wait` or at a terminal interrupt. Nothing waits
+    /// when no unselected automatic update is at the head or its record is confirmed. When the
+    /// record is not confirmed and no upload of it runs, the call asks the store once, for at most
+    /// `store_check_limit`.
     pub(crate) async fn confirm_filesystem_snapshot_before_an_update(
         self: &Arc<Self>,
         mark: Option<crate::services::agent_filesystem::TreeMark>,

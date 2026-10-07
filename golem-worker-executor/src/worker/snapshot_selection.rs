@@ -201,7 +201,7 @@ pub(crate) fn active_head(status: &AgentStatusRecord) -> Option<&PendingUpdateRe
 
 /// Whether the head of the update queue of `status` is an automatic update without a strategy
 /// entry.
-pub(crate) fn has_unselected_automatic_head(status: &AgentStatusRecord) -> bool {
+fn has_unselected_automatic_head(status: &AgentStatusRecord) -> bool {
     matches!(Head::of(status), Head::UnselectedAutomatic(_))
 }
 

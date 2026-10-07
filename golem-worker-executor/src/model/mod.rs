@@ -1267,6 +1267,41 @@ mod tests {
     }
 
     #[test]
+    fn a_speculative_replay_keeps_only_the_retry_of_a_trap_that_every_invocation_retries() {
+        let error = |error: AgentError| TrapType::Error {
+            error,
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+        let retry = |trap: &TrapType| {
+            crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::speculative_retry(trap)
+        };
+
+        assert_eq!(
+            [
+                retry(&error(AgentError::OutOfMemory)),
+                retry(&error(AgentError::InternalError("diverged".to_string()))),
+                retry(&error(AgentError::Unknown("transient".to_string()))),
+                retry(&error(AgentError::TransientError("transient".to_string()))),
+                retry(&error(AgentError::StackOverflow)),
+                retry(&TrapType::Interrupt(InterruptKind::Restart)),
+                retry(&TrapType::Exit),
+            ],
+            [
+                Some(RetryDecision::ReacquirePermits),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
         // `WorkerExecutorError::Runtime` is a generic transient-error wrapper.
         // It must not be classified as `InternalError` (non-retriable); it
