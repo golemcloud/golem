@@ -12,6 +12,9 @@ import scala.concurrent.Future
 @httpRouter("Website", "/web", staticBindings = Array(
   ("/", "/site/index.html"),
   ("/assets/*", "/site/$1")
+), fileResponseHeaders = Array(
+  ("Content-Security-Policy", "default-src 'self'"),
+  ("Referrer-Policy", "same-origin")
 ))
 trait Website extends BaseAgent {
   @httpHandler def serve(request: HttpRequest): Future[HttpResponse]
@@ -61,6 +64,9 @@ before commitment may become an error response; later failures terminate the bod
 @agentDefinition(mount = "/documents/{owner}", exposeFiles = Array(
   ("/latest", "/public/latest.txt"),
   ("/*", "/public/$1")
+), fileResponseHeaders = Array(
+  ("Content-Security-Policy", "default-src 'none'"),
+  ("Referrer-Policy", "no-referrer")
 ))
 trait Documents extends BaseAgent {
   class Id(val owner: String)
@@ -73,6 +79,9 @@ fields must be scalar, bound exactly once by mount captures; caller-dependent `P
 identity/constructor injection and phantom or ephemeral owners are rejected. These agents
 remain ordinary callable agents. `filesystemBindings` is internal metadata; the public
 declaration is `exposeFiles`.
+
+`fileResponseHeaders` adds the listed headers, in declaration order, to responses for files
+served by `staticBindings` or `exposeFiles`. Omitting it sends no configured file response headers.
 
 Both mapping arrays retain order. Repeating a source with a different target provides
 ordered fallback; duplicate identical mappings are rejected. Sources are exact URI paths

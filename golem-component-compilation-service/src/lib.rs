@@ -91,7 +91,6 @@ pub async fn run(
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         address,
         prometheus,
-        config.runtime_metrics_sampling_interval,
         "Component Compilation Service is running",
         join_set,
     )

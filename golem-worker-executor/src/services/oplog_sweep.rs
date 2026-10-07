@@ -1487,8 +1487,12 @@ mod tests {
         let compressed: Arc<dyn OplogArchiveService> = Arc::new(
             CompressedOplogArchiveService::new(storage.clone(), 1, RetryConfig::default()),
         );
-        let blob: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 0));
+        let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            storage.clone(),
+            0,
+            RetryConfig::default(),
+        ));
         let layers = Layers {
             oplog_service: Arc::new(MultiLayerOplogService::new(
                 Arc::new(futures::executor::block_on(PrimaryOplogService::new(
@@ -1515,8 +1519,12 @@ mod tests {
         let compressed: Arc<dyn OplogArchiveService> = Arc::new(
             CompressedOplogArchiveService::new(indexed_storage.clone(), 1, RetryConfig::default()),
         );
-        let blob: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 0));
+        let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            0,
+            RetryConfig::default(),
+        ));
         Layers {
             oplog_service: Arc::new(MultiLayerOplogService::new(
                 Arc::new(futures::executor::block_on(PrimaryOplogService::new(
@@ -1853,7 +1861,9 @@ mod tests {
             .collect();
         archives.push(Arc::new(BlobOplogArchiveService::new(
             blob_storage.clone(),
+            indexed_storage.clone(),
             0,
+            RetryConfig::default(),
         )));
         let mut stack = nev![archives[0].clone()];
         for archive in archives.iter().skip(1) {
@@ -3842,8 +3852,12 @@ mod tests {
             keeps_entries: false,
             appends: appends.clone(),
         });
-        let blob: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 0));
+        let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            0,
+            RetryConfig::default(),
+        ));
         let layers = Layers {
             oplog_service: Arc::new(MultiLayerOplogService::new(
                 Arc::new(futures::executor::block_on(PrimaryOplogService::new(

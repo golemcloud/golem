@@ -1860,7 +1860,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
                     release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
                         account: builtin_account.clone(),
                         name: ToolName::try_from(name).unwrap(),
-                        version: "0.4.0".to_string(),
+                        version: "0.4.1".to_string(),
                     }),
                     automatic: false,
                 },
@@ -1879,7 +1879,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
                     ToolMiddlewareReleaseByCoordinates {
                         account: builtin_account.clone(),
                         name: ToolMiddlewareName::try_from("path-policy").unwrap(),
-                        version: "0.1.0".to_string(),
+                        version: "0.1.1".to_string(),
                     },
                 ),
                 automatic: false,
@@ -1890,7 +1890,7 @@ async fn built_in_path_policy_can_wrap_only_a_selected_filesystem_tool(
         path_policy_remote_middleware(&middleware_grant);
     let installation = ToolMiddlewareInstallation {
         name: ToolMiddlewareName::try_from("path-policy").unwrap(),
-        version: Some("0.1.0".to_string()),
+        version: Some("0.1.1".to_string()),
         parameters: NormalizedJsonValue::new(json!({
             "base": "/",
             "allowed_roots": [{

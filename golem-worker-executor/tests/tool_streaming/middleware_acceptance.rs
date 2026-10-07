@@ -2407,7 +2407,7 @@ async fn rate_2_distinct_concurrent_owners_share_one_atomic_principal_limit(
     }
     assert_eq!(leaf_calls, LIMIT, "atomic admission must not lose updates");
 
-    let backend_id = agent_id!("RateLimitBackend", "rate-2");
+    let backend_id = agent_id!("RateLimitBackend", "rate-2", LIMIT as u64, 3_600_000u64);
     let stats: RateLimitBackendStats = executor
         .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
         .await?
@@ -2488,7 +2488,7 @@ async fn rate_3_crash_after_leaf_effect_replays_without_an_extra_charge_or_effec
         result = invocation.as_mut() => panic!("rate-limit call settled before its leaf checkpoint: {result:?}"),
     };
 
-    let backend_id = agent_id!("RateLimitBackend", "rate-3");
+    let backend_id = agent_id!("RateLimitBackend", "rate-3", 2u64, 3_600_000u64);
     let before: RateLimitBackendStats = executor
         .invoke_and_await_agent(&rate_limit_component, &backend_id, "stats", data_value!())
         .await?

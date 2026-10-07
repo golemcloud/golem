@@ -577,7 +577,7 @@ fn validate_unselected_parameters(
     }
 }
 
-fn effective_installations(
+pub fn effective_installations(
     environment: Option<&ToolBindingInput>,
     owner: Option<&ToolBindingInput>,
 ) -> Vec<ToolMiddlewareInstallation> {

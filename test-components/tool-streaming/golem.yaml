@@ -31,7 +31,7 @@ components:
     dir: rust-middleware
     templates: rust, rust-test-component
   golem:rate-limit-middleware:
-    dir: ../../builtin-tools/rate-limit-middleware
+    dir: ../rate-limit-middleware
     templates: rust, rust-test-component
 
 tools:

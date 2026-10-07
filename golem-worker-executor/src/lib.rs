@@ -165,9 +165,9 @@ pub struct RunDetails {
     /// Weak reference to a sentinel inside `All`. When `All` is properly
     /// deallocated, `upgrade()` returns `None`. Used by tests to detect leaks.
     pub leak_detector: std::sync::Weak<()>,
-    /// The worker invocation loops of this executor. They stop at the shutdown signal; an
-    /// in-process restart of the executor over the same storage must wait for them to exit
-    /// before reopening the workers' oplogs.
+    /// The worker and entity tasks of this executor, plus the owner actors they can submit writes
+    /// to. An in-process restart over the same storage must wait for this boundary to drain before
+    /// reopening workers' oplogs.
     pub invocation_loops: InvocationLoops,
 }
 
@@ -872,8 +872,12 @@ pub async fn create_worker_executor_impl<
         oplog_archives.push(svc);
     }
     for idx in 0..golem_config.oplog.blob_storage_layers {
-        let svc: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
+        let svc: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            idx,
+            golem_config.indexed_storage_retry.clone(),
+        ));
         oplog_archives.push(svc);
     }
     // The sweeper is built further down, once the worker activator exists.
@@ -1237,7 +1241,6 @@ pub async fn bootstrap_and_run_worker_executor<
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr()?,
         prometheus_registry,
-        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )

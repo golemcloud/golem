@@ -24,7 +24,7 @@ import {
   type ToolClientInvocationResult,
   type ToolClientTransport,
 } from '../src/tool';
-import { client, compiledToolClient, toolClientDefinition, ToolCallError } from '../src/toolClient';
+import { client, toolClientDefinition, ToolCallError } from '../src/toolClient';
 import type { ByteStreamItem } from 'golem:tool/host@0.1.0';
 import { compileSchema } from '../src/schema/adapter';
 import {
@@ -461,41 +461,6 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('cancels a compiled stderr invocation when the declared stream is missing', () => {
-    const cancel = vi.fn();
-    const codec = {
-      write: (_value: unknown, writer: { add(node: unknown): number }) =>
-        writer.add({ tag: 'record-value', val: [] }),
-      read: () => undefined,
-    };
-    const runtime = compiledToolClient(
-      'missing-compiled-stderr',
-      [
-        {
-          path: [],
-          aliases: [],
-          nested: false,
-          input: { codec, graph: { nodes: [], root: 0 } },
-          errors: {},
-          stderr: { required: true },
-        },
-      ],
-      {
-        transport: {
-          start: () => ({
-            settledResult: new Promise(() => undefined),
-            cancel,
-          }),
-        },
-      },
-    ) as { 'missing-compiled-stderr'(args: {}): unknown };
-
-    expect(() => runtime['missing-compiled-stderr']({})).toThrow(
-      'required stderr stream is missing',
-    );
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
   it('combines stdin with structured results and stdout through the transport seam', async () => {
     const definition = toolDefinition('transform').body((body) =>
       body.stdin({ required: true }).stdout({ required: true }).returns(z.string()),
@@ -906,6 +871,63 @@ describe('tool runtime client', () => {
     })['permission-card-exchange']({ card });
     expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
   });
+
+  it.each([false, true])(
+    'validates a named foreign result by its value semantics (polymorphic=%s)',
+    async (polymorphic) => {
+      const localSchema = z.object({
+        card: s.permissionCard({ polymorphic: false }),
+        issuer: z.string(),
+      });
+      const remoteCodec = compileSchema(
+        z.object({ card: s.permissionCard({ polymorphic }), issuer: z.string() }),
+      );
+      const dispose = vi.fn();
+      const raw = { [Symbol.dispose]: dispose } as never;
+      const definition = toolDefinition('named-issuer').body((body) => body.returns(localSchema));
+      const result = client(definition, {
+        transport: new FakeTransport(() => ({
+          result: typedSchemaValueToWit({
+            graph: {
+              root: t.ref('rust::PermissionIssue'),
+              defs: new Map([
+                [
+                  'rust::PermissionIssue',
+                  {
+                    name: 'PermissionIssue',
+                    body: {
+                      ...remoteCodec.graph.root,
+                      metadata: {
+                        ...remoteCodec.graph.root.metadata,
+                        aliases: ['rust-issuer-output'],
+                      },
+                    },
+                  },
+                ],
+              ]),
+            },
+            value: remoteCodec.toValue({ card: raw, issuer: 'rust' }),
+          }),
+        })),
+      })['named-issuer']({});
+      if (polymorphic) {
+        await expect(result).rejects.toMatchObject({
+          cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+        });
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        const output = await result;
+        expect(output.issuer).toBe('rust');
+        expect(
+          peekGuestPermissionCardHandle(
+            PERMISSION_CARD_INTERNAL,
+            output.card as GuestPermissionCardHandle,
+          ),
+        ).toBe(raw);
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('accepts allowed MIME metadata when projecting a binary result to Uint8Array', async () => {
     const schema = Bytes({ mimeTypes: ['application/octet-stream'] });

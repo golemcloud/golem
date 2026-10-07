@@ -15,6 +15,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/v4';
 import {
+  AgentStream,
   KeyValue,
   ToolStreamError,
   c,
@@ -28,7 +29,13 @@ import {
 import { compileSchema } from '../src/schema/adapter';
 import { ToolRegistry } from '../src/internal/registry/toolRegistry';
 import { CanonicalInputModel } from '../src/internal/tool';
-import { t, typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import {
+  t,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
+  v,
+} from '../src/internal/schema-model';
 import { tool } from '../src';
 import { encodeToolValue } from '../src/internal/tool/invocationResult';
 import {
@@ -1121,6 +1128,84 @@ describe('tool guest exports', () => {
     expect(
       peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card as GuestPermissionCardHandle),
     ).toBe(raw);
+  });
+
+  it('forwards a wire-lifted permission card through a tool handler without consuming it during validation', async () => {
+    const raw = { id: 'forwarded-permission-card' } as never;
+    toolDefinition('permission-card-forward')
+      .body((body) =>
+        body
+          .positional('card', s.permissionCard({ polymorphic: false }))
+          .returns(z.object({ label: z.string(), card: s.permissionCard({ polymorphic: false }) })),
+      )
+      .implement({
+        'permission-card-forward': async ({ card }) => ok({ label: 'forwarded', card }),
+      });
+    const registered = ToolRegistry.get('permission-card-forward')!;
+    const commandNode = registered.extended.commandByPath([])!;
+    const input = typedSchemaValueToWit(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({ card: raw }),
+    );
+    const result = await tool.invoke(
+      'permission-card-forward',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
+    const output = commandNode.body!.result!.codec.fromValue(
+      typedSchemaValueFromWit(result.result!).value,
+    ) as { label: string; card: GuestPermissionCardHandle };
+    expect(output.label).toBe('forwarded');
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, output.card)).toBe(raw);
+  });
+
+  it('validates native stream input and output without consuming endpoints or pulling producers', async () => {
+    let pulls = 0;
+    toolDefinition('stream-transform')
+      .body((body) => body.positional('input', s.stream(s.u32())).returns(s.stream(s.u32())))
+      .implement({
+        'stream-transform': async ({ input }) =>
+          ok(
+            AgentStream.from(
+              (async function* () {
+                for await (const value of input) yield value * 3 + 1;
+              })(),
+            ),
+          ),
+      });
+    const registered = ToolRegistry.get('stream-transform')!;
+    const commandNode = registered.extended.commandByPath([])!;
+    const source = AgentStream.from(
+      (async function* () {
+        for (const value of [2, 5, 9]) {
+          pulls += 1;
+          yield value;
+        }
+      })(),
+    );
+    const input = await typedSchemaValueToWitAsync(
+      registered.extended.canonicalInputModel(commandNode).encodeTyped({ input: source }),
+    );
+    const result = await tool.invoke(
+      'stream-transform',
+      [],
+      input,
+      undefined,
+      undefined,
+      undefined,
+      { tag: 'anonymous' },
+    );
+    expect(pulls).toBe(0);
+    const output = commandNode.body!.result!.codec.fromValue(
+      typedSchemaValueFromWit(result.result!).value,
+    ) as AgentStream<number>;
+    const values: number[] = [];
+    for await (const value of output) values.push(value);
+    expect(values).toEqual([7, 16, 28]);
+    expect(pulls).toBe(3);
   });
 
   it('releases a permission card after a non-canonical result so it can be retried', async () => {

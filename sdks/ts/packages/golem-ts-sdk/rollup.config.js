@@ -93,9 +93,8 @@ export default (args) =>
           middleware: 'src/middleware.ts',
           'schema/public': 'src/schema/public.ts',
           reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouterContract.ts',
           toolClient: 'src/toolClient.ts',
-          'internal/tool/compiled': 'src/internal/tool/compiled.ts',
-          'internal/compiledAgent': 'src/internal/compiledAgent.ts',
         },
         output: {
           dir: 'dist/runtime',
@@ -114,7 +113,6 @@ export default (args) =>
             name: 'component-build',
             writeBundle() {
               fs.copyFileSync('scripts/component.mjs', 'dist/component.mjs');
-              fs.copyFileSync('scripts/static-tools.mjs', 'dist/static-tools.mjs');
             },
           },
         ],

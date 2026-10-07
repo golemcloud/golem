@@ -8,6 +8,17 @@ use golem_common::schema::tool::{CommandIndex, StreamSpec};
 use tempfile::TempDir;
 use test_r::test;
 
+fn generated_method<'a>(source: &'a str, name: &str) -> &'a str {
+    let start = source
+        .find(&format!("  {name}("))
+        .unwrap_or_else(|| panic!("missing generated method {name}"));
+    let method = &source[start..];
+    let end = method
+        .find("\n  }\n")
+        .unwrap_or_else(|| panic!("unterminated generated method {name}"));
+    &method[..end + "\n  }\n".len()]
+}
+
 #[test]
 fn effect_tool_advanced_schema_inherited_globals_repeatables_and_streams_compile() {
     let mut tool = grep_tool();
@@ -16,11 +27,6 @@ fn effect_tool_advanced_schema_inherited_globals_repeatables_and_streams_compile
         doc: Default::default(),
         mime: vec![],
         required: false,
-    });
-    body.stdout = Some(StreamSpec {
-        doc: Default::default(),
-        mime: vec![],
-        required: true,
     });
     let mut nested_leaf = tool.commands.nodes[1].clone();
     nested_leaf.name = "run".into();
@@ -58,15 +64,34 @@ fn effect_tool_advanced_schema_inherited_globals_repeatables_and_streams_compile
             && source.contains("))(color)), () => ({ tag: 'bool', value: case_sensitive })]"),
         "inherited global encoder expressions were not preserved as complete array elements in {generated}"
     );
+    let non_streaming = generated_method(&source, "grep");
+    assert!(non_streaming.contains("return Effect.scoped(Effect.gen(function*()"));
+    assert!(non_streaming.contains(", base.ToolRequirements>"));
+    assert!(!non_streaming.contains("Scope.Scope"));
+    let streaming = generated_method(&source, "run");
+    assert!(streaming.contains("return Effect.gen(function*()"));
+    assert!(!streaming.contains("return Effect.scoped("));
+    assert!(streaming.contains("base.ToolRequirements | Scope.Scope"));
     assert!(!source.contains("Schema.Top"));
-    let consumer = r#"import { Effect, Stream } from "effect"
+    let consumer = r#"import { BridgeTool as base } from "@golemcloud/effect-golem"
+import { Effect, Scope, Stream } from "effect"
 import { client } from "./grep-tool-guest-client.js"
 const grep = client.grep("auto", false, "needle", [], 0, 10, Stream.empty)
 const replace = client.replace("auto", false).run("needle", "replacement")
-const checkedGrep: Effect.Effect<unknown, unknown, unknown> = grep
-const checkedReplace: Effect.Effect<unknown, unknown, unknown> = replace
+const checkedGrep: Effect.Effect<unknown, unknown, base.ToolRequirements> = grep
+// @ts-expect-error a streaming invocation must retain its caller-owned Scope
+const scopeFreeReplace: Effect.Effect<unknown, unknown, base.ToolRequirements> = replace
+const checkedReplace: Effect.Effect<unknown, unknown, base.ToolRequirements | Scope.Scope> = replace
+const scopedReplace: Effect.Effect<unknown, unknown, base.ToolRequirements> = Effect.scoped(replace)
+declare const runtime: base.ToolClientRuntime
+declare const started: ReturnType<typeof runtime.start<never>>
+// @ts-expect-error low-level invocation startup acquires a resource in Scope
+const scopeFreeStart: Effect.Effect<unknown, unknown, base.ToolRequirements> = started
 void checkedGrep
+void scopeFreeReplace
 void checkedReplace
+void scopedReplace
+void scopeFreeStart
 "#;
     std::fs::write(target.join("consumer.ts"), consumer).unwrap();
     let config = target.join("tsconfig.json");

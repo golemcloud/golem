@@ -37,8 +37,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::retry_policy::RetryProperties;
 use golem_common::model::{AgentId, OplogIndex, RdbmsPoolKey, RetryContext, TransactionId};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::marker::PhantomData;
-use std::ops::Deref;
+use std::ops::{ControlFlow, Deref};
 use std::sync::Arc;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::IoView;
@@ -293,7 +294,7 @@ where
         .await;
 
     match result {
-        Ok((begin_oplog_idx, transaction_state)) => {
+        Ok(ControlFlow::Continue((begin_oplog_idx, transaction_state))) => {
             if ctx.state.is_live() {
                 ctx.as_wasi_view()
                     .table()
@@ -304,6 +305,7 @@ where
             let resource = ctx.as_wasi_view().table().push(entry)?;
             Ok(Ok(resource))
         }
+        Ok(ControlFlow::Break(kind)) => Err(WorkerExecutorError::Interrupted { kind }.into()),
         Err(error) => Ok(Err(error.into())),
     }
 }

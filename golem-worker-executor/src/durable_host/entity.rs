@@ -18,14 +18,13 @@
 //! an entity record here, launch the returned invocation scope through `ActiveAgent`, then hand the
 //! body handle back to [`EntityInvocationDurability::drive_access`].
 
+use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DurableCallSession, HistoricalReconstruction, LeaveIncompleteOnDrop,
     ReconstructionReplayOutcome, ReplayAccessStartOutcome,
 };
 use crate::durable_host::durable_session::strip_typed_streams;
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::{DurableWorkerCtx, commit_replay_jumps};
-use crate::services::HasWorker;
 use crate::services::oplog::OplogOps;
 use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationResources};
 use crate::worker::owner_lane::OwnerInvocationId;
@@ -608,17 +607,6 @@ impl EntityInvocationDurability {
             if replay.has_visible_terminal(handle.start_index()).await {
                 InvocationExecutionMode::ReplayingCompleted
             } else {
-                // Install abandoned atomic history before any body or descendant can claim a
-                // completion from it. Surviving calls then use ordinary incomplete replay.
-                let regions = replay
-                    .entity_atomic_rollback_regions(handle.start_index())
-                    .await;
-                if !regions.is_empty() {
-                    let worker =
-                        store.with(|mut access| get_ctx(access.data_mut()).public_state.worker());
-                    commit_replay_jumps(&worker, &replay, Some(handle.start_index()), regions)
-                        .await?;
-                }
                 InvocationExecutionMode::ReplayingIncomplete
             }
         };
@@ -688,9 +676,8 @@ impl EntityInvocationDurability {
     }
 
     /// Converts a replayed incomplete Start into its live-repair handle before a body exists.
-    /// Filesystem-capable tools can remain in input staging while the primary owner replays later
-    /// sibling calls, so retaining their historical reconstruction fence until body dispatch would
-    /// deadlock the primary's transition to the live tail.
+    /// An empty replay-visible entity scope must release its historical reconstruction fence before
+    /// dispatch, so the primary owner can transition to the live tail.
     pub(crate) async fn enter_incomplete_live_repair_before_body_access<T, D, Ctx>(
         self,
         store: &Accessor<T, D>,
@@ -1022,6 +1009,7 @@ impl EntityInvocationDurability {
         } = self;
         let invocation = scope.invocation_id().clone();
         let abort = body.abort_handle();
+        let executor_tasks = body.executor_tasks();
         let body_resources = Arc::new(Mutex::new(None));
         let completed_body_resources = body_resources.clone();
         let body = async move {
@@ -1080,7 +1068,7 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
-            let completed_supervisor = tokio::spawn(async move {
+            let completed_supervisor = executor_tasks.spawn_entity(async move {
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1126,9 +1114,10 @@ impl EntityInvocationDurability {
             });
             let (completed_tx, completed_rx) = oneshot::channel();
             let monitor_body_resources = body_resources.clone();
-            tokio::spawn(async move {
+            let _monitor = executor_tasks.spawn_entity(async move {
                 let completed = match completed_supervisor.await {
-                    Ok(completed) => completed,
+                    Ok(Some(completed)) => completed,
+                    Ok(None) => return,
                     Err(error) => Err(EntityInvocationDurabilityFailure {
                         error: WorkerExecutorError::runtime(format!(
                             "completed entity reconstruction task failed: {error}"
@@ -1138,7 +1127,8 @@ impl EntityInvocationDurability {
                 };
                 let retained_reconstruction = match &completed {
                     Err(failure) => {
-                        on_completed_failure(failure.error.clone()).await;
+                        let error = failure.error.clone();
+                        on_completed_failure(error).await;
                         drop(monitor_reconstruction);
                         None
                     }

@@ -148,9 +148,13 @@ mod abandoned;
 mod claims;
 mod cursor;
 mod resolution;
+mod rollback;
 
 use abandoned::AbandonedStarts;
 pub(crate) use claims::{CustomStartClaimOutcome, ReplayStartClaimOutcome, StartClaim};
+#[cfg(test)]
+use rollback::atomic_rollback_region;
+pub use rollback::suffix_rollback_region;
 
 #[derive(Debug, Clone)]
 pub struct ReplayState {

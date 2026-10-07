@@ -76,7 +76,7 @@ openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-poem = { workspace = true, features = ["prometheus", "opentelemetry", "tower-compat"] }
+poem = { workspace = true, features = ["tower-compat"] }
 poem-derive = { workspace = true }
 poem-openapi = { workspace = true }
 poem-openapi-derive = { workspace = true }

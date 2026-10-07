@@ -42,6 +42,8 @@ mod tests {
     #[http_router(name = "SdkStatic", mount = "/", static_files = [
         ("/assets/*", "/primary/$1"), ("/assets/*", "/fallback/$1"),
         ("/assets/a", "/exact"), ("/", "/root.txt"),
+    ], file_response_headers = [
+        ("content-security-policy", "default-src 'self'"), ("referrer-policy", "same-origin"),
     ])]
     impl HttpRouter for Static {
         type Config = ();
@@ -67,7 +69,11 @@ mod tests {
         }
     }
 
-    #[agent_definition(mount = "/files/{agent-type}/{agent-version}/{owner}", filesystem_bindings = [("/*", "/public/$1")])]
+    #[agent_definition(
+        mount = "/files/{agent-type}/{agent-version}/{owner}",
+        filesystem_bindings = [("/*", "/public/$1")],
+        file_response_headers = [("content-security-policy", "default-src 'none'"), ("referrer-policy", "no-referrer")]
+    )]
     trait Files {
         fn new(owner: String) -> Self;
         fn ping(&self) -> String;
@@ -178,6 +184,14 @@ mod tests {
         };
         assert_eq!(first.filesystem_root, "/primary");
         assert_eq!(second.filesystem_root, "/fallback");
+        assert_eq!(mount.file_response_headers.len(), 2);
+        assert_eq!(
+            mount.file_response_headers[0].name,
+            "content-security-policy"
+        );
+        assert_eq!(mount.file_response_headers[0].value, "default-src 'self'");
+        assert_eq!(mount.file_response_headers[1].name, "referrer-policy");
+        assert_eq!(mount.file_response_headers[1].value, "same-origin");
         let provider = get("SdkProvider");
         assert_eq!(provider.methods.len(), 1, "metadata-provider-only");
         assert_eq!(provider.methods[0].name, "openapi");
@@ -205,6 +219,14 @@ mod tests {
         assert!(
             matches!(&mount.path_prefix[3], PathSegment::PathVariable(variable) if variable.variable_name == "owner")
         );
+        assert_eq!(mount.file_response_headers.len(), 2);
+        assert_eq!(
+            mount.file_response_headers[0].name,
+            "content-security-policy"
+        );
+        assert_eq!(mount.file_response_headers[0].value, "default-src 'none'");
+        assert_eq!(mount.file_response_headers[1].name, "referrer-policy");
+        assert_eq!(mount.file_response_headers[1].value, "no-referrer");
         assert_eq!(
             get("Files").methods[0].name,
             "ping",

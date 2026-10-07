@@ -16,6 +16,7 @@ import {
   HttpRouterError,
   serializeOpenApi,
   type FileExposure,
+  type FileResponseHeaders,
   type HttpRequest,
   type HttpResponse,
 } from './httpRouterContract';
@@ -51,7 +52,11 @@ export type RawHttpRouterHandler<Config extends ConfigSpec = {}> = (
 export interface HttpRouterBuilder<Config extends ConfigSpec> {
   mount(
     path: string,
-    options?: { readonly auth?: boolean; readonly cors?: readonly string[] },
+    options?: {
+      readonly auth?: boolean;
+      readonly cors?: readonly string[];
+      readonly fileResponseHeaders?: FileResponseHeaders;
+    },
   ): HttpRouterBuilder<Config>;
   static(route: string, path: string): HttpRouterBuilder<Config>;
   openApi(
@@ -75,7 +80,14 @@ export function defineHttpRouter<Config extends ConfigSpec = {}>(
   name: string,
   options: HttpRouterOptions<Config> = {},
 ): HttpRouterBuilder<Config> {
-  let mount: { path: string; auth?: boolean; cors?: readonly string[] } | undefined;
+  let mount:
+    | {
+        path: string;
+        auth?: boolean;
+        cors?: readonly string[];
+        fileResponseHeaders?: FileResponseHeaders;
+      }
+    | undefined;
   const mappings: FileExposure[] = [];
   let provider: ((context: HttpRouterContext<Config>) => unknown | Promise<unknown>) | undefined;
   let providerName: string | undefined;
@@ -92,6 +104,7 @@ export function defineHttpRouter<Config extends ConfigSpec = {}>(
         mount: mount.path,
         auth: mount.auth,
         cors: mount.cors,
+        fileResponseHeaders: mount.fileResponseHeaders,
         staticBindings: compileFileMappings(mappings),
         handlerMethod: handler ? methodName : undefined,
         openapiProviderMethod: providerName,
@@ -189,7 +202,13 @@ export function defineHttpRouter<Config extends ConfigSpec = {}>(
       mutable();
       if (mount) throw new HttpRouterError('router-multiple-mounts');
       compileRouterMount({ mount: path, ...mountOptions });
-      mount = { path, ...mountOptions };
+      mount = {
+        path,
+        ...mountOptions,
+        fileResponseHeaders: mountOptions.fileResponseHeaders
+          ? { ...mountOptions.fileResponseHeaders }
+          : undefined,
+      };
       return builder;
     },
     static(route, path) {

@@ -129,6 +129,7 @@ pub fn compile_fallback_mount(
                 .map(compile_method),
             static_bindings: mount.static_bindings.clone(),
             file_index: Vec::new(),
+            file_response_headers: mount.file_response_headers.clone(),
         })
     } else if !mount.filesystem_bindings.is_empty() {
         let captures = mount
@@ -153,6 +154,7 @@ pub fn compile_fallback_mount(
             constructor_input: compiled_input(agent, &agent.constructor.input_schema),
             constructor_parameters,
             filesystem_bindings: mount.filesystem_bindings.clone(),
+            file_response_headers: mount.file_response_headers.clone(),
         })
     } else {
         return Ok(None);
@@ -1165,6 +1167,7 @@ mod tests {
                 webhook_suffix: vec![],
                 static_bindings: vec![],
                 filesystem_bindings: vec![],
+                file_response_headers: vec![],
                 openapi_provider_method: None,
             }),
             snapshotting: Snapshotting::Disabled(Empty {}),

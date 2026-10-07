@@ -315,6 +315,36 @@ impl std::fmt::Debug for OwnerToolOperations {
 }
 
 impl OwnerToolOperations {
+    /// Store tasks settle terminal selections. Keep driving them even if a different abandoned
+    /// task returns an error, without dropping the in-progress owner election or lane drain.
+    pub async fn fence_for_jump<T: Send + 'static>(
+        self: &Arc<Self>,
+        store: &mut wasmtime::StoreContextMut<'_, T>,
+        mut on_error: impl FnMut(wasmtime::Error),
+    ) {
+        use wasmtime::AsContextMut;
+        let operations = self.clone();
+        let fence = async move {
+            operations
+                .select_owner_failure(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+                .await;
+            operations.drain_owner_failure_lanes().await;
+        }
+        .boxed()
+        .shared();
+        loop {
+            let pending = fence.clone();
+            match store
+                .as_context_mut()
+                .run_concurrent(async move |_accessor| pending.await)
+                .await
+            {
+                Ok(()) => return,
+                Err(error) => on_error(error),
+            }
+        }
+    }
+
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
             next_id: AtomicU64::new(1),

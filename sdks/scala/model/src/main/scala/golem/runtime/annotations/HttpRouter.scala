@@ -13,7 +13,8 @@ final class httpRouter(
   val mount: String,
   val staticBindings: Array[(String, String)] = Array.empty,
   val auth: Boolean = false,
-  val cors: Array[String] = Array.empty
+  val cors: Array[String] = Array.empty,
+  val fileResponseHeaders: Array[(String, String)] = Array.empty
 ) extends StaticAnnotation
 
 /** The router's sole Any-bound method: request: HttpRequest => HttpResponse. */
