@@ -872,6 +872,63 @@ describe('tool runtime client', () => {
     expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
   });
 
+  it.each([false, true])(
+    'validates a named foreign result by its value semantics (polymorphic=%s)',
+    async (polymorphic) => {
+      const localSchema = z.object({
+        card: s.permissionCard({ polymorphic: false }),
+        issuer: z.string(),
+      });
+      const remoteCodec = compileSchema(
+        z.object({ card: s.permissionCard({ polymorphic }), issuer: z.string() }),
+      );
+      const dispose = vi.fn();
+      const raw = { [Symbol.dispose]: dispose } as never;
+      const definition = toolDefinition('named-issuer').body((body) => body.returns(localSchema));
+      const result = client(definition, {
+        transport: new FakeTransport(() => ({
+          result: typedSchemaValueToWit({
+            graph: {
+              root: t.ref('rust::PermissionIssue'),
+              defs: new Map([
+                [
+                  'rust::PermissionIssue',
+                  {
+                    name: 'PermissionIssue',
+                    body: {
+                      ...remoteCodec.graph.root,
+                      metadata: {
+                        ...remoteCodec.graph.root.metadata,
+                        aliases: ['rust-issuer-output'],
+                      },
+                    },
+                  },
+                ],
+              ]),
+            },
+            value: remoteCodec.toValue({ card: raw, issuer: 'rust' }),
+          }),
+        })),
+      })['named-issuer']({});
+      if (polymorphic) {
+        await expect(result).rejects.toMatchObject({
+          cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+        });
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        const output = await result;
+        expect(output.issuer).toBe('rust');
+        expect(
+          peekGuestPermissionCardHandle(
+            PERMISSION_CARD_INTERNAL,
+            output.card as GuestPermissionCardHandle,
+          ),
+        ).toBe(raw);
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('accepts allowed MIME metadata when projecting a binary result to Uint8Array', async () => {
     const schema = Bytes({ mimeTypes: ['application/octet-stream'] });
     const codec = compileSchema(schema);

@@ -65,10 +65,9 @@ import {
   validateToolIdentifier,
 } from './internal/tool';
 import {
-  deepEqual,
   preflightWitTypedSchemaValue,
   schemaGraphFromWit,
-  schemaShapesMatch,
+  schemaGraphsEquivalent,
   t,
   typedSchemaValueFromWit,
   type TypedSchemaValue,
@@ -2397,15 +2396,12 @@ function validateWireSchema(
   position: string,
 ): void {
   preflightWitTypedSchemaValue(wire);
-  if (!schemaShapesMatch(schemaGraphFromWit(wire.graph), expected)) {
+  if (!schemaGraphsEquivalent(schemaGraphFromWit(wire.graph), expected)) {
     throw new Error(`${position} schema does not match the local definition`);
   }
 }
 
 function decodeTypedValue(codec: SchemaCodec, typed: TypedSchemaValue, position: string): unknown {
-  if (!deepEqual(typed.graph, codec.graph)) {
-    throw new Error(`${position} schema does not match the local definition`);
-  }
   if (!schemaValueConforms(codec.graph, codec.graph.root, typed.value)) {
     throw new Error(`${position} does not conform to the local definition`);
   }
