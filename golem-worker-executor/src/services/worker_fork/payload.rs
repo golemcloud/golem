@@ -13,11 +13,82 @@
 // limitations under the License.
 
 use desert_rust::BinaryCodec;
+use golem_common::model::AgentId;
+use golem_common::model::agent::{AgentPrincipal, Principal};
+use golem_common::model::entity::EntityInvocationRequest;
+use golem_common::model::oplog::payload::HostRequest;
 use golem_common::model::oplog::{
     OplogEntry, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
 };
 use std::fmt::Debug;
 use std::future::Future;
+
+/// Persist the rebound request from authoritative contents, returning target external bytes
+/// for fork-budget accounting. Never use a source cache as a substitute for durable storage.
+pub(super) async fn copy_entity_request<Download, DownloadFuture, Upload, UploadFuture>(
+    request: &OplogPayload<HostRequest>,
+    source: &AgentId,
+    target: &AgentId,
+    download: Download,
+    upload: Upload,
+) -> Result<(OplogPayload<HostRequest>, u64), String>
+where
+    Download: FnOnce(PayloadId, Vec<u8>) -> DownloadFuture,
+    DownloadFuture: Future<Output = Result<Vec<u8>, String>>,
+    Upload: FnOnce(Vec<u8>) -> UploadFuture,
+    UploadFuture: Future<Output = Result<RawOplogPayload, String>>,
+{
+    let mut value = match request {
+        OplogPayload::Inline(value) => (**value).clone(),
+        OplogPayload::SerializedInline { bytes, .. } => {
+            golem_common::serialization::deserialize(bytes)?
+        }
+        OplogPayload::External {
+            payload_id,
+            md5_hash,
+            ..
+        } => {
+            let bytes = download(payload_id.clone(), md5_hash.clone()).await?;
+            golem_common::serialization::deserialize(&bytes)?
+        }
+    };
+    rebind_entity_caller(&mut value, source, target)?;
+    let bytes = golem_common::serialization::serialize(&value)?;
+    let size = bytes.len() as u64;
+    let payload = upload(bytes).await?;
+    let external_bytes = if matches!(payload, RawOplogPayload::External { .. }) {
+        size
+    } else {
+        0
+    };
+    Ok((payload.into_payload()?, external_bytes))
+}
+
+fn rebind_entity_caller(
+    request: &mut HostRequest,
+    source: &AgentId,
+    target: &AgentId,
+) -> Result<(), String> {
+    let HostRequest::EntityInvocation(request) = request else {
+        return Err("entity Start has a non-entity request".to_string());
+    };
+    let mut metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
+        .map_err(|_| "invalid entity invocation metadata".to_string())?;
+    if metadata.calling_principal
+        != Principal::Agent(AgentPrincipal {
+            agent_id: source.clone(),
+        })
+    {
+        return Err("entity invocation caller is not the fork source".to_string());
+    }
+    metadata.calling_principal = Principal::Agent(AgentPrincipal {
+        agent_id: target.clone(),
+    });
+    // The execution principal is guest input, unlike the internal invocation owner.
+    request.metadata = desert_rust::serialize_to_byte_vec(&metadata)
+        .map_err(|_| "failed to encode entity invocation metadata".to_string())?;
+    Ok(())
+}
 
 /// Rehome external blobs without decoding or re-encoding their contents. Inline payloads are
 /// already independent of the source. Cached external values are not durable ownership.
@@ -142,6 +213,230 @@ mod tests {
     use golem_common::model::OplogIndex;
     use std::sync::Arc;
     use test_r::test;
+
+    #[test]
+    async fn entity_copy_fails_closed_without_upload_on_storage_errors() {
+        use golem_common::model::component::ComponentId;
+        use golem_common::model::oplog::payload::HostRequestNoInput;
+        let source = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "source".to_string(),
+        };
+        let target = AgentId {
+            agent_id: "target".to_string(),
+            ..source.clone()
+        };
+        let cached = Some(Arc::new(HostRequest::NoInput(HostRequestNoInput {})));
+        for request in [
+            OplogPayload::External {
+                payload_id: PayloadId::new(),
+                md5_hash: vec![0; 16],
+                cached: cached.clone(),
+            },
+            OplogPayload::SerializedInline {
+                bytes: vec![golem_common::serialization::SERIALIZATION_VERSION_V3],
+                cached,
+            },
+        ] {
+            let result = copy_entity_request(
+                &request,
+                &source,
+                &target,
+                |_, _| std::future::ready(Err("storage unavailable".to_string())),
+                |_| -> std::future::Ready<Result<RawOplogPayload, String>> {
+                    panic!("invalid authoritative request must not upload target bytes")
+                },
+            )
+            .await;
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    async fn entity_rebinding_preserves_guest_input_and_supports_repeated_forks() {
+        use golem_common::model::IdempotencyKey;
+        use golem_common::model::card::{Card, CardId, StoredCard};
+        use golem_common::model::component::ComponentId;
+        use golem_common::model::entity::{
+            AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
+            ToolInvocationDescriptor, ToolMiddlewareName, ToolOutputContract,
+        };
+        use golem_common::model::oplog::payload::HostRequestEntityInvocation;
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+
+        let source = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "parent".to_string(),
+        };
+        let child = AgentId {
+            agent_id: "child-with-a-longer-name".to_string(),
+            ..source.clone()
+        };
+        let grandchild = AgentId {
+            agent_id: "grandchild".to_string(),
+            ..source.clone()
+        };
+        let principal = Principal::Agent(AgentPrincipal {
+            agent_id: source.clone(),
+        });
+        let metadata = EntityInvocationRequest {
+            entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
+            calling_principal: principal.clone(),
+            principal,
+            call_mode: EntityCallMode::Synchronous,
+            operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
+                attempt_ordinal: 7,
+                command_path: vec!["write-file".to_string()],
+                args: Vec::new(),
+                has_stdin: false,
+                has_stdout: true,
+                declares_stdout: true,
+                has_stderr: false,
+                declares_stderr: false,
+                output_contract: ToolOutputContract {
+                    result: None,
+                    errors: Vec::new(),
+                },
+            }),
+            plan: EntityInvocationPlanReference::Descendant {
+                root_start_index: OplogIndex::from_u64(11),
+                position: 2,
+            },
+            assume_idempotence: false,
+            authority_wallet: vec![StoredCard::Concrete(Card {
+                card_id: CardId::new(),
+                parent_ids: vec![CardId::new()],
+                lower_positive: Vec::new(),
+                lower_negative: Vec::new(),
+                upper_positive: Vec::new(),
+                upper_negative: Vec::new(),
+                created_at: chrono::Utc::now(),
+                expires_at: None,
+                system_card: false,
+                managed_by: None,
+            })],
+        };
+        let original = HostRequest::EntityInvocation(HostRequestEntityInvocation {
+            metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),
+            input: TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::string()),
+                SchemaValue::String("historical input".to_string()),
+            ),
+            stream_session_idempotency_key: IdempotencyKey::new("original-key".to_string()),
+        });
+        let source_bytes = golem_common::serialization::serialize(&original).unwrap();
+        let mut expected_child = original.clone();
+        let HostRequest::EntityInvocation(expected) = &mut expected_child else {
+            unreachable!()
+        };
+        let mut child_metadata = metadata.clone();
+        child_metadata.calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: child.clone(),
+        });
+        expected.metadata = desert_rust::serialize_to_byte_vec(&child_metadata).unwrap();
+        let expected_bytes = golem_common::serialization::serialize(&expected_child).unwrap();
+        assert!(expected_bytes.len() > source_bytes.len());
+        let source_id = PayloadId::new();
+        let source_hash = vec![17; 16];
+        let poison = Arc::new(HostRequest::NoInput(
+            golem_common::model::oplog::payload::HostRequestNoInput {},
+        ));
+        let representations = [
+            OplogPayload::Inline(Box::new(original.clone())),
+            OplogPayload::SerializedInline {
+                bytes: source_bytes.clone(),
+                cached: Some(poison.clone()),
+            },
+            OplogPayload::External {
+                payload_id: source_id.clone(),
+                md5_hash: source_hash.clone(),
+                cached: None,
+            },
+            OplogPayload::External {
+                payload_id: source_id.clone(),
+                md5_hash: source_hash.clone(),
+                cached: Some(poison),
+            },
+        ];
+        for representation in representations {
+            for external in [false, true] {
+                let target_id = PayloadId::new();
+                let mut stored = Vec::new();
+                let (copied, counted_bytes) = copy_entity_request(
+                    &representation,
+                    &source,
+                    &child,
+                    |id, hash| {
+                        assert_eq!(id, source_id);
+                        assert_eq!(hash, source_hash);
+                        std::future::ready(Ok(source_bytes.clone()))
+                    },
+                    |bytes| {
+                        stored = bytes.clone();
+                        std::future::ready(Ok(if external {
+                            RawOplogPayload::External {
+                                payload_id: target_id.clone(),
+                                md5_hash: vec![23; 16],
+                            }
+                        } else {
+                            RawOplogPayload::SerializedInline(bytes)
+                        }))
+                    },
+                )
+                .await
+                .unwrap();
+                assert_eq!(stored, expected_bytes);
+                // Reload only target contents; the source storage and cache are unnecessary.
+                let reloaded: HostRequest = match copied {
+                    OplogPayload::SerializedInline {
+                        bytes,
+                        cached: None,
+                    } => golem_common::serialization::deserialize(&bytes).unwrap(),
+                    OplogPayload::External {
+                        payload_id,
+                        cached: None,
+                        ..
+                    } => {
+                        assert_eq!(payload_id, target_id);
+                        golem_common::serialization::deserialize(&stored).unwrap()
+                    }
+                    _ => panic!("target must be durably readable without caches"),
+                };
+                assert_eq!(reloaded, expected_child);
+                assert_eq!(
+                    counted_bytes,
+                    if external {
+                        expected_bytes.len() as u64
+                    } else {
+                        0
+                    }
+                );
+            }
+        }
+        let mut request = original.clone();
+        rebind_entity_caller(&mut request, &source, &child).unwrap();
+        rebind_entity_caller(&mut request, &child, &grandchild).unwrap();
+        let mut expected_metadata = metadata;
+        expected_metadata.calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: grandchild,
+        });
+        let HostRequest::EntityInvocation(mut expected) = original else {
+            unreachable!()
+        };
+        expected.metadata = desert_rust::serialize_to_byte_vec(&expected_metadata).unwrap();
+        assert_eq!(request, HostRequest::EntityInvocation(expected));
+        let before = request.clone();
+        assert!(rebind_entity_caller(&mut request, &source, &child).is_err());
+        assert_eq!(
+            request, before,
+            "invalid ownership must not mutate the request"
+        );
+        let HostRequest::EntityInvocation(value) = &mut request else {
+            unreachable!()
+        };
+        value.metadata = vec![255];
+        assert!(rebind_entity_caller(&mut request, &source, &child).is_err());
+    }
 
     #[test]
     async fn copies_external_payload_even_when_cached_and_preserves_bytes() {

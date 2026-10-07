@@ -61,7 +61,23 @@ pub(crate) async fn start_with_local_resume(
     context: &TestContext,
     lose_resume_response: bool,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, lose_resume_response, None, None).await
+    start_with_resume_checkpoint(
+        deps,
+        context,
+        lose_resume_response,
+        None,
+        None,
+        Default::default(),
+    )
+    .await
+}
+
+pub(crate) async fn start_with_local_resume_and_overrides(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_resume_checkpoint(deps, context, false, None, None, overrides).await
 }
 
 pub(crate) async fn start_with_local_resume_and_snapshot_policy(
@@ -69,7 +85,15 @@ pub(crate) async fn start_with_local_resume_and_snapshot_policy(
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, false, None, Some(snapshot_policy)).await
+    start_with_resume_checkpoint(
+        deps,
+        context,
+        false,
+        None,
+        Some(snapshot_policy),
+        Default::default(),
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -142,19 +166,22 @@ async fn start_with_resume_checkpoint(
     lose_resume_response: bool,
     checkpoint: Option<Arc<tokio::sync::Notify>>,
     snapshot_policy: Option<SnapshotPolicy>,
+    overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let client = Arc::new(Mutex::new(None));
     let target = client.clone();
     let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
     let checkpoint = Arc::new(Mutex::new(checkpoint));
     let environment_id = context.default_environment_id;
-    let configure = snapshot_policy.map(|snapshot_policy| {
-        Arc::new(
-            move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
-                config.oplog.default_snapshotting = snapshot_policy.clone();
-            },
-        ) as Arc<_>
-    });
+    let configure = snapshot_policy
+        .map(|snapshot_policy| {
+            Arc::new(
+                move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                    config.oplog.default_snapshotting = snapshot_policy.clone();
+                },
+            ) as Arc<_>
+        })
+        .or(overrides.configure.clone());
     let executor = start_with_overrides(
         deps,
         context,
@@ -171,7 +198,7 @@ async fn start_with_resume_checkpoint(
                     checkpoint: checkpoint.clone(),
                 })
             })),
-            ..Default::default()
+            ..overrides
         },
     )
     .await?;
@@ -1839,8 +1866,15 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let checkpoint = Arc::new(tokio::sync::Notify::new());
-    let executor =
-        start_with_resume_checkpoint(deps, &context, false, Some(checkpoint.clone()), None).await?;
+    let executor = start_with_resume_checkpoint(
+        deps,
+        &context,
+        false,
+        Some(checkpoint.clone()),
+        None,
+        Default::default(),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()

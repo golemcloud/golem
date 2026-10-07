@@ -987,7 +987,14 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 
 Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
 resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
-mappings. Export forks also append `ExportForkInitialized`, which binds their new public session ID,
+mappings. During copying, entity-invocation `Start` metadata rebinds its internal `calling_principal`
+from the source owner to the target owner, including every middleware and leaf invocation. This
+preserves strict replay matching and entity-scope ownership. The separate execution `principal`,
+authority snapshot, guest inputs, recorded environment and external effects remain unchanged.
+Inline and external requests are decoded from authoritative contents and persisted under the target;
+cached external values are not a substitute for copying durable bytes. Repeated forks rebind the
+current source owner, without rewriting historical guest observations or logical RPC origins.
+Export forks also append `ExportForkInitialized`, which binds their new public session ID,
 fresh invocation key and expiry policy. Revert raises the generation/epoch fence before reconstruction,
 so handles issued by the discarded generation cannot control the rebuilt streams. Export targets
 are built in hidden staged oplogs and published atomically; matching retries trust the immutable

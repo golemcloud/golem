@@ -307,6 +307,326 @@ fn assert_read_content(value: SchemaValue, expected: &str) {
     assert_eq!(fields[0], SchemaValue::String(expected.to_string()));
 }
 
+#[test]
+#[timeout("5m")]
+async fn named_fork_replays_guest_tool_calls_with_path_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_named_fork_tool_replay(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        audit,
+        false,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[timeout("5m")]
+async fn named_fork_replays_guest_tool_calls_with_path_policy_and_audit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_named_fork_tool_replay(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        audit,
+        true,
+        false,
+    )
+    .await
+}
+
+#[test]
+#[timeout("5m")]
+async fn named_fork_replays_guest_tool_calls_with_path_policy_at_incomplete_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("filesystem_tools")] filesystem_tools: &PrecompiledComponent,
+    #[tagged_as("audit_middleware")] audit: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    exercise_named_fork_tool_replay(
+        last_unique_id,
+        deps,
+        caller,
+        filesystem_tools,
+        audit,
+        false,
+        true,
+    )
+    .await
+}
+
+async fn exercise_named_fork_tool_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    caller: &PrecompiledComponent,
+    filesystem_tools: &PrecompiledComponent,
+    audit: &PrecompiledComponent,
+    audited: bool,
+    incomplete: bool,
+) -> anyhow::Result<()> {
+    use crate::fork::start_with_local_resume_and_overrides;
+    use golem_common::model::AgentId;
+    use golem_worker_executor::services::golem_config::SnapshotPolicy;
+
+    let (filesystem_metadata, audit_metadata) =
+        extract_path_policy_metadata(deps, filesystem_tools, audit).await?;
+    let (audit_sink_url, audit_sink, audit_sink_task) = start_path_policy_audit_sink().await;
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = || TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        configure: Some(Arc::new(move |config| {
+            config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+            if !audited {
+                config.oplog.max_payload_size = 1;
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_local_resume_and_overrides(deps, &context, overrides()).await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let filesystem_component = executor
+        .component_dep(&context.default_environment_id, filesystem_tools)
+        .store()
+        .await?;
+    let audit_component = executor
+        .component_dep(&context.default_environment_id, audit)
+        .store()
+        .await?;
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let mut deployment = deployment_state(
+        context.account_id,
+        filesystem_component.id,
+        filesystem_component.revision,
+        "golem:filesystem-tools",
+        agent_type.0.as_str(),
+        filesystem_metadata.tools.clone(),
+    );
+    for tool_name in ["write-file", "read-file"] {
+        install_audit_path_policy_chain(
+            &mut deployment,
+            &agent_type,
+            tool_name,
+            &audit_component,
+            &audit_metadata.tool_middlewares,
+            &audit_sink_url,
+            &filesystem_component,
+            &filesystem_metadata.tool_middlewares,
+            "/workspace",
+            "allowed",
+        );
+        if !audited {
+            deployment
+                .tool_middleware_chains
+                .get_mut(&ToolBindingOwner::AgentType {
+                    agent_type_name: agent_type.clone(),
+                })
+                .unwrap()
+                .get_mut(&ToolName::try_from(tool_name).unwrap())
+                .unwrap()
+                .occurrences
+                .remove(0);
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let parent_name = agent_id!("ToolStreamingCaller", "fork-parent");
+    let parent = executor
+        .start_agent(&caller_component.id, parent_name.clone())
+        .await?;
+    let content = "parent checkpoint bytes";
+    let evidence: Result<Vec<String>, String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &parent_name,
+            "filesystem_policy_write_read",
+            data_value!("allowed/state.txt".to_string(), content.to_string()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        evidence.map_err(anyhow::Error::msg)?,
+        vec!["created", "23", content, "1", "1", "none"]
+    );
+    let audit_calls_per_tool = usize::from(audited);
+    assert_eq!(
+        audit_sink.committed.lock().unwrap().len(),
+        2 * audit_calls_per_tool
+    );
+    let original_audit_records = audit_sink.committed.lock().unwrap().clone();
+    let history = executor.get_oplog(&parent, OplogIndex::INITIAL).await?;
+    let cut = if incomplete {
+        history.iter().find(|entry| matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "golem::entity::invoke"))
+            .expect("first entity Start").oplog_index
+    } else {
+        history
+            .last()
+            .expect("completed parent history")
+            .oplog_index
+    };
+    assert!(
+        history
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Start(_)))
+    );
+
+    let child_name = agent_id!("ToolStreamingCaller", "fork-child");
+    let child = AgentId {
+        component_id: caller_component.id,
+        agent_id: child_name.to_string(),
+    };
+    executor.fork_worker(&parent, &child.agent_id, cut).await?;
+    let copied = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
+    for entry in history.iter().filter(|entry| entry.oplog_index <= cut) {
+        if let PublicOplogEntry::Start(start) = &entry.entry {
+            let copy = copied
+                .iter()
+                .find(|copy| copy.oplog_index == entry.oplog_index)
+                .unwrap();
+            let PublicOplogEntry::Start(copied_start) = &copy.entry else {
+                panic!("fork changed a Start's entry kind");
+            };
+            assert_eq!(copied_start.function_name, start.function_name);
+            assert_eq!(copied_start.parent_start_index, start.parent_start_index);
+            if start.function_name == "golem::entity::invoke" {
+                assert_eq!(copied_start.request, start.request);
+            }
+        }
+    }
+    let restored: Result<String, String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &child_name,
+            "filesystem_policy_read",
+            data_value!("allowed/state.txt".to_string()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(restored.map_err(anyhow::Error::msg)?, content);
+    assert_eq!(
+        executor
+            .get_file_contents(&child, "/workspace/allowed/state.txt")
+            .await?,
+        content.as_bytes()
+    );
+    assert_eq!(
+        audit_sink.committed.lock().unwrap().len(),
+        3 * audit_calls_per_tool,
+        "completed replay must not repeat audit HTTP effects"
+    );
+
+    let edited: Result<Vec<String>, String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &child_name,
+            "filesystem_policy_write_read",
+            data_value!(
+                "allowed/state.txt".to_string(),
+                "child-only edit".to_string()
+            ),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(
+        edited.map_err(anyhow::Error::msg)?,
+        vec!["replaced", "15", "child-only edit", "1", "1", "none"]
+    );
+    assert_eq!(
+        executor
+            .get_file_contents(&parent, "/workspace/allowed/state.txt")
+            .await?,
+        content.as_bytes()
+    );
+    assert_eq!(
+        audit_sink.committed.lock().unwrap().len(),
+        5 * audit_calls_per_tool
+    );
+    drop(executor);
+
+    let executor = start_with_local_resume_and_overrides(deps, &context, overrides()).await?;
+    let recovered: Result<String, String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &child_name,
+            "filesystem_policy_read",
+            data_value!("allowed/state.txt".to_string()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(recovered.map_err(anyhow::Error::msg)?, "child-only edit");
+    assert_eq!(
+        audit_sink.committed.lock().unwrap().len(),
+        6 * audit_calls_per_tool,
+        "restart must not repeat recorded audit effects"
+    );
+    let child_history = executor.get_oplog(&child, OplogIndex::INITIAL).await?;
+    let grandchild_name = agent_id!("ToolStreamingCaller", "fork-grandchild");
+    let grandchild = AgentId {
+        component_id: caller_component.id,
+        agent_id: grandchild_name.to_string(),
+    };
+    executor
+        .fork_worker(
+            &child,
+            &grandchild.agent_id,
+            child_history.last().unwrap().oplog_index,
+        )
+        .await?;
+    let inherited: Result<String, String> = executor
+        .invoke_and_await_agent(
+            &caller_component,
+            &grandchild_name,
+            "filesystem_policy_read",
+            data_value!("allowed/state.txt".to_string()),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(inherited.map_err(anyhow::Error::msg)?, "child-only edit");
+    let records = audit_sink.committed.lock().unwrap();
+    assert_eq!(records.len(), 7 * audit_calls_per_tool);
+    assert_eq!(
+        &records[..original_audit_records.len()],
+        original_audit_records.as_slice()
+    );
+    if audited {
+        for record in &records[..2] {
+            assert_eq!(record["owner"]["agentId"], parent.agent_id);
+        }
+        for record in &records[2..6] {
+            assert_eq!(record["owner"]["agentId"], child.agent_id);
+        }
+        assert_eq!(records[6]["owner"]["agentId"], grandchild.agent_id);
+    }
+    drop(records);
+    audit_sink_task.abort();
+    Ok(())
+}
+
 async fn unload_path_policy_owner(
     executor: &TestWorkerExecutor,
     environment_id: golem_common::model::environment::EnvironmentId,
