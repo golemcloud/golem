@@ -11148,9 +11148,9 @@ struct PrivateDurableWorkerState {
     baseline_role: BaselineRole,
     /// The purpose of the speculative replay of this start: the replay after a periodic record,
     /// the replay after the record of a snapshot-assisted update, or the full replay of a pending
-    /// automatic update, or `None` when the replay is not speculative. A periodic recovery can reject a divergent record; an update replay
-    /// fails the update or retries it, as the outcome table decides, and records no application
-    /// failure.
+    /// automatic update, or `None` when the replay is not speculative. A periodic recovery can
+    /// reject a divergent record; an update replay fails the update or retries it, as the outcome
+    /// table decides, and records no application failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).

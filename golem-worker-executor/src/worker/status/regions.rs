@@ -44,7 +44,8 @@ pub(crate) struct RegionFold {
 /// the history up to and including its `PendingUpdate` entry, and a successful snapshot-assisted
 /// automatic update commits the history up to and including its selected record, both read from
 /// the paired queue element. The override is the history up to and including the `PendingUpdate`
-/// entry of a snapshot-based queue head. Entries in a deleted region change only the manual admissions of the queue.
+/// entry of a snapshot-based queue head. Entries in a deleted region change only the manual
+/// admissions of the queue.
 pub(crate) fn fold_regions(
     baseline: &AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,

@@ -18,12 +18,13 @@
 //! The status keeps two automatic snapshot records: the last one, and the newest usable one
 //! before it. A record is usable when a `SnapshotConfirmed` entry confirms its filesystem
 //! snapshot, or when it has no filesystem snapshot name. An executor without filesystem snapshots
-//! uses only a record without a name. A start without a pending update, or with a plain automatic
-//! update that has its strategy entry, takes the first of the two that is usable, of the current
-//! component revision, not rejected, not lost in a failed update, and not unavailable for this
-//! start. An automatic update at the head of the queue that has no strategy yet takes a record by
-//! the same rules, only when its target is newer than the current revision and only from before
-//! the first snapshot-based manual update in the queue. It takes no record when an earlier
+//! uses only a record without a name. A start without a pending update takes the first of the two
+//! that is usable, of the current component revision, not rejected, not lost in a failed update,
+//! and not unavailable for this start. A start with a plain automatic update that has its strategy
+//! entry takes no record: that update replays the full history after the authoritative baseline.
+//! An automatic update at the head of the queue that has no strategy yet takes a record by the
+//! same rules, only when its target is newer than the current revision and only from before the
+//! first snapshot-based manual update in the queue. It takes no record when an earlier
 //! snapshot-assisted attempt with the same target from the same source could not load its record
 //! or diverged after it. Its strategy entry freezes that choice. When no record is taken, the
 //! start uses the authoritative baseline, else the initial files with a full replay.
@@ -233,9 +234,9 @@ where
 }
 
 /// The periodic record that a start of `status` selects under `exclusions`, which is the periodic
-/// baseline of [`StartSelection::of`]: only a start without a pending update, or with a plain
-/// automatic update that has its strategy entry, selects one. `enabled` tells whether this
-/// executor keeps filesystem snapshots.
+/// baseline of [`StartSelection::of`]: only a start without a pending update selects one. A start
+/// with a plain automatic update that has its strategy entry gets the closed queue filter and
+/// selects none. `enabled` tells whether this executor keeps filesystem snapshots.
 pub(crate) fn periodic_baseline(
     status: &AgentStatusRecord,
     exclusions: &SnapshotExclusions,
