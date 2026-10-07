@@ -202,6 +202,12 @@ impl UpdateQueue {
         self.pending
     }
 
+    /// The pending updates, the head first, and the manual update invocations that no
+    /// `PendingUpdate` and no outcome paired, in the order of their invocations.
+    pub(crate) fn into_open(self) -> (VecDeque<PendingUpdateRef>, VecDeque<ManualAdmission>) {
+        (self.pending, self.manual_admissions)
+    }
+
     fn after_pending_update(
         &mut self,
         index: OplogIndex,

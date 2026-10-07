@@ -237,6 +237,12 @@ pub(crate) fn failed_admission_of(
     )
 }
 
+/// The failed update that ends `head` without an error, such as a cancellation: it carries the
+/// attempt index and the snapshot-assisted details of `head`, and no snapshot fault.
+pub(crate) fn cancelled_update_of(head: &PendingUpdateRef, details: String) -> OplogEntry {
+    failed_update_of(head, details, None)
+}
+
 /// The details of a successful update of `head`: its snapshot-assisted details, or `None` for
 /// any other kind.
 pub(crate) fn success_details_of(head: &PendingUpdateRef) -> Option<SnapshotAssistedUpdateDetails> {

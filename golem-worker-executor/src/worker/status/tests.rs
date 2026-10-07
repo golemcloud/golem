@@ -7277,6 +7277,21 @@ fn pending_update_name(
     }
 }
 
+/// The target revision and the attempt index of each failed update in `entries`.
+fn cancelled_updates(entries: &[OplogEntry]) -> Vec<(ComponentRevision, Option<OplogIndex>)> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            OplogEntry::FailedUpdate {
+                target_revision,
+                update_attempt_index,
+                ..
+            } => Some((*target_revision, *update_attempt_index)),
+            _ => None,
+        })
+        .collect()
+}
+
 proptest::proptest! {
     #[test]
     fn the_fork_baseline_name_and_cancelled_updates_equal_the_fold(
@@ -7330,13 +7345,13 @@ proptest::proptest! {
             .into_parts();
 
         proptest::prop_assert_eq!(
-            (cancelled, baseline),
+            (cancelled_updates(&cancelled), baseline),
             (
                 regions
                     .queue
                     .into_pending()
                     .iter()
-                    .map(|update| (update.target_revision, update.admission_index))
+                    .map(|update| (update.target_revision, Some(update.admission_index)))
                     .collect::<Vec<_>>(),
                 pending_update_name(&entries, manual_update_baseline(&fields.authoritative_snapshot))
             )
@@ -7598,6 +7613,71 @@ mod region_fold {
             (vec![region(2, 2)], None)
         );
         assert_eq!(names_in_use(&status), Box::from([name]));
+    }
+
+    #[test]
+    fn the_record_of_an_assisted_update_stays_in_use_while_pending_after_success_after_a_revert_of_the_success_and_after_a_later_update()
+     {
+        let [selected, newer, newest] = [(); 3].map(|()| FilesystemSnapshotName::periodic());
+        let later = FilesystemSnapshotName::update();
+        let pending = [
+            (2, update_fields_snapshot(Some(selected.clone()))),
+            (3, OplogEntry::snapshot_confirmed(selected.clone())),
+            (4, automatic_admission(2)),
+            (5, assisted_strategy(2, 4, 1, 2, Some(selected.clone()))),
+            (6, update_fields_snapshot(Some(newer.clone()))),
+            (7, OplogEntry::snapshot_confirmed(newer.clone())),
+            (8, update_fields_snapshot(Some(newest.clone()))),
+            (9, OplogEntry::snapshot_confirmed(newest.clone())),
+        ];
+        let succeeded_at_10 = pending
+            .iter()
+            .cloned()
+            .chain([(10, succeeded(2))])
+            .collect::<Vec<_>>();
+        let reverted = succeeded_at_10
+            .iter()
+            .cloned()
+            .chain([(11, revert(10, 10))])
+            .collect::<Vec<_>>();
+        let later_update = succeeded_at_10
+            .iter()
+            .cloned()
+            .chain([
+                (11, manual_invocation(3)),
+                (
+                    12,
+                    OplogEntry::pending_update(
+                        UpdateDescription::SnapshotBased {
+                            target_revision: revision(3),
+                            payload: OplogPayload::Inline(Box::new(vec![])),
+                            mime_type: "application/octet-stream".to_string(),
+                            filesystem_snapshot: Some(later.clone()),
+                        },
+                        Some(idx(11)),
+                    ),
+                ),
+                (13, succeeded(3)),
+            ])
+            .collect::<Vec<_>>();
+
+        let names = [
+            fold_status(entries(pending)),
+            fold_status(entries(succeeded_at_10)),
+            fold_status(entries(reverted)),
+            fold_status(entries(later_update)),
+        ]
+        .map(|status| names_in_use(&status));
+
+        assert_eq!(
+            names,
+            [
+                Box::from([newest.clone(), newer.clone(), selected.clone()]),
+                Box::from([selected.clone()]),
+                Box::from([newest, newer, selected.clone()]),
+                Box::from([selected, later]),
+            ]
+        );
     }
 
     #[test]
@@ -7899,9 +7979,13 @@ mod update_entry_sequences {
                     }
                     Generated::Strategy(choice, assisted) => match pick(&automatic, *choice) {
                         Some(admission) => match (assisted, pick(&snapshots, *choice)) {
-                            (true, Some(snapshot)) => {
-                                assisted_strategy(admission + 1, admission, 1, snapshot, None)
-                            }
+                            (true, Some(snapshot)) => assisted_strategy(
+                                admission + 1,
+                                admission,
+                                1,
+                                snapshot,
+                                (choice % 2 == 0).then(FilesystemSnapshotName::periodic),
+                            ),
                             _ => plain_strategy(admission + 1, admission),
                         },
                         None => update_fields_snapshot(None),
@@ -8020,8 +8104,9 @@ mod update_entry_sequences {
                 Ok(())
             })?;
 
-            // The fork cancels the status's pending queue and takes the name of the last
-            // successful snapshot-based update as its baseline.
+            // The fork cancels the status's pending queue and then its pending manual update
+            // invocations, and takes the name of the last successful snapshot-based or
+            // snapshot-assisted update as its baseline.
             let (cancelled, baseline) = list
                 .iter()
                 .fold(ForkUpdates::default(), |updates, (index, entry)| {
@@ -8029,25 +8114,50 @@ mod update_entry_sequences {
                 })
                 .into_parts();
             prop_assert_eq!(
-                cancelled,
+                cancelled_updates(&cancelled),
                 status
                     .pending_updates
                     .iter()
-                    .map(|update| (update.target_revision, update.admission_index))
+                    .map(|update| (update.target_revision, Some(update.admission_index)))
+                    .chain(status.pending_invocations.iter().filter_map(|invocation| {
+                        invocation
+                            .manual_update_target_revision
+                            .map(|target| (target, Some(invocation.oplog_index)))
+                    }))
                     .collect::<Vec<_>>()
             );
             prop_assert_eq!(
-                baseline,
-                status
+                &baseline,
+                &status
                     .successful_updates
                     .iter()
                     .rev()
                     .find(|update| matches!(
                         update.pending_update,
-                        Some(PendingUpdateRef { kind: PendingUpdateKind::SnapshotBased { .. }, .. })
+                        Some(PendingUpdateRef {
+                            kind: PendingUpdateKind::SnapshotBased { .. }
+                                | PendingUpdateKind::SnapshotAssistedAutomatic(_),
+                            ..
+                        })
                     ))
                     .and_then(|update| update.filesystem_snapshot.clone())
             );
+
+            // The copied prefix with the cancellations of the fork leaves no update pending.
+            let last = list.keys().next_back().copied().unwrap_or(OplogIndex::INITIAL);
+            let target = fold_status(
+                list.clone()
+                    .into_iter()
+                    .chain(cancelled.iter().cloned().enumerate().map(|(offset, entry)| {
+                        (OplogIndex::from_u64(u64::from(last) + offset as u64 + 1), entry)
+                    }))
+                    .collect(),
+            );
+            prop_assert!(target.pending_updates.is_empty());
+            prop_assert!(target
+                .pending_invocations
+                .iter()
+                .all(|invocation| invocation.manual_update_target_revision.is_none()));
 
             // The cut point refuses exactly the cuts that split a snapshot-based update as the
             // status pairs it.

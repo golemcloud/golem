@@ -5692,7 +5692,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
                 agent_filesystem_snapshots::Confirmation::Confirmed {
-                    selectable: snapshot_selection::names_in_use(&self.last_known_status.load()),
+                    kept: snapshot_selection::names_in_use(&self.last_known_status.load()),
                 }
             }
             agent_filesystem_snapshots::ConfirmOutcome::Superseded => {

@@ -1042,8 +1042,8 @@ pub(crate) fn owner_gate(
     }
 }
 
-/// The filesystem snapshot name that the record `entry` holds: the name of a snapshot record or
-/// of a snapshot-based update record.
+/// The filesystem snapshot name that the record `entry` holds: the name of a snapshot record, of
+/// a snapshot-based update record, or of the record that a snapshot-assisted update selected.
 fn record_name(entry: &OplogEntry) -> Option<&FilesystemSnapshotName> {
     match entry {
         OplogEntry::Snapshot {
@@ -1055,6 +1055,10 @@ fn record_name(entry: &OplogEntry) -> Option<&FilesystemSnapshotName> {
                 UpdateDescription::SnapshotBased {
                     filesystem_snapshot,
                     ..
+                }
+                | UpdateDescription::SnapshotAssistedAutomatic {
+                    filesystem_snapshot,
+                    ..
                 },
             ..
         } => filesystem_snapshot.as_ref(),
@@ -1063,7 +1067,7 @@ fn record_name(entry: &OplogEntry) -> Option<&FilesystemSnapshotName> {
 }
 
 /// The filesystem snapshot names that a revert of the region `dropped` makes unused, newest
-/// first: the names of the snapshot records and of the snapshot-based update records in `entries`
+/// first: the names of the snapshot records and of the update records in `entries`
 /// inside `dropped`, without the names that such a record outside `dropped` and outside the
 /// regions `deleted` uses. A record outside the region can use an older name again, and after the
 /// revert that record can be a baseline again.
@@ -2652,6 +2656,16 @@ mod tests {
     /// Saves `older` update snapshots, then a manual update whose retention keeps the older
     /// snapshots at the indexes `kept`, and gives the names that the retention deleted.
     async fn update_retention(older: usize, kept: &[usize]) -> (Vec<Box<str>>, Vec<Box<str>>) {
+        update_retention_with(older, kept, &[]).await
+    }
+
+    /// As `update_retention`, with the snapshots `other` saved before the older update snapshots
+    /// and kept by the retention.
+    async fn update_retention_with(
+        older: usize,
+        kept: &[usize],
+        other: &[FilesystemSnapshotName],
+    ) -> (Vec<Box<str>>, Vec<Box<str>>) {
         let store = Arc::new(SpacedStore::default());
         let shutdown = crate::services::shutdown::Shutdown::new();
         let snapshots = AgentFilesystemSnapshots::bind(
@@ -2674,17 +2688,24 @@ mod tests {
                 .unwrap()
             })
             .collect::<Vec<_>>();
-        let saved = futures::StreamExt::then(futures::stream::iter(&older), |name| {
-            crate::filesystem_snapshot::FilesystemSnapshotStore::save(
-                store.as_ref(),
-                &agent,
-                name,
-                tree.path(),
-                None,
-                crate::filesystem_snapshot::never_cancelled(),
-                &crate::filesystem_snapshot::Unlimited,
-            )
-        });
+        let other_names = other
+            .iter()
+            .map(|name| crate::filesystem_snapshot::SnapshotName::new(name.as_str()).unwrap())
+            .collect::<Vec<_>>();
+        let saved = futures::StreamExt::then(
+            futures::stream::iter(other_names.iter().chain(&older)),
+            |name| {
+                crate::filesystem_snapshot::FilesystemSnapshotStore::save(
+                    store.as_ref(),
+                    &agent,
+                    name,
+                    tree.path(),
+                    None,
+                    crate::filesystem_snapshot::never_cancelled(),
+                    &crate::filesystem_snapshot::Unlimited,
+                )
+            },
+        );
         futures::TryStreamExt::try_collect::<Vec<_>>(saved)
             .await
             .unwrap();
@@ -2715,6 +2736,7 @@ mod tests {
                         .parse::<FilesystemSnapshotName>()
                         .unwrap()
                 })
+                .chain(other.iter().cloned())
                 .collect::<Box<[_]>>(),
         );
         let deleted = tokio::time::timeout(
@@ -2750,6 +2772,27 @@ mod tests {
         assert_eq!(deleted, vec![older[1].clone()]);
     }
 
+    #[test]
+    async fn update_retention_keeps_the_record_of_a_successful_assisted_update_and_counts_only_update_snapshots()
+     {
+        let assisted = FilesystemSnapshotName::periodic();
+        let status = golem_common::model::AgentStatusRecord {
+            authoritative_snapshot: Some(golem_common::model::AuthoritativeSnapshot {
+                index: OplogIndex::from_u64(3),
+                kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                    filesystem_snapshot: Some(assisted.clone()),
+                },
+            }),
+            ..Default::default()
+        };
+        let kept = crate::worker::snapshot_selection::names_in_use(&status);
+
+        let (deleted, older) = update_retention_with(2, &[], &kept).await;
+
+        assert_eq!(kept, Box::from([assisted]));
+        assert_eq!(deleted, vec![older[0].clone()]);
+    }
+
     /// A snapshot record with the filesystem snapshot `name`.
     fn snapshot_record(name: Option<&FilesystemSnapshotName>) -> OplogEntry {
         OplogEntry::Snapshot {
@@ -2771,6 +2814,44 @@ mod tests {
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: Some(name.clone()),
             },
+            None,
+        )
+    }
+
+    /// The strategy entry of a snapshot-assisted update that selected the record at
+    /// `snapshot` with the filesystem snapshot `name`.
+    fn assisted_strategy_record(
+        snapshot: u64,
+        name: Option<&FilesystemSnapshotName>,
+    ) -> OplogEntry {
+        OplogEntry::pending_update(
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: ComponentRevision::new(2).unwrap(),
+                source_component_revision: ComponentRevision::INITIAL,
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(snapshot),
+                snapshot_revision: ComponentRevision::INITIAL,
+                filesystem_snapshot: name.cloned(),
+            },
+            Some(OplogIndex::from_u64(snapshot + 1)),
+        )
+    }
+
+    fn automatic_admission_record() -> OplogEntry {
+        OplogEntry::pending_update(
+            UpdateDescription::Automatic {
+                target_revision: ComponentRevision::new(2).unwrap(),
+            },
+            None,
+        )
+    }
+
+    fn assisted_success() -> OplogEntry {
+        OplogEntry::successful_update(
+            ComponentRevision::new(2).unwrap(),
+            10,
+            None,
+            std::collections::HashSet::new(),
             None,
         )
     }
@@ -2861,6 +2942,67 @@ mod tests {
                 &golem_common::model::regions::DeletedRegions::from_regions([region(1, 3)])
             ),
             Box::from([p1])
+        );
+    }
+
+    #[test]
+    fn the_strategy_entry_of_an_assisted_update_holds_the_name_of_its_record() {
+        let p1 = FilesystemSnapshotName::periodic();
+
+        assert_eq!(
+            [
+                super::record_name(&assisted_strategy_record(2, Some(&p1))),
+                super::record_name(&assisted_strategy_record(2, None)),
+            ],
+            [Some(&p1), None]
+        );
+    }
+
+    #[test]
+    fn a_revert_of_an_assisted_update_deletes_the_name_of_its_record_only_with_the_record() {
+        let [p1, p2] = [(); 2].map(|()| FilesystemSnapshotName::periodic());
+        let entries = oplog(vec![
+            (2, snapshot_record(Some(&p1))),
+            (4, snapshot_record(Some(&p2))),
+            (5, automatic_admission_record()),
+            (6, assisted_strategy_record(4, Some(&p2))),
+            (7, assisted_success()),
+        ]);
+        let none = golem_common::model::regions::DeletedRegions::new();
+
+        assert_eq!(
+            [
+                super::reverted_snapshot_names(&entries, &region(8, 9), &none),
+                super::reverted_snapshot_names(&entries, &region(7, 9), &none),
+                super::reverted_snapshot_names(&entries, &region(6, 9), &none),
+                super::reverted_snapshot_names(&entries, &region(3, 9), &none),
+                super::reverted_snapshot_names(&entries, &region(2, 9), &none),
+            ],
+            [
+                Box::from([]),
+                Box::from([]),
+                Box::from([]),
+                Box::from([p2.clone()]),
+                Box::from([p2, p1]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_strategy_entry_outside_the_region_keeps_the_name_of_its_record() {
+        let p1 = FilesystemSnapshotName::periodic();
+        let entries = oplog(vec![
+            (3, assisted_strategy_record(5, Some(&p1))),
+            (5, snapshot_record(Some(&p1))),
+        ]);
+
+        assert_eq!(
+            super::reverted_snapshot_names(
+                &entries,
+                &region(4, 9),
+                &golem_common::model::regions::DeletedRegions::new()
+            ),
+            Box::from([])
         );
     }
 }

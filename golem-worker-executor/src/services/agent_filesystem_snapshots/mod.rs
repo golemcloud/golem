@@ -179,9 +179,7 @@ enum JobDecision {
 /// breaks the first point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Confirmation {
-    Confirmed {
-        selectable: Box<[FilesystemSnapshotName]>,
-    },
+    Confirmed { kept: Box<[FilesystemSnapshotName]> },
     Superseded,
     Deferred,
 }
@@ -198,9 +196,9 @@ impl Confirmation {
 
     /// The names that the agent still uses, which retention keeps. Only a confirmed snapshot has
     /// them.
-    fn selectable(&self) -> &[FilesystemSnapshotName] {
+    fn kept(&self) -> &[FilesystemSnapshotName] {
         match self {
-            Self::Confirmed { selectable } => selectable,
+            Self::Confirmed { kept } => kept,
             Self::Superseded | Self::Deferred => &[],
         }
     }

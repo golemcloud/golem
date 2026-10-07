@@ -123,7 +123,7 @@ pub(super) async fn run_job(
     match decisions::follow_up(kind, outcome) {
         FollowUp::DeleteOlder => {
             let kept = confirmation
-                .selectable()
+                .kept()
                 .iter()
                 .filter_map(|name| store_name(name).ok())
                 .collect::<Box<[_]>>();

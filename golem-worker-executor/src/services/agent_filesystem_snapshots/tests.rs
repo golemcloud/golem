@@ -687,7 +687,7 @@ impl ScriptedStore {
 struct ScriptedConfirmer {
     outcome: Mutex<ConfirmOutcome>,
     /// The names that a `Confirmed` answer carries.
-    selectable: Mutex<Box<[FilesystemSnapshotName]>>,
+    kept: Mutex<Box<[FilesystemSnapshotName]>>,
     names: Mutex<Vec<FilesystemSnapshotName>>,
     /// When set, each confirmation waits for it before it answers.
     gate: Option<Arc<Gate>>,
@@ -697,7 +697,7 @@ impl ScriptedConfirmer {
     fn answering(outcome: ConfirmOutcome) -> Arc<Self> {
         Arc::new(Self {
             outcome: Mutex::new(outcome),
-            selectable: Mutex::default(),
+            kept: Mutex::default(),
             names: Mutex::default(),
             gate: None,
         })
@@ -707,7 +707,7 @@ impl ScriptedConfirmer {
     fn answering_after(outcome: ConfirmOutcome, gate: &Arc<Gate>) -> Arc<Self> {
         Arc::new(Self {
             outcome: Mutex::new(outcome),
-            selectable: Mutex::default(),
+            kept: Mutex::default(),
             names: Mutex::default(),
             gate: Some(Arc::clone(gate)),
         })
@@ -725,7 +725,7 @@ impl ScriptedConfirmer {
         let outcome = *self.outcome.lock().unwrap();
         match outcome {
             ConfirmOutcome::Confirmed => Confirmation::Confirmed {
-                selectable: self.selectable.lock().unwrap().clone(),
+                kept: self.kept.lock().unwrap().clone(),
             },
             ConfirmOutcome::Superseded => Confirmation::Superseded,
             ConfirmOutcome::Deferred => Confirmation::Deferred,
@@ -1836,7 +1836,7 @@ fn a_cancelled_confirmation_deletes_nothing() {
         let gate = Arc::new(Gate::default());
         let confirm = Arc::new(ScriptedConfirmer {
             outcome: Mutex::new(ConfirmOutcome::Confirmed),
-            selectable: Mutex::default(),
+            kept: Mutex::default(),
             names: Mutex::default(),
             gate: Some(Arc::clone(&gate)),
         });
@@ -3227,7 +3227,7 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
         let older = submit(&snapshots, &agent, b"older", confirmer(&deferred)).await;
         ended(&snapshots, &agent).await;
         let confirmed = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
-        *confirmed.selectable.lock().unwrap() = Box::new([oldest.clone()]);
+        *confirmed.kept.lock().unwrap() = Box::new([oldest.clone()]);
 
         let newest = submit(&snapshots, &agent, b"newest", confirmer(&confirmed)).await;
         ended(&snapshots, &agent).await;
@@ -3250,6 +3250,65 @@ fn a_confirmed_upload_keeps_the_names_of_its_confirmation_whatever_their_age() {
         assert_eq!(
             *store.deletes.lock().unwrap(),
             vec![Box::from(older.as_str())]
+        );
+    })
+}
+
+#[test]
+fn the_record_of_a_successful_assisted_update_stays_after_later_periodic_confirmations() {
+    paused(async {
+        let store = Arc::new(scripted_store());
+        let settings = FilesystemSnapshotUploadConfig::new(FilesystemSnapshotUploadValues {
+            retained_periodic_snapshots: 1,
+            ..values(4, 4)
+        })
+        .unwrap();
+        let snapshots = service(&store, settings);
+        let agent = agent_snapshots("kept-assisted-record");
+        let confirmed = ScriptedConfirmer::answering(ConfirmOutcome::Confirmed);
+        let assisted = submit(&snapshots, &agent, b"assisted", confirmer(&confirmed)).await;
+        ended(&snapshots, &agent).await;
+        let status = golem_common::model::AgentStatusRecord {
+            authoritative_snapshot: Some(golem_common::model::AuthoritativeSnapshot {
+                index: golem_common::model::OplogIndex::from_u64(4),
+                kind: golem_common::model::AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                    filesystem_snapshot: Some(assisted.clone()),
+                },
+            }),
+            ..Default::default()
+        };
+        *confirmed.kept.lock().unwrap() = crate::worker::snapshot_selection::names_in_use(&status);
+
+        let later = futures::stream::iter([b"first".as_slice(), b"second", b"third"])
+            .then(|content| {
+                let (snapshots, agent, confirmed) = (&snapshots, &agent, &confirmed);
+                async move {
+                    let name = submit(snapshots, agent, content, confirmer(confirmed)).await;
+                    ended(snapshots, agent).await;
+                    name
+                }
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let kept = store
+            .memory
+            .list(&agent, &crate::filesystem_snapshot::Unlimited)
+            .await
+            .unwrap()
+            .iter()
+            .map(|(name, _)| name.as_str().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            kept,
+            [&assisted, &later[2]]
+                .iter()
+                .map(|name| name.as_str().to_string())
+                .collect()
+        );
+        assert_eq!(
+            *store.deletes.lock().unwrap(),
+            vec![Box::from(later[0].as_str()), Box::from(later[1].as_str())]
         );
     })
 }
