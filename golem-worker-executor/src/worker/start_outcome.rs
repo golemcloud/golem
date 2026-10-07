@@ -346,7 +346,7 @@ fn column(role: &BaselineRole, head: Option<&PendingUpdateRef>) -> Option<Column
 
 /// Why a fetch of a component revision failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FetchProblem {
+pub(super) enum FetchProblem {
     /// The component service did not answer.
     Unavailable,
     /// The revision does not exist.
@@ -358,7 +358,7 @@ enum FetchProblem {
 }
 
 impl FetchProblem {
-    fn of(error: &WorkerExecutorError) -> Self {
+    pub(super) fn of(error: &WorkerExecutorError) -> Self {
         match error {
             WorkerExecutorError::ComponentServiceUnavailable { .. } => Self::Unavailable,
             WorkerExecutorError::ComponentNotFound { .. } => Self::NotFound,

@@ -301,12 +301,13 @@ fn startup_component_charge_revision(status: &AgentStatusRecord) -> ComponentRev
 enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
     ChargeTarget(ResolvedComponentCharge),
-    /// The target does not exist, or the component service refused it:
-    /// `create_instance` will fail the update and load
-    /// the current revision, so charge the current revision instead.
+    /// The target cannot load for good (it does not exist, the component service
+    /// refused it, or any other error but an unavailable component service):
+    /// `create_instance` will fail the update and load the current revision, so
+    /// charge the current revision instead.
     FallBackToCurrent,
-    /// Resolution failed transiently: `create_instance` may still load the
-    /// target, so retry rather than charging the current revision.
+    /// The component service is unavailable: `create_instance` may still load
+    /// the target, so retry rather than charging the current revision.
     Retry,
 }
 
@@ -344,20 +345,21 @@ const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30)
 
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
-/// `create_instance` can still load it. Only a target that cannot load for good
-/// (`ComponentNotFound`, or a refusal of the component service) falls back to the
-/// current revision, because the start fails that update; transient errors are
-/// retried.
+/// `create_instance` can still load it. It uses the fetch classification of the
+/// outcome table: only an unavailable component service leaves the update pending, so
+/// only that is retried. Any other error fails the update at the start, which then
+/// loads the current revision, so the charge falls back to the current revision.
 fn classify_target_charge(
     result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
 ) -> TargetChargeAction {
     match result {
         Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
-        Err(
-            WorkerExecutorError::ComponentNotFound { .. }
-            | WorkerExecutorError::ComponentServiceRefused { .. },
-        ) => TargetChargeAction::FallBackToCurrent,
-        Err(_) => TargetChargeAction::Retry,
+        Err(error) => match start_outcome::FetchProblem::of(error) {
+            start_outcome::FetchProblem::Unavailable => TargetChargeAction::Retry,
+            start_outcome::FetchProblem::NotFound
+            | start_outcome::FetchProblem::Refused(_)
+            | start_outcome::FetchProblem::Other => TargetChargeAction::FallBackToCurrent,
+        },
     }
 }
 
@@ -5378,17 +5380,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// target revision, admission must charge the target revision. Resolving the
     /// target's module size is therefore handled by error class:
     ///
-    /// - `ComponentNotFound` or `ComponentServiceRefused`: the target cannot load,
-    ///   so `create_instance` will write a `failed_update` and retry the *current*
-    ///   revision. Charge the current revision/size to match — falling back here
-    ///   keeps the worker startable instead of wedged, and `create_instance`
-    ///   drives the recovery.
-    /// - Any other (transient/runtime) error: `create_instance`'s later
+    /// - `ComponentServiceUnavailable`: `create_instance`'s later
     ///   `component_service().get(target)` may still succeed and load the target,
     ///   so we must not fall back to the current revision (that would under-reserve
     ///   and mis-key the charge). Back off and retry resolving the target, exactly
     ///   as the memory admission loop treats transient pressure, until it resolves
     ///   to a definite answer.
+    /// - Any other error (`ComponentNotFound`, `ComponentServiceRefused` or any
+    ///   other kind): the target cannot load, so `create_instance` will write a
+    ///   `failed_update` and retry the *current* revision. Charge the current
+    ///   revision/size to match — falling back here keeps the worker startable
+    ///   instead of wedged, and `create_instance` drives the recovery.
     async fn startup_component_charge_requirement(&self) -> StartupComponentChargeRequirement {
         let metadata = self.get_latest_worker_metadata().await;
         let component_id = self.owned_agent_id.component_id();
@@ -5440,9 +5442,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     };
                 }
                 TargetChargeAction::FallBackToCurrent => {
-                    // The target revision does not exist, or the component service
-                    // refused it; create_instance will fail the update and load the
-                    // current revision, so charge that.
+                    // The target revision cannot load; create_instance will fail
+                    // the update and load the current revision, so charge that.
                     debug!(
                         "Pending-update target revision {component_revision} does not exist; charging against current revision and letting create_instance fail the update and recover"
                     );
@@ -5457,9 +5458,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     );
                 }
                 TargetChargeAction::Retry => {
-                    // Transient failure: create_instance may still load the target,
-                    // so do not fall back to the current revision (that would
-                    // under-reserve). Back off and retry resolving the target.
+                    // The component service is unavailable: create_instance may
+                    // still load the target, so do not fall back to the current
+                    // revision (that would under-reserve). Back off and retry
+                    // resolving the target.
                     debug!(
                         "Transient failure resolving pending-update target revision {component_revision} for charge sizing, backing off and retrying"
                     );
@@ -14383,16 +14385,35 @@ mod tests {
     }
 
     #[test]
-    fn classify_target_charge_falls_back_only_for_a_target_that_cannot_load() {
-        let component_id = ComponentId(uuid::Uuid::new_v4());
-        let not_found = Err(WorkerExecutorError::ComponentNotFound { component_id });
+    fn classify_target_charge_retries_when_the_component_service_is_unavailable() {
+        let unavailable = Err(WorkerExecutorError::ComponentServiceUnavailable {
+            component_id: ComponentId(uuid::Uuid::new_v4()),
+            component_revision: Some(ComponentRevision::new(2).unwrap()),
+            reason: "transport".to_string(),
+        });
+        assert_eq!(
+            classify_target_charge(&unavailable),
+            TargetChargeAction::Retry,
+            "the start passes an unavailable component service on without failing the update, so create_instance may still load the target"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_falls_back_for_a_target_that_does_not_exist() {
+        let not_found = Err(WorkerExecutorError::ComponentNotFound {
+            component_id: ComponentId(uuid::Uuid::new_v4()),
+        });
         assert_eq!(
             classify_target_charge(&not_found),
             TargetChargeAction::FallBackToCurrent,
-            "a non-existent target falls back to the current revision (create_instance fails the update and recovers)"
+            "the start fails the update of a target that does not exist and loads the current revision"
         );
+    }
+
+    #[test]
+    fn classify_target_charge_falls_back_for_a_refused_target() {
         let refused = Err(WorkerExecutorError::ComponentServiceRefused {
-            component_id,
+            component_id: ComponentId(uuid::Uuid::new_v4()),
             component_revision: Some(ComponentRevision::new(2).unwrap()),
             kind: golem_service_base::error::worker_executor::ComponentServiceRefusal::Unauthorized,
             reason: "unauthorized".to_string(),
@@ -14400,27 +14421,19 @@ mod tests {
         assert_eq!(
             classify_target_charge(&refused),
             TargetChargeAction::FallBackToCurrent,
-            "a refused target falls back to the current revision (create_instance fails the update and recovers)"
-        );
-        let unavailable = Err(WorkerExecutorError::ComponentServiceUnavailable {
-            component_id,
-            component_revision: Some(ComponentRevision::new(2).unwrap()),
-            reason: "transport".to_string(),
-        });
-        assert_eq!(
-            classify_target_charge(&unavailable),
-            TargetChargeAction::Retry,
-            "an unavailable component service is retried"
+            "the start fails the update of a refused target and loads the current revision"
         );
     }
 
     #[test]
-    fn classify_target_charge_retries_on_transient_error() {
-        let transient = Err(WorkerExecutorError::runtime("registry unavailable"));
+    fn classify_target_charge_falls_back_for_any_other_error() {
+        let other = Err(WorkerExecutorError::runtime(
+            "component metadata cannot be parsed",
+        ));
         assert_eq!(
-            classify_target_charge(&transient),
-            TargetChargeAction::Retry,
-            "a transient resolution failure must retry, not fall back: create_instance may still load the target, so charging the current revision would under-reserve and mis-key the charge"
+            classify_target_charge(&other),
+            TargetChargeAction::FallBackToCurrent,
+            "the start fails the update for any other fetch error and loads the current revision, so a retry would never end"
         );
     }
 
