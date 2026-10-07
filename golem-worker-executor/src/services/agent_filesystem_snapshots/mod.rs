@@ -63,6 +63,8 @@ use tokio_util::task::TaskTracker;
 pub(crate) use fork::{
     Baseline, ForkCopy, ForkStopped, PublicationKey, PublishFound, flight as fork_flight,
 };
+#[cfg(test)]
+pub(crate) use store_calls::restore_class;
 pub(crate) use store_calls::{StoreKey, StoreRestore};
 
 /// The kind of a filesystem snapshot. It gives the prefix of the name.
@@ -157,10 +159,11 @@ enum JobDecision {
 
 /// What a confirmation found.
 ///
-/// `Confirmed` carries the filesystem snapshot names of the automatic snapshot records that a
-/// start of the agent can select, as `snapshot_selection::start_candidates` gives them from the
-/// status that the worker holds after the append of the confirmation record returned. Retention
-/// keeps these names whatever their age. An entry that the status folds between the append and
+/// `Confirmed` carries the filesystem snapshot names that the agent still uses, as
+/// `snapshot_selection::names_in_use` gives them from the status that the worker holds after the
+/// append of the confirmation record returned: the names of the automatic snapshot records that a
+/// start can select, of the pending and the successful updates, and of the authoritative baseline.
+/// Retention keeps these names whatever their age. An entry that the status folds between the append and
 /// that read, such as the `SuccessfulUpdate` of an automatic update, can change the names; count
 /// retention then still keeps the newest older names. While the job holds the admission of its
 /// agent:
@@ -193,7 +196,7 @@ impl Confirmation {
         }
     }
 
-    /// The names that a start can select, which retention keeps. Only a confirmed snapshot has
+    /// The names that the agent still uses, which retention keeps. Only a confirmed snapshot has
     /// them.
     fn selectable(&self) -> &[FilesystemSnapshotName] {
         match self {
@@ -983,7 +986,7 @@ impl Admission {
     /// follows: both go through the same upload.
     ///
     /// The job uploads and confirms. On `Confirmed` it deletes the older snapshots of its kind,
-    /// except the names that a start can select. On `Superseded` it deletes its own snapshot and
+    /// except the names that the agent still uses. On `Superseded` it deletes its own snapshot and
     /// no older one. On `Deferred` it keeps the snapshot and deletes nothing, because a later
     /// start can confirm it. When the save failed, it confirms nothing. A shutdown, a call
     /// of `delete_all_snapshots` for the agent, or a call of `delete_snapshots` with its name stops

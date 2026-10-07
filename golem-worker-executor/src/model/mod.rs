@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::worker::filesystem_snapshots::ReplayBaseline;
 use crate::workerctx::WorkerCtx;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -23,11 +24,13 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{
     AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, ReadOnlyViolationError,
+    UpdateDescription,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp,
+    AgentId, AgentInvocationOutput, OplogIndex, PendingUpdateRef, ShardAssignment, ShardId,
+    Timestamp,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -76,17 +79,14 @@ pub enum SnapshotReplayPurpose {
     AssistedUpdate,
 }
 
-impl SnapshotReplayPurpose {
-    pub(crate) fn for_reconstruction(
-        assisted_update_pending: bool,
-        snapshot_source: Option<SnapshotSource>,
-    ) -> Self {
-        match (assisted_update_pending, snapshot_source) {
-            (true, Some(SnapshotSource::SnapshotAssistedAutomatic)) => Self::AssistedUpdate,
-            (_, Some(SnapshotSource::Automatic)) => Self::PeriodicRecovery,
-            _ => Self::None,
-        }
-    }
+/// The pending update at the head of the queue of an agent, with its description read from its
+/// `PendingUpdate` entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HydratedUpdate {
+    /// The queue element, which pairs the update with its admission.
+    pub reference: PendingUpdateRef,
+    /// The description of the `PendingUpdate` entry at `reference.oplog_index`.
+    pub description: UpdateDescription,
 }
 
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
@@ -99,24 +99,21 @@ pub struct AgentConfig {
     pub created_by: AccountId,
     pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
-    pub last_snapshot_index: Option<OplogIndex>,
-    pub last_snapshot_source: Option<SnapshotSource>,
-    pub snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
+    /// The replay inputs of the baseline of the start.
+    pub(crate) replay: ReplayBaseline,
     pub agent_effective_surface: EffectiveSurface,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
 impl AgentConfig {
-    pub fn new(
+    pub(crate) fn new(
         skipped_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        last_snapshot_index: Option<OplogIndex>,
-        last_snapshot_source: Option<SnapshotSource>,
-        snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
+        replay: ReplayBaseline,
         agent_effective_surface: EffectiveSurface,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
@@ -127,9 +124,7 @@ impl AgentConfig {
             created_by,
             created_by_email,
             initial_agent_config,
-            last_snapshot_index,
-            last_snapshot_source,
-            snapshot_assisted_source_revision_start_index,
+            replay,
             agent_effective_surface,
             owner_component_metadata,
         }
@@ -973,32 +968,6 @@ mod tests {
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;
-
-    #[test]
-    fn snapshot_replay_purpose_distinguishes_assisted_attempts_from_recovery() {
-        assert_eq!(
-            SnapshotReplayPurpose::for_reconstruction(
-                true,
-                Some(SnapshotSource::SnapshotAssistedAutomatic),
-            ),
-            SnapshotReplayPurpose::AssistedUpdate
-        );
-        assert_eq!(
-            SnapshotReplayPurpose::for_reconstruction(
-                false,
-                Some(SnapshotSource::SnapshotAssistedAutomatic),
-            ),
-            SnapshotReplayPurpose::None
-        );
-        assert_eq!(
-            SnapshotReplayPurpose::for_reconstruction(false, Some(SnapshotSource::Automatic)),
-            SnapshotReplayPurpose::PeriodicRecovery
-        );
-        assert_eq!(
-            SnapshotReplayPurpose::for_reconstruction(true, Some(SnapshotSource::ManualUpdate)),
-            SnapshotReplayPurpose::None
-        );
-    }
 
     #[test]
     fn wrapped_replay_jump_remains_an_interrupt() {

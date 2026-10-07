@@ -39,6 +39,12 @@ pub(crate) struct ManualAdmission {
     pub(crate) target_revision: ComponentRevision,
 }
 
+/// Whether `update` is an automatic update whose strategy entry is not written yet: its kind is
+/// `Automatic` and it is still at its admission entry.
+pub(crate) fn is_unselected_automatic(update: &PendingUpdateRef) -> bool {
+    update.kind == PendingUpdateKind::Automatic && update.oplog_index == update.admission_index
+}
+
 /// The pending updates of an agent and its unpaired manual update invocations.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct UpdateQueue {
@@ -233,8 +239,7 @@ impl UpdateQueue {
                 Some(head)
                     if head.admission_index == admission_index
                         && head.target_revision == target_revision
-                        && head.oplog_index == head.admission_index
-                        && head.kind == PendingUpdateKind::Automatic =>
+                        && is_unselected_automatic(head) =>
                 {
                     head.oplog_index = index;
                     head.kind = kind;
@@ -646,5 +651,44 @@ mod tests {
         );
         let (_, step) = queue.after(idx(9), &succeeded(3), false);
         assert_eq!(step, UpdateStep::Succeeded(Some(head)));
+    }
+
+    /// Only an automatic admission that no strategy entry refined still needs its strategy.
+    #[test]
+    fn only_an_unrefined_automatic_admission_is_an_unselected_automatic_update() {
+        let head = |kind: PendingUpdateKind, oplog_index: u64| PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: idx(oplog_index),
+            admission_index: idx(10),
+            target_revision: revision(3),
+            kind,
+        };
+        let snapshot_based = || PendingUpdateKind::SnapshotBased {
+            filesystem_snapshot: None,
+        };
+        let assisted = |filesystem_snapshot| {
+            PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: idx(4),
+                snapshot: UsableAutomaticSnapshot {
+                    index: idx(7),
+                    component_revision: revision(2),
+                    filesystem_snapshot,
+                },
+            }))
+        };
+        assert_eq!(
+            [
+                is_unselected_automatic(&head(PendingUpdateKind::Automatic, 10)),
+                is_unselected_automatic(&head(PendingUpdateKind::Automatic, 12)),
+                is_unselected_automatic(&head(snapshot_based(), 10)),
+                is_unselected_automatic(&head(snapshot_based(), 12)),
+                is_unselected_automatic(&head(assisted(None), 12)),
+                is_unselected_automatic(&head(
+                    assisted(Some(FilesystemSnapshotName::periodic())),
+                    12
+                )),
+            ],
+            [true, false, false, false, false, false]
+        );
     }
 }

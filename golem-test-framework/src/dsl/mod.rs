@@ -1271,6 +1271,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to download component: {:?} revision {}: {}",
             component_id, component_revision, reason
         ),
+        error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,

@@ -19,7 +19,7 @@ use crate::filesystem_snapshot::{
     CallError, Failed, FilesystemSnapshotStore, InMemorySnapshotStore, ReadError, RestoreFailure,
     RunSlots, SpacedTimes, Unlimited, Withdrawal,
 };
-use crate::services::agent_filesystem::RestoreTree;
+use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
 use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
@@ -1986,11 +1986,11 @@ fn at_most_the_configured_number_of_restores_run_at_the_same_time() {
 
         assert_eq!(while_held, 2);
         assert_eq!(store.most_restores_at_once.load(Ordering::SeqCst), 2);
-        assert!(
-            results
-                .into_iter()
-                .all(|result| result.unwrap().is_err_and(|error| !error.retryable))
-        );
+        assert!(results.into_iter().all(|result| {
+            result
+                .unwrap()
+                .is_err_and(|error| error.class == RestoreClass::Lost)
+        }));
     })
 }
 

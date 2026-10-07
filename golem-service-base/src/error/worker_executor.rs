@@ -148,6 +148,88 @@ pub enum WorkerExecutorError {
         expected_epoch: u64,
         actual_epoch: Option<u64>,
     },
+    /// The component service did not answer: a transport error or an error of the service
+    /// itself. A later request can succeed.
+    ComponentServiceUnavailable {
+        component_id: ComponentId,
+        component_revision: Option<ComponentRevision>,
+        reason: String,
+    },
+    /// The component service refused the request. The same request gets the same answer.
+    ComponentServiceRefused {
+        component_id: ComponentId,
+        component_revision: Option<ComponentRevision>,
+        kind: ComponentServiceRefusal,
+        reason: String,
+    },
+}
+
+/// Why the component service refused a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BinaryCodec)]
+#[desert(evolution())]
+pub enum ComponentServiceRefusal {
+    Unauthorized,
+    CouldNotAuthenticate,
+    BadRequest,
+    LimitExceeded,
+    /// The component service has no binary for the revision.
+    MissingBinary,
+    Other,
+}
+
+impl Display for ComponentServiceRefusal {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unauthorized => "unauthorized",
+            Self::CouldNotAuthenticate => "could not authenticate",
+            Self::BadRequest => "bad request",
+            Self::LimitExceeded => "limit exceeded",
+            Self::MissingBinary => "missing binary",
+            Self::Other => "other",
+        })
+    }
+}
+
+impl From<ComponentServiceRefusal> for golem::worker::v1::ComponentServiceRefusal {
+    fn from(value: ComponentServiceRefusal) -> Self {
+        match value {
+            ComponentServiceRefusal::Unauthorized => Self::Unauthorized,
+            ComponentServiceRefusal::CouldNotAuthenticate => Self::CouldNotAuthenticate,
+            ComponentServiceRefusal::BadRequest => Self::BadRequest,
+            ComponentServiceRefusal::LimitExceeded => Self::LimitExceeded,
+            ComponentServiceRefusal::MissingBinary => Self::MissingBinary,
+            ComponentServiceRefusal::Other => Self::Other,
+        }
+    }
+}
+
+/// A refusal without a kind decodes as `Other`.
+impl From<golem::worker::v1::ComponentServiceRefusal> for ComponentServiceRefusal {
+    fn from(value: golem::worker::v1::ComponentServiceRefusal) -> Self {
+        match value {
+            golem::worker::v1::ComponentServiceRefusal::Unspecified => Self::Other,
+            golem::worker::v1::ComponentServiceRefusal::Unauthorized => Self::Unauthorized,
+            golem::worker::v1::ComponentServiceRefusal::CouldNotAuthenticate => {
+                Self::CouldNotAuthenticate
+            }
+            golem::worker::v1::ComponentServiceRefusal::BadRequest => Self::BadRequest,
+            golem::worker::v1::ComponentServiceRefusal::LimitExceeded => Self::LimitExceeded,
+            golem::worker::v1::ComponentServiceRefusal::MissingBinary => Self::MissingBinary,
+            golem::worker::v1::ComponentServiceRefusal::Other => Self::Other,
+        }
+    }
+}
+
+/// The component and revision of a component service error, as `id` or `id#revision`.
+struct ComponentRef<'a>(&'a ComponentId, Option<&'a ComponentRevision>);
+
+impl Display for ComponentRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self.1 {
+            Some(revision) => write!(f, "{}#{revision}", self.0),
+            None => write!(f, "{}", self.0),
+        }
+    }
 }
 
 impl WorkerExecutorError {
@@ -394,6 +476,25 @@ impl Display for WorkerExecutorError {
                      {expected_epoch}, but no epoch is stored for the oplog"
                 ),
             },
+            Self::ComponentServiceUnavailable {
+                component_id,
+                component_revision,
+                reason,
+            } => write!(
+                f,
+                "The component service is unavailable for {}: {reason}",
+                ComponentRef(component_id, component_revision.as_ref())
+            ),
+            Self::ComponentServiceRefused {
+                component_id,
+                component_revision,
+                kind,
+                reason,
+            } => write!(
+                f,
+                "The component service refused {} ({kind}): {reason}",
+                ComponentRef(component_id, component_revision.as_ref())
+            ),
         }
     }
 }
@@ -440,6 +541,8 @@ impl Error for WorkerExecutorError {
             Self::ReadOnlyViolation { .. } => "Read-only agent method attempted a side effect",
             Self::PermissionDenied { .. } => "Permission denied",
             Self::OplogFenced { .. } => "Oplog write fenced: the shard has a new owner",
+            Self::ComponentServiceUnavailable { .. } => "Component service unavailable",
+            Self::ComponentServiceRefused { .. } => "Component service refused the request",
         }
     }
 }
@@ -478,6 +581,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ReadOnlyViolation { .. } => "ReadOnlyViolation",
             Self::PermissionDenied { .. } => "PermissionDenied",
             Self::OplogFenced { .. } => "OplogFenced",
+            Self::ComponentServiceUnavailable { .. } => "ComponentServiceUnavailable",
+            Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
         }
     }
 
@@ -496,6 +601,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::AgentCreationFailed { .. }
             | Self::FailedToResumeAgent { .. }
             | Self::ComponentDownloadFailed { .. }
+            | Self::ComponentServiceUnavailable { .. }
+            | Self::ComponentServiceRefused { .. }
             | Self::ComponentParseFailed { .. }
             | Self::GetCurrentVersionOfComponentFailed { .. }
             | Self::InitialAgentFileDownloadFailed { .. }
@@ -888,6 +995,38 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            WorkerExecutorError::ComponentServiceUnavailable {
+                component_id,
+                component_revision,
+                reason,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentServiceUnavailable(
+                        golem::worker::v1::ComponentServiceUnavailable {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.map(Into::into),
+                            reason,
+                        },
+                    ),
+                ),
+            },
+            WorkerExecutorError::ComponentServiceRefused {
+                component_id,
+                component_revision,
+                kind,
+                reason,
+            } => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+                        golem::worker::v1::ComponentServiceRefused {
+                            component_id: Some(component_id.into()),
+                            component_revision: component_revision.map(Into::into),
+                            kind: golem::worker::v1::ComponentServiceRefusal::from(kind) as i32,
+                            reason,
+                        },
+                    ),
+                ),
+            },
         }
     }
 }
@@ -956,6 +1095,35 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .try_into()?,
                 component_revision: component_download_failed.component_revision.try_into()?,
                 reason: component_download_failed.reason,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceUnavailable(
+                unavailable,
+            )) => Ok(Self::ComponentServiceUnavailable {
+                component_id: unavailable
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                component_revision: unavailable
+                    .component_revision
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                reason: unavailable.reason,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+                refused,
+            )) => Ok(Self::ComponentServiceRefused {
+                component_id: refused
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                component_revision: refused
+                    .component_revision
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                kind: golem::worker::v1::ComponentServiceRefusal::try_from(refused.kind)
+                    .map_err(|error| error.to_string())?
+                    .into(),
+                reason: refused.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                 component_parse_failed,
@@ -1268,6 +1436,55 @@ mod read_only_violation_trap_tests {
         assert!(
             rendered.contains("http::outgoing_handler::handle"),
             "expected host function in display, got: {rendered}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod component_service_refusal_tests {
+    use super::*;
+    use test_r::test;
+
+    fn refused(kind: ComponentServiceRefusal) -> WorkerExecutorError {
+        WorkerExecutorError::ComponentServiceRefused {
+            component_id: ComponentId(uuid::Uuid::nil()),
+            component_revision: None,
+            kind,
+            reason: "refused".to_string(),
+        }
+    }
+
+    /// Every kind of a refusal keeps its kind through the gRPC message, and a message without a
+    /// kind decodes as `Other`.
+    #[test]
+    fn a_refusal_keeps_its_kind_through_grpc_and_no_kind_is_other() {
+        let kinds = [
+            ComponentServiceRefusal::Unauthorized,
+            ComponentServiceRefusal::CouldNotAuthenticate,
+            ComponentServiceRefusal::BadRequest,
+            ComponentServiceRefusal::LimitExceeded,
+            ComponentServiceRefusal::MissingBinary,
+            ComponentServiceRefusal::Other,
+        ];
+        let round_trips = kinds.map(|kind| {
+            WorkerExecutorError::try_from(golem::worker::v1::WorkerExecutionError::from(refused(
+                kind,
+            )))
+        });
+        let mut without_kind = golem::worker::v1::WorkerExecutionError::from(refused(
+            ComponentServiceRefusal::Unauthorized,
+        ));
+        if let Some(golem::worker::v1::worker_execution_error::Error::ComponentServiceRefused(
+            refused,
+        )) = without_kind.error.as_mut()
+        {
+            refused.kind = 0;
+        }
+
+        assert_eq!(round_trips, kinds.map(|kind| Ok(refused(kind))));
+        assert_eq!(
+            WorkerExecutorError::try_from(without_kind),
+            Ok(refused(ComponentServiceRefusal::Other))
         );
     }
 }

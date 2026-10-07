@@ -35,6 +35,7 @@ mod lifecycle;
 pub mod owner_lane;
 pub mod read_only_cache;
 pub(crate) mod snapshot_selection;
+pub(crate) mod start_outcome;
 mod state_actor;
 pub mod status;
 pub mod status_checkpointer;
@@ -61,7 +62,7 @@ use crate::durable_host::{
     recover_stderr_logs,
 };
 use crate::metrics::workers::AdmissionPhase;
-use crate::model::{AgentConfig, ExecutionStatus, LookupResult, SnapshotSource, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LookupResult, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
     ActiveAgent, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
@@ -107,7 +108,8 @@ use crate::worker::interrupt::Interrupts;
 use crate::worker::invocation_loop::{
     ConcurrentAgentPermitState, InvocationLoop, UnloadCleanupFailure, run_invocation_loop_task,
 };
-use crate::worker::snapshot_selection::{SnapshotExclusions, StartSelection};
+use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, StartSelection};
+use crate::worker::status::update_queue::is_unselected_automatic;
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
     revert_validation_regions, update_status_with_new_entries,
@@ -149,21 +151,20 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, DurableStreamEventSummary, FailedSnapshotAssistedUpdateDetails,
-    FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
-    ReadOnlyViolationError, SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
+    AgentError, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogErrorKind,
+    OplogIndex, OplogPayload, ReadOnlyViolationError, SnapshotAssistedUpdateDetails,
     UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::tool::{ToolBindingOwner, ToolName};
 use golem_common::model::worker::{
     AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget, TypedAgentConfigEntry,
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, AuthoritativeSnapshotKind,
-    IdempotencyKey, OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
+    ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -279,13 +280,17 @@ fn component_charge_revision(
     pending_target_revision.unwrap_or(last_known_revision)
 }
 
+/// The pending update whose target and record a revert checks before it writes: the head that a
+/// start of `status` instantiates, when its strategy is chosen. The start chooses the strategy of
+/// an automatic update without a strategy entry, and handles each failure of its target or of
+/// the record it selects, so a revert does not check them.
+fn revert_checked_head(status: &AgentStatusRecord) -> Option<&PendingUpdateRef> {
+    snapshot_selection::active_head(status).filter(|update| !is_unselected_automatic(update))
+}
+
 fn startup_component_charge_revision(status: &AgentStatusRecord) -> ComponentRevision {
     component_charge_revision(
-        status
-            .pending_updates
-            .iter()
-            .find(|update| snapshot_assisted_head_failure(status, update).is_none())
-            .map(|update| update.target_revision),
+        snapshot_selection::active_head(status).map(|update| update.target_revision),
         status.component_revision,
     )
 }
@@ -338,15 +343,19 @@ const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30)
 
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
-/// `create_instance` can still load it. Only a definitely-absent target
-/// (`ComponentNotFound`) falls back to the current revision; transient errors
-/// are retried.
+/// `create_instance` can still load it. Only a target that cannot load for good
+/// (`ComponentNotFound`, or a refusal of the component service) falls back to the
+/// current revision, because the start fails that update; transient errors are
+/// retried.
 fn classify_target_charge(
     result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
 ) -> TargetChargeAction {
     match result {
         Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
-        Err(WorkerExecutorError::ComponentNotFound { .. }) => TargetChargeAction::FallBackToCurrent,
+        Err(
+            WorkerExecutorError::ComponentNotFound { .. }
+            | WorkerExecutorError::ComponentServiceRefused { .. },
+        ) => TargetChargeAction::FallBackToCurrent,
         Err(_) => TargetChargeAction::Retry,
     }
 }
@@ -1208,6 +1217,8 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
         | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }
         | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
         | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
         | WorkerExecutorError::FileSystemError { .. }
@@ -1236,6 +1247,8 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
         | WorkerExecutorError::ComponentDownloadFailed { .. }
+        | WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }
         | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
         | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
         | WorkerExecutorError::FileSystemError { .. }
@@ -1260,12 +1273,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.read_exclusions(|exclusions| StartSelection::of(status, exclusions, enabled))
     }
 
-    /// Selects the start of `status`: it loads the rejected entries that storage keeps for the
-    /// incarnation, adds them to the exclusions of the agent, and selects under them.
+    /// Selects the start of `status`, as [`Worker::decide_start`] does, without the decision on
+    /// the head of the queue.
     async fn select_start(
         &self,
         status: &AgentStatusRecord,
     ) -> Result<StartSelection, WorkerExecutorError> {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.with_persisted_exclusions(status, |exclusions| {
+            StartSelection::of(status, exclusions, enabled)
+        })
+        .await
+    }
+
+    /// Decides the start of `status`, as [`snapshot_selection::decide_start`] does, under the
+    /// exclusions of the agent with the rejected entries that storage keeps for the incarnation.
+    async fn decide_start(
+        &self,
+        status: &AgentStatusRecord,
+    ) -> Result<StartDecision, WorkerExecutorError> {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.with_persisted_exclusions(status, |exclusions| {
+            snapshot_selection::decide_start(status, exclusions, enabled)
+        })
+        .await
+    }
+
+    /// Loads the rejected entries that storage keeps for the incarnation, adds them to the
+    /// exclusions of the agent for a start of `status`, and gives `read` of the exclusions.
+    async fn with_persisted_exclusions<T>(
+        &self,
+        status: &AgentStatusRecord,
+        read: impl FnOnce(&SnapshotExclusions) -> T,
+    ) -> Result<T, WorkerExecutorError> {
         let persisted = self
             .worker_service()
             .get_rejected_periodic_snapshots(
@@ -1273,10 +1313,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self.initial_worker_metadata.fingerprint,
             )
             .await?;
-        let enabled = self.filesystem_snapshots_enabled();
         Ok(self.update_exclusions(
             |exclusions| exclusions.with_persisted(persisted, status),
-            |exclusions| StartSelection::of(status, exclusions, enabled),
+            read,
         ))
     }
 
@@ -2934,9 +2973,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_metadata.created_by,
                 worker_metadata.created_by_email,
                 initial_agent_config,
-                None,
-                None,
-                None,
+                filesystem_snapshots::ReplayBaseline::initial_files(),
                 agent_effective_surface,
                 Some(owner_component_metadata),
             ),
@@ -5198,16 +5235,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn hydrate_pending_update(
         &self,
         pending: &PendingUpdateRef,
-    ) -> Result<TimestampedUpdateDescription, WorkerExecutorError> {
+    ) -> Result<HydratedUpdate, WorkerExecutorError> {
         let entry = self.oplog.read(pending.oplog_index).await;
         match entry {
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                ..
-            } => Ok(TimestampedUpdateDescription {
-                timestamp,
-                oplog_index: pending.oplog_index,
+            OplogEntry::PendingUpdate { description, .. } => Ok(HydratedUpdate {
+                reference: pending.clone(),
                 description,
             }),
             other => Err(WorkerExecutorError::unknown(format!(
@@ -5215,18 +5247,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 pending.oplog_index
             ))),
         }
-    }
-
-    async fn persist_automatic_update_strategy(
-        &self,
-        pending: &PendingUpdateRef,
-    ) -> Result<(), WorkerExecutorError> {
-        self.add_and_commit_oplog(OplogEntry::pending_update(
-            select_automatic_update_strategy(pending),
-            Some(pending.admission_index),
-        ))
-        .await?;
-        Ok(())
     }
 
     // should only be called from invocation loop
@@ -5347,8 +5367,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// target revision, admission must charge the target revision. Resolving the
     /// target's module size is therefore handled by error class:
     ///
-    /// - `ComponentNotFound`: the target genuinely does not exist, so
-    ///   `create_instance` will write a `failed_update` and retry the *current*
+    /// - `ComponentNotFound` or `ComponentServiceRefused`: the target cannot load,
+    ///   so `create_instance` will write a `failed_update` and retry the *current*
     ///   revision. Charge the current revision/size to match — falling back here
     ///   keeps the worker startable instead of wedged, and `create_instance`
     ///   drives the recovery.
@@ -5608,9 +5628,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// takes the owned instance lock, applies the gate, and sends one status job that carries the
     /// guard. A confirmation of the running instance that gives `Confirmed` records the name in
     /// the slot of the instance under the same guard. So a stop waits for at most the status jobs
-    /// already queued plus one confirm transaction. A `Confirmed` answer carries the names of the
-    /// automatic snapshot records that a start can select, from the status that the worker holds
-    /// after the append returned. A status job that folds an entry after the append, such as the
+    /// already queued plus one confirm transaction. A `Confirmed` answer carries the filesystem
+    /// snapshot names that the agent still uses (`snapshot_selection::names_in_use`), from the
+    /// status that the worker holds after the append returned. A status job that folds an entry after the append, such as the
     /// `SuccessfulUpdate` of an automatic update, can change those names before the read.
     pub(crate) async fn confirm_as(
         self: &Arc<Self>,
@@ -5672,9 +5692,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             agent_filesystem_snapshots::ConfirmOutcome::Confirmed => {
                 agent_filesystem_snapshots::Confirmation::Confirmed {
-                    selectable: snapshot_selection::selectable_names(
-                        &self.last_known_status.load(),
-                    ),
+                    selectable: snapshot_selection::names_in_use(&self.last_known_status.load()),
                 }
             }
             agent_filesystem_snapshots::ConfirmOutcome::Superseded => {
@@ -5723,17 +5741,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
-    /// The baselines of a start now: the automatic snapshot record that it selects under the
-    /// exclusions of this incarnation in memory, and the index of the manual-update record of
-    /// the status.
+    /// The baselines of a start now: the periodic record that it selects under the exclusions of
+    /// this incarnation in memory, and the index of the authoritative baseline of the status.
     pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {
         let status = self.last_known_status.load();
-        let enabled = self.filesystem_snapshots_enabled();
         filesystem_snapshots::StartBaselines {
-            automatic: self.read_exclusions(|exclusions| {
-                snapshot_selection::selected_automatic_snapshot(&status, exclusions, enabled)
-            }),
-            manual_update: manual_update_baseline_index(&status),
+            periodic: self
+                .selection_in_memory(&status)
+                .baseline
+                .periodic()
+                .cloned(),
+            authoritative: status
+                .authoritative_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.index),
         }
     }
 
@@ -9357,12 +9378,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         status: &AgentStatusRecord,
     ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
-        let pending_update = status.pending_updates.front();
-        let active_revision = pending_update
-            .filter(|update| {
-                !is_unselected_automatic_update(update)
-                    && snapshot_assisted_head_failure(status, update).is_none()
-            })
+        let checked_head = revert_checked_head(status);
+        let active_revision = checked_head
             .map(|update| update.target_revision)
             .unwrap_or(status.component_revision);
         let (_, active_component) = self
@@ -9374,10 +9391,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?;
 
-        let replay_revision = self
-            .select_start(status)
-            .await?
-            .replay_revision_without_unavailable;
+        let selection = self.select_start(status).await?;
+        let replay_revision = selection.replay_revision_without_unavailable;
         let replay_component = if active_component.revision == replay_revision {
             active_component.clone()
         } else {
@@ -9390,18 +9405,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.preflight_snapshot_update_payload(snapshot.index)
                 .await?;
         }
-        let pending_snapshot_index =
-            pending_update.and_then(|pending_update| match &pending_update.kind {
-                PendingUpdateKind::SnapshotBased { .. } => Some(pending_update.oplog_index),
-                PendingUpdateKind::SnapshotAssistedAutomatic(selection)
-                    if snapshot_assisted_head_failure(status, pending_update).is_none() =>
-                {
-                    Some(selection.snapshot.index)
-                }
-                PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic(_) => {
-                    None
-                }
-            });
+        // The record of a pending baseline, when the start uses it: its update is the checked
+        // head, which the start does not fail before it restores the record.
+        let pending_snapshot_index = match &selection.baseline {
+            snapshot_selection::SelectedBaseline::ManualPending { head, .. } => {
+                (checked_head == Some(head.as_ref())).then_some(head.oplog_index)
+            }
+            snapshot_selection::SelectedBaseline::AssistedPending { snapshot, head } => {
+                (checked_head == Some(head.as_ref())).then_some(snapshot.index)
+            }
+            snapshot_selection::SelectedBaseline::Periodic(_)
+            | snapshot_selection::SelectedBaseline::AssistedPromoted { .. }
+            | snapshot_selection::SelectedBaseline::ManualPromoted { .. }
+            | snapshot_selection::SelectedBaseline::InitialFiles => None,
+        };
         if let Some(snapshot_index) = pending_snapshot_index
             && Some(snapshot_index)
                 != status
@@ -11292,68 +11309,160 @@ struct RunningAgentRuntime<Ctx: WorkerCtx> {
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
 
-/// The filesystem of a start: the selection of its baseline, planned before the agent filesystem
-/// exists, and the restore that [`StartFilesystem::materialize`] applies to the new filesystem.
+/// The filesystem of a start: the plan of its baseline, made before the agent filesystem exists,
+/// and the restore that [`StartFilesystem::materialize`] applies to the new filesystem.
 ///
 /// The two steps are apart because the start builds the filesystem between them, with the
-/// initial files of the replay revision that the selection gives.
+/// initial files of the replay revision that the selection gives. The replay inputs come from the
+/// same plan as the restore.
 struct StartFilesystem {
     selection: StartSelection,
-    baseline: filesystem_snapshots::StartBaseline,
+    plan: filesystem_snapshots::StartPlan,
+    restore: Option<filesystem_snapshots::StartRestore>,
 }
 
-/// A materialization of a start baseline that failed, with the filesystem to clean up and the
-/// error of the start.
+/// Why a start could not plan its filesystem.
+enum StartFilesystemError {
+    /// The baseline names a filesystem snapshot, and this executor keeps none.
+    Disabled,
+    Other(WorkerExecutorError),
+}
+
+/// A materialization of a start baseline that failed, with the filesystem to clean up, the error
+/// of the agent filesystem and the replay inputs of the start.
 struct StartFilesystemFailure {
     filesystem: SealedFilesystem,
-    error: WorkerExecutorError,
+    error: crate::services::agent_filesystem::Error,
+    replay: filesystem_snapshots::ReplayBaseline,
 }
 
 impl StartFilesystem {
-    /// Selects the baseline of a start of `status` with the pending update `pending_update`, as
-    /// [`Worker::select_start`] does, and loads what the restore of the selected record needs.
-    /// It reads storage and the oplog; the decisions are the pure plans of
-    /// [`filesystem_snapshots`].
+    /// Plans the baseline of `selection` for a start of `status` with the hydrated pending update
+    /// `head`, as [`filesystem_snapshots::plan_start`] does, and loads what the restore needs: the
+    /// manual-update record, the initial files of its source revision, the restore of the store.
     async fn load_and_plan<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
         status: &AgentStatusRecord,
-        pending_update: Option<&TimestampedUpdateDescription>,
-    ) -> Result<Self, WorkerExecutorError> {
-        let selection = parent.select_start(status).await?;
-        let baseline = RunningWorker::start_baseline(
-            parent,
-            status,
-            selection.automatic.as_ref(),
-            pending_update,
+        selection: StartSelection,
+        head: Option<&HydratedUpdate>,
+    ) -> Result<Self, StartFilesystemError> {
+        let manual_name = match &selection.baseline {
+            snapshot_selection::SelectedBaseline::ManualPending { head: pending, .. } => {
+                match head.map(|head| &head.description) {
+                    Some(UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    }) => filesystem_snapshot.clone(),
+                    _ => {
+                        return Err(StartFilesystemError::Other(WorkerExecutorError::unknown(
+                            format!(
+                                "Expected a snapshot-based PendingUpdate oplog entry at index {}",
+                                pending.oplog_index
+                            ),
+                        )));
+                    }
+                }
+            }
+            snapshot_selection::SelectedBaseline::ManualPromoted { index } => {
+                match parent.oplog.read(*index).await {
+                    OplogEntry::PendingUpdate {
+                        description:
+                            UpdateDescription::SnapshotBased {
+                                filesystem_snapshot,
+                                ..
+                            },
+                        ..
+                    } => filesystem_snapshot,
+                    other => {
+                        return Err(StartFilesystemError::Other(WorkerExecutorError::unknown(
+                            format!(
+                                "Expected a snapshot-based PendingUpdate oplog entry at index {index}, but found {other:?}"
+                            ),
+                        )));
+                    }
+                }
+            }
+            _ => None,
+        };
+        let snapshots = parent.agent_filesystem_snapshots();
+        let plan = filesystem_snapshots::plan_start(
+            &selection.baseline,
+            manual_name.as_ref(),
+            snapshots.is_enabled(),
         )
-        .await?;
+        .map_err(|_| StartFilesystemError::Disabled)?;
+        let restore = match &plan.source {
+            filesystem_snapshots::TreeSource::InitialFiles => None,
+            filesystem_snapshots::TreeSource::Store(name) => {
+                let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+                    &parent.owned_agent_id,
+                    parent.initial_worker_metadata.fingerprint,
+                );
+                Some(filesystem_snapshots::StartRestore::Store(
+                    snapshots
+                        .restore(&agent_snapshots, name)
+                        .map_err(|_| StartFilesystemError::Disabled)?,
+                ))
+            }
+            filesystem_snapshots::TreeSource::SourceFiles(source) => {
+                let source_revision = match source {
+                    filesystem_snapshots::SourceRevision::Current => status.component_revision,
+                    filesystem_snapshots::SourceRevision::Before(index) => {
+                        RunningWorker::revision_before(parent, status, *index).await
+                    }
+                };
+                let source_files = RunningWorker::initial_files_of(parent, source_revision)
+                    .await
+                    .map_err(StartFilesystemError::Other)?;
+                crate::services::agent_filesystem::InitialFilesRestore::of_read_only(source_files)
+                    .map(filesystem_snapshots::StartRestore::InitialFiles)
+            }
+        };
         Ok(Self {
             selection,
-            baseline,
+            plan,
+            restore,
         })
+    }
+
+    /// The replay inputs of the plan. The suffix-rollback check reads them before the filesystem
+    /// is built.
+    fn replay(&self) -> &filesystem_snapshots::ReplayBaseline {
+        &self.plan.replay
+    }
+
+    /// The component revision at the start of the replay.
+    fn replay_revision(&self) -> ComponentRevision {
+        self.selection.replay_revision
     }
 
     /// Materializes the baseline into `reconstructing` with the initial files `prepared`. On
     /// success it starts the filesystem snapshots of the generation in `slot`, with the mark of
-    /// the tree before any call runs and the named snapshot that it restored. On failure it
-    /// gives the error of the start, as [`filesystem_snapshots::classify_baseline_failure`]
-    /// decides.
-    async fn materialize<Ctx: WorkerCtx>(
+    /// the tree before any call runs and the named snapshot that it restored, and gives the
+    /// filesystem with the replay inputs of the plan.
+    async fn materialize(
         self,
-        parent: &Arc<Worker<Ctx>>,
         reconstructing: ReconstructingFilesystem,
         prepared: crate::services::agent_filesystem::PreparedInitialFiles,
         slot: &filesystem_snapshots::SnapshotSlot,
-    ) -> Result<ReconstructingFilesystem, StartFilesystemFailure> {
-        let filesystem_snapshots::StartBaseline { restore, kind } = self.baseline;
-        match materialize_baseline(reconstructing, prepared, restore).await {
+    ) -> Result<
+        (
+            ReconstructingFilesystem,
+            filesystem_snapshots::ReplayBaseline,
+        ),
+        StartFilesystemFailure,
+    > {
+        let restored = self.plan.restored();
+        let replay = self.plan.replay;
+        match materialize_baseline(reconstructing, prepared, self.restore).await {
             Ok(reconstructing) => {
-                slot.start(tree_mark(&reconstructing), kind.restored());
-                Ok(reconstructing)
+                slot.start(tree_mark(&reconstructing), restored);
+                Ok((reconstructing, replay))
             }
             Err(failure) => Err(StartFilesystemFailure {
-                error: RunningWorker::baseline_failure(parent, kind, failure.source).await,
                 filesystem: failure.filesystem,
+                error: failure.source,
+                replay,
             }),
         }
     }
@@ -11522,110 +11631,6 @@ impl RunningWorker {
         self.handle.take().unwrap()
     }
 
-    /// Gives the baseline of a start, as [`filesystem_snapshots::plan_start_baseline`] and
-    /// [`filesystem_snapshots::plan_manual_baseline`] plan it: the restore of the selected
-    /// automatic snapshot record, or of the manual-update record, when the record names a
-    /// filesystem snapshot. The start reads the manual-update record only when no automatic
-    /// snapshot record is selected. A manual-update record without a name
-    /// restores the initial files of its source revision when they are all read-only. A
-    /// manual-update record that names a filesystem snapshot fails the start with a visible cause
-    /// on an executor with filesystem snapshots disabled.
-    async fn start_baseline<Ctx: WorkerCtx>(
-        parent: &Arc<Worker<Ctx>>,
-        status: &AgentStatusRecord,
-        automatic_snapshot: Option<&golem_common::model::UsableAutomaticSnapshot>,
-        pending_update: Option<&TimestampedUpdateDescription>,
-    ) -> Result<filesystem_snapshots::StartBaseline, WorkerExecutorError> {
-        let snapshots = parent.agent_filesystem_snapshots();
-        let step = match filesystem_snapshots::plan_start_baseline(
-            automatic_snapshot,
-            snapshots.is_enabled(),
-        ) {
-            filesystem_snapshots::StartPlan::Automatic(step) => step,
-            filesystem_snapshots::StartPlan::ManualUpdate => {
-                filesystem_snapshots::plan_manual_baseline(
-                    Self::manual_update_record(parent, status, pending_update).await,
-                    snapshots.is_enabled(),
-                )
-            }
-        };
-        match step {
-            filesystem_snapshots::BaselineStep::Ready { kind, restore } => {
-                let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
-                    &parent.owned_agent_id,
-                    parent.initial_worker_metadata.fingerprint,
-                );
-                let restore = match restore {
-                    Some(name) => Some(filesystem_snapshots::StartRestore::Store(
-                        snapshots.restore(&agent_snapshots, &name).map_err(|_| {
-                            filesystem_snapshots::baseline_disabled_error(
-                                &kind,
-                                &parent.owned_agent_id.agent_id,
-                            )
-                        })?,
-                    )),
-                    None => None,
-                };
-                Ok(filesystem_snapshots::StartBaseline { kind, restore })
-            }
-            filesystem_snapshots::BaselineStep::Disabled { kind } => {
-                Err(filesystem_snapshots::baseline_disabled_error(
-                    &kind,
-                    &parent.owned_agent_id.agent_id,
-                ))
-            }
-            filesystem_snapshots::BaselineStep::NeedsSourceFiles { kind, source } => {
-                let source_revision = match source {
-                    filesystem_snapshots::SourceRevision::Current => status.component_revision,
-                    filesystem_snapshots::SourceRevision::Before(index) => {
-                        Self::revision_before(parent, status, index).await
-                    }
-                };
-                let source_files = Self::initial_files_of(parent, source_revision).await?;
-                Ok(filesystem_snapshots::StartBaseline {
-                    kind,
-                    restore: crate::services::agent_filesystem::InitialFilesRestore::of_read_only(
-                        source_files,
-                    )
-                    .map(filesystem_snapshots::StartRestore::InitialFiles),
-                })
-            }
-        }
-    }
-
-    /// The snapshot-based manual update that a start without an automatic snapshot record uses,
-    /// with whether it is still pending: the pending update, else the record of the last
-    /// successful manual update, which the start reads from the oplog.
-    async fn manual_update_record<Ctx: WorkerCtx>(
-        parent: &Arc<Worker<Ctx>>,
-        status: &AgentStatusRecord,
-        pending_update: Option<&TimestampedUpdateDescription>,
-    ) -> Option<(TimestampedUpdateDescription, bool)> {
-        match pending_update.filter(|pending| {
-            matches!(pending.description, UpdateDescription::SnapshotBased { .. })
-        }) {
-            Some(pending) => Some((pending.clone(), true)),
-            None => match manual_update_baseline_index(status) {
-                Some(index) => match parent.oplog.read(index).await {
-                    OplogEntry::PendingUpdate {
-                        timestamp,
-                        description,
-                        ..
-                    } => Some((
-                        TimestampedUpdateDescription {
-                            timestamp,
-                            oplog_index: index,
-                            description,
-                        },
-                        false,
-                    )),
-                    _ => None,
-                },
-                None => None,
-            },
-        }
-    }
-
     /// Gives the component revision of the agent just before the oplog index `before`: the target
     /// of the last successful update before it, or the revision of the `Create` entry.
     async fn revision_before<Ctx: WorkerCtx>(
@@ -11664,81 +11669,107 @@ impl RunningWorker {
             .unwrap_or_default())
     }
 
-    /// Gives the error of a start whose baseline failed, as
-    /// [`filesystem_snapshots::classify_baseline_failure`] decides.
-    ///
-    /// A filesystem snapshot of an automatic snapshot record that does not restore makes the
-    /// start skip that record: the start ends with a restart, and the next start selects the
-    /// usable record before it. A conflict of the initial-file rule at the start of a pending
-    /// manual update records a failed update and restarts on the current revision, unless the
-    /// shard is lost: then it writes nothing and gives the lost-shard interrupt. A non-retryable
-    /// restore error of a manual-update baseline fails the start with a visible cause; a retryable
-    /// one makes the start retry.
-    async fn baseline_failure<Ctx: WorkerCtx>(
+    /// What a start does with the failure `error` of a start from `role` with the pending update
+    /// `head`, as [`start_outcome::decide`] decides.
+    fn start_action<Ctx: WorkerCtx>(
         parent: &Arc<Worker<Ctx>>,
-        kind: filesystem_snapshots::BaselineKind,
-        error: crate::services::agent_filesystem::Error,
-    ) -> WorkerExecutorError {
-        let restart = WorkerExecutorError::Interrupted {
-            kind: InterruptKind::Restart,
-        };
-        match filesystem_snapshots::classify_baseline_failure(
-            &kind,
-            &error,
+        role: &start_outcome::BaselineRole,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+    ) -> start_outcome::StartAction {
+        start_outcome::decide(
+            role,
+            head,
+            error,
+            &parent.owned_agent_id.agent_id,
             parent.retired_for_lost_shard(),
-        ) {
-            filesystem_snapshots::BaselineFailure::SkipPeriodic(index) => {
+        )
+    }
+
+    /// Performs `action` of a failed start. `Ok` means that the start runs again: a failed
+    /// update is written, or a periodic record is skipped or rejected. `Err` is the error that
+    /// ends the start. A write that fails ends the start with its error; a fenced write has
+    /// already retired the agent, and the update stays pending for the new owner of the shard.
+    async fn perform_start_action<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        action: start_outcome::StartAction,
+    ) -> Result<(), WorkerExecutorError> {
+        match action {
+            start_outcome::StartAction::FailUpdate { entry, reject } => {
+                warn!(?entry, "Pending update failed at the start");
+                parent
+                    .add_and_commit_oplog(entry)
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
+                if let Some(index) = reject {
+                    parent.reject_periodic(index);
+                }
+                Ok(())
+            }
+            start_outcome::StartAction::SkipPeriodic(index) => {
                 warn!(
                     snapshot_index = %index,
-                    error = %error,
                     "The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it"
                 );
                 parent.mark_periodic_unavailable(index);
-                restart
+                Ok(())
             }
-            // On a lost shard nothing is written, and the update stays pending for the shard's
-            // new owner.
-            filesystem_snapshots::BaselineFailure::ShardLost => WorkerExecutorError::Interrupted {
+            start_outcome::StartAction::RejectPeriodic(index) => {
+                parent.reject_periodic(index);
+                Ok(())
+            }
+            start_outcome::StartAction::Error(error) => Err(error),
+            start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::ShardLost,
-            },
-            filesystem_snapshots::BaselineFailure::RecordFailedUpdate { target, message } => {
-                warn!(
-                    target_revision = %target,
-                    error = %message,
-                    "Manual update failed with a conflict of the initial files"
-                );
-                // A write that fails ends the start with its error. A fenced write has already
-                // retired the agent, and the update stays pending for the shard's new owner. The
-                // failure names the admission of the pending update at the front of the queue.
-                let update_attempt_index = parent
-                    .get_last_known_status()
-                    .await
-                    .pending_updates
-                    .front()
-                    .filter(|pending| pending.target_revision == target)
-                    .map(|pending| pending.admission_index);
-                match parent
-                    .add_and_commit_oplog(OplogEntry::failed_update(
-                        target,
-                        Some(message.into()),
-                        None,
-                        update_attempt_index,
-                        None,
-                    ))
-                    .await
-                {
-                    Ok(_) => restart,
-                    Err(error) => error.into(),
+            }),
+            start_outcome::StartAction::Retry(_) | start_outcome::StartAction::Succeed => {
+                Err(WorkerExecutorError::runtime(
+                    "a failed start before the replay gave a replay outcome",
+                ))
+            }
+        }
+    }
+
+    /// Ends a start that failed with `error` while its filesystem was open, as
+    /// [`start_outcome::decide`] decides for a start from `role` with the pending update `head`.
+    /// `cleanup` closes the filesystem with the error that ends the start. An action that writes
+    /// or changes something runs only after a clean cleanup, so a failed update is written only
+    /// when the agent can start again on its source revision; the start then ends with `Restart`,
+    /// an internal retry signal that records no interruption. After a failed cleanup the start
+    /// ends with the error as it is, and nothing is written.
+    async fn end_failed_start<Ctx: WorkerCtx>(
+        parent: &Arc<Worker<Ctx>>,
+        role: &start_outcome::BaselineRole,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+        cleanup: impl AsyncFnOnce(WorkerExecutorError) -> CreateWorkerInstanceError,
+    ) -> CreateWorkerInstanceError {
+        let raw = error.passed_through();
+        match Self::start_action(parent, role, head, error) {
+            start_outcome::StartAction::Error(error) => cleanup(error).await,
+            start_outcome::StartAction::ShardLost => {
+                cleanup(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::ShardLost,
+                })
+                .await
+            }
+            action @ (start_outcome::StartAction::FailUpdate { .. }
+            | start_outcome::StartAction::SkipPeriodic(_)
+            | start_outcome::StartAction::RejectPeriodic(_)
+            | start_outcome::StartAction::Retry(_)
+            | start_outcome::StartAction::Succeed) => {
+                let cleaned = cleanup(raw).await;
+                if cleaned.filesystem_cleanup_failure.is_some() {
+                    return cleaned;
                 }
-            }
-            filesystem_snapshots::BaselineFailure::FailVisibly(message) => {
-                WorkerExecutorError::failed_to_resume_worker(
-                    parent.owned_agent_id.agent_id.clone(),
-                    WorkerExecutorError::invalid_request(String::from(message)),
+                CreateWorkerInstanceError::from(
+                    match Self::perform_start_action(parent, action).await {
+                        Ok(()) => WorkerExecutorError::Interrupted {
+                            kind: InterruptKind::Restart,
+                        },
+                        Err(error) => error,
+                    },
                 )
-            }
-            filesystem_snapshots::BaselineFailure::Reconstruction => {
-                reconstruction_startup_error(error)
             }
         }
     }
@@ -11795,41 +11826,18 @@ impl RunningWorker {
         parent.hydrated_invocation_results.write().await.clear();
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
-        let worker_metadata = if let Some(pending) =
-            worker_metadata.last_known_status.pending_updates.front()
-            && is_unselected_automatic_update(pending)
+        let selection = match parent
+            .decide_start(&worker_metadata.last_known_status)
+            .await?
         {
-            parent.persist_automatic_update_strategy(pending).await?;
-            parent.get_latest_worker_metadata().await
-        } else {
-            worker_metadata
-        };
-        debug!("Creating instance with parent metadata {worker_metadata:?}");
-
-        let (pending_update, component, component_metadata) = {
-            let pending_update_ref = worker_metadata
-                .last_known_status
-                .pending_updates
-                .front()
-                .cloned();
-
-            if let Some(pending_update_ref) = &pending_update_ref
-                && let Some(details) = snapshot_assisted_head_failure(
-                    &worker_metadata.last_known_status,
-                    pending_update_ref,
-                )
-            {
-                warn!(
-                    "Snapshot-assisted automatic update to revision {} failed before target fetch: {details}",
-                    pending_update_ref.target_revision
-                );
+            StartDecision::PersistStrategy {
+                description,
+                admission_index,
+            } => {
                 parent
-                    .add_and_commit_oplog(OplogEntry::failed_update(
-                        pending_update_ref.target_revision,
-                        Some(details),
-                        failed_snapshot_assisted_update_details(pending_update_ref),
-                        Some(pending_update_ref.admission_index),
-                        None,
+                    .add_and_commit_oplog(OplogEntry::pending_update(
+                        description,
+                        Some(admission_index),
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;
@@ -11840,7 +11848,32 @@ impl RunningWorker {
                 ))
                 .await;
             }
+            StartDecision::FailHead { role, found } => {
+                let action = Self::start_action(
+                    &parent,
+                    &role,
+                    None,
+                    start_outcome::RawStartError::StaleSource(&found),
+                );
+                Self::perform_start_action(&parent, action).await?;
+                return Box::pin(Self::create_instance(
+                    parent,
+                    concurrent_agent_permit,
+                    filesystem_snapshot_slot,
+                ))
+                .await;
+            }
+            StartDecision::Start(selection) => selection,
+        };
+        debug!("Creating instance with parent metadata {worker_metadata:?}");
+        let role = selection.baseline.role();
+        let pending_update_ref = worker_metadata
+            .last_known_status
+            .pending_updates
+            .front()
+            .cloned();
 
+        let (pending_update, component, component_metadata) = {
             let component_revision = pending_update_ref.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
@@ -11882,16 +11915,13 @@ impl RunningWorker {
                             target_agent_type.mode,
                             worker_metadata.agent_mode,
                         );
-                        parent
-                            .add_and_commit_oplog(OplogEntry::failed_update(
-                                component_revision,
-                                Some(details),
-                                failed_snapshot_assisted_update_details(pending_update_ref),
-                                Some(pending_update_ref.admission_index),
-                                None,
-                            ))
-                            .await
-                            .map_err(WorkerExecutorError::from)?;
+                        let action = Self::start_action(
+                            &parent,
+                            &role,
+                            Some(pending_update_ref),
+                            start_outcome::RawStartError::ModeChange(&details),
+                        );
+                        Self::perform_start_action(&parent, action).await?;
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -11909,44 +11939,30 @@ impl RunningWorker {
                         }
                         None => None,
                     };
-                    Ok((pending_update, component, component_metadata))
+                    (pending_update, component, component_metadata)
                 }
-                Err(error) => {
-                    if component_revision != worker_metadata.last_known_status.component_revision {
-                        // An update was attempted but the targeted version does not exist
+                Err(error) => match &pending_update_ref {
+                    Some(pending_update_ref) => {
                         warn!(
                             "Attempting update to revision {component_revision} failed with {error}"
                         );
-
-                        // Refused, the update cannot be marked failed, and retrying would find
-                        // the same pending update again: the start fails as a lost shard instead.
-                        parent
-                            .add_and_commit_oplog(OplogEntry::failed_update(
-                                component_revision,
-                                Some(error.to_string()),
-                                pending_update_ref.as_ref().and_then(|pending| {
-                                    failed_snapshot_assisted_update_details(pending)
-                                }),
-                                pending_update_ref
-                                    .as_ref()
-                                    .map(|pending| pending.admission_index),
-                                None,
-                            ))
-                            .await
-                            .map_err(WorkerExecutorError::from)?;
-
-                        // The update is now marked failed in the parent, we can retry.
+                        let action = Self::start_action(
+                            &parent,
+                            &role,
+                            Some(pending_update_ref),
+                            start_outcome::RawStartError::TargetFetch(&error),
+                        );
+                        Self::perform_start_action(&parent, action).await?;
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
                             filesystem_snapshot_slot,
                         ))
                         .await;
-                    } else {
-                        Err(error)
                     }
-                }
-            }?
+                    None => return Err(error.into()),
+                },
+            }
         };
 
         if component_metadata.metadata.has_shared_linear_memory() {
@@ -11959,13 +11975,33 @@ impl RunningWorker {
             .current_component
             .store(Arc::new(component_metadata.clone()));
 
-        let start_filesystem = StartFilesystem::load_and_plan(
+        let start_filesystem = match StartFilesystem::load_and_plan(
             &parent,
             &worker_metadata.last_known_status,
+            selection,
             pending_update.as_ref(),
         )
-        .await?;
-        let component_version_for_replay = start_filesystem.selection.replay_revision;
+        .await
+        {
+            Ok(start_filesystem) => start_filesystem,
+            Err(StartFilesystemError::Other(error)) => return Err(error.into()),
+            Err(StartFilesystemError::Disabled) => {
+                let action = Self::start_action(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Disabled,
+                );
+                Self::perform_start_action(&parent, action).await?;
+                return Box::pin(Self::create_instance(
+                    parent,
+                    concurrent_agent_permit,
+                    filesystem_snapshot_slot,
+                ))
+                .await;
+            }
+        };
+        let component_version_for_replay = start_filesystem.replay_revision();
 
         let component_metadata_for_replay =
             if component_metadata.revision == component_version_for_replay {
@@ -11984,42 +12020,9 @@ impl RunningWorker {
                 &parent.owner_context,
             )?;
 
-        let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
-        let mut last_snapshot_index = worker_metadata
-            .last_known_status
-            .authoritative_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.index);
-        let mut last_snapshot_source = worker_metadata
-            .last_known_status
-            .authoritative_snapshot
-            .as_ref()
-            .map(|snapshot| match snapshot.kind {
-                AuthoritativeSnapshotKind::ManualUpdate => SnapshotSource::ManualUpdate,
-                AuthoritativeSnapshotKind::SnapshotAssistedAutomatic { .. } => {
-                    SnapshotSource::SnapshotAssistedAutomatic
-                }
-            });
-
-        // Only snapshots whose exact record index is not rejected, and that match the active
-        // revision, are eligible. Pending updates temporarily ignore them so compatibility
-        // is established by replaying from the authoritative manual-update baseline.
-        if let Some(snapshot_idx) = start_filesystem
-            .selection
-            .automatic
-            .as_ref()
-            .map(|snapshot| snapshot.index)
-        {
-            let snapshot_skip =
-                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                    OplogIndex::INITIAL.next()..=snapshot_idx,
-                )])
-                .build();
-            skipped_regions.set_override(snapshot_skip);
-
-            last_snapshot_index = Some(snapshot_idx);
-            last_snapshot_source = Some(SnapshotSource::Automatic);
-        }
+        let skipped_regions = start_filesystem
+            .replay()
+            .skipped_regions(&worker_metadata.last_known_status.skipped_regions);
 
         if parent.agent_mode() == AgentMode::Durable {
             let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
@@ -12194,20 +12197,25 @@ impl RunningWorker {
                 .await);
             }
         };
-        let reconstructing = match start_filesystem
-            .materialize(&parent, reconstructing, prepared, filesystem_snapshot_slot)
+        let (reconstructing, replay) = match start_filesystem
+            .materialize(reconstructing, prepared, filesystem_snapshot_slot)
             .await
         {
-            Ok(filesystem) => filesystem,
+            Ok(materialized) => materialized,
             Err(failure) => {
-                return Err(cleanup_open_agent_filesystem(
-                    failure.filesystem,
-                    window,
-                    failure.error,
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &failure.replay.role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Filesystem(&failure.error),
+                    async move |error| {
+                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
+                    },
                 )
                 .await);
             }
         };
+        let replays_a_snapshot = replay.snapshot.is_some();
         let reconstruction_generation_handle =
             match reconstruction_generation_handle(&reconstructing) {
                 Ok(generation_handle) => generation_handle,
@@ -12268,9 +12276,7 @@ impl RunningWorker {
                 worker_metadata.created_by,
                 worker_metadata.created_by_email,
                 worker_metadata.config,
-                last_snapshot_index,
-                last_snapshot_source,
-                None,
+                replay,
                 agent_effective_surface,
                 None,
             ),
@@ -12316,7 +12322,7 @@ impl RunningWorker {
                 );
             }
         };
-        if last_snapshot_index.is_some() {
+        if replays_a_snapshot {
             // Core initializers run before load-snapshot, but their recorded host calls are
             // already inside the skipped snapshot history. Recreate that runtime state with
             // the same durability suppression as snapshot loading, without consuming the tail.
@@ -12331,52 +12337,19 @@ impl RunningWorker {
         let (instance, mut store) = match runtime {
             Ok(runtime) => runtime,
             Err(error) => {
-                let assisted_target_revision = assisted_instantiation_failure_target(
-                    worker_metadata.last_known_status.pending_updates.front(),
-                    &error,
-                );
-                let details = error.to_string();
-                let cleanup =
-                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await;
-                if cleanup.filesystem_cleanup_failure.is_none()
-                    && let Some(target_revision) = assisted_target_revision
-                {
-                    parent
-                        .add_and_commit_oplog(OplogEntry::failed_update(
-                            target_revision,
-                            Some(format!(
-                                "Snapshot-assisted automatic update failed while instantiating the target: {details}"
-                            )),
-                            worker_metadata
-                                .last_known_status
-                                .pending_updates
-                                .front()
-                                .and_then(|pending| {
-                                    failed_snapshot_assisted_update_details(pending)
-                                }),
-                            worker_metadata
-                                .last_known_status
-                                .pending_updates
-                                .front()
-                                .map(|pending| pending.admission_index),
-                                None,
-                        ))
-                        .await
-                        .map_err(WorkerExecutorError::from)?;
-                    // The failed outcome makes the next loop iteration reconstruct the source.
-                    // Restart is an internal retry signal here; no interruption oplog entry is
-                    // recorded for it.
-                    return Err(CreateWorkerInstanceError {
-                        error: WorkerExecutorError::Interrupted {
-                            kind: InterruptKind::Restart,
-                        },
-                        filesystem_cleanup_failure: None,
-                    });
-                }
-                return Err(cleanup);
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Instantiation(&error),
+                    async move |error| {
+                        cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await
+                    },
+                )
+                .await);
             }
         };
-        if last_snapshot_index.is_some() {
+        if replays_a_snapshot {
             store.data_mut().end_call_snapshotting_function();
         }
         {
@@ -12420,11 +12393,14 @@ impl RunningWorker {
             Ok(filesystem) => filesystem,
             Err(failure) => {
                 drop(store);
-                let startup_error = reconstruction_startup_error(failure.source);
-                return Err(cleanup_open_agent_filesystem(
-                    failure.filesystem,
-                    window,
-                    startup_error,
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Finish(&failure.source),
+                    async move |error| {
+                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
+                    },
                 )
                 .await);
             }
@@ -12433,11 +12409,14 @@ impl RunningWorker {
             Ok(filesystem) => filesystem,
             Err(failure) => {
                 drop(store);
-                let startup_error = reconstruction_startup_error(failure.source);
-                return Err(cleanup_open_agent_filesystem(
-                    failure.filesystem,
-                    window,
-                    startup_error,
+                return Err(Self::end_failed_start(
+                    &parent,
+                    &role,
+                    pending_update_ref.as_ref(),
+                    start_outcome::RawStartError::Finish(&failure.source),
+                    async move |error| {
+                        cleanup_open_agent_filesystem(failure.filesystem, window, error).await
+                    },
                 )
                 .await);
             }
@@ -12563,19 +12542,6 @@ async fn cleanup_reconstructing_agent_filesystem(
     startup_error: WorkerExecutorError,
 ) -> CreateWorkerInstanceError {
     cleanup_open_agent_filesystem(abort_reconstruction(filesystem), window, startup_error).await
-}
-
-fn reconstruction_startup_error(
-    error: crate::services::agent_filesystem::Error,
-) -> WorkerExecutorError {
-    match error {
-        crate::services::agent_filesystem::Error::AgentQuota(_) => {
-            WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Suspend(Timestamp::now_utc()),
-            }
-        }
-        error => WorkerExecutorError::runtime(error.to_string()),
-    }
 }
 
 async fn cleanup_open_agent_filesystem(
@@ -13046,91 +13012,11 @@ fn lookup_result_from_cached_result(
     }
 }
 
-fn is_unselected_automatic_update(pending_update: &PendingUpdateRef) -> bool {
-    pending_update.kind == PendingUpdateKind::Automatic
-        && pending_update.oplog_index == pending_update.admission_index
-}
-
-/// The strategy entry of the automatic update `pending` at the front of the queue: a plain
-/// automatic update, which replays the whole history on the target revision.
-fn select_automatic_update_strategy(pending: &PendingUpdateRef) -> UpdateDescription {
-    UpdateDescription::Automatic {
-        target_revision: pending.target_revision,
-    }
-}
-
-fn snapshot_assisted_head_failure(
-    status: &AgentStatusRecord,
-    pending_update: &PendingUpdateRef,
-) -> Option<String> {
-    let PendingUpdateKind::SnapshotAssistedAutomatic(selection) = &pending_update.kind else {
-        return None;
-    };
-    let source_component_revision = selection.snapshot.component_revision;
-    let source_revision_start_index = selection.source_revision_start_index;
-
-    if status.component_revision != source_component_revision
-        || status.component_revision_start_index != source_revision_start_index
-    {
-        return Some(format!(
-            "Snapshot-assisted automatic update source became stale: expected revision {source_component_revision} at revision start index {source_revision_start_index}, found revision {} at revision start index {}",
-            status.component_revision, status.component_revision_start_index,
-        ));
-    }
-
-    if pending_update.target_revision <= source_component_revision {
-        return Some(format!(
-            "Snapshot-assisted automatic update from revision {source_component_revision} to revision {} is not an upgrade",
-            pending_update.target_revision,
-        ));
-    }
-
-    None
-}
-
-fn failed_snapshot_assisted_update_details(
-    pending_update: &PendingUpdateRef,
-) -> Option<FailedSnapshotAssistedUpdateDetails> {
-    let PendingUpdateKind::SnapshotAssistedAutomatic(selection) = &pending_update.kind else {
-        return None;
-    };
-    Some(FailedSnapshotAssistedUpdateDetails {
-        pending_update_index: pending_update.oplog_index,
-        source_component_revision: selection.snapshot.component_revision,
-        source_revision_start_index: selection.source_revision_start_index,
-        snapshot_index: selection.snapshot.index,
-    })
-}
-
-/// The index of the `PendingUpdate` entry of the manual update whose snapshot is the
-/// authoritative baseline of `status`, if the baseline is a manual update.
-fn manual_update_baseline_index(status: &AgentStatusRecord) -> Option<OplogIndex> {
-    status
-        .authoritative_snapshot
-        .as_ref()
-        .filter(|snapshot| snapshot.kind == AuthoritativeSnapshotKind::ManualUpdate)
-        .map(|snapshot| snapshot.index)
-}
-
-fn assisted_instantiation_failure_target(
-    pending_update: Option<&PendingUpdateRef>,
-    error: &WorkerExecutorError,
-) -> Option<ComponentRevision> {
-    if matches!(error, WorkerExecutorError::Interrupted { .. }) {
-        return None;
-    }
-    pending_update.and_then(|update| {
-        matches!(update.kind, PendingUpdateKind::SnapshotAssistedAutomatic(_))
-            .then_some(update.target_revision)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
-    use std::path::Path;
     use test_r::test;
 
     #[test]
@@ -13207,59 +13093,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_assisted_head_validation_rejects_stale_aba_and_downgrade() {
-        let source_revision = ComponentRevision::new(2).unwrap();
-        let source_revision_start_index = OplogIndex::from_u64(4);
-        let target_revision = ComponentRevision::new(3).unwrap();
-        let mut status = AgentStatusRecord {
-            component_revision: source_revision,
-            component_revision_start_index: source_revision_start_index,
-            ..Default::default()
-        };
-
-        let valid = assisted_pending(
-            source_revision,
-            source_revision_start_index,
-            target_revision,
-        );
-        assert_eq!(snapshot_assisted_head_failure(&status, &valid), None);
-
-        let downgrade = assisted_pending(
-            source_revision,
-            source_revision_start_index,
-            ComponentRevision::new(1).unwrap(),
-        );
-        assert!(snapshot_assisted_head_failure(&status, &downgrade).is_some());
-
-        status.component_revision = target_revision;
-        status.component_revision_start_index = OplogIndex::from_u64(11);
-        assert!(snapshot_assisted_head_failure(&status, &valid).is_some());
-
-        status.component_revision = source_revision;
-        assert!(snapshot_assisted_head_failure(&status, &valid).is_some());
-    }
-
-    /// Every automatic update at the front of the queue gets a plain automatic strategy entry,
-    /// also when an automatic snapshot of the source revision follows its admission.
-    #[test]
-    fn automatic_strategy_is_a_plain_automatic_update_with_a_snapshot_after_admission() {
-        let target_revision = ComponentRevision::new(3).unwrap();
-        let admission_index = OplogIndex::from_u64(6);
-        let pending = PendingUpdateRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: admission_index,
-            admission_index,
-            target_revision,
-            kind: PendingUpdateKind::Automatic,
-        };
-
-        assert_eq!(
-            select_automatic_update_strategy(&pending),
-            UpdateDescription::Automatic { target_revision }
-        );
-    }
-
-    #[test]
     fn startup_charge_skips_rejected_assisted_targets() {
         let source_revision = ComponentRevision::new(2).unwrap();
         let source_revision_start_index = OplogIndex::from_u64(4);
@@ -13288,37 +13121,48 @@ mod tests {
         assert_eq!(startup_component_charge_revision(&status), next_target);
     }
 
+    /// A revert checks the target and the record of the head that a start instantiates only when
+    /// the strategy of the head is chosen: an automatic update still at its admission entry is
+    /// left to the start, also behind a snapshot-assisted head whose source does not hold.
     #[test]
-    fn assisted_instantiation_failure_is_terminal_but_interruption_is_not() {
+    fn a_revert_checks_only_a_head_whose_strategy_is_chosen() {
         let source_revision = ComponentRevision::new(2).unwrap();
-        let target_revision = ComponentRevision::new(3).unwrap();
         let source_revision_start_index = OplogIndex::from_u64(4);
-        let mut status = AgentStatusRecord {
+        let target = ComponentRevision::new(4).unwrap();
+        let automatic = |oplog_index: u64, admission_index: u64| PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(oplog_index),
+            admission_index: OplogIndex::from_u64(admission_index),
+            target_revision: target,
+            kind: PendingUpdateKind::Automatic,
+        };
+        let status_of = |updates: Vec<PendingUpdateRef>| AgentStatusRecord {
             component_revision: source_revision,
             component_revision_start_index: source_revision_start_index,
+            pending_updates: updates.into_iter().collect(),
             ..Default::default()
         };
-        status.pending_updates.push_back(assisted_pending(
+        let stale = assisted_pending(
             source_revision,
-            source_revision_start_index,
-            target_revision,
-        ));
+            source_revision_start_index.next(),
+            ComponentRevision::new(3).unwrap(),
+        );
+        let checked = |status: &AgentStatusRecord| {
+            revert_checked_head(status).map(|update| update.oplog_index)
+        };
 
+        assert_eq!(checked(&status_of(vec![automatic(11, 11)])), None);
         assert_eq!(
-            assisted_instantiation_failure_target(
-                status.pending_updates.front(),
-                &WorkerExecutorError::runtime("target initializer trapped"),
-            ),
-            Some(target_revision)
+            checked(&status_of(vec![automatic(12, 11)])),
+            Some(OplogIndex::from_u64(12))
         );
         assert_eq!(
-            assisted_instantiation_failure_target(
-                status.pending_updates.front(),
-                &WorkerExecutorError::Interrupted {
-                    kind: InterruptKind::Restart,
-                },
-            ),
+            checked(&status_of(vec![stale.clone(), automatic(11, 11)])),
             None
+        );
+        assert_eq!(
+            checked(&status_of(vec![stale, automatic(12, 11)])),
+            Some(OplogIndex::from_u64(12))
         );
     }
 
@@ -13667,221 +13511,6 @@ mod tests {
             StartSelection::of(&status, &other, false).replay_revision,
             active_revision
         );
-    }
-
-    #[test]
-    fn reconstruction_agent_quota_maps_to_startup_suspension() {
-        let error =
-            reconstruction_startup_error(crate::services::agent_filesystem::Error::AgentQuota(
-                crate::services::agent_filesystem::FilesystemStorageError::verification(
-                    "seed initial file",
-                    Path::new("<scripted>"),
-                ),
-            ));
-
-        assert!(matches!(
-            error,
-            WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Suspend(_)
-            }
-        ));
-    }
-
-    /// Characterizes the start error of today for every error of the agent filesystem: an agent
-    /// quota suspends the start, and every other error fails it with its message.
-    #[test]
-    fn reconstruction_startup_error_for_every_filesystem_error() {
-        use crate::services::agent_filesystem::{
-            AccessError, Error, FilesystemStorageError, InitialFileConflict, RestoreError,
-        };
-        let storage =
-            || FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"));
-        let others = [
-            Error::Access(AccessError::Revoked),
-            Error::Sandbox(storage()),
-            Error::InitialFileConflict(Box::new(InitialFileConflict::occupied(Path::new("e/f")))),
-            Error::PhysicalCapacity(storage()),
-            Error::Baseline(Box::new(RestoreError {
-                retryable: true,
-                source: anyhow::anyhow!("restore failed"),
-            })),
-            Error::Baseline(Box::new(RestoreError {
-                retryable: false,
-                source: anyhow::anyhow!("restore failed"),
-            })),
-            Error::RuntimeInvalidated,
-        ];
-
-        assert!(matches!(
-            reconstruction_startup_error(Error::AgentQuota(storage())),
-            WorkerExecutorError::Interrupted {
-                kind: InterruptKind::Suspend(_)
-            }
-        ));
-        for error in others {
-            let message = error.to_string();
-            assert_eq!(
-                reconstruction_startup_error(error),
-                WorkerExecutorError::runtime(message)
-            );
-        }
-    }
-
-    fn head(kind: PendingUpdateKind, oplog_index: u64, admission_index: u64) -> PendingUpdateRef {
-        PendingUpdateRef {
-            timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(oplog_index),
-            admission_index: OplogIndex::from_u64(admission_index),
-            target_revision: ComponentRevision::new(3).unwrap(),
-            kind,
-        }
-    }
-
-    fn assisted_kind(filesystem_snapshot: Option<FilesystemSnapshotName>) -> PendingUpdateKind {
-        PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
-            source_revision_start_index: OplogIndex::from_u64(4),
-            snapshot: UsableAutomaticSnapshot {
-                index: OplogIndex::from_u64(7),
-                component_revision: ComponentRevision::new(2).unwrap(),
-                filesystem_snapshot,
-            },
-        }))
-    }
-
-    /// Characterizes which queue head still needs its strategy entry: only an automatic
-    /// admission that no strategy entry refined.
-    #[test]
-    fn only_an_unrefined_automatic_admission_is_an_unselected_automatic_update() {
-        let snapshot_based = || PendingUpdateKind::SnapshotBased {
-            filesystem_snapshot: None,
-        };
-        assert_eq!(
-            [
-                is_unselected_automatic_update(&head(PendingUpdateKind::Automatic, 10, 10)),
-                is_unselected_automatic_update(&head(PendingUpdateKind::Automatic, 12, 10)),
-                is_unselected_automatic_update(&head(snapshot_based(), 10, 10)),
-                is_unselected_automatic_update(&head(snapshot_based(), 12, 10)),
-                is_unselected_automatic_update(&head(assisted_kind(None), 12, 10)),
-                is_unselected_automatic_update(&head(
-                    assisted_kind(Some(FilesystemSnapshotName::periodic())),
-                    12,
-                    10
-                )),
-            ],
-            [true, false, false, false, false, false]
-        );
-    }
-
-    /// Characterizes the failure details of today for every queue head kind.
-    #[test]
-    fn failed_snapshot_assisted_update_details_for_every_head_kind() {
-        let details = FailedSnapshotAssistedUpdateDetails {
-            pending_update_index: OplogIndex::from_u64(12),
-            source_component_revision: ComponentRevision::new(2).unwrap(),
-            source_revision_start_index: OplogIndex::from_u64(4),
-            snapshot_index: OplogIndex::from_u64(7),
-        };
-        assert_eq!(
-            failed_snapshot_assisted_update_details(&head(PendingUpdateKind::Automatic, 12, 10)),
-            None
-        );
-        assert_eq!(
-            failed_snapshot_assisted_update_details(&head(
-                PendingUpdateKind::SnapshotBased {
-                    filesystem_snapshot: Some(FilesystemSnapshotName::update()),
-                },
-                12,
-                12
-            )),
-            None
-        );
-        assert_eq!(
-            failed_snapshot_assisted_update_details(&head(assisted_kind(None), 12, 10)),
-            Some(details.clone())
-        );
-        assert_eq!(
-            failed_snapshot_assisted_update_details(&head(
-                assisted_kind(Some(FilesystemSnapshotName::periodic())),
-                12,
-                10
-            )),
-            Some(details)
-        );
-    }
-
-    /// Characterizes the head check of today: only a snapshot-assisted head can fail it.
-    #[test]
-    fn snapshot_assisted_head_failure_ignores_every_other_head_kind() {
-        let status = AgentStatusRecord {
-            component_revision: ComponentRevision::new(5).unwrap(),
-            component_revision_start_index: OplogIndex::from_u64(9),
-            ..Default::default()
-        };
-        assert_eq!(
-            snapshot_assisted_head_failure(&status, &head(PendingUpdateKind::Automatic, 10, 10)),
-            None
-        );
-        assert_eq!(
-            snapshot_assisted_head_failure(
-                &status,
-                &head(
-                    PendingUpdateKind::SnapshotBased {
-                        filesystem_snapshot: None
-                    },
-                    10,
-                    10
-                )
-            ),
-            None
-        );
-        assert!(
-            snapshot_assisted_head_failure(&status, &head(assisted_kind(None), 12, 10)).is_some()
-        );
-    }
-
-    /// Characterizes the instantiation failure of today for every queue head kind: only a
-    /// snapshot-assisted head names its target, and an interruption names none.
-    #[test]
-    fn assisted_instantiation_failure_target_for_every_head_kind_and_error() {
-        let runtime = WorkerExecutorError::runtime("target initializer trapped");
-        let interrupted = WorkerExecutorError::Interrupted {
-            kind: InterruptKind::Restart,
-        };
-        let heads = [
-            head(PendingUpdateKind::Automatic, 10, 10),
-            head(PendingUpdateKind::Automatic, 12, 10),
-            head(
-                PendingUpdateKind::SnapshotBased {
-                    filesystem_snapshot: None,
-                },
-                10,
-                10,
-            ),
-            head(assisted_kind(None), 12, 10),
-            head(
-                assisted_kind(Some(FilesystemSnapshotName::periodic())),
-                12,
-                10,
-            ),
-        ];
-        let target = Some(ComponentRevision::new(3).unwrap());
-
-        assert_eq!(
-            heads
-                .iter()
-                .map(|head| assisted_instantiation_failure_target(Some(head), &runtime))
-                .collect::<Vec<_>>(),
-            vec![None, None, None, target, target]
-        );
-        assert!(
-            heads
-                .iter()
-                .all(
-                    |head| assisted_instantiation_failure_target(Some(head), &interrupted)
-                        .is_none()
-                )
-        );
-        assert_eq!(assisted_instantiation_failure_target(None, &runtime), None);
     }
 
     #[test]
@@ -14677,14 +14306,34 @@ mod tests {
     }
 
     #[test]
-    fn classify_target_charge_falls_back_only_for_component_not_found() {
-        let not_found = Err(WorkerExecutorError::ComponentNotFound {
-            component_id: ComponentId(uuid::Uuid::new_v4()),
-        });
+    fn classify_target_charge_falls_back_only_for_a_target_that_cannot_load() {
+        let component_id = ComponentId(uuid::Uuid::new_v4());
+        let not_found = Err(WorkerExecutorError::ComponentNotFound { component_id });
         assert_eq!(
             classify_target_charge(&not_found),
             TargetChargeAction::FallBackToCurrent,
             "a non-existent target falls back to the current revision (create_instance fails the update and recovers)"
+        );
+        let refused = Err(WorkerExecutorError::ComponentServiceRefused {
+            component_id,
+            component_revision: Some(ComponentRevision::new(2).unwrap()),
+            kind: golem_service_base::error::worker_executor::ComponentServiceRefusal::Unauthorized,
+            reason: "unauthorized".to_string(),
+        });
+        assert_eq!(
+            classify_target_charge(&refused),
+            TargetChargeAction::FallBackToCurrent,
+            "a refused target falls back to the current revision (create_instance fails the update and recovers)"
+        );
+        let unavailable = Err(WorkerExecutorError::ComponentServiceUnavailable {
+            component_id,
+            component_revision: Some(ComponentRevision::new(2).unwrap()),
+            reason: "transport".to_string(),
+        });
+        assert_eq!(
+            classify_target_charge(&unavailable),
+            TargetChargeAction::Retry,
+            "an unavailable component service is retried"
         );
     }
 

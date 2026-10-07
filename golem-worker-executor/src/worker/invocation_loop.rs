@@ -3360,7 +3360,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         // The status holds the new pending update by now, so its name is kept.
                         if let Some(retention) = retention {
                             retention.delete_older_snapshots(
-                                &crate::worker::snapshot_selection::update_names_in_use(
+                                &crate::worker::snapshot_selection::names_in_use(
                                     &self.parent.last_known_status.load(),
                                 ),
                             );
@@ -3581,12 +3581,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         match self
             .store
             .data()
-            .on_worker_update_failed(
+            .on_worker_update_failed(crate::worker::start_outcome::failed_admission_of(
                 target_revision,
-                Some(error),
-                None,
-                Some(update_attempt_index),
-            )
+                update_attempt_index,
+                error,
+            ))
             .await
         {
             Ok(()) => CommandOutcome::Continue,
@@ -4009,7 +4008,7 @@ impl<Ctx: WorkerCtx> PeriodicSnapshotHost for PeriodicHost<'_, '_, Ctx> {
         let baselines = self.0.parent.start_baselines_now();
         self.0
             .filesystem_snapshot_slot
-            .since(baselines.automatic.as_ref(), baselines.manual_update)
+            .since(baselines.periodic.as_ref(), baselines.authoritative)
     }
 
     async fn capture(

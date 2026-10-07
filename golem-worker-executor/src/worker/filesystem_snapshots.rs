@@ -20,6 +20,7 @@
 use super::Worker;
 use crate::filesystem_snapshot::AgentSnapshots;
 use crate::filesystem_snapshot::ChangeDetection as StoreChangeDetection;
+use crate::model::SnapshotSource;
 use crate::services::agent_filesystem::{
     CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck,
     InitialFilesRestore, RestoreError, RestoreTree, TreeMark, WholeCapture,
@@ -29,15 +30,14 @@ use crate::services::agent_filesystem_snapshots::{
     SnapshotsDisabled, StoreRestore, UpdateAdmitted, UploadNowError,
 };
 use crate::services::oplog::OplogError;
+use crate::worker::snapshot_selection::SelectedBaseline;
+use crate::worker::start_outcome::BaselineRole;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{
-    FilesystemSnapshotName, OplogIndex, TimestampedUpdateDescription, UpdateDescription,
-};
+use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex, UpdateDescription};
 use golem_common::model::oplog::{OplogEntry, RawSnapshotData};
-use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{AgentId, UsableAutomaticSnapshot};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::{AuthoritativeSnapshotKind, UsableAutomaticSnapshot};
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::path::Path;
@@ -51,8 +51,9 @@ use uuid::Uuid;
 pub(crate) enum ConfirmedBaseline {
     /// A periodic snapshot record: a start restored it, or a confirmation confirmed it.
     Periodic,
-    /// The manual-update record at the index, which a start restored.
-    ManualUpdate(OplogIndex),
+    /// The record at the index that is or becomes the authoritative baseline: a manual-update
+    /// record, or the record that a snapshot-assisted update selected. A start restored it.
+    Authoritative(OplogIndex),
 }
 
 /// The last confirmed filesystem snapshot of a worker, with the mark of its tree. A snapshot
@@ -109,19 +110,19 @@ impl SnapshotSlot {
     }
 
     /// The confirmed snapshot that a capture compares with now, as [`since`] decides from the
-    /// record `selected` that a start selects now and the index `last_manual_update` of the
-    /// manual-update baseline.
+    /// periodic record `selected` that a start selects now and the index `authoritative` of the
+    /// authoritative baseline.
     pub(crate) fn since(
         &self,
         selected: Option<&UsableAutomaticSnapshot>,
-        last_manual_update: Option<OplogIndex>,
+        authoritative: Option<OplogIndex>,
     ) -> Option<ConfirmedFilesystemSnapshot> {
         since(
             self.lock()
                 .as_ref()
                 .and_then(FilesystemSnapshotSlot::confirmed),
             selected,
-            last_manual_update,
+            authoritative,
         )
     }
 
@@ -132,13 +133,13 @@ impl SnapshotSlot {
     }
 }
 
-/// The baselines that a start of a worker has now: the automatic snapshot record that it
-/// selects, and the index of the manual-update record of the status. A periodic capture
-/// compares with the confirmed snapshot of its slot only while one of them restores it.
+/// The baselines that a start of a worker has now: the periodic record that it selects, and the
+/// index of the authoritative baseline of the status. A periodic capture compares with the
+/// confirmed snapshot of its slot only while one of them restores it.
 #[derive(Clone, Debug)]
 pub(crate) struct StartBaselines {
-    pub(crate) automatic: Option<UsableAutomaticSnapshot>,
-    pub(crate) manual_update: Option<OplogIndex>,
+    pub(crate) periodic: Option<UsableAutomaticSnapshot>,
+    pub(crate) authoritative: Option<OplogIndex>,
 }
 
 /// What a worker knows about the filesystem snapshots of its current generation.
@@ -201,17 +202,17 @@ fn same_generation(slot: &FilesystemSnapshotSlot, mark: TreeMark) -> bool {
 
 /// Gives the confirmed snapshot that a capture compares with: the confirmed snapshot of the slot
 /// while a start would restore its name now. A snapshot without a name matches a selected record
-/// without a name. `selected` is the automatic snapshot record that a start selects now, and
-/// `last_manual_update` the index of the manual-update baseline.
+/// without a name. `selected` is the periodic record that a start selects now, and
+/// `authoritative` the index of the authoritative baseline.
 fn since(
     confirmed: Option<&ConfirmedFilesystemSnapshot>,
     selected: Option<&UsableAutomaticSnapshot>,
-    last_manual_update: Option<OplogIndex>,
+    authoritative: Option<OplogIndex>,
 ) -> Option<ConfirmedFilesystemSnapshot> {
     let confirmed = confirmed?;
     let selected_now = match (selected, confirmed.baseline) {
         (Some(selected), _) => selected.filesystem_snapshot == confirmed.name,
-        (None, ConfirmedBaseline::ManualUpdate(index)) => last_manual_update == Some(index),
+        (None, ConfirmedBaseline::Authoritative(index)) => authoritative == Some(index),
         (None, ConfirmedBaseline::Periodic) => false,
     };
     selected_now.then(|| confirmed.clone())
@@ -673,11 +674,19 @@ enum Admit {
     InitialFilesOnly(Duration),
 }
 
-/// Why a manual update on an executor without filesystem snapshots fails when the tree of the
-/// agent holds more than its initial files.
-pub(crate) const UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS: &str = "cannot take a snapshot for the update: \
-     the files of the agent differ from its initial files, and filesystem snapshots are disabled \
-     on this executor";
+/// A manual update on an executor without filesystem snapshots cannot take a snapshot, because
+/// the tree of the agent holds more than its initial files.
+pub(crate) const UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS: &str = "UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS";
+
+/// The details of a failed update with [`UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`]: the code, then its
+/// text.
+fn needs_filesystem_snapshots() -> String {
+    format!(
+        "{UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS}: cannot take a snapshot for the update: the files of \
+         the agent differ from its initial files, and filesystem snapshots are disabled on this \
+         executor"
+    )
+}
 
 /// Why a manual update on an executor without filesystem snapshots fails when the check of the
 /// tree failed. The cause of the failure follows it.
@@ -702,9 +711,7 @@ fn checked_update<Stop>(
             name: None,
             retention: None,
         },
-        Ok(InitialFilesCheck::Changed) => {
-            UpdateSnapshot::Fail(UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS.to_string())
-        }
+        Ok(InitialFilesCheck::Changed) => UpdateSnapshot::Fail(needs_filesystem_snapshots()),
         Err(error) => UpdateSnapshot::Fail(format!("{UPDATE_CHECK_FAILED}: {error}")),
     }
 }
@@ -754,46 +761,6 @@ fn failed_update_upload<Stop>(error: &UploadNowError, lost_shard: bool) -> Updat
     }
 }
 
-/// The baseline that a start selected, with its restore.
-pub(crate) struct StartBaseline {
-    pub(crate) kind: BaselineKind,
-    pub(crate) restore: Option<StartRestore>,
-}
-
-/// The record that the baseline of a start comes from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum BaselineKind {
-    /// No snapshot record: the initial files of the replay revision.
-    InitialFiles,
-    /// The automatic snapshot record at `index`.
-    Periodic {
-        index: OplogIndex,
-        name: Option<FilesystemSnapshotName>,
-    },
-    /// The manual-update record at `index`, which is still pending when `pending` is true.
-    ManualUpdate {
-        index: OplogIndex,
-        target_revision: ComponentRevision,
-        pending: bool,
-        name: Option<FilesystemSnapshotName>,
-    },
-}
-
-impl BaselineKind {
-    /// The named filesystem snapshot that the baseline restored.
-    pub(crate) fn restored(&self) -> Option<(FilesystemSnapshotName, ConfirmedBaseline)> {
-        match self {
-            Self::InitialFiles => None,
-            Self::Periodic { name, .. } => {
-                name.clone().map(|name| (name, ConfirmedBaseline::Periodic))
-            }
-            Self::ManualUpdate { index, name, .. } => name
-                .clone()
-                .map(|name| (name, ConfirmedBaseline::ManualUpdate(*index))),
-        }
-    }
-}
-
 /// The component revision whose initial files a manual-update baseline without a name seeds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SourceRevision {
@@ -817,184 +784,163 @@ pub(crate) fn revision_before(
         .map(|update| update.target_revision)
 }
 
-/// What a start does to get its baseline.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum BaselineStep {
-    /// The baseline is known. `restore` names the filesystem snapshot that the start restores
-    /// from the store.
-    Ready {
-        kind: BaselineKind,
-        restore: Option<FilesystemSnapshotName>,
-    },
-    /// A manual-update record without a name: the start needs the initial files of `source`.
-    NeedsSourceFiles {
-        kind: BaselineKind,
-        source: SourceRevision,
-    },
-    /// The record names a filesystem snapshot, and this executor keeps none.
-    Disabled { kind: BaselineKind },
-}
-
-/// What a start plans first.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum StartPlan {
-    /// The selected automatic snapshot record gives the baseline.
-    Automatic(BaselineStep),
-    /// No automatic snapshot record is selected: the start reads the manual-update record and
-    /// plans with [`plan_manual_baseline`].
-    ManualUpdate,
-}
-
-/// Plans the baseline of a start from the selected automatic snapshot record. Without one, the
-/// start needs the manual-update record. `enabled` tells whether this executor keeps filesystem
-/// snapshots.
-pub(crate) fn plan_start_baseline(
-    automatic: Option<&UsableAutomaticSnapshot>,
-    enabled: bool,
-) -> StartPlan {
-    match automatic {
-        Some(snapshot) => StartPlan::Automatic(named_baseline(
-            BaselineKind::Periodic {
-                index: snapshot.index,
-                name: snapshot.filesystem_snapshot.clone(),
-            },
-            snapshot.filesystem_snapshot.clone(),
-            enabled,
-        )),
-        None => StartPlan::ManualUpdate,
-    }
-}
-
-/// The baseline `kind`, which restores the filesystem snapshot `name` when it has one.
-fn named_baseline(
-    kind: BaselineKind,
-    name: Option<FilesystemSnapshotName>,
-    enabled: bool,
-) -> BaselineStep {
-    match name {
-        Some(_) if !enabled => BaselineStep::Disabled { kind },
-        restore => BaselineStep::Ready { kind, restore },
-    }
-}
-
-/// Plans the baseline of a start without an automatic snapshot record: from the manual-update
-/// record with whether it is still pending, else from the initial files. `enabled` tells whether
-/// this executor keeps filesystem snapshots.
-pub(crate) fn plan_manual_baseline(
-    manual: Option<(TimestampedUpdateDescription, bool)>,
-    enabled: bool,
-) -> BaselineStep {
-    match manual {
-        Some((
-            TimestampedUpdateDescription {
-                timestamp: _,
-                oplog_index,
-                description:
-                    UpdateDescription::SnapshotBased {
-                        target_revision,
-                        filesystem_snapshot,
-                        ..
-                    },
-            },
-            pending,
-        )) => {
-            let kind = BaselineKind::ManualUpdate {
-                index: oplog_index,
-                target_revision,
-                pending,
-                name: filesystem_snapshot.clone(),
-            };
-            match filesystem_snapshot {
-                Some(name) => named_baseline(kind, Some(name), enabled),
-                None => BaselineStep::NeedsSourceFiles {
-                    kind,
-                    source: if pending {
-                        SourceRevision::Current
-                    } else {
-                        SourceRevision::Before(oplog_index)
-                    },
-                },
-            }
-        }
-        _ => BaselineStep::Ready {
-            kind: BaselineKind::InitialFiles,
-            restore: None,
-        },
-    }
-}
-
-/// The error of a start whose baseline names a filesystem snapshot on an executor that keeps
-/// none. A manual-update baseline fails the start with a visible cause.
-pub(crate) fn baseline_disabled_error(
-    kind: &BaselineKind,
-    agent_id: &AgentId,
-) -> WorkerExecutorError {
-    match kind {
-        BaselineKind::ManualUpdate { .. } => WorkerExecutorError::failed_to_resume_worker(
-            agent_id.clone(),
-            WorkerExecutorError::invalid_request(SnapshotsDisabled.to_string()),
-        ),
-        BaselineKind::InitialFiles | BaselineKind::Periodic { .. } => {
-            WorkerExecutorError::runtime(SnapshotsDisabled.to_string())
-        }
-    }
-}
-
-/// What a start does when its baseline failed.
+/// The plan of the baseline of a start: where its tree comes from, and the replay inputs. One
+/// plan gives both, so a start loads an application snapshot only from the record whose files it
+/// restores, and skips exactly the history before that record.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum BaselineFailure {
-    /// The filesystem snapshot of the automatic snapshot record at the index does not restore.
-    /// The start skips the record and restarts.
-    SkipPeriodic(OplogIndex),
-    /// A conflict of the initial-file rule at the start of a pending manual update. The start
-    /// records a failed update with the message and restarts on the current revision.
-    RecordFailedUpdate {
-        target: ComponentRevision,
-        message: Box<str>,
-    },
-    /// The same conflict on a lost shard. Nothing is written.
-    ShardLost,
-    /// A manual-update baseline that does not restore, and whose error allows no retry. The
-    /// start fails with the message as a visible cause.
-    FailVisibly(Box<str>),
-    /// Any other failure of the reconstruction.
-    Reconstruction,
+pub(crate) struct StartPlan {
+    pub(crate) source: TreeSource,
+    pub(crate) replay: ReplayBaseline,
 }
 
-/// Classifies the failure `error` of the baseline `kind`. `lost_shard` tells whether the shard
-/// of the agent is lost.
-pub(crate) fn classify_baseline_failure(
-    kind: &BaselineKind,
-    error: &crate::services::agent_filesystem::Error,
-    lost_shard: bool,
-) -> BaselineFailure {
-    use crate::services::agent_filesystem::Error;
-    match (kind, error) {
-        (BaselineKind::Periodic { index, .. }, Error::Baseline(_)) => {
-            BaselineFailure::SkipPeriodic(*index)
+/// Where the tree of a start comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TreeSource {
+    /// The initial files of the replay revision; no restore.
+    InitialFiles,
+    /// The filesystem snapshot of this name in the store of the incarnation.
+    Store(FilesystemSnapshotName),
+    /// The initial files of another revision, followed by the initial-file rule: a manual-update
+    /// record without a name.
+    SourceFiles(SourceRevision),
+}
+
+/// The replay inputs of the baseline of a start.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplayBaseline {
+    /// The record whose application snapshot the start uses, with its source.
+    pub(crate) snapshot: Option<(OplogIndex, SnapshotSource)>,
+    /// `Some(index)` makes the start skip the history `1..=index`; `None` keeps only the skipped
+    /// regions of the status.
+    pub(crate) skip_through: Option<OplogIndex>,
+    /// The column of the start outcome table.
+    pub(crate) role: BaselineRole,
+}
+
+impl ReplayBaseline {
+    /// The replay inputs of a start without a record: the initial files and the whole history.
+    pub(crate) fn initial_files() -> Self {
+        Self {
+            snapshot: None,
+            skip_through: None,
+            role: BaselineRole::InitialFiles,
         }
-        (
-            BaselineKind::ManualUpdate {
-                target_revision,
-                pending: true,
-                ..
-            },
-            Error::InitialFileConflict(conflict),
-        ) => {
-            if lost_shard {
-                BaselineFailure::ShardLost
-            } else {
-                BaselineFailure::RecordFailedUpdate {
-                    target: *target_revision,
-                    message: conflict.to_string().into_boxed_str(),
-                }
-            }
-        }
-        (BaselineKind::ManualUpdate { .. }, Error::Baseline(error)) if !error.retryable => {
-            BaselineFailure::FailVisibly(error.to_string().into_boxed_str())
-        }
-        _ => BaselineFailure::Reconstruction,
     }
+
+    /// The skipped regions of the start: `status_regions` with the history before the record
+    /// skipped, or without an override when the record is not pending.
+    pub(crate) fn skipped_regions(&self, status_regions: &DeletedRegions) -> DeletedRegions {
+        let mut regions = status_regions.clone();
+        match self.skip_through {
+            Some(index) => regions.set_override(
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    OplogIndex::INITIAL.next()..=index,
+                )])
+                .build(),
+            ),
+            None if regions.is_overridden() => regions.drop_override(),
+            None => {}
+        }
+        regions
+    }
+}
+
+impl StartPlan {
+    /// The named filesystem snapshot that the start restores, with the baseline that it is: a
+    /// periodic record, or the record that is or becomes the authoritative baseline.
+    pub(crate) fn restored(&self) -> Option<(FilesystemSnapshotName, ConfirmedBaseline)> {
+        let TreeSource::Store(name) = &self.source else {
+            return None;
+        };
+        let baseline = match &self.replay.role {
+            BaselineRole::Periodic(_) => ConfirmedBaseline::Periodic,
+            BaselineRole::ManualPending(head) => ConfirmedBaseline::Authoritative(head.oplog_index),
+            BaselineRole::ManualPromoted
+            | BaselineRole::AssistedPending(_)
+            | BaselineRole::AssistedPromoted
+            | BaselineRole::InitialFiles => {
+                ConfirmedBaseline::Authoritative(self.replay.snapshot.map(|(index, _)| index)?)
+            }
+        };
+        Some((name.clone(), baseline))
+    }
+}
+
+/// Plans the baseline of a start from `selected`. `manual_name` is the filesystem snapshot name
+/// of the manual-update record when `selected` is one; `enabled` tells whether this executor
+/// keeps filesystem snapshots. A record that names a filesystem snapshot gives `SnapshotsDisabled`
+/// on an executor without them.
+pub(crate) fn plan_start(
+    selected: &SelectedBaseline,
+    manual_name: Option<&FilesystemSnapshotName>,
+    enabled: bool,
+) -> Result<StartPlan, SnapshotsDisabled> {
+    let named = |name: Option<&FilesystemSnapshotName>| match name {
+        Some(_) if !enabled => Err(SnapshotsDisabled),
+        Some(name) => Ok(TreeSource::Store(name.clone())),
+        None => Ok(TreeSource::InitialFiles),
+    };
+    let manual = |source: SourceRevision| match manual_name {
+        Some(name) => named(Some(name)),
+        None => Ok(TreeSource::SourceFiles(source)),
+    };
+    let role = selected.role();
+    Ok(match selected {
+        SelectedBaseline::Periodic(snapshot) => StartPlan {
+            source: named(snapshot.filesystem_snapshot.as_ref())?,
+            replay: ReplayBaseline {
+                snapshot: Some((snapshot.index, SnapshotSource::Automatic)),
+                skip_through: Some(snapshot.index),
+                role,
+            },
+        },
+        SelectedBaseline::AssistedPending { snapshot, .. } => StartPlan {
+            source: named(snapshot.filesystem_snapshot.as_ref())?,
+            replay: ReplayBaseline {
+                snapshot: Some((snapshot.index, SnapshotSource::SnapshotAssistedAutomatic)),
+                skip_through: Some(snapshot.index),
+                role,
+            },
+        },
+        SelectedBaseline::AssistedPromoted { index, name } => StartPlan {
+            source: named(name.as_ref())?,
+            replay: ReplayBaseline {
+                snapshot: Some((*index, SnapshotSource::SnapshotAssistedAutomatic)),
+                skip_through: None,
+                role,
+            },
+        },
+        SelectedBaseline::ManualPending { head, previous } => StartPlan {
+            source: manual(SourceRevision::Current)?,
+            replay: ReplayBaseline {
+                snapshot: previous.as_ref().map(|previous| {
+                    (
+                        previous.index,
+                        match previous.kind {
+                            AuthoritativeSnapshotKind::ManualUpdate => SnapshotSource::ManualUpdate,
+                            AuthoritativeSnapshotKind::SnapshotAssistedAutomatic { .. } => {
+                                SnapshotSource::SnapshotAssistedAutomatic
+                            }
+                        },
+                    )
+                }),
+                skip_through: Some(head.oplog_index),
+                role,
+            },
+        },
+        SelectedBaseline::ManualPromoted { index } => StartPlan {
+            source: manual(SourceRevision::Before(*index))?,
+            replay: ReplayBaseline {
+                snapshot: Some((*index, SnapshotSource::ManualUpdate)),
+                skip_through: None,
+                role,
+            },
+        },
+        SelectedBaseline::InitialFiles => StartPlan {
+            source: TreeSource::InitialFiles,
+            replay: ReplayBaseline::initial_files(),
+        },
+    })
 }
 
 /// The restore of a start: a filesystem snapshot of the store, or the initial files of the
@@ -1152,6 +1098,7 @@ pub(crate) fn reverted_snapshot_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_common::model::AgentId;
     use golem_common::model::Timestamp;
     use std::sync::Arc;
     use test_r::test;
@@ -1192,7 +1139,7 @@ mod tests {
         let other = FilesystemSnapshotName::periodic();
         let periodic = confirmed(&name, mark);
         let manual = ConfirmedFilesystemSnapshot {
-            baseline: ConfirmedBaseline::ManualUpdate(OplogIndex::from_u64(4)),
+            baseline: ConfirmedBaseline::Authoritative(OplogIndex::from_u64(4)),
             ..periodic.clone()
         };
 
@@ -1386,34 +1333,6 @@ mod tests {
         );
     }
 
-    fn manual(
-        name: Option<&FilesystemSnapshotName>,
-        pending: bool,
-    ) -> (TimestampedUpdateDescription, bool) {
-        (
-            TimestampedUpdateDescription {
-                timestamp: Timestamp::from(1_000),
-                oplog_index: OplogIndex::from_u64(7),
-                description: UpdateDescription::SnapshotBased {
-                    target_revision: ComponentRevision::new(3).unwrap(),
-                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
-                    mime_type: "application/octet-stream".to_string(),
-                    filesystem_snapshot: name.cloned(),
-                },
-            },
-            pending,
-        )
-    }
-
-    fn manual_kind(name: Option<&FilesystemSnapshotName>, pending: bool) -> BaselineKind {
-        BaselineKind::ManualUpdate {
-            index: OplogIndex::from_u64(7),
-            target_revision: ComponentRevision::new(3).unwrap(),
-            pending,
-            name: name.cloned(),
-        }
-    }
-
     #[test]
     async fn the_revision_before_an_update_record_follows_the_oplog_order_and_not_the_clocks() {
         let update =
@@ -1446,258 +1365,315 @@ mod tests {
         );
     }
 
+    fn head(
+        kind: golem_common::model::PendingUpdateKind,
+        index: u64,
+    ) -> golem_common::model::PendingUpdateRef {
+        golem_common::model::PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(index),
+            admission_index: OplogIndex::from_u64(index),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind,
+        }
+    }
+
+    fn record(index: u64, name: Option<&FilesystemSnapshotName>) -> UsableAutomaticSnapshot {
+        UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(index),
+            component_revision: ComponentRevision::new(2).unwrap(),
+            filesystem_snapshot: name.cloned(),
+        }
+    }
+
+    /// One plan gives the tree and the replay inputs of every baseline: a start loads the
+    /// application snapshot only of the record whose files it restores, skips the history before
+    /// a pending record, and keeps only the regions of the status for an authoritative one.
     #[test]
-    async fn a_start_plans_its_baseline_from_the_automatic_record_then_the_manual_update() {
+    async fn a_start_plans_the_tree_and_the_replay_of_its_baseline_from_one_record() {
+        use crate::worker::snapshot_selection::SelectedBaseline;
+        use golem_common::model::{AssistedSelection, AuthoritativeSnapshot, PendingUpdateKind};
         let name = FilesystemSnapshotName::periodic();
         let update = FilesystemSnapshotName::update();
-        let periodic = BaselineKind::Periodic {
-            index: OplogIndex::from_u64(10),
-            name: Some(name.clone()),
+        let index = OplogIndex::from_u64;
+        let assisted_head = |name: Option<&FilesystemSnapshotName>| {
+            Box::new(head(
+                PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                    source_revision_start_index: index(4),
+                    snapshot: record(10, name),
+                })),
+                12,
+            ))
         };
-        let automatic = selected(Some(&name));
-        let automatic_kind = BaselineKind::Periodic {
-            index: OplogIndex::from_u64(10),
-            name: Some(name.clone()),
-        };
-        let automatic_without_name = selected(None);
-        let not_snapshot_based = (
-            TimestampedUpdateDescription {
-                timestamp: Timestamp::from(1_000),
-                oplog_index: OplogIndex::from_u64(7),
-                description: UpdateDescription::Automatic {
-                    target_revision: ComponentRevision::new(3).unwrap(),
+        let manual_head = || {
+            Box::new(head(
+                PendingUpdateKind::SnapshotBased {
+                    filesystem_snapshot: None,
                 },
+                7,
+            ))
+        };
+        let previous = AuthoritativeSnapshot {
+            index: index(5),
+            kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                filesystem_snapshot: None,
             },
-            true,
+        };
+        let plan = |source, snapshot, skip_through, role| StartPlan {
+            source,
+            replay: ReplayBaseline {
+                snapshot,
+                skip_through,
+                role,
+            },
+        };
+        let periodic = SnapshotSource::Automatic;
+        let assisted = SnapshotSource::SnapshotAssistedAutomatic;
+        let manual = SnapshotSource::ManualUpdate;
+        // (selected, manual record name, enabled, expected plan)
+        type Case<'a> = (
+            SelectedBaseline,
+            Option<&'a FilesystemSnapshotName>,
+            bool,
+            Result<StartPlan, ()>,
         );
-
-        assert_eq!(
-            [
-                plan_start_baseline(Some(&automatic), true),
-                plan_start_baseline(Some(&automatic), false),
-                plan_start_baseline(Some(&automatic_without_name), false),
-                plan_start_baseline(None, true),
-            ],
-            [
-                StartPlan::Automatic(BaselineStep::Ready {
-                    kind: periodic.clone(),
-                    restore: Some(name.clone()),
-                }),
-                StartPlan::Automatic(BaselineStep::Disabled {
-                    kind: automatic_kind
-                }),
-                StartPlan::Automatic(BaselineStep::Ready {
-                    kind: BaselineKind::Periodic {
-                        index: OplogIndex::from_u64(10),
-                        name: None
-                    },
-                    restore: None,
-                }),
-                StartPlan::ManualUpdate,
-            ]
-        );
-        assert_eq!(
-            [
-                plan_manual_baseline(Some(manual(Some(&update), false)), true),
-                plan_manual_baseline(Some(manual(Some(&update), true)), false),
-                plan_manual_baseline(Some(manual(None, true)), false),
-                plan_manual_baseline(Some(manual(None, false)), true),
-                plan_manual_baseline(Some(not_snapshot_based), true),
-                plan_manual_baseline(None, true),
-            ],
-            [
-                BaselineStep::Ready {
-                    kind: manual_kind(Some(&update), false),
-                    restore: Some(update.clone()),
+        let cases: Vec<Case<'_>> = vec![
+            (
+                SelectedBaseline::Periodic(record(10, Some(&name))),
+                None,
+                true,
+                Ok(plan(
+                    TreeSource::Store(name.clone()),
+                    Some((index(10), periodic)),
+                    Some(index(10)),
+                    BaselineRole::Periodic(index(10)),
+                )),
+            ),
+            (
+                SelectedBaseline::Periodic(record(10, Some(&name))),
+                None,
+                false,
+                Err(()),
+            ),
+            (
+                SelectedBaseline::Periodic(record(10, None)),
+                None,
+                false,
+                Ok(plan(
+                    TreeSource::InitialFiles,
+                    Some((index(10), periodic)),
+                    Some(index(10)),
+                    BaselineRole::Periodic(index(10)),
+                )),
+            ),
+            (
+                SelectedBaseline::AssistedPending {
+                    snapshot: record(10, Some(&name)),
+                    head: assisted_head(Some(&name)),
                 },
-                BaselineStep::Disabled {
-                    kind: manual_kind(Some(&update), true)
+                None,
+                true,
+                Ok(plan(
+                    TreeSource::Store(name.clone()),
+                    Some((index(10), assisted)),
+                    Some(index(10)),
+                    BaselineRole::AssistedPending(assisted_head(Some(&name))),
+                )),
+            ),
+            (
+                SelectedBaseline::AssistedPending {
+                    snapshot: record(10, Some(&name)),
+                    head: assisted_head(Some(&name)),
                 },
-                BaselineStep::NeedsSourceFiles {
-                    kind: manual_kind(None, true),
-                    source: SourceRevision::Current,
+                None,
+                false,
+                Err(()),
+            ),
+            (
+                SelectedBaseline::AssistedPending {
+                    snapshot: record(10, None),
+                    head: assisted_head(None),
                 },
-                BaselineStep::NeedsSourceFiles {
-                    kind: manual_kind(None, false),
-                    source: SourceRevision::Before(OplogIndex::from_u64(7)),
+                None,
+                false,
+                Ok(plan(
+                    TreeSource::InitialFiles,
+                    Some((index(10), assisted)),
+                    Some(index(10)),
+                    BaselineRole::AssistedPending(assisted_head(None)),
+                )),
+            ),
+            (
+                SelectedBaseline::AssistedPromoted {
+                    index: index(10),
+                    name: Some(name.clone()),
                 },
-                BaselineStep::Ready {
-                    kind: BaselineKind::InitialFiles,
-                    restore: None
+                None,
+                true,
+                Ok(plan(
+                    TreeSource::Store(name.clone()),
+                    Some((index(10), assisted)),
+                    None,
+                    BaselineRole::AssistedPromoted,
+                )),
+            ),
+            (
+                SelectedBaseline::AssistedPromoted {
+                    index: index(10),
+                    name: Some(name.clone()),
                 },
-                BaselineStep::Ready {
-                    kind: BaselineKind::InitialFiles,
-                    restore: None
+                None,
+                false,
+                Err(()),
+            ),
+            (
+                SelectedBaseline::AssistedPromoted {
+                    index: index(10),
+                    name: None,
                 },
-            ]
-        );
+                None,
+                false,
+                Ok(plan(
+                    TreeSource::InitialFiles,
+                    Some((index(10), assisted)),
+                    None,
+                    BaselineRole::AssistedPromoted,
+                )),
+            ),
+            (
+                SelectedBaseline::ManualPending {
+                    head: manual_head(),
+                    previous: Some(previous.clone()),
+                },
+                Some(&update),
+                true,
+                Ok(plan(
+                    TreeSource::Store(update.clone()),
+                    Some((index(5), assisted)),
+                    Some(index(7)),
+                    BaselineRole::ManualPending(manual_head()),
+                )),
+            ),
+            (
+                SelectedBaseline::ManualPending {
+                    head: manual_head(),
+                    previous: None,
+                },
+                Some(&update),
+                false,
+                Err(()),
+            ),
+            (
+                SelectedBaseline::ManualPending {
+                    head: manual_head(),
+                    previous: None,
+                },
+                None,
+                false,
+                Ok(plan(
+                    TreeSource::SourceFiles(SourceRevision::Current),
+                    None,
+                    Some(index(7)),
+                    BaselineRole::ManualPending(manual_head()),
+                )),
+            ),
+            (
+                SelectedBaseline::ManualPromoted { index: index(7) },
+                Some(&update),
+                true,
+                Ok(plan(
+                    TreeSource::Store(update.clone()),
+                    Some((index(7), manual)),
+                    None,
+                    BaselineRole::ManualPromoted,
+                )),
+            ),
+            (
+                SelectedBaseline::ManualPromoted { index: index(7) },
+                Some(&update),
+                false,
+                Err(()),
+            ),
+            (
+                SelectedBaseline::ManualPromoted { index: index(7) },
+                None,
+                true,
+                Ok(plan(
+                    TreeSource::SourceFiles(SourceRevision::Before(index(7))),
+                    Some((index(7), manual)),
+                    None,
+                    BaselineRole::ManualPromoted,
+                )),
+            ),
+            (
+                SelectedBaseline::InitialFiles,
+                None,
+                false,
+                Ok(plan(
+                    TreeSource::InitialFiles,
+                    None,
+                    None,
+                    BaselineRole::InitialFiles,
+                )),
+            ),
+        ];
+        cases
+            .into_iter()
+            .for_each(|(selected, manual_name, enabled, expected)| {
+                assert_eq!(
+                    plan_start(&selected, manual_name, enabled).map_err(|_| ()),
+                    expected,
+                    "{selected:?} with {manual_name:?}, enabled: {enabled}"
+                );
+            });
     }
 
     #[test]
-    async fn a_baseline_on_an_executor_without_snapshots_fails_visibly_only_for_a_manual_update() {
-        let agent_id = AgentId {
-            component_id: golem_common::model::component::ComponentId::new(),
-            agent_id: "disabled".to_string(),
+    async fn the_skipped_regions_of_a_start_skip_the_history_before_a_pending_record_only() {
+        let index = OplogIndex::from_u64;
+        let status_regions = {
+            let mut regions =
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    index(3)..=index(4),
+                )])
+                .build();
+            regions.set_override(
+                DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                    index(2)..=index(9),
+                )])
+                .build(),
+            );
+            regions
         };
-        let periodic = baseline_disabled_error(
-            &BaselineKind::Periodic {
-                index: OplogIndex::from_u64(10),
-                name: None,
-            },
-            &agent_id,
-        );
-        let manual = baseline_disabled_error(&manual_kind(None, true), &agent_id);
+        let replay = |skip_through| ReplayBaseline {
+            snapshot: None,
+            skip_through,
+            role: BaselineRole::InitialFiles,
+        };
+        let pending = replay(Some(index(6))).skipped_regions(&status_regions);
+        let promoted = replay(None).skipped_regions(&status_regions);
 
         assert_eq!(
-            periodic,
-            WorkerExecutorError::runtime(SnapshotsDisabled.to_string())
-        );
-        assert_eq!(
-            manual,
-            WorkerExecutorError::failed_to_resume_worker(
-                agent_id,
-                WorkerExecutorError::invalid_request(SnapshotsDisabled.to_string())
+            (
+                pending.get_override(),
+                pending.is_in_deleted_region(index(5)),
+                promoted.get_override(),
+                promoted.is_in_deleted_region(index(5)),
+                promoted.is_in_deleted_region(index(3)),
+            ),
+            (
+                Some(
+                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
+                        index(2)..=index(6),
+                    )])
+                    .build()
+                ),
+                true,
+                None,
+                false,
+                true,
             )
         );
-    }
-
-    #[test]
-    async fn a_failed_baseline_skips_a_periodic_record_or_fails_or_records_a_manual_update() {
-        use crate::services::agent_filesystem::{Error, InitialFileConflict, RestoreError};
-        let restore = |retryable| {
-            Error::Baseline(Box::new(RestoreError {
-                retryable,
-                source: anyhow::anyhow!("restore failed"),
-            }))
-        };
-        let conflict = InitialFileConflict::occupied(Path::new("e/f"));
-        let conflicting = || Error::InitialFileConflict(Box::new(conflict.clone()));
-        let periodic = BaselineKind::Periodic {
-            index: OplogIndex::from_u64(10),
-            name: None,
-        };
-
-        assert_eq!(
-            [
-                classify_baseline_failure(&periodic, &restore(true), false),
-                classify_baseline_failure(&periodic, &conflicting(), false),
-                classify_baseline_failure(&manual_kind(None, true), &conflicting(), false),
-                classify_baseline_failure(&manual_kind(None, true), &conflicting(), true),
-                classify_baseline_failure(&manual_kind(None, false), &conflicting(), false),
-                classify_baseline_failure(&manual_kind(None, true), &restore(false), false),
-                classify_baseline_failure(&manual_kind(None, true), &restore(true), false),
-                classify_baseline_failure(&BaselineKind::InitialFiles, &restore(false), false),
-            ],
-            [
-                BaselineFailure::SkipPeriodic(OplogIndex::from_u64(10)),
-                BaselineFailure::Reconstruction,
-                BaselineFailure::RecordFailedUpdate {
-                    target: ComponentRevision::new(3).unwrap(),
-                    message: conflict.to_string().into_boxed_str(),
-                },
-                BaselineFailure::ShardLost,
-                BaselineFailure::Reconstruction,
-                BaselineFailure::FailVisibly(restore(false).to_string().into_boxed_str()),
-                BaselineFailure::Reconstruction,
-                BaselineFailure::Reconstruction,
-            ]
-        );
-    }
-
-    /// Characterizes the decision of today for every baseline kind, every error of the agent
-    /// filesystem and both shard states. The table is the expected answer, cell by cell.
-    #[test]
-    async fn a_failed_baseline_decision_for_every_kind_error_and_shard_state() {
-        use crate::services::agent_filesystem::{
-            AccessError, Error, FilesystemStorageError, InitialFileConflict, RestoreError,
-        };
-        let storage = || FilesystemStorageError::verification("seed initial file", Path::new("a"));
-        let restore = |retryable| {
-            Error::Baseline(Box::new(RestoreError {
-                retryable,
-                source: anyhow::anyhow!("restore failed"),
-            }))
-        };
-        let conflict = InitialFileConflict::occupied(Path::new("e/f"));
-        let errors = |label: &str| match label {
-            "access" => Error::Access(AccessError::Revoked),
-            "sandbox" => Error::Sandbox(storage()),
-            "conflict" => Error::InitialFileConflict(Box::new(conflict.clone())),
-            "quota" => Error::AgentQuota(storage()),
-            "capacity" => Error::PhysicalCapacity(storage()),
-            "restore-retryable" => restore(true),
-            "restore-fixed" => restore(false),
-            "invalidated" => Error::RuntimeInvalidated,
-            other => panic!("unknown error {other}"),
-        };
-        let kinds = |label: &str| match label {
-            "initial" => BaselineKind::InitialFiles,
-            "periodic" => BaselineKind::Periodic {
-                index: OplogIndex::from_u64(10),
-                name: Some(FilesystemSnapshotName::periodic()),
-            },
-            "manual-pending" => manual_kind(Some(&FilesystemSnapshotName::update()), true),
-            "manual-promoted" => manual_kind(Some(&FilesystemSnapshotName::update()), false),
-            other => panic!("unknown kind {other}"),
-        };
-        let skip = || BaselineFailure::SkipPeriodic(OplogIndex::from_u64(10));
-        let record = || BaselineFailure::RecordFailedUpdate {
-            target: ComponentRevision::new(3).unwrap(),
-            message: conflict.to_string().into_boxed_str(),
-        };
-        let visibly = || BaselineFailure::FailVisibly(restore(false).to_string().into_boxed_str());
-        let rebuild = || BaselineFailure::Reconstruction;
-        // (kind, error, without a lost shard, with a lost shard)
-        let table = [
-            ("initial", "access", rebuild(), rebuild()),
-            ("initial", "sandbox", rebuild(), rebuild()),
-            ("initial", "conflict", rebuild(), rebuild()),
-            ("initial", "quota", rebuild(), rebuild()),
-            ("initial", "capacity", rebuild(), rebuild()),
-            ("initial", "restore-retryable", rebuild(), rebuild()),
-            ("initial", "restore-fixed", rebuild(), rebuild()),
-            ("initial", "invalidated", rebuild(), rebuild()),
-            ("periodic", "access", rebuild(), rebuild()),
-            ("periodic", "sandbox", rebuild(), rebuild()),
-            ("periodic", "conflict", rebuild(), rebuild()),
-            ("periodic", "quota", rebuild(), rebuild()),
-            ("periodic", "capacity", rebuild(), rebuild()),
-            ("periodic", "restore-retryable", skip(), skip()),
-            ("periodic", "restore-fixed", skip(), skip()),
-            ("periodic", "invalidated", rebuild(), rebuild()),
-            ("manual-pending", "access", rebuild(), rebuild()),
-            ("manual-pending", "sandbox", rebuild(), rebuild()),
-            (
-                "manual-pending",
-                "conflict",
-                record(),
-                BaselineFailure::ShardLost,
-            ),
-            ("manual-pending", "quota", rebuild(), rebuild()),
-            ("manual-pending", "capacity", rebuild(), rebuild()),
-            ("manual-pending", "restore-retryable", rebuild(), rebuild()),
-            ("manual-pending", "restore-fixed", visibly(), visibly()),
-            ("manual-pending", "invalidated", rebuild(), rebuild()),
-            ("manual-promoted", "access", rebuild(), rebuild()),
-            ("manual-promoted", "sandbox", rebuild(), rebuild()),
-            ("manual-promoted", "conflict", rebuild(), rebuild()),
-            ("manual-promoted", "quota", rebuild(), rebuild()),
-            ("manual-promoted", "capacity", rebuild(), rebuild()),
-            ("manual-promoted", "restore-retryable", rebuild(), rebuild()),
-            ("manual-promoted", "restore-fixed", visibly(), visibly()),
-            ("manual-promoted", "invalidated", rebuild(), rebuild()),
-        ];
-
-        for (kind, error, without_lost_shard, with_lost_shard) in table {
-            assert_eq!(
-                (
-                    classify_baseline_failure(&kinds(kind), &errors(error), false),
-                    classify_baseline_failure(&kinds(kind), &errors(error), true),
-                ),
-                (without_lost_shard, with_lost_shard),
-                "{kind} with {error}"
-            );
-        }
     }
 
     #[test]
@@ -2087,7 +2063,7 @@ mod tests {
         assert_eq!(
             changed,
             (
-                format!("Fail({UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS})"),
+                format!("Fail({})", needs_filesystem_snapshots()),
                 strings(&["snapshot_guest", "check(5s)"])
             )
         );
@@ -2101,9 +2077,10 @@ mod tests {
             )
         );
         assert_eq!(
-            UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS,
-            "cannot take a snapshot for the update: the files of the agent differ from its \
-             initial files, and filesystem snapshots are disabled on this executor"
+            needs_filesystem_snapshots(),
+            "UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS: cannot take a snapshot for the update: the files \
+             of the agent differ from its initial files, and filesystem snapshots are disabled on \
+             this executor"
         );
         shut_down(disabled_shutdown).await;
     }
@@ -2338,30 +2315,73 @@ mod tests {
     }
 
     #[test]
-    async fn a_baseline_restored_the_name_of_its_record() {
+    async fn a_baseline_restored_the_name_of_its_record_as_a_periodic_or_an_authoritative_one() {
+        use golem_common::model::PendingUpdateKind;
         let name = FilesystemSnapshotName::periodic();
         let update = FilesystemSnapshotName::update();
-        let periodic = |name: Option<&FilesystemSnapshotName>| BaselineKind::Periodic {
-            index: OplogIndex::from_u64(10),
-            name: name.cloned(),
+        let index = OplogIndex::from_u64;
+        let plan = |source, snapshot, role| StartPlan {
+            source,
+            replay: ReplayBaseline {
+                snapshot,
+                skip_through: None,
+                role,
+            },
         };
+        let manual_head = Box::new(head(
+            PendingUpdateKind::SnapshotBased {
+                filesystem_snapshot: Some(update.clone()),
+            },
+            7,
+        ));
 
         assert_eq!(
             [
-                BaselineKind::InitialFiles.restored(),
-                periodic(Some(&name)).restored(),
-                periodic(None).restored(),
-                manual_kind(Some(&update), false).restored(),
-                manual_kind(None, true).restored(),
+                plan(TreeSource::InitialFiles, None, BaselineRole::InitialFiles).restored(),
+                plan(
+                    TreeSource::Store(name.clone()),
+                    Some((index(10), SnapshotSource::Automatic)),
+                    BaselineRole::Periodic(index(10))
+                )
+                .restored(),
+                plan(
+                    TreeSource::InitialFiles,
+                    Some((index(10), SnapshotSource::Automatic)),
+                    BaselineRole::Periodic(index(10))
+                )
+                .restored(),
+                plan(
+                    TreeSource::Store(update.clone()),
+                    Some((index(7), SnapshotSource::ManualUpdate)),
+                    BaselineRole::ManualPromoted
+                )
+                .restored(),
+                plan(
+                    TreeSource::Store(update.clone()),
+                    None,
+                    BaselineRole::ManualPending(manual_head)
+                )
+                .restored(),
+                plan(
+                    TreeSource::Store(name.clone()),
+                    Some((index(10), SnapshotSource::SnapshotAssistedAutomatic)),
+                    BaselineRole::AssistedPromoted
+                )
+                .restored(),
+                plan(
+                    TreeSource::SourceFiles(SourceRevision::Current),
+                    None,
+                    BaselineRole::InitialFiles
+                )
+                .restored(),
             ],
             [
                 None,
-                Some((name, ConfirmedBaseline::Periodic)),
+                Some((name.clone(), ConfirmedBaseline::Periodic)),
                 None,
-                Some((
-                    update,
-                    ConfirmedBaseline::ManualUpdate(OplogIndex::from_u64(7))
-                )),
+                Some((update.clone(), ConfirmedBaseline::Authoritative(index(7)))),
+                Some((update, ConfirmedBaseline::Authoritative(index(7)))),
+                Some((name, ConfirmedBaseline::Authoritative(index(10)))),
                 None,
             ]
         );

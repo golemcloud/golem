@@ -38,6 +38,7 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
+pub(crate) mod revision_update;
 pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
@@ -166,11 +167,11 @@ use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, SnapshotReplayPurpose,
-    SnapshotSource, TrapType,
+    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
-use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
+use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -184,7 +185,9 @@ use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
     LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogOps, OplogService};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
+};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
@@ -202,7 +205,7 @@ use crate::services::{
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
-use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
+use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
     AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
@@ -210,6 +213,7 @@ use crate::worker::invocation::{
     materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
+use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
 };
@@ -248,9 +252,9 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails,
-    HostRequestHttpRequest, LogLevel, OplogEntry, OplogErrorKind, OplogIndex, RawSnapshotData,
-    ScopeScanState, SnapshotAssistedUpdateDetails, TimestampedUpdateDescription, UpdateDescription,
+    AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, SnapshotAssistedUpdateDetails,
+    UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -258,7 +262,8 @@ use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingCardEventRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
+    PendingCardEventRef, PendingUpdateRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction,
+    Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
@@ -1002,7 +1007,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: websocket::WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
@@ -1224,7 +1229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 owner_execution
                     .begin_replay_generation(
                         worker_config.skipped_regions.clone(),
-                        worker_config.last_snapshot_index,
+                        worker_config.replay.snapshot.map(|(index, _)| index),
                     )
                     .await?
             }
@@ -1277,9 +1282,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             shard_service,
             pending_update,
             original_phantom_id,
-            worker_config.last_snapshot_index,
-            worker_config.last_snapshot_source,
-            worker_config.snapshot_assisted_source_revision_start_index,
+            worker_config.replay.snapshot.map(|(index, _)| index),
+            worker_config.replay.role.clone(),
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
@@ -4107,213 +4111,251 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .take();
         match pending_update {
-            Some(TimestampedUpdateDescription {
+            Some(HydratedUpdate {
+                reference,
                 description: description @ UpdateDescription::SnapshotBased { .. },
-                ..
             }) => {
                 let target_revision = *description.target_revision();
 
                 debug!("Finalizing snapshot update to revision {target_revision}");
 
-                match store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .get_upload_description_payload(description)
-                    .await
+                if let Err(result) =
+                    Self::load_manual_update_snapshot(instance, store, description).await
                 {
-                    Ok(Some((data, mime_type))) => {
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let idempotency_key = IdempotencyKey::fresh();
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_idempotency_key(idempotency_key.clone())
-                            .await;
-
-                        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
-                            idempotency_key,
-                            snapshot: RawSnapshotData { data, mime_type },
-                        };
-                        let agent_id = store.as_context().data().parsed_agent_id();
-                        let lowered = match lower_invocation(
-                            load_snapshot_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        ) {
-                            Ok(lowered) => lowered,
-                            Err(err) => {
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_worker_update_failed(
-                                        target_revision,
-                                        Some(format!(
-                                            "Manual update failed to lower load-snapshot invocation: {err}"
-                                        )),
-                                        None,
-                                        None,
-                                    )
-                                    .await?;
-                                return Ok(Some(RetryDecision::Immediate));
-                            }
-                        };
-
-                        let invocation_context = InvocationContextStack::fresh();
-                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
-                        if let Err(err) = store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_invocation_context(invocation_context)
-                            .await
-                        {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(
-                                    target_revision,
-                                    Some(format!(
-                                        "Manual update failed to install invocation context: {err}"
-                                    )),
-                                    None,
-                                    None,
-                                )
-                                .await?;
-                            return Ok(Some(RetryDecision::Immediate));
-                        }
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .begin_call_snapshotting_function();
-
-                        let load_result = invoke_observed_and_traced(
-                            lowered,
-                            store,
-                            instance,
-                            InvocationMode::Replay,
-                        )
-                        .await;
-                        store.as_context_mut().data().set_suspended();
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .end_call_snapshotting_function_if_active();
-
-                        for span_id in local_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-                        for span_id in inherited_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-
-                        let failed = match load_result {
-                            Err(error) => {
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Failed { error, .. }) => {
-                                let stderr = store
-                                    .as_context()
-                                    .data()
-                                    .get_public_state()
-                                    .event_service()
-                                    .get_last_invocation_errors();
-                                let error = error.to_string(&stderr);
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
-                                AgentInvocationResult::LoadSnapshot { error } => error
-                                    .map(|e| format!("Manual update failed to load snapshot: {e}")),
-                                _ => Some(
-                                    "Unexpected result value from the snapshot load function"
-                                        .to_string(),
-                                ),
-                            },
-                            _ => None,
-                        };
-
-                        if let Some(error) = failed {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(target_revision, Some(error), None, None)
-                                .await?;
-                            Ok(Some(RetryDecision::Immediate))
-                        } else {
-                            let component_metadata =
-                                store.as_context().data().component_metadata().clone();
-                            let agent_type_provision_config = store
-                                .as_context()
-                                .data()
-                                .agent_type_provision_config()
-                                .cloned();
-
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_succeeded(
-                                    target_revision,
-                                    component_metadata.component_size,
-                                    HashSet::from_iter(
-                                        agent_type_provision_config
-                                            .into_iter()
-                                            .flat_map(|c| c.plugins)
-                                            .map(|installation| {
-                                                installation.environment_plugin_grant_id
-                                            }),
-                                    ),
-                                    None,
-                                )
-                                .await?;
-                            Ok(None)
-                        }
-                    }
-                    Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(
-                                target_revision,
-                                Some("Failed to find snapshot data for update".to_string()),
-                                None,
-                                None,
-                            )
-                            .await?;
-                        Ok(Some(RetryDecision::Immediate))
-                    }
-                    Err(error) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(target_revision, Some(error), None, None)
-                            .await?;
-                        Ok(Some(RetryDecision::Immediate))
+                    match store.as_context().data().durable_ctx().start_action(
+                        Some(&reference),
+                        start_outcome::RawStartError::ManualLoad(&result),
+                    ) {
+                        start_outcome::StartAction::Succeed => {}
+                        action => return Self::perform_start_action(store, action).await,
                     }
                 }
+                let component_metadata = store.as_context().data().component_metadata().clone();
+                let agent_type_provision_config = store
+                    .as_context()
+                    .data()
+                    .agent_type_provision_config()
+                    .cloned();
+
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .on_worker_update_succeeded(
+                        target_revision,
+                        component_metadata.component_size,
+                        HashSet::from_iter(
+                            agent_type_provision_config
+                                .into_iter()
+                                .flat_map(|c| c.plugins)
+                                .map(|installation| installation.environment_plugin_grant_id),
+                        ),
+                        start_outcome::success_details_of(&reference),
+                    )
+                    .await?;
+                Ok(None)
             }
             _ => Err(WorkerExecutorError::runtime(
                 "`finalize_pending_snapshot_update` can only be called with a snapshot update description",
             )),
+        }
+    }
+
+    /// Loads the application snapshot of the pending snapshot-based update `description`. An
+    /// interrupted load and an exited guest give `ManualLoadResult::Interrupted`.
+    async fn load_manual_update_snapshot(
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        description: UpdateDescription,
+    ) -> Result<(), start_outcome::ManualLoadResult> {
+        use start_outcome::ManualLoadResult;
+        let (data, mime_type) = match store
+            .as_context_mut()
+            .data_mut()
+            .get_public_state()
+            .oplog()
+            .get_upload_description_payload(description)
+            .await
+        {
+            Ok(Some(payload)) => payload,
+            Ok(None) => {
+                return Err(ManualLoadResult::Failed(
+                    "Failed to find snapshot data for update".to_string(),
+                ));
+            }
+            Err(error) => return Err(ManualLoadResult::Failed(error)),
+        };
+        let component_metadata = store
+            .as_context()
+            .data()
+            .component_metadata()
+            .metadata
+            .clone();
+
+        let idempotency_key = IdempotencyKey::fresh();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
+
+        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key,
+            snapshot: RawSnapshotData { data, mime_type },
+        };
+        let agent_id = store.as_context().data().parsed_agent_id();
+        let lowered = lower_invocation(
+            load_snapshot_invocation,
+            &component_metadata,
+            agent_id.as_ref(),
+        )
+        .map_err(|err| {
+            ManualLoadResult::Failed(format!(
+                "Manual update failed to lower load-snapshot invocation: {err}"
+            ))
+        })?;
+
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+            .map_err(|err| {
+                ManualLoadResult::Failed(format!(
+                    "Manual update failed to install invocation context: {err}"
+                ))
+            })?;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
+
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
+
+        local_span_ids
+            .into_iter()
+            .chain(inherited_span_ids)
+            .for_each(|span_id| {
+                let _ = store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .remove_span(&span_id);
+            });
+
+        match load_result {
+            Err(error) => Err(ManualLoadResult::Failed(format!(
+                "Manual update failed to load snapshot: {error}"
+            ))),
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                Err(ManualLoadResult::Failed(format!(
+                    "Manual update failed to load snapshot: {error}"
+                )))
+            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error: None } => Ok(()),
+                AgentInvocationResult::LoadSnapshot { error: Some(e) } => Err(
+                    ManualLoadResult::Failed(format!("Manual update failed to load snapshot: {e}")),
+                ),
+                _ => Err(ManualLoadResult::Failed(
+                    "Unexpected result value from the snapshot load function".to_string(),
+                )),
+            },
+            Ok(InvokeResult::Interrupted { .. } | InvokeResult::Exited { .. }) => {
+                Err(ManualLoadResult::Interrupted)
+            }
+        }
+    }
+
+    /// What the start does with the failure `error` with the pending update `head`, as
+    /// [`start_outcome::decide`] decides for the baseline of this start.
+    fn start_action(
+        &self,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+    ) -> start_outcome::StartAction {
+        start_outcome::decide(
+            &self.state.baseline_role,
+            head,
+            error,
+            &self.owned_agent_id.agent_id,
+            self.public_state.worker().retired_for_lost_shard(),
+        )
+    }
+
+    /// Performs `action` of a failed start: it writes a failed update and starts again on the
+    /// source revision, skips or rejects a periodic record and starts again, or ends the start
+    /// with an error.
+    async fn perform_start_action(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        action: start_outcome::StartAction,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        match action {
+            start_outcome::StartAction::FailUpdate { entry, reject } => {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .on_worker_update_failed(entry)
+                    .await?;
+                if let Some(index) = reject {
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .reject_periodic(index);
+                }
+                debug!("Retrying prepare_instance after failed update attempt");
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::SkipPeriodic(index) => {
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .mark_periodic_unavailable(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::RejectPeriodic(index) => {
+                warn!(
+                    snapshot_index = %index,
+                    "The application snapshot of a periodic record does not load; the start uses the authoritative baseline"
+                );
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .reject_periodic(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::Error(error) => Err(error),
+            start_outcome::StartAction::Retry(decision) => Ok(Some(decision)),
+            start_outcome::StartAction::Succeed => Ok(None),
+            start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            }),
         }
     }
 
@@ -4373,11 +4415,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .oplog()
-            .download_payload(data_payload)
+            .download_payload_classified(data_payload)
             .await
         {
             Ok(data) => data,
             Err(err) => {
+                let lost = matches!(err, OplogPayloadDownloadError::Corrupt(_));
                 let error =
                     format!("Failed to download snapshot payload at {snapshot_index}: {err}");
                 Self::emit_snapshot_recovery_event(
@@ -4386,23 +4429,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     false,
                     Some(error.clone()),
                 );
-                if store
-                    .as_context()
-                    .data()
-                    .durable_ctx()
-                    .state
-                    .snapshot_replay_purpose
-                    == SnapshotReplayPurpose::PeriodicRecovery
-                {
+                let result = payload_download_failure(
+                    store
+                        .as_context()
+                        .data()
+                        .durable_ctx()
+                        .state
+                        .snapshot_replay_purpose,
+                    lost,
+                    error,
+                );
+                if matches!(result, SnapshotRecoveryResult::Retry(_)) {
                     store
                         .as_context()
                         .data()
                         .get_public_state()
                         .worker()
                         .mark_periodic_unavailable(snapshot_index);
-                    return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
                 }
-                return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
+                return result;
             }
         };
 
@@ -4553,6 +4598,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Whether the replay after the application snapshot of this start, which diverged from the
+    /// oplog with `error`, rejects its record now, as [`start_outcome::decide`] decides: only a
+    /// periodic record, and only while the start still replays it.
+    fn rejects_diverged_record(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        error: &WorkerExecutorError,
+    ) -> bool {
+        let ctx = store.as_context().data().durable_ctx();
+        ctx.state.snapshot_replay_purpose == SnapshotReplayPurpose::PeriodicRecovery
+            && !ctx.is_live()
+            && matches!(
+                ctx.start_action(
+                    None,
+                    start_outcome::RawStartError::Replay {
+                        error,
+                        diverged: true,
+                    },
+                ),
+                start_outcome::StartAction::RejectPeriodic(_)
+            )
+    }
+
     /// Recreates the instance from the authoritative baseline, excluding this periodic snapshot.
     fn abandon_diverged_automatic_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
@@ -4622,39 +4689,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 },
                 true,
             );
-    }
-}
-
-enum SnapshotRecoveryResult {
-    Success,
-    NotAttempted,
-    Failed(WorkerExecutorError),
-    Unavailable(WorkerExecutorError),
-    Retry(RetryDecision),
-}
-
-fn build_snapshot_assisted_update_details(
-    pending_update_index: OplogIndex,
-    source_component_revision: ComponentRevision,
-    source_revision_start_index: OplogIndex,
-    snapshot_index: OplogIndex,
-) -> SnapshotAssistedUpdateDetails {
-    SnapshotAssistedUpdateDetails {
-        pending_update_index,
-        source_component_revision,
-        source_revision_start_index,
-        snapshot_index,
-    }
-}
-
-fn failed_snapshot_assisted_update_details(
-    details: &SnapshotAssistedUpdateDetails,
-) -> FailedSnapshotAssistedUpdateDetails {
-    FailedSnapshotAssistedUpdateDetails {
-        pending_update_index: details.pending_update_index,
-        source_component_revision: details.source_component_revision,
-        source_revision_start_index: details.source_revision_start_index,
-        snapshot_index: details.snapshot_index,
     }
 }
 
@@ -4890,38 +4924,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    fn take_snapshot_assisted_update_details(
-        &mut self,
-        pending_update_index: OplogIndex,
-    ) -> Result<SnapshotAssistedUpdateDetails, WorkerExecutorError> {
-        let source_revision_start_index = self
-            .state
-            .snapshot_assisted_source_revision_start_index
-            .take()
-            .ok_or_else(|| {
-                WorkerExecutorError::runtime(
-                    "Snapshot-assisted automatic update has no source revision start index",
-                )
-            })?;
-        let snapshot_index = match (
-            self.state.last_snapshot_index,
-            self.state.last_snapshot_source,
-        ) {
-            (Some(index), Some(SnapshotSource::SnapshotAssistedAutomatic)) => index,
-            _ => {
-                return Err(WorkerExecutorError::runtime(
-                    "Snapshot-assisted automatic update has no required snapshot",
-                ));
-            }
-        };
-        Ok(build_snapshot_assisted_update_details(
-            pending_update_index,
-            self.component_metadata().revision,
-            source_revision_start_index,
-            snapshot_index,
-        ))
-    }
-
     async fn process_pending_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode {
             return Ok(());
@@ -4935,7 +4937,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::UpdateReplayed { new_revision } => {
                     debug!("Updating worker state to component metadata revision {new_revision}");
                     self.update_state_to_new_component_revision(new_revision)
-                        .await?;
+                        .await
+                        .map_err(|error| error.to_worker_executor_error())?;
                 }
                 ReplayEvent::ForkReplayed { new_phantom_id } => {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
@@ -5086,56 +5089,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
-                    if let Some(pending_update) = pending_update {
-                        let target_revision = *pending_update.description.target_revision();
-                        let snapshot_assisted_details = match &pending_update.description {
-                            UpdateDescription::Automatic { .. } => None,
-                            UpdateDescription::SnapshotAssistedAutomatic { .. } => {
-                                match self.take_snapshot_assisted_update_details(
-                                    pending_update.oplog_index,
-                                ) {
-                                    Ok(details) => Some(details),
-                                    Err(error) => {
-                                        self.on_worker_update_failed(
-                                            target_revision,
-                                            Some(format!("Applying worker update failed: {error}")),
-                                            None,
-                                            None,
-                                        )
-                                        .await?;
-                                        return Err(error);
-                                    }
-                                }
-                            }
-                            UpdateDescription::SnapshotBased { .. } => {
-                                return Err(WorkerExecutorError::runtime(
-                                    "pending replay event finalization expected an automatic update description",
-                                ));
-                            }
-                        };
+                    if let Some(HydratedUpdate {
+                        reference,
+                        description,
+                    }) = pending_update
+                    {
+                        if matches!(description, UpdateDescription::SnapshotBased { .. }) {
+                            return Err(WorkerExecutorError::runtime(
+                                "pending replay event finalization expected an automatic update description",
+                            ));
+                        }
+                        let target_revision = *description.target_revision();
                         debug!("Finalizing pending automatic update");
 
                         if let Err(error) = self
                             .update_state_to_new_component_revision(target_revision)
                             .await
                         {
-                            match &snapshot_assisted_details {
-                                // The update stays pending, so the start records it as failed
-                                // and starts again at the current revision.
-                                None => {
-                                    *self.state.pending_update.lock().await = Some(pending_update);
-                                }
-                                Some(details) => {
-                                    self.on_worker_update_failed(
-                                        target_revision,
-                                        Some(format!("Applying worker update failed: {error}")),
-                                        Some(failed_snapshot_assisted_update_details(details)),
-                                        None,
-                                    )
-                                    .await?;
-                                }
-                            }
-                            Err(error)?
+                            let action = self.start_action(
+                                Some(&reference),
+                                start_outcome::RawStartError::UpdateState(&error),
+                            );
+                            return Err(perform_at_update_point(
+                                &self.public_state.worker(),
+                                action,
+                            )
+                            .await);
                         };
 
                         let component_metadata = self.component_metadata().clone();
@@ -5150,7 +5129,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     .iter()
                                     .map(|installation| installation.environment_plugin_grant_id)
                             }),
-                            snapshot_assisted_details,
+                            start_outcome::success_details_of(&reference),
                         )
                         .await?;
 
@@ -5209,84 +5188,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn update_state_to_new_component_revision(
         &mut self,
         new_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = self.component_metadata();
-
-        if new_revision <= current_metadata.revision {
+    ) -> Result<(), revision_update::UpdateStateError> {
+        if new_revision <= self.component_metadata().revision {
             debug!("Update {new_revision} was already applied, skipping");
             return Ok(());
         };
-
-        let new_metadata = self
-            .component_service()
-            .get_metadata(self.owned_agent_id.component_id(), Some(new_revision))
-            .await?;
-
-        let new_agent_type_provision_configs = self.parsed_agent_id().and_then(|aid| {
-            new_metadata
-                .metadata
-                .agent_type_provision_configs()
-                .get(&aid.agent_type)
-                .cloned()
-        });
-
-        let updated_agent_state = if let Some(agent_id) = self.parsed_agent_id() {
-            let agent_type = new_metadata
-                .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "Agent type {} not found in updated agent metadata",
-                        agent_id.agent_type
-                    ))
-                })?;
-
-            let updated_agent_config = effective_agent_config(
-                self.state.initial_agent_config.clone(),
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.config.clone())
-                    .unwrap_or_default(),
-            )?;
-
-            validate_agent_config(&updated_agent_config, agent_type)?;
-
-            let initial_card =
-                agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
-            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-            Some((updated_agent_config, initial_wallet_cards))
-        } else {
-            None
-        };
-
-        update_initial_files(
-            &self.filesystem_generation_handle,
-            Arc::clone(&self.state.file_loader),
-            self.owned_agent_id.environment_id,
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.clone())
-                .unwrap_or_default(),
+        let update = revision_update::prepare_revision_update(
+            &revision_update::RevisionUpdateInputs::of(self),
+            new_revision,
         )
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-
-        self.state.component_metadata = new_metadata.clone();
-        self.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(new_metadata));
-
-        if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
-            self.state.agent_config = updated_agent_config;
-            self.state.cached_agent_config_retry_policies = None;
-            replace_wallet_cards(
-                &mut self.state.agent_wallet_cards,
-                &mut self.state.wallet_generation,
-                initial_wallet_cards,
-            )?;
-            self.rederive_agent_effective_surface_from_wallet();
-        };
-
-        Ok(())
+        .await?;
+        revision_update::apply_revision_update(self, update)
+            .map_err(revision_update::UpdateStateError::WalletCards)
     }
 }
 
@@ -6015,26 +5928,11 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-        update_attempt_index: Option<OplogIndex>,
+        failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
-        let entry = OplogEntry::failed_update(
-            target_revision,
-            details.clone(),
-            snapshot_assisted_details,
-            update_attempt_index,
-            None,
-        );
+        warn!(?failed_update, "Worker update attempt aborted");
         let worker = self.public_state.worker();
-        worker.add_and_commit_oplog(entry).await?;
-
-        warn!(
-            "Worker failed to update to {}: {}, update attempt aborted",
-            target_revision,
-            details.unwrap_or_else(|| "?".to_string())
-        );
+        worker.add_and_commit_oplog(failed_update).await?;
         Ok(())
     }
 
@@ -6095,29 +5993,16 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
-    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
-    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
-    type ExtraDeps = Ctx::ExtraDeps;
-
-    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
-    }
-
-    async fn resume_replay(
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Replays the recorded invocations of the start, as `resume_replay` does. A failure says
+    /// whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    async fn replay(
         store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, ReplayFailure> {
+        let mut diverged = false;
         let result = async {
         let mut number_of_replayed_functions = 0;
 
@@ -6421,18 +6306,10 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     // its authoritative baseline.
                                     Some(TrapType::Error { error, .. })
                                         if snapshot_divergence
-                                            && store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .state
-                                                .snapshot_replay_purpose
-                                                == SnapshotReplayPurpose::PeriodicRecovery
-                                            && !store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .is_live() =>
+                                            && Self::rejects_diverged_record(
+                                                store,
+                                                &WorkerExecutorError::runtime(error.message()),
+                                            ) =>
                                     {
                                         Some(Self::abandon_diverged_automatic_snapshot(
                                             store,
@@ -6447,6 +6324,8 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                     {
                                         // Speculative reconstruction failures must not append an
                                         // authoritative invocation Error for already recorded work.
+                                        // The failure of the replay says whether it diverged.
+                                        diverged = snapshot_divergence;
                                         match trap_type {
                                             TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
                                                 error,
@@ -6566,19 +6445,42 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         // Result validation can consume the final recorded entry before detecting a mismatch.
         // Its typed replay error, rather than the resulting live cursor, identifies divergence.
         if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
-            && store
-                .as_context()
-                .data()
-                .durable_ctx()
-                .state
-                .snapshot_replay_purpose
-                == SnapshotReplayPurpose::PeriodicRecovery
+            && Self::rejects_diverged_record(store, error)
         {
             return Ok(Some(Self::abandon_diverged_automatic_snapshot(
                 store, error, true,
             )));
         }
-        result
+        result.map_err(|error| ReplayFailure { error, diverged })
+    }
+}
+
+pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+    type ExtraDeps = Ctx::ExtraDeps;
+
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        latest_worker_status: &AgentStatusRecord,
+    ) -> Option<LastError> {
+        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+    }
+
+    async fn resume_replay(
+        store: &mut Store<Ctx>,
+        instance: &Instance,
+        refresh_replay_target: bool,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        Self::replay(store, instance, refresh_replay_target)
+            .await
+            .map_err(|failure| failure.error)
     }
 
     async fn prepare_instance(
@@ -6631,225 +6533,97 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .clone();
 
             match pending_update {
-                Some(timestamped_update) => {
-                    match &timestamped_update.description {
-                        UpdateDescription::SnapshotBased { .. } => {
-                            // If a snapshot based update is pending, no replay should be necessary
-                            if !store.as_context().data().durable_ctx().is_live() {
-                                return Err(WorkerExecutorError::runtime(
-                                    "snapshot-based pending update expected replay state to already be live",
-                                ));
-                            }
-
-                            Self::finalize_pending_snapshot_update(instance, store).await
+                Some(hydrated) => match &hydrated.description {
+                    UpdateDescription::SnapshotBased { .. } => {
+                        // If a snapshot based update is pending, no replay should be necessary
+                        if !store.as_context().data().durable_ctx().is_live() {
+                            return Err(WorkerExecutorError::runtime(
+                                "snapshot-based pending update expected replay state to already be live",
+                            ));
                         }
-                        UpdateDescription::Automatic {
-                            target_revision, ..
-                        } => {
-                            let replay_result = async {
-                                match Self::try_load_snapshot(store, instance).await {
-                                    SnapshotRecoveryResult::Failed(error)
-                                    | SnapshotRecoveryResult::Unavailable(error) => {
-                                        return Err(error);
-                                    }
-                                    SnapshotRecoveryResult::Retry(decision) => {
-                                        return Ok(Some(decision));
-                                    }
-                                    SnapshotRecoveryResult::Success
-                                    | SnapshotRecoveryResult::NotAttempted => {}
-                                };
-                                // automatic update will be succeeded as part of the replay.
-                                let result = Self::resume_replay(store, instance, false).await?;
 
-                                record_resume_worker(start.elapsed());
-
-                                Ok(result)
+                        Self::finalize_pending_snapshot_update(instance, store).await
+                    }
+                    UpdateDescription::Automatic { .. }
+                    | UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                        let assisted = matches!(
+                            hydrated.description,
+                            UpdateDescription::SnapshotAssistedAutomatic { .. }
+                        );
+                        let attempt = async {
+                            match Self::try_load_snapshot(store, instance).await {
+                                SnapshotRecoveryResult::Success => {}
+                                SnapshotRecoveryResult::NotAttempted if !assisted => {}
+                                failure => return Err(AttemptFailure::Load(failure)),
                             }
-                            .await;
+                            // An automatic update succeeds at the end of the replay.
+                            let result = Self::replay(store, instance, assisted)
+                                .await
+                                .map_err(AttemptFailure::Replay)?;
+                            record_resume_worker(start.elapsed());
+                            Ok(result)
+                        }
+                        .await;
 
-                            match replay_result {
-                                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
-                                    Err(error)
-                                }
-                                Err(error) => {
-                                    // replay failed. There are two cases here:
-                                    // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
-                                    // 2. We failed after the update has succeeded. In this case we can the original failure.
-                                    let final_pending_update = store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .durable_ctx_mut()
-                                        .state
-                                        .pending_update
-                                        .lock()
-                                        .await
-                                        .take();
-
-                                    match final_pending_update {
-                                        Some(_) => {
-                                            // We failed before the update has succeeded. Mark the update as failed and retry
+                        match attempt {
+                            Ok(result) => Ok(result),
+                            Err(failure) => {
+                                // A failure before the update point fails the update or retries
+                                // it, as the outcome table decides. A failure after the update
+                                // point consumed the update: the update point performed the
+                                // outcome of its own failure, and its error ends the start.
+                                let pending = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .state
+                                    .pending_update
+                                    .lock()
+                                    .await
+                                    .take();
+                                match pending {
+                                    Some(pending) => {
+                                        let action = {
+                                            let raw = match &failure {
+                                                AttemptFailure::Load(result) => {
+                                                    start_outcome::RawStartError::Load(result)
+                                                }
+                                                AttemptFailure::Replay(ReplayFailure {
+                                                    error,
+                                                    diverged,
+                                                }) => start_outcome::RawStartError::Replay {
+                                                    error,
+                                                    diverged: *diverged,
+                                                },
+                                            };
                                             store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_worker_update_failed(
-                                                    *target_revision,
-                                                    Some(format!(
-                                                        "Automatic update failed: {error}"
-                                                    )),
-                                                    None,
-                                                    None,
-                                                )
-                                                .await?;
-
-                                            debug!(
-                                                "Retrying prepare_instance after failed update attempt"
-                                            );
-
-                                            Ok(Some(RetryDecision::Immediate))
-                                        }
-                                        _ => Err(error),
-                                    }
-                                }
-                                _ => replay_result,
-                            }
-                        }
-                        UpdateDescription::SnapshotAssistedAutomatic {
-                            target_revision, ..
-                        } => {
-                            let snapshot_index = store
-                                .as_context()
-                                .data()
-                                .durable_ctx()
-                                .state
-                                .last_snapshot_index
-                                .expect("validated assisted update has a selected snapshot");
-                            let replay_result = async {
-                                match Self::try_load_snapshot(store, instance).await {
-                                    SnapshotRecoveryResult::Failed(error)
-                                    | SnapshotRecoveryResult::Unavailable(error) => {
-                                        return Err(error);
-                                    }
-                                    SnapshotRecoveryResult::Retry(decision) => {
-                                        return Ok(Some(decision));
-                                    }
-                                    SnapshotRecoveryResult::Success => {}
-                                    SnapshotRecoveryResult::NotAttempted => {
-                                        return Err(WorkerExecutorError::runtime(
-                                            "Snapshot-assisted automatic update did not attempt its required snapshot",
-                                        ));
-                                    }
-                                }
-
-                                let result = Self::resume_replay(store, instance, true).await?;
-                                record_resume_worker(start.elapsed());
-                                Ok(result)
-                            }
-                            .await;
-
-                            match replay_result {
-                                Err(error) => {
-                                    let final_pending_update = store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .durable_ctx_mut()
-                                        .state
-                                        .pending_update
-                                        .lock()
-                                        .await
-                                        .take();
-                                    match final_pending_update {
-                                        Some(pending_update) => {
-                                            let replay_target = store
                                                 .as_context()
                                                 .data()
                                                 .durable_ctx()
-                                                .state
-                                                .replay_state
-                                                .replay_target();
-                                            let source_component_revision = store
-                                                .as_context()
-                                                .data()
-                                                .component_metadata()
-                                                .revision;
-                                            let source_revision_start_index = store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .state
-                                                .snapshot_assisted_source_revision_start_index
-                                                .expect("assisted update has a source revision start index");
-                                            store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_worker_update_failed(
-                                                    *target_revision,
-                                                    Some(format!(
-                                                        "Snapshot-assisted automatic update failed while replaying {}..={replay_target}: {error}",
-                                                        snapshot_index.next(),
-                                                    )),
-                                                    Some(FailedSnapshotAssistedUpdateDetails {
-                                                        pending_update_index: pending_update
-                                                            .oplog_index,
-                                                        source_component_revision,
-                                                        source_revision_start_index,
-                                                        snapshot_index,
-                                                    }),
-                                                    None,
-                                                )
-                                                .await?;
-                                            Ok(Some(RetryDecision::Immediate))
-                                        }
-                                        None => Err(error),
+                                                .start_action(Some(&pending.reference), raw)
+                                        };
+                                        Self::perform_start_action(store, action).await
                                     }
+                                    None => Err(failure.into_error()),
                                 }
-                                result => result,
                             }
                         }
                     }
-                }
+                },
                 None => match Self::try_load_snapshot(store, instance).await {
                     SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed(error) => {
-                        if store
+                    failure => {
+                        let action = store
                             .as_context()
                             .data()
                             .durable_ctx()
-                            .state
-                            .last_snapshot_source
-                            == Some(SnapshotSource::Automatic)
-                        {
-                            Ok(Some(Self::abandon_diverged_automatic_snapshot(
-                                store, &error, false,
-                            )))
-                        } else {
-                            Err(WorkerExecutorError::InvocationFailed {
-                                error: AgentError::InternalError(error.to_string()),
-                                stderr: String::new(),
-                            })
-                        }
+                            .start_action(None, start_outcome::RawStartError::Load(&failure));
+                        Self::perform_start_action(store, action).await
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => {
-                        if store
-                            .as_context()
-                            .data()
-                            .durable_ctx()
-                            .state
-                            .last_snapshot_source
-                            == Some(SnapshotSource::ManualUpdate)
-                        {
-                            Err(WorkerExecutorError::InvocationFailed {
-                                error: AgentError::InternalError(error.to_string()),
-                                stderr: String::new(),
-                            })
-                        } else {
-                            Err(error)
-                        }
-                    }
-                    SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
         };
@@ -6866,14 +6640,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 Ok(None)
             }
             Ok(other) => Ok(other),
-            Err(
-                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
-                | WorkerExecutorError::PreviousInvocationExited),
-            ) => Err(error),
-            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                agent_id.clone(),
-                error,
-            )),
+            Err(error) => Err(prepare_failure(agent_id, error)),
         }
     }
 
@@ -7639,6 +7406,128 @@ fn selected_replay_recovery_error(
     }
 }
 
+/// What a start gets when the payload of the application snapshot of its baseline does not
+/// download for `purpose`, with `error` as the text. `lost` tells that the payload is missing or
+/// does not decode, rather than that its store failed. A periodic record is skipped for the start
+/// attempt and the start retries at once (the caller marks it unavailable). A snapshot-assisted
+/// attempt whose store failed retries with the same record through the recovery path, and
+/// nothing marks the record; one whose payload is lost reports the selected record as lost. Any
+/// other baseline gets the runtime error.
+fn payload_download_failure(
+    purpose: SnapshotReplayPurpose,
+    lost: bool,
+    error: String,
+) -> SnapshotRecoveryResult {
+    match purpose {
+        SnapshotReplayPurpose::PeriodicRecovery => {
+            SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+        }
+        SnapshotReplayPurpose::AssistedUpdate if lost => {
+            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
+        }
+        SnapshotReplayPurpose::AssistedUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::None => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error))
+        }
+    }
+}
+
+/// Performs `action`, the outcome of a failure of the update of the instance at the update point
+/// of a start, on the p2 and the p3 path, and gives the error that ends the start. The update
+/// point consumed the pending update, so a start that runs again starts on the source revision:
+/// a written failed update, a skipped or a rejected record end the start with `Restart`, an
+/// internal retry signal that records no interruption. A failed write ends it with the error of
+/// the write, a lost shard with `ShardLost`, and an error of the table with that error.
+pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
+    worker: &Arc<Worker<Ctx>>,
+    action: start_outcome::StartAction,
+) -> WorkerExecutorError {
+    let restart = WorkerExecutorError::Interrupted {
+        kind: InterruptKind::Restart,
+    };
+    match action {
+        start_outcome::StartAction::FailUpdate { entry, reject } => {
+            warn!(?entry, "Worker update attempt aborted");
+            match worker.add_and_commit_oplog(entry).await {
+                Ok(_) => {
+                    if let Some(index) = reject {
+                        worker.reject_periodic(index);
+                    }
+                    restart
+                }
+                Err(error) => WorkerExecutorError::from(error),
+            }
+        }
+        start_outcome::StartAction::SkipPeriodic(index) => {
+            worker.mark_periodic_unavailable(index);
+            restart
+        }
+        start_outcome::StartAction::RejectPeriodic(index) => {
+            worker.reject_periodic(index);
+            restart
+        }
+        start_outcome::StartAction::Error(error) => error,
+        start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        },
+        start_outcome::StartAction::Retry(decision) => WorkerExecutorError::runtime(format!(
+            "the update point has no snapshot load to retry ({decision:?})"
+        )),
+        start_outcome::StartAction::Succeed => {
+            WorkerExecutorError::runtime("the update point cannot apply an update that failed")
+        }
+    }
+}
+
+/// The error of a failed `prepare_instance`. A failure of the previous invocation and an
+/// interrupt keep their form: the invocation loop handles an interrupt as an interrupted start and
+/// records no recovery failure for it. Every other error is a failure to resume the agent.
+fn prepare_failure(agent_id: &AgentId, error: WorkerExecutorError) -> WorkerExecutorError {
+    match error {
+        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+        | WorkerExecutorError::PreviousInvocationExited
+        | WorkerExecutorError::Interrupted { .. }) => error,
+        error => WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), error),
+    }
+}
+
+/// A failed replay of the recorded invocations of a start.
+struct ReplayFailure {
+    error: WorkerExecutorError,
+    /// Whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    diverged: bool,
+}
+
+/// Why a pending automatic update did not reach the end of its replay.
+enum AttemptFailure {
+    /// The application snapshot of the baseline did not load.
+    Load(SnapshotRecoveryResult),
+    /// The replay failed.
+    Replay(ReplayFailure),
+}
+
+impl AttemptFailure {
+    fn into_error(self) -> WorkerExecutorError {
+        match self {
+            Self::Load(
+                SnapshotRecoveryResult::Failed(error)
+                | SnapshotRecoveryResult::Unavailable(error)
+                | SnapshotRecoveryResult::Lost(error),
+            )
+            | Self::Replay(ReplayFailure { error, .. }) => error,
+            Self::Load(_) => WorkerExecutorError::runtime(
+                "Snapshot-assisted automatic update did not attempt its required snapshot",
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7661,35 +7550,140 @@ mod tests {
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
 
+    use test_r::test;
+
+    /// A payload of an application snapshot that does not download skips a periodic record for
+    /// the start attempt. A snapshot-assisted attempt whose payload store fails retries with the
+    /// same record through the recovery path: the outcome table writes no failed update and
+    /// rejects nothing for it. A snapshot-assisted attempt whose payload is missing or does not
+    /// decode fails the update as a lost record and rejects the record.
     #[test]
-    fn assisted_success_details_preserve_snapshot_provenance() {
-        let source_revision = ComponentRevision::new(4).unwrap();
-        let details = build_snapshot_assisted_update_details(
-            OplogIndex::from_u64(20),
-            source_revision,
-            OplogIndex::from_u64(8),
-            OplogIndex::from_u64(12),
+    fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_store_failed() {
+        use golem_common::model::{
+            AssistedSelection, PendingUpdateKind, PendingUpdateRef, UsableAutomaticSnapshot,
+        };
+        let head = PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            })),
+        };
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "payload".to_string(),
+        };
+        let decide = |result: &SnapshotRecoveryResult| {
+            start_outcome::decide(
+                &start_outcome::BaselineRole::AssistedPending(Box::new(head.clone())),
+                Some(&head),
+                start_outcome::RawStartError::Load(result),
+                &agent_id,
+                false,
+            )
+        };
+        let unavailable = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            false,
+            "blob store unavailable".to_string(),
+        );
+        let lost = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            true,
+            "referenced oplog payload is missing".to_string(),
         );
 
-        assert_eq!(details.pending_update_index, OplogIndex::from_u64(20));
-        assert_eq!(details.source_component_revision, source_revision);
-        assert_eq!(details.source_revision_start_index, OplogIndex::from_u64(8));
-        assert_eq!(details.snapshot_index, OplogIndex::from_u64(12));
-
-        let failed = failed_snapshot_assisted_update_details(&details);
-        assert_eq!(failed.pending_update_index, details.pending_update_index);
-        assert_eq!(
-            failed.source_component_revision,
-            details.source_component_revision
-        );
-        assert_eq!(
-            failed.source_revision_start_index,
-            details.source_revision_start_index
-        );
-        assert_eq!(failed.snapshot_index, details.snapshot_index);
+        [false, true].iter().for_each(|lost| {
+            assert!(matches!(
+                payload_download_failure(
+                    SnapshotReplayPurpose::PeriodicRecovery,
+                    *lost,
+                    "down".to_string()
+                ),
+                SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+            ));
+            assert!(matches!(
+                payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
+                SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+            ));
+        });
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            decide(&unavailable),
+            start_outcome::StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        match decide(&lost) {
+            start_outcome::StartAction::FailUpdate {
+                entry:
+                    OplogEntry::FailedUpdate {
+                        details,
+                        snapshot_assisted_details: Some(assisted),
+                        snapshot_fault,
+                        ..
+                    },
+                reject,
+            } => {
+                assert!(
+                    details
+                        .as_deref()
+                        .is_some_and(|details| details
+                            .starts_with(start_outcome::UPDATE_SNAPSHOT_UNAVAILABLE)),
+                    "{details:?}"
+                );
+                assert_eq!(assisted.snapshot_index, OplogIndex::from_u64(7));
+                assert_eq!(
+                    snapshot_fault,
+                    Some(golem_common::model::oplog::SnapshotFault::Unavailable)
+                );
+                assert_eq!(reject, Some(OplogIndex::from_u64(7)));
+            }
+            other => panic!("a lost payload fails the update, got {other:?}"),
+        }
     }
 
-    use test_r::test;
+    /// An interrupt that ends a start, for example the restart of a revert while the start after
+    /// a failed update replays, keeps its form, so the invocation loop handles it as an interrupted
+    /// start and writes no recovery failure. A failure of the previous invocation keeps its form
+    /// too; every other error is a failure to resume the agent.
+    #[test]
+    fn a_prepare_failure_keeps_an_interrupt_and_a_previous_invocation_failure() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "prepare".to_string(),
+        };
+        let interrupt = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart,
+        };
+        let previous = WorkerExecutorError::PreviousInvocationFailed {
+            error: AgentError::Unknown("trap".to_string()),
+            stderr: String::new(),
+        };
+        let runtime = WorkerExecutorError::runtime("boom");
+        assert_eq!(
+            [
+                prepare_failure(&agent_id, interrupt.clone()),
+                prepare_failure(&agent_id, previous.clone()),
+                prepare_failure(&agent_id, WorkerExecutorError::PreviousInvocationExited),
+                prepare_failure(&agent_id, runtime.clone()),
+            ],
+            [
+                interrupt,
+                previous,
+                WorkerExecutorError::PreviousInvocationExited,
+                WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), runtime),
+            ]
+        );
+    }
 
     #[test]
     fn replay_recovery_branch_preserves_owner_and_ephemeral_priority() {
@@ -10998,17 +10992,17 @@ struct PrivateDurableWorkerState {
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
-    pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
+    pending_update: tokio::sync::Mutex<Option<HydratedUpdate>>,
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
-    last_snapshot_source: Option<SnapshotSource>,
+    /// The baseline of the start: the column of the start outcome table.
+    baseline_role: BaselineRole,
     /// Identifies whether replay after a snapshot is optional periodic recovery or a required
     /// assisted-update attempt. Optional recovery may abandon a divergent snapshot; assisted replay
     /// must instead fail the update without recording an application failure.
     snapshot_replay_purpose: SnapshotReplayPurpose,
-    snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -11108,11 +11102,10 @@ impl PrivateDurableWorkerState {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
         shard_service: Arc<dyn ShardService>,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
-        last_snapshot_source: Option<SnapshotSource>,
-        snapshot_assisted_source_revision_start_index: Option<OplogIndex>,
+        baseline_role: BaselineRole,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
@@ -11192,16 +11185,7 @@ impl PrivateDurableWorkerState {
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
-        let snapshot_replay_purpose = SnapshotReplayPurpose::for_reconstruction(
-            matches!(
-                pending_update.as_ref(),
-                Some(TimestampedUpdateDescription {
-                    description: UpdateDescription::SnapshotAssistedAutomatic { .. },
-                    ..
-                })
-            ),
-            last_snapshot_source,
-        );
+        let snapshot_replay_purpose = baseline_role.purpose();
         let completion_marker_recorder =
             concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         Ok(Self {
@@ -11306,9 +11290,8 @@ impl PrivateDurableWorkerState {
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
-            last_snapshot_source,
+            baseline_role,
             snapshot_replay_purpose,
-            snapshot_assisted_source_revision_start_index,
             resource_limit_entry,
         })
     }

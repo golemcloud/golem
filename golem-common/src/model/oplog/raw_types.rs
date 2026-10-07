@@ -480,14 +480,6 @@ impl UpdateDescription {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub struct TimestampedUpdateDescription {
-    pub timestamp: Timestamp,
-    pub oplog_index: OplogIndex,
-    pub description: UpdateDescription,
-}
-
 /// Provenance of a snapshot-assisted automatic update, persisted on its successful outcome.
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]

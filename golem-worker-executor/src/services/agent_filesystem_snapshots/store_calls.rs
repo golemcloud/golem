@@ -32,7 +32,7 @@ use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore, ReadError,
     RestoreFailure, RunSlots, SaveError, Slot, SnapshotInfo, SnapshotName, Withdrawal,
 };
-use crate::services::agent_filesystem::{RestoreError, RestoreTree};
+use crate::services::agent_filesystem::{RestoreClass, RestoreError, RestoreTree};
 use crate::services::golem_config::{
     FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig,
 };
@@ -947,13 +947,23 @@ pub(crate) struct StoreRestore {
 }
 
 /// Whether a restore that failed with `failure` can succeed when the start runs again: `Failed`
-/// and `Stopped` can, and `NotFound`, `Corrupt` and `Destination` give the same answer again.
-fn restore_retryable(failure: &RestoreFailure) -> bool {
+/// and `Stopped` can; `NotFound` and `Corrupt` say that the store lost the snapshot, which gives
+/// the same answer to every later attempt; `Destination` fails the same way on this executor, and
+/// a full disk or a full quota of the destination has a class of its own for the details of a
+/// failed update.
+pub(crate) fn restore_class(failure: &RestoreFailure) -> RestoreClass {
     match failure {
-        RestoreFailure::Failed(_) | RestoreFailure::Stopped(_) => true,
-        RestoreFailure::NotFound | RestoreFailure::Corrupt(_) | RestoreFailure::Destination(_) => {
-            false
+        RestoreFailure::Failed(_) | RestoreFailure::Stopped(_) => RestoreClass::Transient,
+        RestoreFailure::NotFound | RestoreFailure::Corrupt(_) => RestoreClass::Lost,
+        RestoreFailure::Destination(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+            ) =>
+        {
+            RestoreClass::DiskFull
         }
+        RestoreFailure::Destination(_) => RestoreClass::Fixed,
     }
 }
 
@@ -965,7 +975,7 @@ impl RestoreTree for StoreRestore {
 
     async fn restore(self, into: &Path) -> Result<(), RestoreError> {
         let name = super::store_name(&self.name).map_err(|error| RestoreError {
-            retryable: false,
+            class: RestoreClass::Fixed,
             source: anyhow::Error::new(error),
         })?;
         let started = std::time::Instant::now();
@@ -978,7 +988,7 @@ impl RestoreTree for StoreRestore {
             started.elapsed(),
         );
         result.map(drop).map_err(|error| RestoreError {
-            retryable: restore_retryable(&error),
+            class: restore_class(&error),
             source: anyhow::Error::new(error)
                 .context(format!("restore the filesystem snapshot {}", self.name)),
         })
@@ -1161,17 +1171,27 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_or_stopped_restore_is_retryable_and_the_other_failures_are_not() {
+    fn a_lost_snapshot_a_fixed_failure_a_full_disk_and_a_transient_failure_have_their_class() {
         assert_eq!(
             [
                 RestoreFailure::Failed(Failed::new(anyhow::anyhow!("storage"))),
                 RestoreFailure::Stopped(Withdrawal::Stopped),
                 RestoreFailure::NotFound,
                 RestoreFailure::Corrupt(anyhow::anyhow!("corrupt")),
-                RestoreFailure::Destination(std::io::Error::other("full")),
+                RestoreFailure::Destination(std::io::Error::other("read-only")),
+                RestoreFailure::Destination(std::io::Error::from_raw_os_error(libc::ENOSPC)),
+                RestoreFailure::Destination(std::io::Error::from_raw_os_error(libc::EDQUOT)),
             ]
-            .map(|failure| restore_retryable(&failure)),
-            [true, true, false, false, false]
+            .map(|failure| restore_class(&failure)),
+            [
+                RestoreClass::Transient,
+                RestoreClass::Transient,
+                RestoreClass::Lost,
+                RestoreClass::Lost,
+                RestoreClass::Fixed,
+                RestoreClass::DiskFull,
+                RestoreClass::DiskFull,
+            ]
         );
     }
 

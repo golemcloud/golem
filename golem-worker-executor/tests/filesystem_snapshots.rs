@@ -1510,13 +1510,40 @@ async fn a_changed_file_at_a_changed_declaration_fails_both_updates_the_same_way
             "{automatic_failures:?}"
         );
         assert_eq!(manual.describe(&executor).await?, manual_before);
-        // A failed automatic update ends the start with an error, and the agent starts again at its
-        // current revision after the retry delay.
+        // A failed automatic update writes its failed update once at the update point, and the
+        // agent starts again at its current revision.
         let automatic_after = eventually(Duration::from_secs(60), || async {
             Ok(automatic.describe(&executor).await.ok())
         })
         .await?;
         assert_eq!(automatic_after, automatic_before);
+        assert_eq!(
+            (manual_failures.len(), automatic_failures.len()),
+            (1, 1),
+            "{manual_failures:?} {automatic_failures:?}"
+        );
+
+        // A restart neither writes a failed update again nor loses it.
+        executor.release().await?;
+        let restarted =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        assert_eq!(manual.describe(&restarted).await?, manual_before);
+        assert_eq!(automatic.describe(&restarted).await?, automatic_before);
+        assert_eq!(
+            (
+                manual.records(&restarted).await?.failed_updates.len(),
+                automatic.records(&restarted).await?.failed_updates.len(),
+                restarted
+                    .get_worker_metadata(&manual.worker_id)
+                    .await?
+                    .component_revision,
+                restarted
+                    .get_worker_metadata(&automatic.worker_id)
+                    .await?
+                    .component_revision,
+            ),
+            (1, 1, manual.component.revision, manual.component.revision)
+        );
         Ok(())
     })
     .await
@@ -2756,6 +2783,75 @@ async fn a_named_manual_update_record_fails_a_start_without_filesystem_snapshots
                 .as_deref()
                 .is_some_and(|error| error.contains("filesystem snapshots are disabled")),
             "{metadata:?}"
+        );
+        Ok(())
+    })
+    .await
+}
+
+/// A pending manual update whose filesystem snapshot the store lost fails the update with a
+/// stable code, and the agent keeps running on its source revision with its files.
+#[test]
+#[timeout("4m")]
+async fn a_pending_manual_update_whose_snapshot_is_lost_fails_and_the_agent_stays_on_its_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "lost-manual-update",
+            &[],
+        )
+        .await?;
+        agent
+            .apply_all(
+                &executor,
+                &[Operation::Write {
+                    path: "state.db",
+                    content: "rows",
+                }],
+            )
+            .await?;
+        agent.confirmed(&executor).await?;
+
+        let held = store.hold_next_save();
+        let updated = executor
+            .update_component_with_files(
+                &agent.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![],
+            )
+            .await?;
+        executor
+            .manual_update_worker(&agent.worker_id, updated.revision, false)
+            .await?;
+        let name = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        store.fail_restores_of(&name);
+        held.release();
+
+        let failed = agent.failed_updates(&executor).await?;
+        let files = agent.describe(&executor).await?;
+        let metadata = executor.get_worker_metadata(&agent.worker_id).await?;
+
+        assert!(name.starts_with("u-"), "{name}");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("UPDATE_SNAPSHOT_UNAVAILABLE: "),
+            "{failed:?}"
+        );
+        assert_eq!(metadata.component_revision, agent.component.revision);
+        assert_eq!(
+            files,
+            [r#"state.db file links=1 writable=true content="rows""#.to_string()]
         );
         Ok(())
     })
@@ -4456,9 +4552,9 @@ async fn without_filesystem_snapshots_changed_files_take_no_snapshot_and_fail_a_
     assert_eq!(
         outcomes,
         [format!(
-            "failed to update to {:?}: cannot take a snapshot for the update: the files of the \
-             agent differ from its initial files, and filesystem snapshots are disabled on this \
-             executor",
+            "failed to update to {:?}: UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS: cannot take a snapshot \
+             for the update: the files of the agent differ from its initial files, and filesystem \
+             snapshots are disabled on this executor",
             updated.revision
         )]
     );

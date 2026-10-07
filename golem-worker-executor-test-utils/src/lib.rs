@@ -53,11 +53,11 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponse, HostResponseEntityInvocation,
+    AgentError, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
-    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription, host_functions::HostFunctionName,
-    types::ObjectMetadata, types::SerializableEntityBodyExecution,
-    types::SerializableP3HttpBodyChunk, types::SerializableToolOperationTerminal,
+    SnapshotAssistedUpdateDetails, host_functions::HostFunctionName, types::ObjectMetadata,
+    types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
+    types::SerializableToolOperationTerminal,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -97,7 +97,9 @@ use golem_worker_executor::durable_host::{
     DurableResourceLimiter, DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
     SnapshotBoundaryBlocker,
 };
-use golem_worker_executor::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
+use golem_worker_executor::model::{
+    AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType,
+};
 use golem_worker_executor::native_tool::{
     NativeToolAdapter, NativeToolCatalog, NativeToolRegistration,
 };
@@ -1075,7 +1077,23 @@ impl TestWorkerExecutor {
             .snapshot_download_failures
             .lock()
             .unwrap()
-            .insert((agent_id.clone(), snapshot_index), PayloadId::new());
+            .insert(
+                (agent_id.clone(), snapshot_index),
+                (PayloadId::new(), SnapshotDownloadFailure::Once),
+            );
+    }
+
+    /// Makes the payload of the snapshot at `snapshot_index` missing from its store, for every
+    /// download.
+    pub fn lose_snapshot_payload(&self, agent_id: &AgentId, snapshot_index: OplogIndex) {
+        self.additional_test_deps
+            .snapshot_download_failures
+            .lock()
+            .unwrap()
+            .insert(
+                (agent_id.clone(), snapshot_index),
+                (PayloadId::new(), SnapshotDownloadFailure::Missing),
+            );
     }
 
     /// Replaces only the selected snapshot's bytes on read, leaving the persisted oplog intact.
@@ -2946,18 +2964,10 @@ impl UpdateManagement for TestWorkerCtx {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-        update_attempt_index: Option<OplogIndex>,
+        failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(
-                target_revision,
-                details,
-                snapshot_assisted_details,
-                update_attempt_index,
-            )
+            .on_worker_update_failed(failed_update)
             .await
     }
 
@@ -3059,7 +3069,7 @@ impl WorkerCtx for TestWorkerCtx {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
@@ -5280,7 +5290,7 @@ impl Oplog for TestOplog {
             self.additional_test_deps
                 .record_oplog_call(&self.owned_agent_id, "read_automatic_snapshot");
         }
-        if let Some(payload_id) = self
+        if let Some((payload_id, _)) = self
             .additional_test_deps
             .snapshot_download_failures
             .lock()
@@ -5373,14 +5383,20 @@ impl Oplog for TestOplog {
                 .snapshot_download_failures
                 .lock()
                 .unwrap();
-            let key = failures
-                .iter()
-                .find_map(|(key, id)| (id == &payload_id).then(|| key.clone()));
-            if let Some(key) = key {
-                failures.remove(&key);
-                return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
-                    "injected snapshot payload download failure"
-                )));
+            let found = failures.iter().find_map(|(key, (id, failure))| {
+                (id == &payload_id).then(|| (key.clone(), *failure))
+            });
+            match found {
+                Some((key, SnapshotDownloadFailure::Once)) => {
+                    failures.remove(&key);
+                    return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
+                        "injected snapshot payload download failure"
+                    )));
+                }
+                Some((_, SnapshotDownloadFailure::Missing)) => {
+                    return Err(RawOplogPayloadDownloadError::Missing(payload_id));
+                }
+                None => {}
             }
         }
         if self
@@ -5738,6 +5754,20 @@ impl RpcMemoryFailure {
     }
 }
 
+/// The injected payload of each snapshot, by agent and snapshot index, and how its download
+/// fails.
+type SnapshotDownloadFailures =
+    HashMap<(AgentId, OplogIndex), (PayloadId, SnapshotDownloadFailure)>;
+
+/// How the download of an injected snapshot payload fails.
+#[derive(Clone, Copy)]
+enum SnapshotDownloadFailure {
+    /// The store fails once.
+    Once,
+    /// The payload is missing from the store.
+    Missing,
+}
+
 struct OplogReadGate {
     entered_tx: tokio::sync::oneshot::Sender<()>,
     release_rx: tokio::sync::oneshot::Receiver<()>,
@@ -5760,7 +5790,7 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
     http_body_read_start_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
-    snapshot_download_failures: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), PayloadId>>>,
+    snapshot_download_failures: Arc<std::sync::Mutex<SnapshotDownloadFailures>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
     oplog_read_gates: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), OplogReadGate>>>,

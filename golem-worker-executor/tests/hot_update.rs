@@ -30,10 +30,13 @@ use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCu
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::golem_config::{OplogConfig, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_snapshot_policy,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
+    start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -1241,9 +1244,12 @@ async fn snapshot_assisted_schema_rejection_fails_once_and_allows_later_update(
     Ok(())
 }
 
+/// A payload of the selected record that does not download once is a transient failure: the
+/// frozen attempt runs again with the same record, and the update succeeds without a failed
+/// update.
 #[test]
 #[timeout("120s")]
-async fn snapshot_assisted_payload_download_failure_fails_once_and_preserves_source(
+async fn snapshot_assisted_payload_download_failure_retries_the_same_record(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
@@ -1282,23 +1288,19 @@ async fn snapshot_assisted_payload_download_failure_fails_once_and_preserves_sou
     executor
         .auto_update_worker(&worker_id, updated_component.revision, false)
         .await?;
-    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
-    assert_eq!(metadata.component_revision, component.revision);
-    assert_eq!(metadata.retry_count, 0);
-    assert_eq!(metadata.last_error, None);
-    let cause = metadata
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let success = metadata
         .updates
         .iter()
         .find_map(|record| match record {
-            UpdateRecord::FailedUpdate(update) => update.details.as_deref(),
+            UpdateRecord::SuccessfulUpdate(update) => Some(update),
             _ => None,
         })
-        .unwrap_or_default();
-    assert!(
-        cause.contains("Failed to download snapshot payload"),
-        "{cause}"
-    );
-    let healthy = executor
+        .expect("the update succeeds");
+
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert!(success.snapshot_assisted_details.is_some());
+    executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
@@ -1306,7 +1308,78 @@ async fn snapshot_assisted_payload_download_failure_fails_once_and_preserves_sou
             data_value!(),
         )
         .await?;
-    assert_eq!(healthy.into_typed::<u32>()?, 1);
+    Ok(())
+}
+
+/// A payload of the selected record that is missing from its store is a lost record: the update
+/// fails once with `UPDATE_SNAPSHOT_UNAVAILABLE`, and the agent runs on its source revision.
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_missing_payload_fails_the_update_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let config = OplogConfig {
+        max_payload_size: 0,
+        default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 2 },
+        ..Default::default()
+    };
+    let executor = start_customized(deps, &context, None, None, None, None, Some(config)).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("ExternalSnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    executor.lose_snapshot_payload(&worker_id, snapshot_index);
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let failed = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("the update fails");
+    let details = failed.details.as_deref().unwrap_or_default();
+    assert!(
+        details.starts_with("UPDATE_SNAPSHOT_UNAVAILABLE"),
+        "{details}"
+    );
+    assert_eq!(metadata.component_revision, component.revision);
+
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "loaded_snapshot_revision",
+            data_value!(),
+        )
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(metadata.component_revision, component.revision);
     Ok(())
 }
 
@@ -2506,7 +2579,9 @@ async fn assert_promoted_automatic_snapshot_load_failure_retries_required_baseli
         .await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
 
-    assert_eq!(replay_revision.into_typed::<u32>()?, 1);
+    // The start from the promoted record replays its tail with the source revision, as the
+    // update attempt did, and moves to the target at the replayed update.
+    assert_eq!(replay_revision.into_typed::<u32>()?, 0);
     assert_eq!(revision_two_only.into_typed::<u32>()?, 2);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
@@ -3469,7 +3544,347 @@ async fn auto_update_on_idle_to_non_existing(
     assert_eq!(result2.into_typed::<u64>()?, 0);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 1));
+    let failed = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(failed.starts_with("UPDATE_TARGET_NOT_FOUND: "), "{failed}");
 
+    Ok(())
+}
+
+/// A component service that cannot give one component revision while it is down.
+pub(crate) struct FlakyComponentService {
+    pub(crate) inner: Arc<dyn ComponentService>,
+    pub(crate) outage: Arc<Outage>,
+}
+
+/// The revision that a [`FlakyComponentService`] cannot give, whether it is down, and how many
+/// fetches it refused. A revision whose metadata is lost gives its component, and after that no
+/// metadata, as if the revision were deleted between the two fetches.
+#[derive(Default)]
+pub(crate) struct Outage {
+    revision: std::sync::Mutex<Option<ComponentRevision>>,
+    down: std::sync::atomic::AtomicBool,
+    refused: std::sync::atomic::AtomicUsize,
+    metadata_lost: std::sync::Mutex<Option<ComponentRevision>>,
+    fetched: std::sync::atomic::AtomicBool,
+}
+
+impl Outage {
+    pub(crate) fn begin(&self, revision: ComponentRevision) {
+        *self.revision.lock().unwrap() = Some(revision);
+        self.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn end(&self) {
+        self.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn refused(&self) -> usize {
+        self.refused.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn lose_metadata_after_get(&self, revision: ComponentRevision) {
+        *self.metadata_lost.lock().unwrap() = Some(revision);
+    }
+
+    fn got(&self, revision: ComponentRevision) {
+        if *self.metadata_lost.lock().unwrap() == Some(revision) {
+            self.fetched
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Fails a fetch of the metadata of the revision after its component was fetched.
+    fn check_metadata(
+        &self,
+        component_id: golem_common::model::component::ComponentId,
+        revision: Option<ComponentRevision>,
+    ) -> Result<(), WorkerExecutorError> {
+        let lost = revision.is_some()
+            && *self.metadata_lost.lock().unwrap() == revision
+            && self.fetched.load(std::sync::atomic::Ordering::SeqCst);
+        if lost {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(WorkerExecutorError::ComponentNotFound { component_id })
+        } else {
+            self.check(component_id, revision)
+        }
+    }
+
+    /// Fails a fetch of the revision while the service is down.
+    fn check(
+        &self,
+        component_id: golem_common::model::component::ComponentId,
+        revision: Option<ComponentRevision>,
+    ) -> Result<(), WorkerExecutorError> {
+        let affected = revision.is_some() && *self.revision.lock().unwrap() == revision;
+        if affected && self.down.load(std::sync::atomic::Ordering::SeqCst) {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(WorkerExecutorError::ComponentServiceUnavailable {
+                component_id,
+                component_revision: revision,
+                reason: "the component service is down".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ComponentService for FlakyComponentService {
+    async fn get(
+        &self,
+        engine: &wasmtime::Engine,
+        component_id: golem_common::model::component::ComponentId,
+        component_revision: ComponentRevision,
+    ) -> Result<
+        (
+            wasmtime::component::Component,
+            golem_service_base::model::component::Component,
+        ),
+        WorkerExecutorError,
+    > {
+        self.outage.check(component_id, Some(component_revision))?;
+        let result = self
+            .inner
+            .get(engine, component_id, component_revision)
+            .await?;
+        self.outage.got(component_revision);
+        Ok(result)
+    }
+
+    async fn get_metadata(
+        &self,
+        component_id: golem_common::model::component::ComponentId,
+        forced_revision: Option<ComponentRevision>,
+    ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
+        self.outage.check_metadata(component_id, forced_revision)?;
+        self.inner.get_metadata(component_id, forced_revision).await
+    }
+
+    async fn resolve_component(
+        &self,
+        component_reference: String,
+        resolving_environment: golem_common::model::environment::EnvironmentId,
+        resolving_application: golem_common::model::application::ApplicationId,
+        resolving_account: golem_common::model::account::AccountId,
+    ) -> Result<Option<golem_common::model::component::ComponentId>, WorkerExecutorError> {
+        self.inner
+            .resolve_component(
+                component_reference,
+                resolving_environment,
+                resolving_application,
+                resolving_account,
+            )
+            .await
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::component::Component> {
+        self.inner.all_cached_metadata().await
+    }
+
+    async fn invalidate_current_deployed_metadata(&self) {
+        self.inner.invalidate_current_deployed_metadata().await;
+    }
+
+    async fn invalidate_current_deployed_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all_metadata_for_environment(
+        &self,
+        environment_id: golem_common::model::environment::EnvironmentId,
+    ) {
+        self.inner
+            .invalidate_all_metadata_for_environment(environment_id)
+            .await;
+    }
+
+    async fn invalidate_all(&self) {
+        self.inner.invalidate_all().await;
+    }
+}
+
+/// While the component service cannot give the target of an update, the start of the agent fails
+/// as a recovery that is retried, and no failed update is written; a start after the outage
+/// applies the update.
+#[test]
+#[timeout("120s")]
+async fn an_unavailable_component_service_delays_the_update_and_fails_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    outage.begin(updated_component.revision);
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let polled = (&executor, &worker_id, &outage);
+    let during = tokio::time::timeout(
+        Duration::from_secs(60),
+        futures::StreamExt::into_future(futures::StreamExt::boxed(
+            futures::TryStreamExt::try_skip_while(
+                futures::StreamExt::then(
+                    futures::stream::repeat(polled),
+                    |(executor, worker_id, _)| async move {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        executor.get_worker_metadata(worker_id).await
+                    },
+                ),
+                |metadata| {
+                    futures::future::ready(Ok(!(polled.2.refused() > 0
+                        && metadata.last_error.as_deref().is_some_and(|error| {
+                            error.contains("component service is unavailable")
+                        }))))
+                },
+            ),
+        )),
+    )
+    .await?
+    .0
+    .expect("the metadata polls do not end")?;
+    outage.end();
+    executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            Duration::from_secs(30),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(during.component_revision, component.revision);
+    assert_eq!(update_counts(&during), (1, 0, 0));
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    Ok(())
+}
+
+/// A target whose metadata is gone when the replay reaches the update point fails the update
+/// there: one failed update with its code is written, and the agent runs on its source revision
+/// with the state that the source built.
+#[test]
+#[timeout("120s")]
+async fn a_failure_at_the_update_point_fails_the_update_once_and_keeps_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    for _ in 0..2 {
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+            .await?;
+    }
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    outage.lose_metadata_after_get(updated_component.revision);
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let details = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.clone(),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    assert!(details.starts_with("UPDATE_TARGET_NOT_FOUND"), "{details}");
+    assert!(outage.refused() > 0);
+    assert_eq!(metadata.component_revision, component.revision);
+
+    let accumulated = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(accumulated.into_typed::<u32>()?, 20);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let accumulated = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(accumulated.into_typed::<u32>()?, 30);
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(update_counts(&metadata), (0, 0, 1));
     Ok(())
 }
 

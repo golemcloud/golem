@@ -50,11 +50,25 @@ impl RestoreTree for std::convert::Infallible {
     }
 }
 
+/// Whether a restore that failed can succeed when it runs again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RestoreClass {
+    /// The store lost the snapshot: every later attempt gets the same answer.
+    Lost,
+    /// The restore fails the same way on this executor until something changes.
+    Fixed,
+    /// The local disk of the executor, or the quota of its volume, is full. The restore fails as
+    /// with `Fixed`; only the details of a failed update name the cause.
+    DiskFull,
+    /// A new attempt can succeed without a change.
+    Transient,
+}
+
 /// Why a restore did not fill its directory.
 #[derive(Debug)]
 pub(crate) struct RestoreError {
-    /// Whether a new attempt can succeed without a change.
-    pub(crate) retryable: bool,
+    /// Whether a new attempt can succeed.
+    pub(crate) class: RestoreClass,
     /// The cause of the failure.
     pub(crate) source: anyhow::Error,
 }
@@ -117,7 +131,7 @@ impl RestoreTree for InitialFilesRestore {
             link_groups: Box::new([]),
         };
         let bytes = serde_json::to_vec(&record).map_err(|error| RestoreError {
-            retryable: false,
+            class: RestoreClass::Fixed,
             source: anyhow::Error::new(error).context("encode the record"),
         })?;
         futures::stream::iter(std::iter::once(tree.clone()).chain(directories))
@@ -126,7 +140,7 @@ impl RestoreTree for InitialFilesRestore {
             .await
             .and(tokio::fs::write(into.join(RECORD_FILE), bytes).await)
             .map_err(|error| RestoreError {
-                retryable: true,
+                class: RestoreClass::Transient,
                 source: anyhow::Error::new(error).context("write the initial files of a restore"),
             })
     }
@@ -383,7 +397,7 @@ impl CaptureRecord {
 
 fn record_error(source: anyhow::Error) -> Error {
     Error::Baseline(Box::new(RestoreError {
-        retryable: false,
+        class: RestoreClass::Fixed,
         source,
     }))
 }

@@ -1422,7 +1422,7 @@ mod tests {
     #[test]
     fn a_confirmed_answer_selects_the_own_name_and_the_previous_usable_name_of_the_folded_status() {
         use super::{ConfirmOutcome, confirmation_after_append};
-        use crate::worker::snapshot_selection::selectable_names;
+        use crate::worker::snapshot_selection::names_in_use;
         use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogPayload};
         let (previous, own) = (
             FilesystemSnapshotName::periodic(),
@@ -1473,7 +1473,7 @@ mod tests {
             confirmation_after_append(false, &after, &own),
             ConfirmOutcome::Confirmed
         );
-        assert_eq!(selectable_names(&after), Box::from([own, previous]));
+        assert_eq!(names_in_use(&after), Box::from([own, previous]));
     }
 
     #[test]

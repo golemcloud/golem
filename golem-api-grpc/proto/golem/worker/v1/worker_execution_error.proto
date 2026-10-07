@@ -38,7 +38,32 @@ message WorkerExecutionError {
     FileSystemError file_system_error = 26;
     InvocationFailed invocation_failed = 27;
     PermissionDenied permission_denied = 28;
+    ComponentServiceUnavailable component_service_unavailable = 29;
+    ComponentServiceRefused component_service_refused = 30;
   }
+}
+
+message ComponentServiceUnavailable {
+  golem.component.ComponentId component_id = 1;
+  optional uint64 component_revision = 2;
+  string reason = 3;
+}
+
+enum ComponentServiceRefusal {
+  COMPONENT_SERVICE_REFUSAL_UNSPECIFIED = 0;
+  UNAUTHORIZED = 1;
+  COULD_NOT_AUTHENTICATE = 2;
+  BAD_REQUEST = 3;
+  LIMIT_EXCEEDED = 4;
+  MISSING_BINARY = 5;
+  OTHER = 6;
+}
+
+message ComponentServiceRefused {
+  golem.component.ComponentId component_id = 1;
+  optional uint64 component_revision = 2;
+  ComponentServiceRefusal kind = 3;
+  string reason = 4;
 }
 
 message InvalidRequest {

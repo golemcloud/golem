@@ -1209,40 +1209,42 @@ async fn an_update_with_two_sizes_for_one_content_fails_before_any_change() {
 }
 
 #[test]
-async fn a_failed_restore_returns_the_sealed_filesystem_with_its_retryable_flag() {
-    futures::stream::iter([true, false])
-        .for_each(|retryable| async move {
-            let store = InitialFileStore::new().await;
-            let (filesystem, control, _) =
-                bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
-            let scratch = scratch_of(&filesystem);
+async fn a_failed_restore_returns_the_sealed_filesystem_with_its_class() {
+    futures::stream::iter([
+        RestoreClass::Lost,
+        RestoreClass::Fixed,
+        RestoreClass::Transient,
+    ])
+    .for_each(|class| async move {
+        let store = InitialFileStore::new().await;
+        let (filesystem, control, _) =
+            bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+        let scratch = scratch_of(&filesystem);
 
-            let failure = materialize_baseline(
-                filesystem,
-                store.prepare(&[]).await,
-                Some(FixtureRestore(move |_: &Path| {
-                    Err(RestoreError {
-                        retryable,
-                        source: anyhow::anyhow!("programmed restore failure"),
-                    })
-                })),
-            )
-            .await
-            .unwrap_err();
+        let failure = materialize_baseline(
+            filesystem,
+            store.prepare(&[]).await,
+            Some(FixtureRestore(move |_: &Path| {
+                Err(RestoreError {
+                    class,
+                    source: anyhow::anyhow!("programmed restore failure"),
+                })
+            })),
+        )
+        .await
+        .unwrap_err();
 
-            assert!(
-                matches!(&failure.source, Error::Baseline(error) if error.retryable == retryable)
-            );
-            assert!(!has_call(&control, "seed("));
-            assert!(scratch_is_empty(&scratch));
-            control.push_delete_and_verify(Ok(()));
-            delete(failure.filesystem).await.unwrap();
-        })
-        .await;
+        assert!(matches!(&failure.source, Error::Baseline(error) if error.class == class));
+        assert!(!has_call(&control, "seed("));
+        assert!(scratch_is_empty(&scratch));
+        control.push_delete_and_verify(Ok(()));
+        delete(failure.filesystem).await.unwrap();
+    })
+    .await;
 }
 
 #[test]
-async fn a_restore_without_a_record_is_a_baseline_failure_that_is_not_retryable() {
+async fn a_restore_without_a_record_is_a_fixed_baseline_failure() {
     let store = InitialFileStore::new().await;
     let (filesystem, control, _) =
         bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
@@ -1258,7 +1260,9 @@ async fn a_restore_without_a_record_is_a_baseline_failure_that_is_not_retryable(
     .await
     .unwrap_err();
 
-    assert!(matches!(&failure.source, Error::Baseline(error) if !error.retryable));
+    assert!(
+        matches!(&failure.source, Error::Baseline(error) if error.class == RestoreClass::Fixed)
+    );
     assert!(!has_call(&control, "seed("));
     control.push_delete_and_verify(Ok(()));
     delete(failure.filesystem).await.unwrap();
@@ -3009,6 +3013,13 @@ struct Coverage {
     old_object_back: bool,
     /// The capture found a tree of initial files.
     initial_files: bool,
+    /// A step came between the capture and the first update after it, so the start from the
+    /// capture replayed that step before the update, and the order of the initial-file rule was
+    /// compared.
+    tail_before_update: bool,
+    /// A start that applied the initial-file rule of that update before the tail gave another
+    /// tree or other step results than the replay.
+    target_first_differs: bool,
 }
 
 /// The number of histories of one run of the restore property that reached each check.
@@ -3017,6 +3028,8 @@ struct CoverageCounts {
     times: usize,
     old_object_back: usize,
     initial_files: usize,
+    tail_before_update: usize,
+    target_first_differs: usize,
 }
 
 impl CoverageCounts {
@@ -3026,6 +3039,9 @@ impl CoverageCounts {
             times: self.times + usize::from(coverage.times),
             old_object_back: self.old_object_back + usize::from(coverage.old_object_back),
             initial_files: self.initial_files + usize::from(coverage.initial_files),
+            tail_before_update: self.tail_before_update + usize::from(coverage.tail_before_update),
+            target_first_differs: self.target_first_differs
+                + usize::from(coverage.target_first_differs),
         }
     }
 }
@@ -3131,6 +3147,51 @@ async fn compare_start_from_initial_files(
             )),
         }
     }
+}
+
+/// Whether a start from `snapshot` that applies the initial-file rule of the first update in
+/// `after` before the steps that come before that update gives another tree or other step results
+/// than the replay, which applies the rule at the update. `None` when no step comes before the
+/// first update. A start from a record applies the rule at the update, as the replay does (agent C
+/// of the property), so this order tells the two apart.
+async fn target_first_differs(
+    agents: &UnmanagedAgents,
+    snapshot: &FilesystemCapture,
+    after: &[HistoryStep],
+    expected: Expected<'_>,
+) -> Option<bool> {
+    let position = after
+        .iter()
+        .position(|step| matches!(step, HistoryStep::Update { .. }))
+        .filter(|position| *position > 0)?;
+    let HistoryStep::Update { files } = &after[position] else {
+        return None;
+    };
+    let others = |all: &[StepOutcome]| -> Vec<StepOutcome> {
+        all.iter()
+            .enumerate()
+            .filter(|(index, _)| *index != position)
+            .map(|(_, outcome)| outcome.clone())
+            .collect()
+    };
+    let (agent, started) = start_restored(agents, "target-first", files, snapshot).await;
+    Some(match started {
+        Ok(filesystem) => {
+            let steps = after
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != position)
+                .map(|(_, step)| step.clone())
+                .collect::<Vec<_>>();
+            let outcomes = run_steps(agents, &filesystem, &steps).await;
+            let tree = tree_without_times(&agents.root(&agent));
+            delete(seal(filesystem)).await.unwrap();
+            outcomes != others(expected.outcomes)
+                || expected.outcomes[position] != StepOutcome::Done
+                || &tree != expected.tree
+        }
+        Err(error) => error_outcome(error) != expected.outcomes[position],
+    })
 }
 
 /// Runs `steps` on a started agent, adds each difference from `expected` to `problems`, and
@@ -4009,6 +4070,21 @@ async fn check_restore_against_replay(
                 }
                 (_, Err(error)) => problems.push(format!("the restore did not start: {error}")),
             }
+            if let Some(differs) = target_first_differs(
+                &agents,
+                &snapshot,
+                after,
+                Expected {
+                    outcomes: &replay_outcomes[capture_at..],
+                    tree: &replay_tree,
+                    model_tree: &model_tree,
+                },
+            )
+            .await
+            {
+                coverage.tail_before_update = true;
+                coverage.target_first_differs = differs;
+            }
             if let Some((HistoryStep::Update { files }, rest)) = after.split_first() {
                 match (
                     &replay_outcomes[capture_at],
@@ -4094,11 +4170,15 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
     eprintln!(
         "restore property: {cases} histories in {elapsed:?}, {:?} for each history, the tree with \
          times compared in {} histories, the old object of a read-only file back at its path in {} \
-         histories, a tree of initial files in {} histories",
+         histories, a tree of initial files in {} histories, a step before the first update \
+         after the capture in {} histories, of which the initial-file rule before that step gave \
+         another result in {}",
         elapsed / cases.max(1),
         counts.times,
         counts.old_object_back,
-        counts.initial_files
+        counts.initial_files,
+        counts.tail_before_update,
+        counts.target_first_differs
     );
     if let Err(error) = result {
         panic!("{error}");
@@ -4109,6 +4189,14 @@ fn a_restore_gives_the_tree_and_the_step_results_that_a_replay_gives() {
         assert!(
             counts.old_object_back > 0,
             "no history found the old object of a read-only file back at its path"
+        );
+        assert!(
+            counts.tail_before_update > 0,
+            "no history replayed a step between the capture and the first update after it"
+        );
+        assert!(
+            counts.target_first_differs > 0,
+            "no history told the initial-file rule at the update from the rule before the tail"
         );
     }
 }

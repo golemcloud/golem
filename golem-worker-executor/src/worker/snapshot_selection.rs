@@ -12,29 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! The choice of the automatic snapshot entry that a start uses as its baseline.
+//! The start decision of an agent: what a start does with the head of its update queue, and the
+//! record whose filesystem snapshot and application snapshot the start uses as its baseline.
 //!
-//! The status keeps two automatic snapshot entries: the last one, and the newest usable one
-//! before it. An entry is usable when a `SnapshotConfirmed` entry confirms its filesystem
-//! snapshot, or when it has no filesystem snapshot name. A start takes the first of the two that
-//! is usable, of the current component revision, not rejected, and not unavailable for this
-//! start. When neither is, the start uses the manual-update baseline or a
-//! full replay.
+//! The status keeps two automatic snapshot records: the last one, and the newest usable one
+//! before it. A record is usable when a `SnapshotConfirmed` entry confirms its filesystem
+//! snapshot, or when it has no filesystem snapshot name. A start without a pending update takes
+//! the first of the two that is usable, of the current component revision, not rejected, and not
+//! unavailable for this start. An automatic update at the head of the queue that has no strategy
+//! yet takes a record by the same rules, and its strategy entry freezes that choice. When no
+//! record is taken, the start uses the authoritative baseline or a full replay.
 
+use crate::worker::start_outcome::BaselineRole;
+use crate::worker::status::update_queue::is_unselected_automatic;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{FilesystemSnapshotName, OplogIndex};
+use golem_common::model::oplog::{
+    FilesystemSnapshotName, OplogIndex, SnapshotFault, UpdateDescription,
+};
 use golem_common::model::{
-    AgentStatusRecord, AutomaticSnapshot, PendingUpdateKind, SnapshotFiles, UsableAutomaticSnapshot,
+    AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot, AuthoritativeSnapshotKind,
+    AutomaticSnapshot, PendingUpdateKind, PendingUpdateRef, SnapshotFiles, UsableAutomaticSnapshot,
 };
 use std::collections::{BTreeSet, HashSet};
 
 /// The automatic snapshot entries that the starts of one agent exclude.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SnapshotExclusions {
-    /// The entries whose application snapshot did not load or whose replay diverged. A start
-    /// never selects them. The start that rejects one persists it for the incarnation after its
-    /// fallback succeeds. Each change keeps only the entries that [`kept_rejections`] keeps, so
-    /// the set holds at most the two candidates of a start and the entry just rejected.
+    /// The entries whose application snapshot did not load or whose replay diverged, or whose
+    /// filesystem snapshot the store lost in a snapshot-assisted update. A start never selects
+    /// them. The start that rejects one persists it for the incarnation after its fallback
+    /// succeeds. Each change keeps only the entries that [`kept_rejections`] keeps, so the set
+    /// holds at most the two candidates of a start and the entry just rejected.
     rejected: HashSet<OplogIndex>,
     /// The entries whose payload or filesystem snapshot a start could not get. The starts skip
     /// them until a start prepares the agent with success, or until a new startup attempt
@@ -94,7 +102,7 @@ impl SnapshotExclusions {
         unavailable: bool,
     ) -> AutomaticSnapshotFilter<'_> {
         AutomaticSnapshotFilter {
-            has_pending_update: !status.pending_updates.is_empty(),
+            queue: QueueFilter::of(status),
             rejected: &self.rejected,
             unavailable: unavailable.then_some(&self.unavailable),
             filesystem_snapshots_enabled: enabled,
@@ -102,23 +110,122 @@ impl SnapshotExclusions {
     }
 }
 
-/// The automatic snapshot entry that a start of `status` selects under `exclusions`, as
-/// [`StartSelection::of`] gives it, without the rest of the selection. `enabled` tells whether
-/// this executor keeps filesystem snapshots.
-pub(crate) fn selected_automatic_snapshot(
+/// What a start does first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum StartDecision {
+    /// The head of the queue is an automatic update without a strategy. The start writes
+    /// `PendingUpdate { description, update_attempt_index: Some(admission_index) }`, reads the
+    /// status again and decides again.
+    PersistStrategy {
+        description: UpdateDescription,
+        admission_index: OplogIndex,
+    },
+    /// The head of the queue is a snapshot-assisted update whose source does not hold any more:
+    /// `found` is what the status has. The start fails the update from `role`, the baseline of
+    /// that update, and decides again.
+    FailHead {
+        role: BaselineRole,
+        found: SourceFound,
+    },
+    /// The start uses this selection.
+    Start(StartSelection),
+}
+
+/// The source revision of an agent as its status has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SourceFound {
+    pub(crate) revision: ComponentRevision,
+    pub(crate) start_index: OplogIndex,
+}
+
+/// The decision of a start of `status` under `exclusions`. `enabled` tells whether this executor
+/// keeps filesystem snapshots.
+///
+/// A head with a frozen snapshot-assisted selection reads only its kind and the source of the
+/// status: the exclusions, the candidates and `enabled` do not change it.
+pub(crate) fn decide_start(
     status: &AgentStatusRecord,
     exclusions: &SnapshotExclusions,
     enabled: bool,
-) -> Option<UsableAutomaticSnapshot> {
-    select_automatic_snapshot(status, exclusions.filter(status, enabled, true))
+) -> StartDecision {
+    match Head::of(status) {
+        Head::UnselectedAutomatic(head) => StartDecision::PersistStrategy {
+            description: strategy(
+                status,
+                head,
+                select_automatic_snapshot(status, exclusions.filter(status, enabled, true)),
+            ),
+            admission_index: head.admission_index,
+        },
+        Head::SelectedAssisted(head, _) => match stale_assisted_head(status, head) {
+            Some(found) => StartDecision::FailHead {
+                role: BaselineRole::AssistedPending(Box::new(head.clone())),
+                found,
+            },
+            None => StartDecision::Start(StartSelection::of(status, exclusions, enabled)),
+        },
+        Head::None | Head::Other(_) => {
+            StartDecision::Start(StartSelection::of(status, exclusions, enabled))
+        }
+    }
+}
+
+/// What the status has when `head` is a snapshot-assisted update whose source does not hold in
+/// `status` any more: the revision or the start of the revision changed, or the target is not
+/// newer than the source. `None` for any other head.
+pub(crate) fn stale_assisted_head(
+    status: &AgentStatusRecord,
+    head: &PendingUpdateRef,
+) -> Option<SourceFound> {
+    let PendingUpdateKind::SnapshotAssistedAutomatic(selection) = &head.kind else {
+        return None;
+    };
+    (status.component_revision != selection.snapshot.component_revision
+        || status.component_revision_start_index != selection.source_revision_start_index
+        || head.target_revision <= selection.snapshot.component_revision)
+        .then_some(SourceFound {
+            revision: status.component_revision,
+            start_index: status.component_revision_start_index,
+        })
+}
+
+/// The pending update whose target a start of `status` instantiates: the first update of the
+/// queue whose source holds. A start fails a snapshot-assisted head whose source does not hold
+/// before it instantiates anything, and the update after it becomes the head.
+pub(crate) fn active_head(status: &AgentStatusRecord) -> Option<&PendingUpdateRef> {
+    status
+        .pending_updates
+        .iter()
+        .find(|update| stale_assisted_head(status, update).is_none())
+}
+
+/// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
+/// `selected`, or a plain automatic update, which replays the whole history on the target.
+fn strategy(
+    status: &AgentStatusRecord,
+    head: &PendingUpdateRef,
+    selected: Option<UsableAutomaticSnapshot>,
+) -> UpdateDescription {
+    match selected {
+        Some(snapshot) => UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: head.target_revision,
+            source_component_revision: status.component_revision,
+            source_revision_start_index: status.component_revision_start_index,
+            snapshot_index: snapshot.index,
+            snapshot_revision: snapshot.component_revision,
+            filesystem_snapshot: snapshot.filesystem_snapshot,
+        },
+        None => UpdateDescription::Automatic {
+            target_revision: head.target_revision,
+        },
+    }
 }
 
 /// What a start selects from the status of an agent, under the exclusions of the agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StartSelection {
-    /// The automatic snapshot entry that the start uses as its baseline, or `None` when it uses
-    /// the manual-update baseline or a full replay.
-    pub(crate) automatic: Option<UsableAutomaticSnapshot>,
+    /// The record that gives the start its filesystem and its application snapshot.
+    pub(crate) baseline: SelectedBaseline,
     /// The component revision at the start of the replay.
     pub(crate) replay_revision: ComponentRevision,
     /// The component revision at the start of the replay when no entry is unavailable. A check
@@ -133,31 +240,176 @@ pub(crate) struct StartSelection {
 
 impl StartSelection {
     /// The selection of a start of `status` under `exclusions`. `enabled` tells whether this
-    /// executor keeps filesystem snapshots; without them an entry with a name is not usable. A
-    /// pending update ignores the automatic snapshot entries.
+    /// executor keeps filesystem snapshots; without them an entry with a name is not usable.
+    ///
+    /// For an automatic update at the head of the queue without a strategy, the selection is the
+    /// one that its strategy entry freezes.
     pub(crate) fn of(
         status: &AgentStatusRecord,
         exclusions: &SnapshotExclusions,
         enabled: bool,
     ) -> Self {
         let filter = exclusions.filter(status, enabled, true);
+        let baseline = selected_baseline(status, filter);
         Self {
-            automatic: select_automatic_snapshot(status, filter),
-            replay_revision: component_revision_for_replay(status, filter),
-            replay_revision_without_unavailable: component_revision_for_replay(
+            replay_revision: replay_revision(status, &baseline),
+            replay_revision_without_unavailable: replay_revision(
                 status,
-                exclusions.filter(status, enabled, false),
+                &selected_baseline(status, exclusions.filter(status, enabled, false)),
             ),
+            baseline,
             candidate: start_candidate(status, filter),
         }
     }
 }
 
+/// The record whose filesystem snapshot and application snapshot a start uses.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SelectedBaseline {
+    /// A periodic record, for a start without a pending update.
+    Periodic(UsableAutomaticSnapshot),
+    /// The record that the snapshot-assisted update at the head of the queue selected.
+    AssistedPending {
+        snapshot: UsableAutomaticSnapshot,
+        head: Box<PendingUpdateRef>,
+    },
+    /// The authoritative baseline of a successful snapshot-assisted update: the `Snapshot` entry
+    /// at `index` and its filesystem snapshot. Its replay revision is the source revision of the
+    /// update.
+    AssistedPromoted {
+        index: OplogIndex,
+        name: Option<FilesystemSnapshotName>,
+    },
+    /// The snapshot-based manual update at the head of the queue, whose record is its
+    /// `PendingUpdate` entry. `previous` is the authoritative baseline before it.
+    ManualPending {
+        head: Box<PendingUpdateRef>,
+        previous: Option<AuthoritativeSnapshot>,
+    },
+    /// The authoritative baseline of a successful snapshot-based manual update: its
+    /// `PendingUpdate` entry at `index`.
+    ManualPromoted { index: OplogIndex },
+    /// No record: the initial files of the replay revision.
+    InitialFiles,
+}
+
+impl SelectedBaseline {
+    /// The periodic record of the baseline, when it is one.
+    pub(crate) fn periodic(&self) -> Option<&UsableAutomaticSnapshot> {
+        match self {
+            Self::Periodic(snapshot) => Some(snapshot),
+            _ => None,
+        }
+    }
+
+    /// The column of the start outcome table of a start from this baseline.
+    pub(crate) fn role(&self) -> BaselineRole {
+        match self {
+            Self::Periodic(snapshot) => BaselineRole::Periodic(snapshot.index),
+            Self::AssistedPending { head, .. } => BaselineRole::AssistedPending(head.clone()),
+            Self::AssistedPromoted { .. } => BaselineRole::AssistedPromoted,
+            Self::ManualPending { head, .. } => BaselineRole::ManualPending(head.clone()),
+            Self::ManualPromoted { .. } => BaselineRole::ManualPromoted,
+            Self::InitialFiles => BaselineRole::InitialFiles,
+        }
+    }
+}
+
+/// The head of the update queue of a status, as a start sees it.
+#[derive(Clone, Copy, Debug)]
+enum Head<'a> {
+    None,
+    /// An automatic update without a strategy entry.
+    UnselectedAutomatic(&'a PendingUpdateRef),
+    /// A snapshot-assisted update with its frozen selection.
+    SelectedAssisted(&'a PendingUpdateRef, &'a AssistedSelection),
+    /// A plain automatic update with its strategy entry, or a snapshot-based manual update.
+    Other(&'a PendingUpdateRef),
+}
+
+impl<'a> Head<'a> {
+    fn of(status: &'a AgentStatusRecord) -> Self {
+        match status.pending_updates.front() {
+            None => Self::None,
+            Some(head) if is_unselected_automatic(head) => Self::UnselectedAutomatic(head),
+            Some(head) => match &head.kind {
+                PendingUpdateKind::SnapshotAssistedAutomatic(selection) => {
+                    Self::SelectedAssisted(head, selection)
+                }
+                PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotBased { .. } => {
+                    Self::Other(head)
+                }
+            },
+        }
+    }
+}
+
+/// Which records the update queue of a status allows a start to select.
+#[derive(Clone, Copy, Debug)]
+enum QueueFilter {
+    /// No pending update: the records of the current revision.
+    Empty,
+    /// An automatic update without a strategy at the head: the records of the current revision
+    /// when `target` is newer than it, and only the records before `before`, the `PendingUpdate`
+    /// entry of the first snapshot-based manual update in the queue.
+    UnselectedAutomatic {
+        target: ComponentRevision,
+        before: Option<OplogIndex>,
+    },
+    /// Any other head, or an automatic update whose earlier snapshot-assisted attempt with the
+    /// same target from the same source could not use its record: no record.
+    Closed,
+}
+
+impl QueueFilter {
+    fn of(status: &AgentStatusRecord) -> Self {
+        match Head::of(status) {
+            Head::None => Self::Empty,
+            Head::UnselectedAutomatic(head)
+                if !incompatible_before(status, head.target_revision) =>
+            {
+                Self::UnselectedAutomatic {
+                    target: head.target_revision,
+                    before: status
+                        .pending_updates
+                        .iter()
+                        .filter(|update| {
+                            matches!(update.kind, PendingUpdateKind::SnapshotBased { .. })
+                        })
+                        .map(|update| update.oplog_index)
+                        .min(),
+                }
+            }
+            Head::UnselectedAutomatic(_) | Head::SelectedAssisted(..) | Head::Other(_) => {
+                Self::Closed
+            }
+        }
+    }
+}
+
+/// Whether a live failed update of `target` from the current source of `status` could not load
+/// its selected record or diverged after it. A request for the same target from the same source
+/// then replays the full history.
+fn incompatible_before(status: &AgentStatusRecord, target: ComponentRevision) -> bool {
+    status.failed_updates.iter().any(|failed| {
+        failed.target_revision == target
+            && failed.snapshot_fault == Some(SnapshotFault::Incompatible)
+            && failed
+                .snapshot_assisted_details
+                .as_ref()
+                .is_some_and(|details| {
+                    details.source_component_revision == status.component_revision
+                        && details.source_revision_start_index
+                            == status.component_revision_start_index
+                })
+    })
+}
+
 /// What a start excludes when it selects an automatic snapshot entry.
 #[derive(Clone, Copy, Debug)]
 struct AutomaticSnapshotFilter<'a> {
-    /// Whether an update is pending. A pending update ignores the automatic snapshot entries.
-    has_pending_update: bool,
+    /// What the update queue allows.
+    queue: QueueFilter,
     /// The entries whose application snapshot did not load or whose replay diverged.
     rejected: &'a HashSet<OplogIndex>,
     /// The entries whose payload or filesystem snapshot this start could not get, when the filter
@@ -168,8 +420,78 @@ struct AutomaticSnapshotFilter<'a> {
     filesystem_snapshots_enabled: bool,
 }
 
-/// Gives the automatic snapshot entry that a start uses as its baseline, or `None` when the start
-/// uses the manual-update baseline or a full replay.
+/// The baseline of a start of `status` under `filter`: the record of a snapshot-assisted head,
+/// else the record of a snapshot-based head, else a periodic record that passes, else the
+/// authoritative baseline, else the initial files.
+fn selected_baseline(
+    status: &AgentStatusRecord,
+    filter: AutomaticSnapshotFilter<'_>,
+) -> SelectedBaseline {
+    match Head::of(status) {
+        Head::SelectedAssisted(head, selection) => SelectedBaseline::AssistedPending {
+            snapshot: selection.snapshot.clone(),
+            head: Box::new(head.clone()),
+        },
+        Head::Other(
+            head @ PendingUpdateRef {
+                kind: PendingUpdateKind::SnapshotBased { .. },
+                ..
+            },
+        ) => SelectedBaseline::ManualPending {
+            head: Box::new(head.clone()),
+            previous: status.authoritative_snapshot.clone(),
+        },
+        Head::UnselectedAutomatic(head) => select_automatic_snapshot(status, filter).map_or_else(
+            || authoritative_baseline(status),
+            |snapshot| SelectedBaseline::AssistedPending {
+                snapshot,
+                head: Box::new(head.clone()),
+            },
+        ),
+        Head::None | Head::Other(_) => select_automatic_snapshot(status, filter).map_or_else(
+            || authoritative_baseline(status),
+            SelectedBaseline::Periodic,
+        ),
+    }
+}
+
+/// The authoritative baseline of `status`, or the initial files when it has none.
+fn authoritative_baseline(status: &AgentStatusRecord) -> SelectedBaseline {
+    match &status.authoritative_snapshot {
+        Some(AuthoritativeSnapshot {
+            index,
+            kind: AuthoritativeSnapshotKind::ManualUpdate,
+        }) => SelectedBaseline::ManualPromoted { index: *index },
+        Some(AuthoritativeSnapshot {
+            index,
+            kind:
+                AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                    filesystem_snapshot,
+                },
+        }) => SelectedBaseline::AssistedPromoted {
+            index: *index,
+            name: filesystem_snapshot.clone(),
+        },
+        None => SelectedBaseline::InitialFiles,
+    }
+}
+
+/// The component revision at the start of the replay from `baseline`: the revision of the
+/// selected record, the target of a pending snapshot-based update, else the replay revision of
+/// the status, which is the source revision after a snapshot-assisted update.
+fn replay_revision(status: &AgentStatusRecord, baseline: &SelectedBaseline) -> ComponentRevision {
+    match baseline {
+        SelectedBaseline::Periodic(snapshot)
+        | SelectedBaseline::AssistedPending { snapshot, .. } => snapshot.component_revision,
+        SelectedBaseline::ManualPending { head, .. } => head.target_revision,
+        SelectedBaseline::AssistedPromoted { .. }
+        | SelectedBaseline::ManualPromoted { .. }
+        | SelectedBaseline::InitialFiles => status.component_revision_for_replay,
+    }
+}
+
+/// Gives the automatic snapshot entry that passes `filter`: the last usable entry, else the
+/// previous usable entry.
 fn select_automatic_snapshot(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
@@ -239,13 +561,35 @@ fn passes(
     component_revision: ComponentRevision,
     has_filesystem_snapshot: bool,
 ) -> bool {
-    !filter.has_pending_update
+    let queue_allows = match filter.queue {
+        QueueFilter::Empty => true,
+        QueueFilter::UnselectedAutomatic { target, before } => {
+            target > status.component_revision && before.is_none_or(|before| index < before)
+        }
+        QueueFilter::Closed => false,
+    };
+    queue_allows
         && component_revision == status.component_revision
         && !filter.rejected.contains(&index)
+        && !lost_in_failed_update(status, index)
         && !filter
             .unavailable
             .is_some_and(|unavailable| unavailable.contains(&index))
         && (filter.filesystem_snapshots_enabled || !has_filesystem_snapshot)
+}
+
+/// Whether a live failed update says that the store lost the filesystem snapshot of the record at
+/// `index`: the snapshot-assisted attempt selected that record, and its restore found no snapshot.
+/// The status keeps the failure, so no start selects the record again, also after a restart that
+/// lost the rejection in memory. A revert that drops the failure drops the rule.
+fn lost_in_failed_update(status: &AgentStatusRecord, index: OplogIndex) -> bool {
+    status.failed_updates.iter().any(|failed| {
+        failed.snapshot_fault == Some(SnapshotFault::Unavailable)
+            && failed
+                .snapshot_assisted_details
+                .as_ref()
+                .is_some_and(|details| details.snapshot_index == index)
+    })
 }
 
 /// The rejected automatic snapshot entries of `rejected` that are one of the two candidates of a
@@ -288,64 +632,53 @@ pub(crate) fn start_candidates(
     ]
 }
 
-/// The filesystem snapshot names of the two automatic snapshot records that a start can select,
-/// as [`start_candidates`] gives them, the last record first. Retention keeps them whatever their
-/// age.
-pub(crate) fn selectable_names(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
+/// The filesystem snapshot names that retention keeps whatever their age: the names of the two
+/// records that a start can select, the last record first, of the successful updates, of the
+/// pending updates, and of the authoritative snapshot-assisted baseline. A revert rebuilds the
+/// status, so the names of updates in its dropped region are not in it. Each name is given once.
+pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
+    let authoritative = status
+        .authoritative_snapshot
+        .as_ref()
+        .and_then(|snapshot| match &snapshot.kind {
+            AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                filesystem_snapshot,
+            } => filesystem_snapshot.as_ref(),
+            AuthoritativeSnapshotKind::ManualUpdate => None,
+        });
     start_candidates(status)
         .into_iter()
         .flatten()
-        .filter_map(|(_, name)| name.cloned())
-        .collect()
-}
-
-/// The update snapshot names that a valid cut of the agent can still make a baseline: the names
-/// of the successful updates and of the pending updates in the status. A revert rebuilds the
-/// status, so the names of updates in its dropped region are not in it.
-pub(crate) fn update_names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapshotName]> {
-    status
-        .successful_updates
-        .iter()
-        .filter_map(|update| update.filesystem_snapshot.clone())
+        .filter_map(|(_, name)| name)
+        .chain(
+            status
+                .successful_updates
+                .iter()
+                .filter_map(|update| update.filesystem_snapshot.as_ref()),
+        )
         .chain(
             status
                 .pending_updates
                 .iter()
-                .filter_map(|update| update.kind.filesystem_snapshot().cloned()),
+                .filter_map(|update| update.kind.filesystem_snapshot()),
         )
-        .collect()
-}
-
-/// Gives the component revision at the start of the replay: the revision of the selected
-/// automatic snapshot entry, else the target of a pending snapshot-based update, else the source
-/// revision of a pending snapshot-assisted automatic update, else the revision of the
-/// manual-update baseline.
-fn component_revision_for_replay(
-    status: &AgentStatusRecord,
-    filter: AutomaticSnapshotFilter<'_>,
-) -> ComponentRevision {
-    select_automatic_snapshot(status, filter).map_or_else(
-        || {
-            status
-                .pending_updates
-                .front()
-                .and_then(|update| match &update.kind {
-                    PendingUpdateKind::SnapshotBased { .. } => Some(update.target_revision),
-                    PendingUpdateKind::SnapshotAssistedAutomatic(selection) => {
-                        Some(selection.snapshot.component_revision)
-                    }
-                    PendingUpdateKind::Automatic => None,
-                })
-                .unwrap_or(status.component_revision_for_replay)
-        },
-        |snapshot| snapshot.component_revision,
-    )
+        .chain(authoritative)
+        .fold(
+            (HashSet::new(), Vec::new()),
+            |(mut seen, mut names), name| {
+                if seen.insert(name) {
+                    names.push(name.clone());
+                }
+                (seen, names)
+            },
+        )
+        .1
+        .into_boxed_slice()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::PendingUpdateRef;
     use golem_common::model::SuccessfulUpdateRecord;
     use golem_common::model::Timestamp;
     use golem_common::model::oplog::FilesystemSnapshotName;
@@ -391,7 +724,7 @@ mod tests {
         static NONE_REJECTED: std::sync::LazyLock<HashSet<OplogIndex>> =
             std::sync::LazyLock::new(HashSet::new);
         AutomaticSnapshotFilter {
-            has_pending_update: false,
+            queue: QueueFilter::Empty,
             rejected: &NONE_REJECTED,
             unavailable: Some(unavailable),
             filesystem_snapshots_enabled: true,
@@ -474,7 +807,10 @@ mod tests {
 
         assert_eq!(selected_index(&status, filter(&HashSet::new())), None);
         assert_eq!(
-            component_revision_for_replay(&status, filter(&HashSet::new())),
+            replay_revision(
+                &status,
+                &selected_baseline(&status, filter(&HashSet::new()))
+            ),
             revision(1)
         );
     }
@@ -521,7 +857,7 @@ mod tests {
             (Some(5), None)
         );
         assert_eq!(
-            component_revision_for_replay(&status, rejecting(&both)),
+            replay_revision(&status, &selected_baseline(&status, rejecting(&both))),
             revision(1)
         );
     }
@@ -562,7 +898,7 @@ mod tests {
             selected_index(
                 &pending,
                 AutomaticSnapshotFilter {
-                    has_pending_update: true,
+                    queue: QueueFilter::Closed,
                     ..filter(&unavailable)
                 }
             ),
@@ -582,16 +918,8 @@ mod tests {
                 filesystem_snapshot: None,
             },
         });
-        let unavailable = HashSet::new();
-
         assert_eq!(
-            component_revision_for_replay(
-                &status,
-                AutomaticSnapshotFilter {
-                    has_pending_update: true,
-                    ..filter(&unavailable)
-                }
-            ),
+            StartSelection::of(&status, &SnapshotExclusions::default(), true).replay_revision,
             revision(4)
         );
     }
@@ -670,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn update_names_in_use_are_the_successful_and_pending_update_names() {
+    fn the_names_in_use_are_the_candidate_successful_pending_and_authoritative_names() {
         let first = FilesystemSnapshotName::update();
         let second = FilesystemSnapshotName::update();
         let pending = FilesystemSnapshotName::update();
@@ -700,12 +1028,47 @@ mod tests {
             ..Default::default()
         };
 
+        let assisted = FilesystemSnapshotName::periodic();
+        let last = FilesystemSnapshotName::periodic();
+        let with_assisted = AgentStatusRecord {
+            authoritative_snapshot: Some(AuthoritativeSnapshot {
+                index: OplogIndex::from_u64(2),
+                kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                    filesystem_snapshot: Some(assisted.clone()),
+                },
+            }),
+            last_automatic_snapshot: Some(AutomaticSnapshot {
+                index: OplogIndex::from_u64(13),
+                timestamp: Timestamp::from(2_000),
+                component_revision: revision(2),
+                files: SnapshotFiles::Confirmed(last.clone()),
+            }),
+            ..status.clone()
+        };
+        let mut repeated = with_assisted.clone();
+        repeated
+            .successful_updates
+            .push(successful_update(14, Some(assisted.clone())));
+
         assert_eq!(
             [
-                update_names_in_use(&status),
-                update_names_in_use(&AgentStatusRecord::default())
+                names_in_use(&status),
+                names_in_use(&AgentStatusRecord::default()),
+                names_in_use(&with_assisted),
+                names_in_use(&repeated),
             ],
-            [Box::from([first, second, pending]), Box::from([])]
+            [
+                Box::from([first.clone(), second.clone(), pending.clone()]),
+                Box::from([]),
+                Box::from([
+                    last.clone(),
+                    first.clone(),
+                    second.clone(),
+                    pending.clone(),
+                    assisted.clone()
+                ]),
+                Box::from([last, first, second, assisted, pending]),
+            ]
         );
     }
 
@@ -813,7 +1176,10 @@ mod tests {
         };
         let rejected = SnapshotExclusions::default().rejecting(OplogIndex::from_u64(20), &reused);
 
-        let selected = StartSelection::of(&reused, &rejected, true).automatic;
+        let selected = StartSelection::of(&reused, &rejected, true)
+            .baseline
+            .periodic()
+            .cloned();
 
         assert_eq!(
             selected,
@@ -827,8 +1193,8 @@ mod tests {
 
     fn selection_index(selection: &StartSelection) -> Option<u64> {
         selection
-            .automatic
-            .as_ref()
+            .baseline
+            .periodic()
             .map(|snapshot| u64::from(snapshot.index))
     }
 
@@ -911,7 +1277,7 @@ mod tests {
         let mut pending = confirmed.clone();
         pending.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
-            oplog_index: OplogIndex::from_u64(11),
+            oplog_index: OplogIndex::from_u64(12),
             admission_index: OplogIndex::from_u64(11),
             target_revision: revision(4),
             kind: PendingUpdateKind::Automatic,
@@ -933,6 +1299,591 @@ mod tests {
                 StartSelection::of(&confirmed, &none, true).candidate,
             ],
             [Some(name), None, None]
+        );
+    }
+
+    fn unselected(admission: u64, target: u64) -> PendingUpdateRef {
+        PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(admission),
+            admission_index: OplogIndex::from_u64(admission),
+            target_revision: revision(target),
+            kind: PendingUpdateKind::Automatic,
+        }
+    }
+
+    fn assisted_head(
+        snapshot: UsableAutomaticSnapshot,
+        source_revision_start_index: u64,
+        target: u64,
+    ) -> PendingUpdateRef {
+        PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(6),
+            target_revision: revision(target),
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(source_revision_start_index),
+                snapshot,
+            })),
+        }
+    }
+
+    /// A status of source revision 2 that started at index 4, whose last record is at index 10
+    /// and whose previous usable record is at index 5, with `head` at the head of its queue.
+    fn with_head(
+        last: Option<FilesystemSnapshotName>,
+        confirmed: bool,
+        previous: Option<Option<FilesystemSnapshotName>>,
+        head: PendingUpdateRef,
+    ) -> AgentStatusRecord {
+        let mut status = status(last, confirmed, previous);
+        status.component_revision_start_index = OplogIndex::from_u64(4);
+        status.pending_updates.push_back(head);
+        status
+    }
+
+    fn assisted_strategy(
+        snapshot_index: u64,
+        name: Option<FilesystemSnapshotName>,
+    ) -> StartDecision {
+        StartDecision::PersistStrategy {
+            description: UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision: revision(3),
+                source_component_revision: revision(2),
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot_index: OplogIndex::from_u64(snapshot_index),
+                snapshot_revision: revision(2),
+                filesystem_snapshot: name,
+            },
+            admission_index: OplogIndex::from_u64(6),
+        }
+    }
+
+    fn automatic_strategy() -> StartDecision {
+        StartDecision::PersistStrategy {
+            description: UpdateDescription::Automatic {
+                target_revision: revision(3),
+            },
+            admission_index: OplogIndex::from_u64(6),
+        }
+    }
+
+    /// An automatic update that has no strategy yet selects the record that a start would
+    /// select, also a record that came after its admission, and freezes it with its name.
+    #[test]
+    fn an_assisted_strategy_selects_a_snapshot_taken_after_the_admission() {
+        let name = FilesystemSnapshotName::periodic();
+        let status = with_head(Some(name.clone()), true, Some(None), unselected(6, 3));
+        let none = SnapshotExclusions::default();
+
+        assert_eq!(
+            decide_start(&status, &none, true),
+            assisted_strategy(10, Some(name))
+        );
+    }
+
+    #[test]
+    fn an_assisted_strategy_falls_back_to_the_previous_usable_record() {
+        let name = FilesystemSnapshotName::periodic();
+        let previous = FilesystemSnapshotName::periodic();
+        let unconfirmed = with_head(
+            Some(name.clone()),
+            false,
+            Some(Some(previous.clone())),
+            unselected(6, 3),
+        );
+        let confirmed = with_head(
+            Some(name),
+            true,
+            Some(Some(previous.clone())),
+            unselected(6, 3),
+        );
+        let rejected =
+            SnapshotExclusions::default().rejecting(OplogIndex::from_u64(10), &confirmed);
+        let unavailable = SnapshotExclusions::default().with_unavailable(OplogIndex::from_u64(10));
+        let none = SnapshotExclusions::default();
+
+        assert_eq!(
+            [
+                decide_start(&unconfirmed, &none, true),
+                decide_start(&confirmed, &rejected, true),
+                decide_start(&confirmed, &unavailable, true),
+            ],
+            [
+                assisted_strategy(5, Some(previous.clone())),
+                assisted_strategy(5, Some(previous.clone())),
+                assisted_strategy(5, Some(previous)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_plain_automatic_strategy_when_no_record_passes_or_the_update_is_not_an_upgrade() {
+        let name = FilesystemSnapshotName::periodic();
+        let none = SnapshotExclusions::default();
+        let named_only = with_head(Some(name.clone()), true, None, unselected(6, 3));
+        let unnamed = with_head(None, true, None, unselected(6, 3));
+        let mut downgrade = with_head(Some(name.clone()), true, None, unselected(6, 1));
+        downgrade.pending_updates[0].target_revision = revision(1);
+        let mut same = with_head(Some(name.clone()), true, None, unselected(6, 2));
+        same.pending_updates[0].target_revision = revision(2);
+        let rejected =
+            SnapshotExclusions::default().rejecting(OplogIndex::from_u64(10), &named_only);
+
+        assert_eq!(
+            [
+                decide_start(&named_only, &none, false),
+                decide_start(&named_only, &rejected, true),
+                decide_start(&unnamed, &none, false),
+            ],
+            [
+                automatic_strategy(),
+                automatic_strategy(),
+                assisted_strategy(10, None),
+            ]
+        );
+        assert!(matches!(
+            decide_start(&downgrade, &none, true),
+            StartDecision::PersistStrategy {
+                description: UpdateDescription::Automatic { .. },
+                ..
+            }
+        ));
+        assert!(matches!(
+            decide_start(&same, &none, true),
+            StartDecision::PersistStrategy {
+                description: UpdateDescription::Automatic { .. },
+                ..
+            }
+        ));
+    }
+
+    fn failed(
+        target: u64,
+        source_revision_start_index: u64,
+        fault: Option<SnapshotFault>,
+    ) -> golem_common::model::FailedUpdateRecord {
+        golem_common::model::FailedUpdateRecord {
+            timestamp: Timestamp::from(1_000),
+            target_revision: revision(target),
+            details: None,
+            pending_update: None,
+            snapshot_assisted_details: Some(
+                golem_common::model::oplog::FailedSnapshotAssistedUpdateDetails {
+                    pending_update_index: OplogIndex::from_u64(8),
+                    source_component_revision: revision(2),
+                    source_revision_start_index: OplogIndex::from_u64(source_revision_start_index),
+                    snapshot_index: OplogIndex::from_u64(10),
+                },
+            ),
+            snapshot_fault: fault,
+        }
+    }
+
+    /// After a failed snapshot-assisted update whose target could not use its record, the next
+    /// request for the same target from the same source replays the full history. Another
+    /// target, another source and a failure without a fault select as usual; a lost record is
+    /// never selected again (see the next test).
+    #[test]
+    fn an_incompatible_assisted_failure_makes_the_next_request_of_the_same_update_a_full_replay() {
+        let name = FilesystemSnapshotName::periodic();
+        let none = SnapshotExclusions::default();
+        let with_failure = |failure| {
+            let mut status = with_head(Some(name.clone()), true, None, unselected(6, 3));
+            status.failed_updates.push(failure);
+            status
+        };
+
+        assert_eq!(
+            [
+                decide_start(
+                    &with_failure(failed(3, 4, Some(SnapshotFault::Incompatible))),
+                    &none,
+                    true
+                ),
+                decide_start(
+                    &with_failure(failed(4, 4, Some(SnapshotFault::Incompatible))),
+                    &none,
+                    true
+                ),
+                decide_start(
+                    &with_failure(failed(3, 1, Some(SnapshotFault::Incompatible))),
+                    &none,
+                    true
+                ),
+                decide_start(
+                    &with_failure(failed(3, 4, Some(SnapshotFault::Unavailable))),
+                    &none,
+                    true
+                ),
+                decide_start(&with_failure(failed(3, 4, None)), &none, true),
+                decide_start(
+                    &with_head(Some(name.clone()), true, None, unselected(6, 3)),
+                    &none,
+                    true
+                ),
+            ],
+            [
+                automatic_strategy(),
+                assisted_strategy(10, Some(name.clone())),
+                assisted_strategy(10, Some(name.clone())),
+                automatic_strategy(),
+                assisted_strategy(10, Some(name.clone())),
+                assisted_strategy(10, Some(name)),
+            ]
+        );
+    }
+
+    /// A live failed update whose snapshot-assisted attempt lost the filesystem snapshot of its
+    /// record excludes that record from every start: the next request of any target takes the
+    /// previous usable record, a periodic start falls back the same way, and the record is not a
+    /// start candidate. No exclusion in memory is needed, so a restart between the failure and
+    /// the persisted rejection cannot select the record again.
+    #[test]
+    fn a_record_whose_snapshot_a_failed_update_lost_is_never_selected_again() {
+        let name = FilesystemSnapshotName::periodic();
+        let none = SnapshotExclusions::default();
+        let lost = |mut status: AgentStatusRecord| {
+            status
+                .failed_updates
+                .push(failed(4, 4, Some(SnapshotFault::Unavailable)));
+            status
+        };
+        let request = lost(with_head(
+            Some(name.clone()),
+            true,
+            Some(None),
+            unselected(6, 3),
+        ));
+        let periodic = lost(status(Some(name.clone()), true, Some(None)));
+        let unconfirmed = lost(status(Some(name.clone()), false, Some(None)));
+        let previous = UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(5),
+            component_revision: revision(2),
+            filesystem_snapshot: None,
+        };
+
+        assert_eq!(
+            decide_start(&request, &none, true),
+            assisted_strategy(5, None)
+        );
+        assert_eq!(
+            StartSelection::of(&periodic, &none, true).baseline,
+            SelectedBaseline::Periodic(previous)
+        );
+        assert_eq!(
+            StartSelection::of(&unconfirmed, &none, true).candidate,
+            None
+        );
+    }
+
+    /// The selection of a snapshot-assisted update is frozen: the exclusions, the candidates and
+    /// the filesystem snapshot setting of the executor do not change it.
+    #[test]
+    fn a_frozen_assisted_selection_ignores_exclusions_candidates_and_the_executor_setting() {
+        let frozen = record_at(7, Some(FilesystemSnapshotName::periodic()));
+        let head = assisted_head(frozen.clone(), 4, 3);
+        let status = with_head(
+            Some(FilesystemSnapshotName::periodic()),
+            true,
+            Some(None),
+            head.clone(),
+        );
+        let mut without_candidates = status.clone();
+        without_candidates.last_automatic_snapshot = None;
+        without_candidates.previous_usable_automatic_snapshot = None;
+        let rejected = SnapshotExclusions::default()
+            .rejecting(OplogIndex::from_u64(7), &status)
+            .with_unavailable(OplogIndex::from_u64(7));
+        let expected = SelectedBaseline::AssistedPending {
+            snapshot: frozen,
+            head: Box::new(head),
+        };
+        let baseline = |decision| match decision {
+            StartDecision::Start(selection) => {
+                Some((selection.baseline, selection.replay_revision))
+            }
+            _ => None,
+        };
+
+        assert!(
+            [
+                baseline(decide_start(&status, &SnapshotExclusions::default(), true)),
+                baseline(decide_start(&status, &rejected, false)),
+                baseline(decide_start(&without_candidates, &rejected, true)),
+            ]
+            .into_iter()
+            .all(|selected| selected == Some((expected.clone(), revision(2))))
+        );
+    }
+
+    fn record_at(index: u64, name: Option<FilesystemSnapshotName>) -> UsableAutomaticSnapshot {
+        UsableAutomaticSnapshot {
+            index: OplogIndex::from_u64(index),
+            component_revision: revision(2),
+            filesystem_snapshot: name,
+        }
+    }
+
+    /// A frozen assisted head fails when its source revision, the start of that revision or the
+    /// upgrade does not hold; only a snapshot-assisted head can fail this way.
+    #[test]
+    fn a_stale_or_downgrading_assisted_head_fails_and_no_other_head_does() {
+        let valid = assisted_head(record_at(7, None), 4, 3);
+        let status = with_head(None, true, None, valid.clone());
+        let mut aba = status.clone();
+        aba.component_revision_start_index = OplogIndex::from_u64(11);
+        let mut moved = status.clone();
+        moved.component_revision = revision(3);
+        let downgrade = with_head(None, true, None, assisted_head(record_at(7, None), 4, 1));
+        let found = |revision_value: u64, start: u64| SourceFound {
+            revision: revision(revision_value),
+            start_index: OplogIndex::from_u64(start),
+        };
+        let none = SnapshotExclusions::default();
+
+        assert!(matches!(
+            decide_start(&status, &none, true),
+            StartDecision::Start(_)
+        ));
+        assert_eq!(
+            [
+                decide_start(&aba, &none, true),
+                decide_start(&moved, &none, true),
+                decide_start(&downgrade, &none, true),
+            ],
+            [
+                StartDecision::FailHead {
+                    role: BaselineRole::AssistedPending(Box::new(valid.clone())),
+                    found: found(2, 11),
+                },
+                StartDecision::FailHead {
+                    role: BaselineRole::AssistedPending(Box::new(valid)),
+                    found: found(3, 4),
+                },
+                StartDecision::FailHead {
+                    role: BaselineRole::AssistedPending(Box::new(assisted_head(
+                        record_at(7, None),
+                        4,
+                        1
+                    ))),
+                    found: found(2, 4),
+                },
+            ]
+        );
+        let other_heads = [
+            unselected(6, 3),
+            PendingUpdateRef {
+                oplog_index: OplogIndex::from_u64(12),
+                ..unselected(6, 3)
+            },
+            PendingUpdateRef {
+                kind: PendingUpdateKind::SnapshotBased {
+                    filesystem_snapshot: None,
+                },
+                ..unselected(6, 3)
+            },
+        ];
+        assert!(
+            other_heads
+                .iter()
+                .all(|head| stale_assisted_head(&aba, head).is_none())
+        );
+    }
+
+    /// The strategy entry refines the head, so a start after it never writes a strategy again.
+    #[test]
+    fn a_start_after_the_strategy_entry_never_persists_a_strategy() {
+        let name = FilesystemSnapshotName::periodic();
+        let none = SnapshotExclusions::default();
+        let plain = with_head(
+            Some(name.clone()),
+            true,
+            None,
+            PendingUpdateRef {
+                oplog_index: OplogIndex::from_u64(12),
+                ..unselected(6, 3)
+            },
+        );
+        let assisted = with_head(
+            Some(name),
+            true,
+            None,
+            assisted_head(record_at(10, None), 4, 3),
+        );
+
+        assert!(
+            [
+                decide_start(&plain, &none, true),
+                decide_start(&assisted, &none, true)
+            ]
+            .iter()
+            .all(|decision| matches!(decision, StartDecision::Start(_)))
+        );
+    }
+
+    /// A start with an automatic update that has no strategy waits for the unconfirmed newest
+    /// record, as a start without a pending update does, and its selection is the one that the
+    /// strategy entry then freezes.
+    #[test]
+    fn an_unselected_head_waits_for_the_newest_record_and_selects_what_its_strategy_freezes() {
+        let name = FilesystemSnapshotName::periodic();
+        let none = SnapshotExclusions::default();
+        let unconfirmed = with_head(Some(name.clone()), false, Some(None), unselected(6, 3));
+        let confirmed = with_head(Some(name.clone()), true, Some(None), unselected(6, 3));
+        let after_strategy = {
+            let mut status = confirmed.clone();
+            status.pending_updates[0] = PendingUpdateRef {
+                oplog_index: OplogIndex::from_u64(12),
+                ..assisted_head(record_at(10, Some(name.clone())), 4, 3)
+            };
+            status
+        };
+        let selected_record =
+            |status: &AgentStatusRecord| match StartSelection::of(status, &none, true).baseline {
+                SelectedBaseline::AssistedPending { snapshot, .. } => Some(snapshot),
+                _ => None,
+            };
+
+        assert_eq!(
+            StartSelection::of(&unconfirmed, &none, true).candidate,
+            Some(name.clone())
+        );
+        assert_eq!(StartSelection::of(&confirmed, &none, true).candidate, None);
+        assert_eq!(
+            selected_record(&confirmed),
+            selected_record(&after_strategy)
+        );
+        assert_eq!(selected_record(&confirmed), Some(record_at(10, Some(name))));
+        assert_eq!(
+            StartSelection::of(&confirmed, &none, true).replay_revision,
+            StartSelection::of(&after_strategy, &none, true).replay_revision
+        );
+    }
+
+    /// A record after the `PendingUpdate` entry of a manual update queued behind the head is not
+    /// selected: its skipped region would reach past the manual snapshot.
+    #[test]
+    fn an_unselected_head_does_not_select_a_record_after_a_queued_manual_update() {
+        let none = SnapshotExclusions::default();
+        let manual_at = |index: u64| PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(index),
+            admission_index: OplogIndex::from_u64(index),
+            target_revision: revision(4),
+            kind: PendingUpdateKind::SnapshotBased {
+                filesystem_snapshot: None,
+            },
+        };
+        let queued = |index| {
+            let mut status = with_head(None, true, Some(None), unselected(6, 3));
+            status.pending_updates.push_back(manual_at(index));
+            status
+        };
+
+        assert_eq!(
+            [
+                decide_start(&queued(8), &none, true),
+                decide_start(&queued(11), &none, true),
+            ],
+            [assisted_strategy(5, None), assisted_strategy(10, None)]
+        );
+        assert_eq!(decide_start(&queued(4), &none, true), automatic_strategy());
+    }
+
+    /// After a snapshot-assisted update the authoritative baseline is its record, which replays
+    /// from the source revision; a rejected newer periodic record falls back to it, never to a
+    /// full replay.
+    #[test]
+    fn a_rejected_periodic_record_after_an_assisted_update_uses_the_promoted_record_on_the_source_revision()
+     {
+        let name = FilesystemSnapshotName::periodic();
+        let mut status = status(None, true, None);
+        status.component_revision = revision(3);
+        status.component_revision_for_replay = revision(2);
+        status.authoritative_snapshot = Some(AuthoritativeSnapshot {
+            index: OplogIndex::from_u64(7),
+            kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                filesystem_snapshot: Some(name.clone()),
+            },
+        });
+        if let Some(last) = status.last_automatic_snapshot.as_mut() {
+            last.component_revision = revision(3);
+        }
+        let rejected = SnapshotExclusions::default().rejecting(OplogIndex::from_u64(10), &status);
+        let selection = StartSelection::of(&status, &rejected, true);
+        let usable = StartSelection::of(&status, &SnapshotExclusions::default(), true);
+
+        assert_eq!(
+            (selection.baseline, selection.replay_revision),
+            (
+                SelectedBaseline::AssistedPromoted {
+                    index: OplogIndex::from_u64(7),
+                    name: Some(name),
+                },
+                revision(2)
+            )
+        );
+        assert_eq!(
+            (
+                usable.baseline.periodic().map(|record| record.index),
+                usable.replay_revision
+            ),
+            (Some(OplogIndex::from_u64(10)), revision(3))
+        );
+    }
+
+    #[test]
+    fn a_selection_follows_the_priority_of_the_queue_head_then_the_records_then_the_baseline() {
+        let none = SnapshotExclusions::default();
+        let manual_head = PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(11),
+            admission_index: OplogIndex::from_u64(9),
+            target_revision: revision(4),
+            kind: PendingUpdateKind::SnapshotBased {
+                filesystem_snapshot: None,
+            },
+        };
+        let authoritative = AuthoritativeSnapshot {
+            index: OplogIndex::from_u64(3),
+            kind: AuthoritativeSnapshotKind::ManualUpdate,
+        };
+        let mut manual = with_head(None, true, None, manual_head.clone());
+        manual.authoritative_snapshot = Some(authoritative.clone());
+        let mut promoted = status(None, false, None);
+        promoted.last_automatic_snapshot = None;
+        promoted.authoritative_snapshot = Some(authoritative.clone());
+        let mut initial = promoted.clone();
+        initial.authoritative_snapshot = None;
+        let selection = |status: &AgentStatusRecord| {
+            let selection = StartSelection::of(status, &none, true);
+            (selection.baseline, selection.replay_revision)
+        };
+
+        assert_eq!(
+            [
+                selection(&manual),
+                selection(&promoted),
+                selection(&initial)
+            ],
+            [
+                (
+                    SelectedBaseline::ManualPending {
+                        head: Box::new(manual_head),
+                        previous: Some(authoritative),
+                    },
+                    revision(4)
+                ),
+                (
+                    SelectedBaseline::ManualPromoted {
+                        index: OplogIndex::from_u64(3)
+                    },
+                    revision(1)
+                ),
+                (SelectedBaseline::InitialFiles, revision(1)),
+            ]
         );
     }
 }

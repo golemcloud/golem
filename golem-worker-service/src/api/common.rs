@@ -318,7 +318,9 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::FailedToResumeAgent { .. } => {
                 Self::internal(api::error_code::INTERNAL_AGENT_RESUME_FAILED, error)
             }
-            WorkerExecutorError::ComponentDownloadFailed { .. } => {
+            WorkerExecutorError::ComponentDownloadFailed { .. }
+            | WorkerExecutorError::ComponentServiceUnavailable { .. }
+            | WorkerExecutorError::ComponentServiceRefused { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
             WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. } => {

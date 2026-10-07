@@ -17,7 +17,7 @@ use crate::services::component::ComponentService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
-use crate::worker::snapshot_selection::update_names_in_use;
+use crate::worker::snapshot_selection::names_in_use;
 use crate::worker::status::{
     StatusOplogReader, calculate_last_known_status,
     calculate_last_known_status_for_existing_worker,
@@ -2368,14 +2368,14 @@ async fn a_revert_across_an_update_drops_its_name_from_the_status() {
     );
     assert_eq!(
         (
-            update_names_in_use(&before_revert),
+            names_in_use(&before_revert),
             manual_update_baseline(&before_revert.authoritative_snapshot)
         ),
         (Box::from([name]), Some(OplogIndex::from_u64(4)))
     );
     assert_eq!(
         (
-            update_names_in_use(&after_revert),
+            names_in_use(&after_revert),
             manual_update_baseline(&after_revert.authoritative_snapshot)
         ),
         (Box::from([]), None)
@@ -7597,7 +7597,7 @@ mod region_fold {
             committed_and_override(&status.skipped_regions),
             (vec![region(2, 2)], None)
         );
-        assert_eq!(update_names_in_use(&status), Box::from([name]));
+        assert_eq!(names_in_use(&status), Box::from([name]));
     }
 
     #[test]
@@ -7627,6 +7627,79 @@ mod region_fold {
             committed_and_override(&status.skipped_regions),
             (vec![], None)
         );
+    }
+
+    /// A failed update whose snapshot-assisted attempt lost the filesystem snapshot of its record
+    /// excludes that record through the status alone. A status folded from the oplog after a
+    /// restart, whole or from any checkpoint, gives the next request of the same update a plain
+    /// automatic strategy without any rejection in memory; the same history without the fault
+    /// selects the record again.
+    #[test]
+    fn a_lost_record_stays_excluded_in_a_status_folded_after_a_restart() {
+        use crate::worker::snapshot_selection::{SnapshotExclusions, StartDecision, decide_start};
+        let name = FilesystemSnapshotName::periodic();
+        let history = |fault| {
+            entries([
+                (2, update_fields_snapshot(Some(name.clone()))),
+                (3, OplogEntry::snapshot_confirmed(name.clone())),
+                (4, automatic_admission(2)),
+                (5, assisted_strategy(2, 4, 1, 2, Some(name.clone()))),
+                (
+                    6,
+                    OplogEntry::failed_update(
+                        revision(2),
+                        None,
+                        Some(
+                            golem_common::model::oplog::FailedSnapshotAssistedUpdateDetails {
+                                pending_update_index: idx(5),
+                                source_component_revision: AgentStatusRecord::default()
+                                    .component_revision,
+                                source_revision_start_index: OplogIndex::INITIAL,
+                                snapshot_index: idx(2),
+                            },
+                        ),
+                        Some(idx(4)),
+                        fault,
+                    ),
+                ),
+                (7, automatic_admission(2)),
+            ])
+        };
+        let folds = |list: BTreeMap<OplogIndex, OplogEntry>| {
+            std::iter::once(fold_status(list.clone()))
+                .chain(list.keys().filter_map(|checkpoint| {
+                    let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = list
+                        .clone()
+                        .into_iter()
+                        .partition(|(index, _)| index <= checkpoint);
+                    update_status_with_new_entries(
+                        AgentMode::Durable,
+                        fold_status(before),
+                        after,
+                        &RetryConfig::default(),
+                    )
+                }))
+                .map(|status| decide_start(&status, &SnapshotExclusions::default(), true))
+                .collect::<Vec<_>>()
+        };
+        let lost = folds(history(Some(SnapshotFault::Unavailable)));
+        let kept = folds(history(None));
+
+        assert!(lost.len() > 1);
+        assert!(lost.iter().all(|decision| matches!(
+            decision,
+            StartDecision::PersistStrategy {
+                description: UpdateDescription::Automatic { .. },
+                admission_index,
+            } if *admission_index == idx(7)
+        )));
+        assert!(kept.iter().all(|decision| matches!(
+            decision,
+            StartDecision::PersistStrategy {
+                description: UpdateDescription::SnapshotAssistedAutomatic { snapshot_index, .. },
+                ..
+            } if *snapshot_index == idx(2)
+        )));
     }
 
     #[test]
