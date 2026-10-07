@@ -7629,7 +7629,7 @@ mod tests {
         };
         let decide = |result: &SnapshotRecoveryResult| {
             start_outcome::decide(
-                &start_outcome::BaselineRole::AssistedPending(Box::new(head.clone())),
+                &start_outcome::BaselineRole::AssistedPending(Arc::new(head.clone())),
                 Some(&head),
                 start_outcome::RawStartError::Load(result),
                 &agent_id,
@@ -7788,7 +7788,7 @@ mod tests {
         );
         assert!(matches!(
             decide(
-                start_outcome::BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                start_outcome::BaselineRole::AssistedPending(Arc::new(assisted.clone())),
                 &assisted
             ),
             start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)

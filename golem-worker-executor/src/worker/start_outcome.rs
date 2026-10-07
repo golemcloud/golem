@@ -35,6 +35,7 @@ use golem_common::model::{AgentId, PendingUpdateKind, PendingUpdateRef, Timestam
 use golem_service_base::error::worker_executor::{
     ComponentServiceRefusal, InterruptKind, WorkerExecutorError,
 };
+use std::sync::Arc;
 
 /// The selected record of a snapshot-assisted update, or the record of a pending snapshot-based
 /// manual update, is no longer in the store.
@@ -62,11 +63,11 @@ pub(crate) enum BaselineRole {
     /// The periodic record at the index.
     Periodic(OplogIndex),
     /// The record of the snapshot-based manual update at the head of the queue.
-    ManualPending(Box<PendingUpdateRef>),
+    ManualPending(Arc<PendingUpdateRef>),
     /// The authoritative baseline of a successful snapshot-based manual update.
     ManualPromoted,
     /// The record that the snapshot-assisted update at the head of the queue selected.
-    AssistedPending(Box<PendingUpdateRef>),
+    AssistedPending(Arc<PendingUpdateRef>),
     /// The authoritative baseline of a successful snapshot-assisted update.
     AssistedPromoted,
     /// No record.
@@ -1138,8 +1139,8 @@ mod tests {
 
     #[test]
     fn the_column_follows_the_baseline_and_a_pending_plain_automatic_update() {
-        let assisted = Box::new(assisted_head());
-        let manual = Box::new(manual_head());
+        let assisted = Arc::new(assisted_head());
+        let manual = Arc::new(manual_head());
         let automatic = automatic_head();
         assert_eq!(
             [
@@ -1434,7 +1435,7 @@ mod tests {
     #[test]
     fn every_assisted_failure_carries_the_details_of_its_head() {
         let head = assisted_head();
-        let role = BaselineRole::AssistedPending(Box::new(head.clone()));
+        let role = BaselineRole::AssistedPending(Arc::new(head.clone()));
         let found = SourceFound {
             revision: revision(3),
             start_index: OplogIndex::from_u64(11),
@@ -1547,7 +1548,7 @@ mod tests {
     #[test]
     fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
         let head = assisted_head();
-        let role = BaselineRole::AssistedPending(Box::new(head.clone()));
+        let role = BaselineRole::AssistedPending(Arc::new(head.clone()));
         let transient = restore(RestoreClass::Transient);
         let quota = FilesystemError::AgentQuota(storage());
         let recovery = WorkerExecutorError::RecoveryRequired {
@@ -1616,11 +1617,11 @@ mod tests {
         let automatic = automatic_head();
         let cases = [
             (
-                BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
                 assisted,
             ),
             (
-                BaselineRole::ManualPending(Box::new(manual.clone())),
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
                 manual,
             ),
             (BaselineRole::ManualPromoted, automatic),
@@ -1660,7 +1661,7 @@ mod tests {
         let roles = |label: &str| match label {
             "initial" => BaselineRole::InitialFiles,
             "periodic" => BaselineRole::Periodic(OplogIndex::from_u64(10)),
-            "manual-pending" => BaselineRole::ManualPending(Box::new(manual.clone())),
+            "manual-pending" => BaselineRole::ManualPending(Arc::new(manual.clone())),
             "manual-promoted" => BaselineRole::ManualPromoted,
             other => panic!("unknown role {other}"),
         };
@@ -1850,11 +1851,11 @@ mod tests {
         });
         let roles = [
             (
-                BaselineRole::ManualPending(Box::new(manual.clone())),
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
                 manual,
             ),
             (
-                BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
                 assisted,
             ),
         ];
@@ -1892,11 +1893,11 @@ mod tests {
         let automatic = automatic_head();
         let cases = [
             (
-                BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
                 assisted,
             ),
             (
-                BaselineRole::ManualPending(Box::new(manual.clone())),
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
                 manual,
             ),
             (BaselineRole::InitialFiles, automatic.clone()),
@@ -1980,11 +1981,11 @@ mod tests {
         );
         [
             (
-                BaselineRole::ManualPending(Box::new(manual.clone())),
+                BaselineRole::ManualPending(Arc::new(manual.clone())),
                 manual,
             ),
             (
-                BaselineRole::AssistedPending(Box::new(assisted.clone())),
+                BaselineRole::AssistedPending(Arc::new(assisted.clone())),
                 assisted,
             ),
         ]
@@ -2017,15 +2018,15 @@ mod tests {
         let heads = [
             (BaselineRole::InitialFiles, automatic_head()),
             (
-                BaselineRole::ManualPending(Box::new(manual_head())),
+                BaselineRole::ManualPending(Arc::new(manual_head())),
                 manual_head(),
             ),
             (
-                BaselineRole::AssistedPending(Box::new(assisted_head())),
+                BaselineRole::AssistedPending(Arc::new(assisted_head())),
                 assisted_head(),
             ),
             (
-                BaselineRole::AssistedPending(Box::new(head(
+                BaselineRole::AssistedPending(Arc::new(head(
                     assisted_kind(Some(FilesystemSnapshotName::periodic())),
                     12,
                     10,
@@ -2126,7 +2127,7 @@ mod tests {
     #[test]
     fn a_stale_assisted_head_fails_with_what_the_status_has() {
         let head = assisted_head();
-        let role = BaselineRole::AssistedPending(Box::new(head.clone()));
+        let role = BaselineRole::AssistedPending(Arc::new(head.clone()));
         let stale = SourceFound {
             revision: revision(3),
             start_index: OplogIndex::from_u64(11),
@@ -2192,7 +2193,7 @@ mod tests {
         };
 
         let (_, details, assisted_details_of_entry, attempt, _) = fields(
-            &BaselineRole::AssistedPending(Box::new(assisted.clone())),
+            &BaselineRole::AssistedPending(Arc::new(assisted.clone())),
             None,
             RawStartError::Load(&failed_load),
         );
@@ -2209,7 +2210,7 @@ mod tests {
         );
 
         let (_, _, manual_details, attempt, _) = fields(
-            &BaselineRole::ManualPending(Box::new(manual)),
+            &BaselineRole::ManualPending(Arc::new(manual)),
             Some(&assisted),
             RawStartError::Filesystem(&lost),
         );
@@ -2292,7 +2293,7 @@ mod tests {
         ));
         assert!(matches!(
             decide_now(
-                &BaselineRole::ManualPending(Box::new(manual_head())),
+                &BaselineRole::ManualPending(Arc::new(manual_head())),
                 Some(&manual_head()),
                 RawStartError::ManualLoad(&ManualLoadResult::Interrupted)
             ),
@@ -2327,10 +2328,10 @@ mod tests {
         assert_eq!(
             [
                 BaselineRole::Periodic(OplogIndex::from_u64(10)).purpose(None),
-                BaselineRole::AssistedPending(Box::new(assisted_head()))
+                BaselineRole::AssistedPending(Arc::new(assisted_head()))
                     .purpose(Some(&assisted_head())),
                 BaselineRole::AssistedPromoted.purpose(None),
-                BaselineRole::ManualPending(Box::new(manual_head())).purpose(Some(&manual)),
+                BaselineRole::ManualPending(Arc::new(manual_head())).purpose(Some(&manual)),
                 BaselineRole::ManualPromoted.purpose(None),
                 BaselineRole::InitialFiles.purpose(None),
                 BaselineRole::InitialFiles.purpose(Some(&automatic)),

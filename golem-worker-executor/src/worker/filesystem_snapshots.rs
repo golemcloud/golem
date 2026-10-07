@@ -1407,7 +1407,7 @@ mod tests {
         let update = FilesystemSnapshotName::update();
         let index = OplogIndex::from_u64;
         let assisted_head = |name: Option<&FilesystemSnapshotName>| {
-            Box::new(head(
+            Arc::new(head(
                 PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                     source_revision_start_index: index(4),
                     snapshot: record(10, name),
@@ -1416,7 +1416,7 @@ mod tests {
             ))
         };
         let manual_head = || {
-            Box::new(head(
+            Arc::new(head(
                 PendingUpdateKind::SnapshotBased {
                     filesystem_snapshot: None,
                 },
@@ -2361,7 +2361,7 @@ mod tests {
                 role,
             },
         };
-        let manual_head = Box::new(head(
+        let manual_head = Arc::new(head(
             PendingUpdateKind::SnapshotBased {
                 filesystem_snapshot: Some(update.clone()),
             },

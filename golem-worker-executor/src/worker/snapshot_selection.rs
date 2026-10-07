@@ -40,6 +40,7 @@ use golem_common::model::{
     AutomaticSnapshot, PendingUpdateKind, PendingUpdateRef, SnapshotFiles, UsableAutomaticSnapshot,
 };
 use std::collections::{BTreeSet, HashSet};
+use std::sync::Arc;
 
 /// The automatic snapshot entries that the starts of one agent exclude.
 #[derive(Clone, Debug, Default)]
@@ -165,7 +166,7 @@ pub(crate) fn decide_start(
         },
         Head::SelectedAssisted(head, _) => match stale_assisted_head(status, head) {
             Some(found) => StartDecision::FailHead {
-                role: BaselineRole::AssistedPending(Box::new(head.clone())),
+                role: BaselineRole::AssistedPending(Arc::new(head.clone())),
                 found,
             },
             None => StartDecision::Start(StartSelection::of(status, exclusions, enabled)),
@@ -320,7 +321,7 @@ pub(crate) enum SelectedBaseline {
     /// The record that the snapshot-assisted update at the head of the queue selected.
     AssistedPending {
         snapshot: UsableAutomaticSnapshot,
-        head: Box<PendingUpdateRef>,
+        head: Arc<PendingUpdateRef>,
     },
     /// The authoritative baseline of a successful snapshot-assisted update: the `Snapshot` entry
     /// at `index` and its filesystem snapshot. Its replay revision is the source revision of the
@@ -332,7 +333,7 @@ pub(crate) enum SelectedBaseline {
     /// The snapshot-based manual update at the head of the queue, whose record is its
     /// `PendingUpdate` entry. `previous` is the authoritative baseline before it.
     ManualPending {
-        head: Box<PendingUpdateRef>,
+        head: Arc<PendingUpdateRef>,
         previous: Option<AuthoritativeSnapshot>,
     },
     /// The authoritative baseline of a successful snapshot-based manual update: its
@@ -481,7 +482,7 @@ fn selected_baseline(
     match Head::of(status) {
         Head::SelectedAssisted(head, selection) => SelectedBaseline::AssistedPending {
             snapshot: selection.snapshot.clone(),
-            head: Box::new(head.clone()),
+            head: Arc::new(head.clone()),
         },
         Head::Other(
             head @ PendingUpdateRef {
@@ -489,14 +490,14 @@ fn selected_baseline(
                 ..
             },
         ) => SelectedBaseline::ManualPending {
-            head: Box::new(head.clone()),
+            head: Arc::new(head.clone()),
             previous: status.authoritative_snapshot.clone(),
         },
         Head::UnselectedAutomatic(head) => select_automatic_snapshot(status, filter).map_or_else(
             || authoritative_baseline(status),
             |snapshot| SelectedBaseline::AssistedPending {
                 snapshot,
-                head: Box::new(head.clone()),
+                head: Arc::new(head.clone()),
             },
         ),
         Head::None | Head::Other(_) => select_automatic_snapshot(status, filter).map_or_else(
@@ -1816,7 +1817,7 @@ mod tests {
             .with_unavailable(OplogIndex::from_u64(7));
         let expected = SelectedBaseline::AssistedPending {
             snapshot: frozen,
-            head: Box::new(head),
+            head: Arc::new(head),
         };
         let baseline = |decision| match decision {
             StartDecision::Start(selection) => {
@@ -1873,15 +1874,15 @@ mod tests {
             ],
             [
                 StartDecision::FailHead {
-                    role: BaselineRole::AssistedPending(Box::new(valid.clone())),
+                    role: BaselineRole::AssistedPending(Arc::new(valid.clone())),
                     found: found(2, 11),
                 },
                 StartDecision::FailHead {
-                    role: BaselineRole::AssistedPending(Box::new(valid)),
+                    role: BaselineRole::AssistedPending(Arc::new(valid)),
                     found: found(3, 4),
                 },
                 StartDecision::FailHead {
-                    role: BaselineRole::AssistedPending(Box::new(assisted_head(
+                    role: BaselineRole::AssistedPending(Arc::new(assisted_head(
                         record_at(7, None),
                         4,
                         1
@@ -2107,7 +2108,7 @@ mod tests {
             [
                 (
                     SelectedBaseline::ManualPending {
-                        head: Box::new(manual_head),
+                        head: Arc::new(manual_head),
                         previous: Some(authoritative),
                     },
                     revision(4)
