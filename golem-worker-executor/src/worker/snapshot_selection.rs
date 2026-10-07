@@ -227,6 +227,25 @@ where
         .then(|| name.clone())
 }
 
+/// The periodic record that a start of `status` selects under `exclusions`, which is the periodic
+/// baseline of [`StartSelection::of`]: only a start without a pending update, or with a plain
+/// automatic update that has its strategy entry, selects one. `enabled` tells whether this
+/// executor keeps filesystem snapshots.
+pub(crate) fn periodic_baseline(
+    status: &AgentStatusRecord,
+    exclusions: &SnapshotExclusions,
+    enabled: bool,
+) -> Option<UsableAutomaticSnapshot> {
+    match Head::of(status) {
+        Head::None
+        | Head::Other(PendingUpdateRef {
+            kind: PendingUpdateKind::Automatic,
+            ..
+        }) => select_automatic_snapshot(status, exclusions.filter(status, enabled, true)),
+        Head::UnselectedAutomatic(_) | Head::SelectedAssisted(..) | Head::Other(_) => None,
+    }
+}
+
 /// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
 /// `selected`, or a plain automatic update, which replays the whole history on the target.
 fn strategy(
@@ -323,6 +342,7 @@ pub(crate) enum SelectedBaseline {
 
 impl SelectedBaseline {
     /// The periodic record of the baseline, when it is one.
+    #[cfg(test)]
     pub(crate) fn periodic(&self) -> Option<&UsableAutomaticSnapshot> {
         match self {
             Self::Periodic(snapshot) => Some(snapshot),
@@ -1371,6 +1391,64 @@ mod tests {
             [true, true, false, false, false]
         );
         assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn the_periodic_baseline_is_the_periodic_record_of_the_start_selection() {
+        let name = FilesystemSnapshotName::periodic();
+        let with_head = |record: &AgentStatusRecord, head: PendingUpdateRef| {
+            let mut status = record.clone();
+            status.pending_updates.push_back(head);
+            status
+        };
+        let records = [
+            status(Some(name.clone()), true, None),
+            status(Some(name.clone()), false, Some(None)),
+            status(None, false, Some(Some(FilesystemSnapshotName::periodic()))),
+        ];
+        let heads = [
+            unselected(12, 4),
+            PendingUpdateRef {
+                oplog_index: OplogIndex::from_u64(13),
+                ..unselected(12, 4)
+            },
+            assisted_head(record_at(5, None), 0, 4),
+            pending_update(
+                12,
+                PendingUpdateKind::SnapshotBased {
+                    filesystem_snapshot: None,
+                },
+            ),
+        ];
+        let statuses = records
+            .iter()
+            .flat_map(|record| {
+                std::iter::once(record.clone())
+                    .chain(heads.iter().map(|head| with_head(record, head.clone())))
+            })
+            .collect::<Vec<_>>();
+        let exclusions = [
+            SnapshotExclusions::default(),
+            SnapshotExclusions::default().with_unavailable(OplogIndex::from_u64(10)),
+        ];
+
+        statuses.iter().for_each(|status| {
+            exclusions.iter().for_each(|exclusions| {
+                [true, false].into_iter().for_each(|enabled| {
+                    assert_eq!(
+                        periodic_baseline(status, exclusions, enabled),
+                        StartSelection::of(status, exclusions, enabled)
+                            .baseline
+                            .periodic()
+                            .cloned(),
+                        "{status:?} {exclusions:?} {enabled}"
+                    )
+                })
+            })
+        });
+        assert!(statuses.iter().any(|status| {
+            periodic_baseline(status, &SnapshotExclusions::default(), true).is_some()
+        }));
     }
 
     fn unselected(admission: u64, target: u64) -> PendingUpdateRef {

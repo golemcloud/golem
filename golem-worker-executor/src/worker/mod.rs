@@ -5796,12 +5796,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// this incarnation in memory, and the index of the authoritative baseline of the status.
     pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {
         let status = self.last_known_status.load();
+        let enabled = self.filesystem_snapshots_enabled();
         filesystem_snapshots::StartBaselines {
-            periodic: self
-                .selection_in_memory(&status)
-                .baseline
-                .periodic()
-                .cloned(),
+            periodic: self.read_exclusions(|exclusions| {
+                snapshot_selection::periodic_baseline(&status, exclusions, enabled)
+            }),
             authoritative: status
                 .authoritative_snapshot
                 .as_ref()
