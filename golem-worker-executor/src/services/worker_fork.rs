@@ -1726,7 +1726,7 @@ mod tests {
     }
 
     /// The updates of a prefix with deleted regions are the same when the fold reads only the
-    /// entries that [`ForkUpdates::reads`] keeps.
+    /// entries that [`ForkUpdates::update_entry`] keeps.
     #[test]
     fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
         let invocation = OplogEntry::PendingAgentInvocation {
