@@ -428,7 +428,7 @@ where
     baseline.skipped_regions = regions.skipped.clone();
     // The queue after the whole range belongs to the status after the last chunk. A status
     // between two chunks keeps the pending updates of the baseline; nothing reads them.
-    let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_pending());
+    let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_open().0);
 
     let mut first = start;
     while first <= last_oplog_index {
@@ -606,7 +606,7 @@ fn update_status_with_new_entries_internal(
         return Ok(None);
     }
 
-    let pending_updates = std::mem::take(&mut regions.queue).into_pending();
+    let pending_updates = std::mem::take(&mut regions.queue).into_open().0;
     Ok(Some(update_status_with_precomputed_regions(
         agent_mode,
         last_known,

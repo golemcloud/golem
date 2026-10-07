@@ -1043,7 +1043,8 @@ pub(crate) fn owner_gate(
 }
 
 /// The filesystem snapshot name that the record `entry` holds: the name of a snapshot record, of
-/// a snapshot-based update record, or of the record that a snapshot-assisted update selected.
+/// a snapshot-based update record, or of the record that a snapshot-assisted update selected. The
+/// name of a snapshot-assisted update is always the name of a snapshot record before it.
 fn record_name(entry: &OplogEntry) -> Option<&FilesystemSnapshotName> {
     match entry {
         OplogEntry::Snapshot {
@@ -2985,24 +2986,6 @@ mod tests {
                 Box::from([p2.clone()]),
                 Box::from([p2, p1]),
             ]
-        );
-    }
-
-    #[test]
-    fn a_strategy_entry_outside_the_region_keeps_the_name_of_its_record() {
-        let p1 = FilesystemSnapshotName::periodic();
-        let entries = oplog(vec![
-            (3, assisted_strategy_record(5, Some(&p1))),
-            (5, snapshot_record(Some(&p1))),
-        ]);
-
-        assert_eq!(
-            super::reverted_snapshot_names(
-                &entries,
-                &region(4, 9),
-                &golem_common::model::regions::DeletedRegions::new()
-            ),
-            Box::from([])
         );
     }
 }

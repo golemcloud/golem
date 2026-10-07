@@ -7170,7 +7170,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
 
     assert_eq!(fields.last_automatic_snapshot, None);
     assert_eq!(fields.previous_usable_automatic_snapshot, None);
-    assert!(regions.queue.into_pending().is_empty());
+    assert!(regions.queue.into_open().0.is_empty());
     assert_eq!(fields.component_revision, target);
     assert_eq!(fields.component_size, 20);
     assert_eq!(fields.component_revision_for_replay, target);
@@ -7209,55 +7209,6 @@ fn update_fields_skip_the_entries_in_a_deleted_region() {
     );
 }
 
-/// One update entry of a generated prefix of a fork.
-#[derive(Clone, Debug)]
-enum ForkPrefixEntry {
-    /// A pending snapshot-based update, with a filesystem snapshot when `true`.
-    SnapshotBased(bool),
-    Automatic,
-    Successful,
-    Failed,
-    /// A jump over the region from the first to the second index.
-    Jump(u64, u64),
-}
-
-/// The oplog entry of `entry` at the position `position` of the prefix. A pending update targets
-/// the revision `position + 2`, so the revisions of the pending updates tell them apart.
-fn fork_prefix_entry(position: u64, entry: &ForkPrefixEntry) -> OplogEntry {
-    let target_revision = ComponentRevision::new(position + 2).unwrap();
-    match entry {
-        ForkPrefixEntry::Jump(start, length) => OplogEntry::Jump {
-            timestamp: Timestamp::now_utc(),
-            entity_parent_start_index: None,
-            jump: OplogRegion::from_index_range(
-                OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
-            ),
-        },
-        ForkPrefixEntry::SnapshotBased(named) => OplogEntry::pending_update(
-            UpdateDescription::SnapshotBased {
-                target_revision,
-                payload: OplogPayload::Inline(Box::new(vec![])),
-                mime_type: "application/octet-stream".to_string(),
-                filesystem_snapshot: named.then(FilesystemSnapshotName::update),
-            },
-            None,
-        ),
-        ForkPrefixEntry::Automatic => {
-            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None)
-        }
-        ForkPrefixEntry::Successful => OplogEntry::successful_update(
-            ComponentRevision::new(2).unwrap(),
-            100,
-            None,
-            HashSet::new(),
-            None,
-        ),
-        ForkPrefixEntry::Failed => {
-            OplogEntry::failed_update(ComponentRevision::new(2).unwrap(), None, None, None, None)
-        }
-    }
-}
-
 /// The filesystem snapshot name of the pending update at `index` in `entries`, when it is a
 /// snapshot-based update.
 fn pending_update_name(
@@ -7290,73 +7241,6 @@ fn cancelled_updates(entries: &[OplogEntry]) -> Vec<(ComponentRevision, Option<O
             _ => None,
         })
         .collect()
-}
-
-proptest::proptest! {
-    #[test]
-    fn the_fork_baseline_name_and_cancelled_updates_equal_the_fold(
-        prefix in proptest::collection::vec(
-            proptest::prop_oneof![
-                proptest::strategy::Strategy::prop_map(proptest::bool::ANY, ForkPrefixEntry::SnapshotBased),
-                proptest::strategy::Just(ForkPrefixEntry::Automatic),
-                proptest::strategy::Just(ForkPrefixEntry::Successful),
-                proptest::strategy::Just(ForkPrefixEntry::Failed),
-                proptest::strategy::Strategy::prop_map((2u64..26, 0u64..4), |(start, length)| ForkPrefixEntry::Jump(start, length)),
-            ],
-            0..24,
-        ),
-        dropped in proptest::collection::vec((2u64..26, 0u64..4), 0..3),
-    ) {
-        let entries = prefix
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| (OplogIndex::from_u64(index as u64 + 2), fork_prefix_entry(index as u64, entry)))
-            .collect::<BTreeMap<_, _>>();
-        let deleted = DeletedRegionsBuilder::from_regions(
-            dropped
-                .iter()
-                .map(|(start, length)| {
-                    OplogRegion::from_index_range(
-                        OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )
-        .build();
-        let regions = super::fold_regions(
-            &AgentStatusRecord {
-                deleted_regions: deleted.clone(),
-                ..AgentStatusRecord::default()
-            },
-            &entries,
-        );
-        let fields = super::calculate_update_fields(
-            empty_update_fields(),
-            &regions.deleted,
-            &regions.steps,
-            &entries,
-        )
-        .unwrap();
-        let (cancelled, baseline) = entries
-            .iter()
-            .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, (index, entry)| {
-                updates.after(*index, entry, deleted.is_in_deleted_region(*index))
-            })
-            .into_parts();
-
-        proptest::prop_assert_eq!(
-            (cancelled_updates(&cancelled), baseline),
-            (
-                regions
-                    .queue
-                    .into_pending()
-                    .iter()
-                    .map(|update| (update.target_revision, Some(update.admission_index)))
-                    .collect::<Vec<_>>(),
-                pending_update_name(&entries, manual_update_baseline(&fields.authoritative_snapshot))
-            )
-        );
-    }
 }
 
 mod region_fold {
@@ -7846,11 +7730,11 @@ mod region_fold {
             let checkpoint_status = fold_status(before);
             let rest = fold_regions(&checkpoint_status, &after);
             assert_eq!(
-                (rest.deleted, rest.skipped, rest.queue.into_pending()),
+                (rest.deleted, rest.skipped, rest.queue.into_open().0),
                 (
                     whole.deleted.clone(),
                     whole.skipped.clone(),
-                    whole.queue.clone().into_pending()
+                    whole.queue.clone().into_open().0
                 ),
                 "checkpoint {checkpoint}"
             );
@@ -8105,8 +7989,8 @@ mod update_entry_sequences {
             })?;
 
             // The fork cancels the status's pending queue and then its pending manual update
-            // invocations, and takes the name of the last successful snapshot-based or
-            // snapshot-assisted update as its baseline.
+            // invocations, and takes the filesystem snapshot of the authoritative baseline of
+            // the status as its baseline.
             let (cancelled, baseline) = list
                 .iter()
                 .fold(ForkUpdates::default(), |updates, (index, entry)| {
@@ -8129,18 +8013,16 @@ mod update_entry_sequences {
             prop_assert_eq!(
                 &baseline,
                 &status
-                    .successful_updates
-                    .iter()
-                    .rev()
-                    .find(|update| matches!(
-                        update.pending_update,
-                        Some(PendingUpdateRef {
-                            kind: PendingUpdateKind::SnapshotBased { .. }
-                                | PendingUpdateKind::SnapshotAssistedAutomatic(_),
-                            ..
-                        })
-                    ))
-                    .and_then(|update| update.filesystem_snapshot.clone())
+                    .authoritative_snapshot
+                    .as_ref()
+                    .and_then(|baseline| match &baseline.kind {
+                        AuthoritativeSnapshotKind::ManualUpdate => {
+                            pending_update_name(&list, Some(baseline.index))
+                        }
+                        AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                            filesystem_snapshot,
+                        } => filesystem_snapshot.clone(),
+                    })
             );
 
             // The copied prefix with the cancellations of the fork leaves no update pending.

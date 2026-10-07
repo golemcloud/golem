@@ -197,11 +197,6 @@ impl UpdateQueue {
         self.pending.front()
     }
 
-    /// The pending updates, the head first.
-    pub(crate) fn into_pending(self) -> VecDeque<PendingUpdateRef> {
-        self.pending
-    }
-
     /// The pending updates, the head first, and the manual update invocations that no
     /// `PendingUpdate` and no outcome paired, in the order of their invocations.
     pub(crate) fn into_open(self) -> (VecDeque<PendingUpdateRef>, VecDeque<ManualAdmission>) {
@@ -424,7 +419,7 @@ mod tests {
                 UpdateStep::Selected
             ]
         );
-        let pending = queue.into_pending();
+        let pending = queue.into_open().0;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].admission_index, idx(2));
         assert_eq!(pending[0].oplog_index, idx(5));
@@ -479,7 +474,7 @@ mod tests {
             })
         );
         assert_eq!(admissions(&queue), vec![idx(2)]);
-        let pending = queue.into_pending();
+        let pending = queue.into_open().0;
         assert_eq!(
             (pending[0].oplog_index, pending[0].admission_index),
             (idx(4), idx(3))
@@ -536,7 +531,7 @@ mod tests {
         );
 
         assert_eq!(steps.last(), Some(&UpdateStep::FailedQueued(None)));
-        assert_eq!(queue.into_pending().len(), 2);
+        assert_eq!(queue.into_open().0.len(), 2);
     }
 
     #[test]
@@ -566,7 +561,7 @@ mod tests {
             steps.last(),
             Some(UpdateStep::Succeeded(Some(update))) if update.target_revision == revision(3)
         ));
-        assert_eq!(queue.into_pending()[0].target_revision, revision(4));
+        assert_eq!(queue.into_open().0[0].target_revision, revision(4));
     }
 
     #[test]
@@ -607,7 +602,7 @@ mod tests {
             ]
         );
         assert!(admissions(&queue).is_empty());
-        let pending = queue.into_pending();
+        let pending = queue.into_open().0;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, PendingUpdateKind::Automatic);
     }

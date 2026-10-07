@@ -61,7 +61,7 @@ use crate::worker::status::update_queue::{
 };
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt as _, TryStreamExt as _};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRequest, ForkStreamSlotResponse,
 };
@@ -952,10 +952,20 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .await?;
         }
 
-        for cancellation in cancellations {
-            tracing::debug!("Cancelling a pending update in forked worker: {cancellation:?}");
-            new_oplog.add(cancellation).await?;
-        }
+        futures::stream::iter(cancellations)
+            .map(Ok::<_, WorkerExecutorError>)
+            .try_for_each(|cancellation| {
+                tracing::debug!("Cancelling a pending update in forked worker: {cancellation:?}");
+                let new_oplog = &new_oplog;
+                async move {
+                    new_oplog
+                        .add(cancellation)
+                        .await
+                        .map(|_| ())
+                        .map_err(WorkerExecutorError::from)
+                }
+            })
+            .await?;
 
         if let Some(candidate) = export
             && (candidate.initial.is_some() || candidate.export.closed)
