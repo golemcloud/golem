@@ -16,8 +16,8 @@ use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecover
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
-    FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits, LinkGroup,
-    SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
+    AgentAccounting, FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits,
+    LinkGroup, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
     SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
     SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
     SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
@@ -147,6 +147,7 @@ struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
     initial_files: Mutex<Arc<InitialFileState>>,
     initial_file_updates: tokio::sync::Mutex<()>,
     pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
     namespace: Arc<NamespaceCoordinator>,
     scratch: Arc<HostDirectory>,
 }
@@ -461,7 +462,8 @@ pub(crate) fn create_fresh(
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits)
+    let accounting = provisioning.agent_accounting();
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
@@ -476,12 +478,14 @@ pub(super) fn create_fresh_with_pressure_recovery(
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
+    let accounting = provisioning.agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
         scratch,
         agent,
         limits,
         Some(pressure_recovery),
+        accounting,
     )
 }
 
@@ -491,16 +495,19 @@ fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
+    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None)
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
 }
 
+/// Creates a generation on storage that accounts for each agent as `accounting` says.
 async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
     scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
@@ -521,6 +528,7 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
             initial_files: Mutex::new(Arc::default()),
             initial_file_updates: tokio::sync::Mutex::new(()),
             pressure_recovery,
+            accounting,
             namespace: Arc::new(NamespaceCoordinator::new()),
             scratch,
         })),
@@ -4111,6 +4119,19 @@ async fn decide_generation_effect<Adapter: SandboxFilesystemAdapter>(
     decide_effect(cause, evidence, decision_budget)
 }
 
+/// Whether a write that found no space, on storage with `accounting` that reports no usage of
+/// the agent, goes to pressure recovery.
+///
+/// Production storage without per-agent accounting has no agent quota to exhaust, so the volume is
+/// full, and pressure recovery can free space. Development storage keeps the failure of the call.
+/// Storage with project quotas reports the usage, so it never asks.
+fn unreported_usage_goes_to_pressure_recovery(accounting: AgentAccounting) -> bool {
+    match accounting {
+        AgentAccounting::Unaccounted => true,
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development => false,
+    }
+}
+
 async fn decide_write_effect<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     error: &FilesystemStorageError,
@@ -4126,6 +4147,11 @@ async fn decide_write_effect<Adapter: SandboxFilesystemAdapter>(
     }
 
     let quota_exhausted = match generation.observe_usage_sandbox().await {
+        Ok(FilesystemUsage::Unsupported)
+            if unreported_usage_goes_to_pressure_recovery(generation.accounting) =>
+        {
+            false
+        }
         Ok(FilesystemUsage::Unsupported) => {
             return EffectDecision::ReturnFailure(FailureCause::UnclassifiedIo);
         }

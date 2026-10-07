@@ -38,7 +38,7 @@ use golem_worker_executor::filesystem_snapshot_testing::{
 };
 use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotStoreConfig, FilesystemSnapshotUploadConfig, FilesystemSnapshotUploadValues,
-    FilesystemSnapshotsConfig, SnapshotPolicy,
+    FilesystemSnapshotsConfig, FilesystemStorageMode, SnapshotPolicy,
 };
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
@@ -103,8 +103,11 @@ fn snapshotting(
     let root: Option<Box<Path>> = root.map(Box::from);
     TestExecutorOverrides {
         configure: Some(Arc::new(move |config| {
-            config.filesystem_storage.deterministic_root_dir =
-                root.as_deref().map(Path::to_path_buf);
+            config.filesystem_storage.mode = root
+                .as_deref()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                });
             config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
         })),
         filesystem_snapshot_store: Some((store.clone(), uploads(confirmation_wait))),
@@ -136,7 +139,8 @@ async fn start_replaying_with(
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.to_path_buf());
+                config.filesystem_storage.mode =
+                    FilesystemStorageMode::Directory { root: root.clone() };
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
             })),
@@ -1568,7 +1572,7 @@ async fn a_start_waits_for_a_running_upload_until_the_limit_and_then_falls_back(
 
 #[test]
 #[timeout("2m")]
-async fn managed_snapshots_on_unmanaged_storage_fail_at_startup(
+async fn managed_snapshots_on_storage_without_copy_on_write_fail_at_startup(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
@@ -1593,12 +1597,14 @@ async fn managed_snapshots_on_unmanaged_storage_fail_at_startup(
 
     match started {
         Ok(_) => Err(anyhow!(
-            "the executor started with managed snapshots on unmanaged storage"
+            "the executor started with managed snapshots on storage without copy-on-write"
         )),
         Err(error) => {
             let message = format!("{error:#}");
             assert!(
-                message.contains("filesystem snapshots require managed XFS storage"),
+                message.contains(
+                    "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+                ),
                 "{message}"
             );
             Ok(())
@@ -2147,6 +2153,13 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
 }
 
 #[cfg(target_os = "linux")]
+fn reflink_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
+}
+
+#[cfg(target_os = "linux")]
 fn managed_xfs_test_root() -> PathBuf {
     std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
         .map(PathBuf::from)
@@ -2179,21 +2192,100 @@ async fn managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
     use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_managed_xfs;
 
     let context = TestContext::new(last_unique_id);
-    let start = |snapshots| {
-        start_with_filesystem_snapshots_on_managed_xfs(
-            deps,
-            &context,
-            MANAGED_XFS_DISK_SPACE,
-            managed_xfs_test_root(),
-            snapshots,
-        )
-    };
-    let executor = start(managed_snapshots()).await?;
-    let agent = Agent::start(
-        &executor,
+    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
         &context,
         initial_file_system,
         "managed-xfs-replay",
+        |snapshots| {
+            start_with_filesystem_snapshots_on_managed_xfs(
+                deps,
+                &context,
+                MANAGED_XFS_DISK_SPACE,
+                managed_xfs_test_root(),
+                snapshots,
+            )
+        },
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("4m")]
+async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_reflink_xfs;
+
+    let context = TestContext::new(last_unique_id);
+    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
+        &context,
+        initial_file_system,
+        "reflink-xfs-replay",
+        |snapshots| {
+            start_with_filesystem_snapshots_on_reflink_xfs(
+                deps,
+                &context,
+                reflink_xfs_test_root(),
+                snapshots,
+            )
+        },
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("2m")]
+async fn reflink_xfs_with_filesystem_metering_fails_at_startup(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_filesystem_metering_on_reflink_xfs;
+
+    let context = TestContext::new(last_unique_id);
+    match start_with_filesystem_metering_on_reflink_xfs(deps, &context, reflink_xfs_test_root())
+        .await
+    {
+        Ok(_) => Err(anyhow!(
+            "the executor started with filesystem metering on XFS storage without project quotas"
+        )),
+        Err(error) => {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("filesystem metering requires XFS storage with project quotas"),
+                "{message}"
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Starts the agent `name` with read-only and read-write initial files on executors that `start`
+/// makes, changes its files with a write, renames, a hard link and a symlink, and checks that a
+/// restart from a snapshot and a restart with a full replay both give the tree of the live agent.
+#[cfg(target_os = "linux")]
+async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
+    context: &TestContext,
+    initial_file_system: &PrecompiledComponent,
+    name: &str,
+    start: impl Fn(FilesystemSnapshotsConfig) -> F,
+) -> anyhow::Result<()>
+where
+    F: std::future::Future<Output = anyhow::Result<TestWorkerExecutor>>,
+{
+    let executor = start(managed_snapshots()).await?;
+    let agent = Agent::start(
+        &executor,
+        context,
+        initial_file_system,
+        name,
         &[
             entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
             entry(
@@ -2246,12 +2338,20 @@ async fn managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
 
     let restarted = start(managed_snapshots()).await?;
     let restored = agent.describe(&restarted).await?;
+    let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id).await);
     restarted.release().await?;
     let replaying = start(FilesystemSnapshotsConfig::default()).await?;
     let replayed = agent.describe(&replaying).await?;
+    let replayed_shape = invocation_shape(&replaying.stored_oplog(&agent.worker_id).await);
 
     assert_eq!(restored, live);
     assert_eq!(replayed, live);
+    let settled = || InvocationShape {
+        applied: 6,
+        ..InvocationShape::settled()
+    };
+    assert_eq!(restored_shape, settled());
+    assert_eq!(replayed_shape, settled());
     Ok(())
 }
 

@@ -21,6 +21,7 @@ use crate::filesystem_snapshot::{
 };
 use crate::services::agent_filesystem::RestoreTree;
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
+use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use futures::StreamExt as _;
@@ -3347,14 +3348,38 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
     let root = std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
         .map(std::path::PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
-    let storage = crate::services::golem_config::FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
-        ..crate::services::golem_config::FilesystemStorageConfig::default()
-    };
+    a_volume_below_the_pressure_target_admits_no_periodic_upload(
+        FilesystemStorageMode::ManagedXfs { root: root.into() },
+        "managed-xfs-pressure",
+    )
+    .await;
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[test_r::timeout("60s")]
+async fn reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload() {
+    let root = std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+        .map(std::path::PathBuf::from)
+        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas");
+    a_volume_below_the_pressure_target_admits_no_periodic_upload(
+        FilesystemStorageMode::ReflinkXfs { root: root.into() },
+        "reflink-xfs-pressure",
+    )
+    .await;
+}
+
+/// Binds `storage` on a real volume, sets pressure targets that no volume reaches, and checks
+/// that the volume has no room for the periodic upload of the agent `name`.
+#[cfg(target_os = "linux")]
+async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
+    storage: FilesystemStorageMode,
+    name: &str,
+) {
     let provisioning = crate::sandbox_filesystem::SandboxFilesystemProvisioning::new(
-        storage.deterministic_root_dir.clone(),
-        storage.managed_xfs_root_dir.clone(),
-        storage.cleanup_retry.clone(),
+        &storage,
+        crate::services::golem_config::FilesystemStorageConfig::default().cleanup_retry,
     )
     .unwrap();
     let pressure = FilesystemPressureConfig::new(1, u64::MAX, 1, 2, 1, Duration::ZERO).unwrap();
@@ -3368,9 +3393,7 @@ async fn managed_xfs_a_volume_below_the_pressure_target_admits_no_periodic_uploa
         CancellationToken::new(),
     );
 
-    let admitted = snapshots
-        .admit_periodic(&agent_snapshots("managed-xfs-pressure"))
-        .await;
+    let admitted = snapshots.admit_periodic(&agent_snapshots(name)).await;
 
     assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
 }

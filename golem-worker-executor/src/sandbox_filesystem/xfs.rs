@@ -21,14 +21,20 @@ use rustix::ioctl::{Getter, Setter, ioctl};
 use std::collections::HashMap;
 use std::fs::File;
 use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const XFS_SUPER_MAGIC: u64 = 0x5846_5342;
-// XFS reserves inode 128 for the filesystem root.
-const XFS_ROOT_INODE: u64 = 128;
+// The mount table of the process: one line per mount, in the format of `proc_pid_mountinfo(5)`.
+const MOUNT_TABLE: &str = "/proc/self/mountinfo";
+// `XFS_FSOP_GEOM_FLAGS_DIRV2CI` of `xfs_fs.h`: names are compared without ASCII case.
+const XFS_FSOP_GEOM_FLAGS_DIRV2CI: u32 = 1 << 12;
+// `XFS_IOC_FSGEOMETRY_V1` of `xfs_fs.h`: `_IOR('X', 100, struct xfs_fsop_geom_v1)`.
+const XFS_IOC_FSGEOMETRY_V1: rustix::ioctl::Opcode =
+    rustix::ioctl::opcode::read::<XfsGeometryV1>(b'X', 100);
 const XFS_BASIC_BLOCK_BYTES: u64 = 512;
 const XQM_PRJQUOTA: u32 = 2;
 const Q_XGETQUOTA: u32 = (b'X' as u32) << 8 | 3;
@@ -50,33 +56,33 @@ const PROJECT_LIMIT_FIELDS: u16 =
 const PROJECT_DATA_LIMIT_FIELDS: u16 = FS_DQ_ISOFT | FS_DQ_IHARD | FS_DQ_BSOFT | FS_DQ_BHARD;
 
 #[derive(Clone, Copy)]
-pub(super) struct ValidatedManagedXfsNameMode {
+pub(super) struct ValidatedXfsNameMode {
     identity: FilesystemIdentity,
 }
 
-impl ValidatedManagedXfsNameMode {
+impl ValidatedXfsNameMode {
     pub(super) fn matches_device(self, device: u64) -> bool {
         self.identity.device == device
     }
 }
 
 #[cfg(test)]
-pub(super) fn validated_managed_xfs_name_mode_for_test(device: u64) -> ValidatedManagedXfsNameMode {
-    validated_managed_xfs_name_mode(XFS_SUPER_MAGIC, FilesystemIdentity { device })
+pub(super) fn validated_xfs_name_mode_for_test(device: u64) -> ValidatedXfsNameMode {
+    validated_xfs_name_mode(XFS_SUPER_MAGIC, FilesystemIdentity { device })
         .expect("XFS filesystem type must produce a managed name-mode proof")
 }
 
-fn validated_managed_xfs_name_mode(
+fn validated_xfs_name_mode(
     filesystem_type: u64,
     identity: FilesystemIdentity,
-) -> Option<ValidatedManagedXfsNameMode> {
-    (filesystem_type == XFS_SUPER_MAGIC).then_some(ValidatedManagedXfsNameMode { identity })
+) -> Option<ValidatedXfsNameMode> {
+    (filesystem_type == XFS_SUPER_MAGIC).then_some(ValidatedXfsNameMode { identity })
 }
 
 #[derive(Default)]
 struct ProjectAllocator {
     next: u32,
-    active: HashMap<NonZeroU32, PathBuf>,
+    active: HashMap<NonZeroU32, Box<Path>>,
 }
 
 #[repr(C)]
@@ -139,81 +145,244 @@ struct FsQuotaStatV {
     qs_pad2: [u64; 7],
 }
 
+/// `struct xfs_fsop_geom_v1` of `xfs_fs.h`, the output of `XFS_IOC_FSGEOMETRY_V1`.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct XfsGeometryV1 {
+    blocksize: u32,
+    rtextsize: u32,
+    agblocks: u32,
+    agcount: u32,
+    logblocks: u32,
+    sectsize: u32,
+    inodesize: u32,
+    imaxpct: u32,
+    datablocks: u64,
+    rtblocks: u64,
+    rtextents: u64,
+    logstart: u64,
+    uuid: [u8; 16],
+    sunit: u32,
+    swidth: u32,
+    version: i32,
+    flags: u32,
+    logsectsize: u32,
+    rtsectsize: u32,
+    dirblocksize: u32,
+}
+
 #[derive(Clone)]
 pub(super) struct ManagedProvisioning {
     volume: FilesystemVolume,
-    root: PathBuf,
+    root: Arc<Path>,
     root_fd: Arc<File>,
     allocator: Arc<Mutex<ProjectAllocator>>,
     filesystem_block_bytes: NonZeroU64,
-    validated_name_mode: ValidatedManagedXfsNameMode,
+    validated_name_mode: ValidatedXfsNameMode,
     cleanup_retry: RetryConfig,
 }
 
-impl ManagedProvisioning {
-    pub(super) fn new(
-        root: &Path,
-        cleanup_retry: &RetryConfig,
-    ) -> Result<Self, FilesystemStorageError> {
+/// The root directory of an XFS volume after the checks that every XFS storage mode needs.
+///
+/// The value holds the exclusive lock of the root for as long as its descriptor is open.
+pub(super) struct XfsRoot {
+    /// The root as the configuration gives it. Errors name it.
+    root: Box<Path>,
+    root_fd: Arc<File>,
+    /// The root through the open descriptor, which keeps naming the same directory.
+    stable_root: Box<Path>,
+    identity: FilesystemIdentity,
+    name_mode: ValidatedXfsNameMode,
+    filesystem_block_bytes: NonZeroU64,
+    /// The filesystem options of the mount, as XFS shows them in the mount table.
+    mount_options: Box<str>,
+}
+
+impl XfsRoot {
+    /// Opens the XFS volume at `root` for one executor.
+    ///
+    /// The path must be the root directory of an XFS filesystem and the root of its mount. The
+    /// filesystem must compare names with their case and have a valid block size. No other
+    /// process must hold the lock of the root. The function takes the exclusive lock of the root.
+    /// It changes nothing on the volume, and none of its calls needs a privilege.
+    pub(super) fn open(root: &Path) -> Result<Self, FilesystemStorageError> {
         let root_fd = File::open(root)
-            .map_err(|error| FilesystemStorageError::io("open managed XFS root", root, error))?;
+            .map_err(|error| FilesystemStorageError::io("open XFS root", root, error))?;
         let filesystem = fstatfs(&root_fd).map_err(|error| {
-            FilesystemStorageError::io("inspect managed XFS root", root, errno_to_io(error))
+            FilesystemStorageError::io("inspect XFS root", root, errno_to_io(error))
         })?;
-        if filesystem.f_type as u64 != XFS_SUPER_MAGIC {
+        let identity = filesystem_identity(&root_fd)
+            .map_err(|error| FilesystemStorageError::io("identify XFS root", root, error))?;
+        let name_mode =
+            validated_xfs_name_mode(filesystem.f_type as u64, identity).ok_or_else(|| {
+                FilesystemStorageError::verification("validate XFS root filesystem type", root)
+            })?;
+        let flags = geometry_flags(&root_fd).map_err(|error| {
+            FilesystemStorageError::io("inspect XFS root geometry", root, error)
+        })?;
+        if !names_are_case_sensitive(flags) {
             return Err(FilesystemStorageError::verification(
-                "validate managed XFS root filesystem type",
+                "validate XFS names are case-sensitive",
                 root,
             ));
         }
-        validate_managed_xfs_root_location(&root_fd, root)?;
+        let mount_options = validate_xfs_root_location(&root_fd, root)?;
         flock(&root_fd, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
             FilesystemStorageError::io(
-                "acquire exclusive ownership of managed XFS root",
+                "acquire exclusive ownership of XFS root",
                 root,
                 errno_to_io(error),
             )
         })?;
-        let filesystem_block_bytes = u64::try_from(filesystem.f_bsize).map_err(|_| {
-            FilesystemStorageError::verification("validate managed XFS filesystem block size", root)
-        })?;
-        if filesystem_block_bytes == 0
-            || !filesystem_block_bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES)
-        {
-            return Err(FilesystemStorageError::verification(
-                "validate managed XFS filesystem block size",
-                root,
-            ));
-        }
-
-        let stable_root = PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd()));
+        let filesystem_block_bytes = u64::try_from(filesystem.f_bsize)
+            .ok()
+            .filter(|bytes| *bytes != 0 && bytes.is_multiple_of(XFS_BASIC_BLOCK_BYTES))
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| {
+                FilesystemStorageError::verification("validate XFS filesystem block size", root)
+            })?;
+        let stable_root: Box<Path> =
+            PathBuf::from(format!("/proc/self/fd/{}", root_fd.as_raw_fd())).into_boxed_path();
         std::fs::metadata(&stable_root).map_err(|error| {
-            FilesystemStorageError::io(
-                "open managed XFS root through its stable descriptor",
-                root,
-                error,
-            )
+            FilesystemStorageError::io("open XFS root through its stable descriptor", root, error)
         })?;
+        Ok(Self {
+            root: Box::from(root),
+            root_fd: Arc::new(root_fd),
+            stable_root,
+            identity,
+            name_mode,
+            filesystem_block_bytes,
+            mount_options,
+        })
+    }
+}
 
-        let identity = filesystem_identity(&root_fd).map_err(|error| {
-            FilesystemStorageError::io("identify managed XFS root", root, error)
-        })?;
-        let validated_name_mode =
-            validated_managed_xfs_name_mode(filesystem.f_type as u64, identity)
-                .expect("validated XFS filesystem type must produce a name-mode proof");
-        clear_root_project_assignment(&root_fd, &stable_root)?;
-        let root_fd = Arc::new(root_fd);
+/// Binds XFS storage with reflink and without project quotas on the opened root `root`: plain
+/// agent directories under the root, copied by reflink.
+///
+/// The root is refused when its mount accounts project quotas, when it has a project id or the
+/// project-inherit flag, or when a reflink in it fails. The function never changes the project id
+/// or the flags of the root, and none of its calls needs a privilege.
+pub(super) fn bind_reflink(
+    root: XfsRoot,
+    cleanup_retry: RetryConfig,
+) -> Result<(FilesystemVolume, directories::DirectoryProvisioning), FilesystemStorageError> {
+    verify_no_project_quotas(&root)?;
+    probe_reflink(&root)?;
+    let XfsRoot {
+        root_fd,
+        stable_root,
+        identity,
+        name_mode,
+        ..
+    } = root;
+    Ok((
+        FilesystemVolume::copy_on_write(root_fd, identity),
+        directories::DirectoryProvisioning::new(
+            Some(Arc::from(stable_root)),
+            cleanup_retry,
+            NativeNameModeSource::ValidatedXfs(name_mode),
+        ),
+    ))
+}
+
+/// Checks that the mount of `root` accounts no project quotas, and that the root has no project
+/// id and no project-inherit flag. Then no agent directory and no host directory gets a project.
+fn verify_no_project_quotas(root: &XfsRoot) -> Result<(), FilesystemStorageError> {
+    if project_quota_accounting(&root.mount_options) == ProjectQuotaAccounting::On {
+        return Err(FilesystemStorageError::verification(
+            "verify XFS volume has no project quota accounting",
+            &root.root,
+        ));
+    }
+    let attributes = get_fsxattr(&root.root_fd).map_err(|error| {
+        FilesystemStorageError::io("inspect XFS root project attributes", &root.root, error)
+    })?;
+    if has_project_identity(&attributes) {
+        return Err(FilesystemStorageError::verification(
+            "verify XFS root has no project identity",
+            &root.root,
+        ));
+    }
+    Ok(())
+}
+
+/// The directory under the root of an XFS volume in which [`probe_reflink`] tests a reflink.
+const REFLINK_PROBE: &str = ".golem-xfs-reflink-probe";
+
+/// Checks that a reflink works on the volume of `root`: makes a file under [`REFLINK_PROBE`],
+/// reflinks it into a second file, and reads the second file back.
+///
+/// What an earlier process left under the probe name is removed first. The probe is removed after
+/// the check, also when the check fails.
+fn probe_reflink(root: &XfsRoot) -> Result<(), FilesystemStorageError> {
+    let probe = root.stable_root.join(REFLINK_PROBE);
+    let configured_probe = root.root.join(REFLINK_PROBE);
+    remove_and_verify_blocking(&probe, "remove stale XFS reflink probe")
+        .map_err(|error| error.about(&configured_probe))?;
+    std::fs::create_dir(&probe).map_err(|error| {
+        FilesystemStorageError::io("create XFS reflink probe", &configured_probe, error)
+    })?;
+    let probed = reflink_probe_contents(&probe);
+    let removed = remove_and_verify_blocking(&probe, "remove XFS reflink probe")
+        .map_err(|error| error.about(&configured_probe));
+    probed
+        .map_err(|error| {
+            FilesystemStorageError::io("validate XFS reflink support", &configured_probe, error)
+        })
+        .and(removed)
+}
+
+/// Writes a file in the empty directory `probe`, reflinks it into a new file, and checks that the
+/// new file holds the same bytes.
+fn reflink_probe_contents(probe: &Path) -> std::io::Result<()> {
+    const CONTENTS: &[u8] = b"golem-xfs-reflink-probe";
+    let mut create = std::fs::OpenOptions::new();
+    create.read(true).write(true).create_new(true);
+    let mut source = create.open(probe.join("source"))?;
+    std::io::Write::write_all(&mut source, CONTENTS)?;
+    let target = create.open(probe.join("target"))?;
+    ioctl_ficlone(&target, &source).map_err(errno_to_io)?;
+    if std::fs::read(probe.join("target"))? != CONTENTS {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "XFS reflink did not preserve probe contents",
+        ));
+    }
+    Ok(())
+}
+
+impl ManagedProvisioning {
+    /// Binds managed XFS storage with project quotas on the opened root `root`.
+    ///
+    /// The function removes any project from the root, checks that project quota accounting and
+    /// enforcement are on and that this process may query and change project quotas, and probes
+    /// project inheritance and reflink.
+    pub(super) fn new(
+        root: XfsRoot,
+        cleanup_retry: &RetryConfig,
+    ) -> Result<Self, FilesystemStorageError> {
+        let XfsRoot {
+            root: configured_root,
+            root_fd,
+            stable_root,
+            identity,
+            name_mode,
+            filesystem_block_bytes,
+            ..
+        } = root;
+        clear_root_project_assignment(&root_fd, &configured_root)?;
         let backend = Self {
-            volume: FilesystemVolume::managed(Arc::clone(&root_fd), identity),
-            root: stable_root,
+            volume: FilesystemVolume::copy_on_write(Arc::clone(&root_fd), identity),
+            root: Arc::from(stable_root),
             root_fd,
             allocator: Arc::new(Mutex::new(ProjectAllocator {
                 next: 1,
                 active: HashMap::new(),
             })),
-            filesystem_block_bytes: NonZeroU64::new(filesystem_block_bytes)
-                .expect("validated XFS filesystem block size must be nonzero"),
-            validated_name_mode,
+            filesystem_block_bytes,
+            validated_name_mode: name_mode,
             cleanup_retry: cleanup_retry.clone(),
         };
         backend.validate_project_quota_state()?;
@@ -226,7 +395,7 @@ impl ManagedProvisioning {
         &self.volume
     }
 
-    pub(super) fn root(&self) -> &Path {
+    pub(super) fn root(&self) -> &Arc<Path> {
         &self.root
     }
 
@@ -263,12 +432,11 @@ impl ManagedProvisioning {
     }
 
     pub(super) fn reserved_project(&self, owner: &Path) -> Option<NonZeroU32> {
-        self.allocator
+        let allocator = self
+            .allocator
             .lock()
-            .expect("XFS project allocator lock poisoned")
-            .active
-            .iter()
-            .find_map(|(project_id, active_owner)| (active_owner == owner).then_some(*project_id))
+            .expect("XFS project allocator lock poisoned");
+        project_of_owner(&allocator.active, owner)
     }
 
     pub(super) fn reserve_existing_project(
@@ -280,78 +448,76 @@ impl ManagedProvisioning {
             .allocator
             .lock()
             .expect("XFS project allocator lock poisoned");
-        match allocator.active.get(&project_id) {
-            Some(active_owner) if active_owner == owner => Ok(()),
-            Some(active_owner) => Err(std::io::Error::new(
+        match existing_reservation(&allocator.active, project_id, owner) {
+            ExistingReservation::Held => Ok(()),
+            ExistingReservation::HeldByOther(active_owner) => Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!(
                     "XFS project {project_id} is owned by {}",
                     active_owner.display()
                 ),
             )),
-            None => {
-                allocator.active.insert(project_id, owner.to_path_buf());
+            ExistingReservation::Free => {
+                allocator.active.insert(project_id, owner.into());
                 Ok(())
             }
         }
     }
 
     pub(super) fn reserve_project(&self, owner: &Path) -> std::io::Result<NonZeroU32> {
-        let mut first_candidate = None;
-        loop {
-            let project_id = self.reserve_project_candidate(owner)?;
-            if first_candidate == Some(project_id) {
+        // Each attempt reserves a new candidate, so the scan stops when it reaches its first
+        // candidate again. When another caller holds that candidate at that moment, the bound of
+        // 2^32 attempts stops it with the same error.
+        let outcome = (0..=u32::MAX).try_fold(None, |first, _| {
+            let project_id = match self.reserve_project_candidate(owner) {
+                Ok(project_id) => project_id,
+                Err(error) => return ControlFlow::Break(Err(error)),
+            };
+            if candidate_repeats(first, project_id) {
                 self.release_project(project_id);
-                return Err(std::io::Error::other(
-                    "no reusable XFS project IDs are available",
-                ));
+                return ControlFlow::Break(Err(no_reusable_projects()));
             }
-            first_candidate.get_or_insert(project_id);
-
-            let prepared = (|| {
-                let usage = self.project_usage(project_id.get())?;
-                if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
-                    return Ok(false);
+            match self.prepare_project(project_id) {
+                Ok(true) => ControlFlow::Break(Ok(project_id)),
+                Ok(false) => {
+                    self.release_project(project_id);
+                    ControlFlow::Continue(Some(first.unwrap_or(project_id)))
                 }
-                self.clear_project_limits(project_id)?;
-                Ok(true)
-            })();
-
-            match prepared {
-                Ok(true) => return Ok(project_id),
-                Ok(false) => self.release_project(project_id),
                 Err(error) => {
                     self.release_project(project_id);
-                    return Err(error);
+                    ControlFlow::Break(Err(error))
                 }
             }
+        });
+        match outcome {
+            ControlFlow::Break(result) => result,
+            ControlFlow::Continue(_) => Err(no_reusable_projects()),
         }
     }
 
+    /// Makes the reserved project `project_id` ready for a new owner when it holds nothing:
+    /// clears its limits, and gives true. Gives false when it still holds something. This is the
+    /// sequence of native calls; the decision is [`project_is_empty`].
+    fn prepare_project(&self, project_id: NonZeroU32) -> std::io::Result<bool> {
+        if !project_is_empty(self.project_usage(project_id.get())?) {
+            return Ok(false);
+        }
+        self.clear_project_limits(project_id)?;
+        Ok(true)
+    }
+
+    /// Reserves the next project that no owner holds for `owner`. The decision, the reservation and
+    /// the next scan start are made under one lock, so a concurrent caller sees the reservation.
     fn reserve_project_candidate(&self, owner: &Path) -> std::io::Result<NonZeroU32> {
         let mut allocator = self
             .allocator
             .lock()
             .expect("XFS project allocator lock poisoned");
-        let first = allocator.next.max(1);
-        let mut candidate = first;
-        loop {
-            let project_id = NonZeroU32::new(candidate).expect("candidate must be nonzero");
-            if let std::collections::hash_map::Entry::Vacant(entry) =
-                allocator.active.entry(project_id)
-            {
-                entry.insert(owner.to_path_buf());
-                allocator.next = candidate.checked_add(1).unwrap_or(1);
-                return Ok(project_id);
-            }
-
-            candidate = candidate.checked_add(1).unwrap_or(1);
-            if candidate == first {
-                return Err(std::io::Error::other(
-                    "no reusable XFS project IDs are available",
-                ));
-            }
-        }
+        let project_id = next_free_project(allocator.next, &allocator.active)
+            .ok_or_else(no_reusable_projects)?;
+        allocator.active.insert(project_id, owner.into());
+        allocator.next = project_after(project_id);
+        Ok(project_id)
     }
 
     pub(super) fn release_project(&self, project_id: NonZeroU32) {
@@ -373,11 +539,11 @@ impl ManagedProvisioning {
 
     pub(super) fn finish_project_cleanup(&self, project_id: NonZeroU32) -> std::io::Result<()> {
         let mut usage = self.project_usage(project_id.get())?;
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             rustix::fs::syncfs(&self.root_fd).map_err(errno_to_io)?;
             usage = self.project_usage(project_id.get())?;
         }
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 format!(
@@ -439,7 +605,7 @@ impl ManagedProvisioning {
         let usage = self.project_usage(project_id.get()).map_err(|error| {
             FilesystemStorageError::io("validate 32-bit XFS project quota query", &self.root, error)
         })?;
-        if usage.allocated_bytes != 0 || usage.filesystem_objects != 0 {
+        if !project_is_empty(usage) {
             return Err(FilesystemStorageError::verification(
                 "reserve unused 32-bit XFS startup probe project",
                 &self.root,
@@ -516,18 +682,12 @@ impl ManagedProvisioning {
     fn project_quota(&self, project_id: u32) -> std::io::Result<FsDiskQuota> {
         let mut quota = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id, &mut quota) {
-            if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
-                quota.d_version = FS_DQUOT_VERSION;
-                quota.d_flags = FS_PROJ_QUOTA;
-                quota.d_id = project_id;
-                return Ok(quota);
+            if quota_record_is_missing(&error) {
+                return Ok(empty_project_quota(project_id));
             }
             return Err(error);
         }
-        if quota.d_version != FS_DQUOT_VERSION
-            || quota.d_flags != FS_PROJ_QUOTA
-            || quota.d_id != project_id
-        {
+        if !project_quota_record_is_valid(&quota, project_id) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "XFS returned an invalid project quota record",
@@ -548,27 +708,12 @@ impl ManagedProvisioning {
 
         let mut cleared = FsDiskQuota::default();
         if let Err(error) = self.get_project_quota(project_id.get(), &mut cleared) {
-            if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
+            if quota_record_is_missing(&error) {
                 return Ok(());
             }
             return Err(error);
         }
-        if cleared.d_blk_hardlimit != 0
-            || cleared.d_blk_softlimit != 0
-            || cleared.d_ino_hardlimit != 0
-            || cleared.d_ino_softlimit != 0
-            || cleared.d_rtb_hardlimit != 0
-            || cleared.d_rtb_softlimit != 0
-            || cleared.d_itimer != 0
-            || cleared.d_btimer != 0
-            || cleared.d_rtbtimer != 0
-            || cleared.d_iwarns != 0
-            || cleared.d_bwarns != 0
-            || cleared.d_rtbwarns != 0
-            || cleared.d_itimer_hi != 0
-            || cleared.d_btimer_hi != 0
-            || cleared.d_rtbtimer_hi != 0
-        {
+        if project_quota_retains_state(&cleared) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("XFS project {project_id} retained quota limits or state"),
@@ -662,6 +807,132 @@ impl ManagedProvisioning {
     }
 }
 
+/// The project that `owner` holds in `active`, if any.
+fn project_of_owner(active: &HashMap<NonZeroU32, Box<Path>>, owner: &Path) -> Option<NonZeroU32> {
+    active
+        .iter()
+        .find_map(|(project_id, active_owner)| (&**active_owner == owner).then_some(*project_id))
+}
+
+/// What a reservation of an existing project finds in the active reservations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingReservation<'a> {
+    /// The owner already holds the project.
+    Held,
+    /// Another owner holds the project.
+    HeldByOther(&'a Path),
+    /// No owner holds the project.
+    Free,
+}
+
+/// What a reservation of `project_id` for `owner` finds in `active`.
+fn existing_reservation<'a>(
+    active: &'a HashMap<NonZeroU32, Box<Path>>,
+    project_id: NonZeroU32,
+    owner: &Path,
+) -> ExistingReservation<'a> {
+    match active.get(&project_id) {
+        Some(active_owner) if &**active_owner == owner => ExistingReservation::Held,
+        Some(active_owner) => ExistingReservation::HeldByOther(active_owner),
+        None => ExistingReservation::Free,
+    }
+}
+
+/// The first project that `active` does not hold, scanning from `next` (0 counts as 1) up to
+/// `u32::MAX`, and then from 1 up to the start. `None` when every project is held.
+fn next_free_project(next: u32, active: &HashMap<NonZeroU32, Box<Path>>) -> Option<NonZeroU32> {
+    let first = next.max(1);
+    (first..=u32::MAX)
+        .chain(1..first)
+        .filter_map(NonZeroU32::new)
+        .find(|project_id| !active.contains_key(project_id))
+}
+
+/// Where the next scan starts after `project_id` is reserved: the next project, and 1 after
+/// `u32::MAX`.
+fn project_after(project_id: NonZeroU32) -> u32 {
+    project_id.get().checked_add(1).unwrap_or(1)
+}
+
+/// Whether the reservation loop got back to `first`, the first candidate it reserved, so it went
+/// once around the project ids.
+fn candidate_repeats(first: Option<NonZeroU32>, candidate: NonZeroU32) -> bool {
+    first == Some(candidate)
+}
+
+/// Whether a project with `usage` holds nothing, so it can be given to a new owner.
+fn project_is_empty(usage: FilesystemAllocation) -> bool {
+    usage.allocated_bytes == 0 && usage.filesystem_objects == 0
+}
+
+/// Whether a read of a project quota record failed because XFS has no record for the project.
+fn quota_record_is_missing(error: &std::io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH))
+}
+
+/// The quota record of a project for which XFS has no record: no limits, no usage.
+fn empty_project_quota(project_id: u32) -> FsDiskQuota {
+    FsDiskQuota {
+        d_version: FS_DQUOT_VERSION,
+        d_flags: FS_PROJ_QUOTA,
+        d_id: project_id,
+        ..FsDiskQuota::default()
+    }
+}
+
+/// Whether `quota` is a project quota record of the expected version for `project_id`.
+fn project_quota_record_is_valid(quota: &FsDiskQuota, project_id: u32) -> bool {
+    quota.d_version == FS_DQUOT_VERSION
+        && quota.d_flags == FS_PROJ_QUOTA
+        && quota.d_id == project_id
+}
+
+/// Whether `quota` still holds a limit, a timer or a warning count after its limits were cleared.
+fn project_quota_retains_state(quota: &FsDiskQuota) -> bool {
+    quota.d_blk_hardlimit != 0
+        || quota.d_blk_softlimit != 0
+        || quota.d_ino_hardlimit != 0
+        || quota.d_ino_softlimit != 0
+        || quota.d_rtb_hardlimit != 0
+        || quota.d_rtb_softlimit != 0
+        || quota.d_itimer != 0
+        || quota.d_btimer != 0
+        || quota.d_rtbtimer != 0
+        || quota.d_iwarns != 0
+        || quota.d_bwarns != 0
+        || quota.d_rtbwarns != 0
+        || quota.d_itimer_hi != 0
+        || quota.d_btimer_hi != 0
+        || quota.d_rtbtimer_hi != 0
+}
+
+/// Whether XFS project quotas can hold `limits` exactly: both limits are positive and the byte
+/// limit is a whole number of filesystem blocks.
+fn limits_are_representable(limits: FilesystemLimits, filesystem_block_bytes: NonZeroU64) -> bool {
+    limits.allocated_bytes != 0
+        && limits
+            .allocated_bytes
+            .is_multiple_of(filesystem_block_bytes.get())
+        && limits.filesystem_objects != 0
+}
+
+/// Whether `installed` holds the block hard limit `block_hard_limit` and the inode hard limit
+/// `inode_hard_limit`, and no soft limit.
+fn project_quota_holds_limits(
+    installed: &FsDiskQuota,
+    block_hard_limit: u64,
+    inode_hard_limit: u64,
+) -> bool {
+    installed.d_blk_hardlimit == block_hard_limit
+        && installed.d_blk_softlimit == 0
+        && installed.d_ino_hardlimit == inode_hard_limit
+        && installed.d_ino_softlimit == 0
+}
+
+fn no_reusable_projects() -> std::io::Error {
+    std::io::Error::other("no reusable XFS project IDs are available")
+}
+
 // The root must have no project id and no inheritance before anything is created under it,
 // so a host directory made under it belongs to no project.
 fn clear_root_project_assignment(
@@ -718,66 +989,137 @@ fn has_project_identity(attributes: &linux_raw_sys::general::fsxattr) -> bool {
 pub(super) fn verify_host_directory_has_no_project(
     path: &Path,
 ) -> Result<(), FilesystemStorageError> {
-    let directory = File::open(path).map_err(|error| {
-        FilesystemStorageError::io("open managed XFS host directory", path, error)
-    })?;
+    let directory = File::open(path)
+        .map_err(|error| FilesystemStorageError::io("open XFS host directory", path, error))?;
     let attributes = get_fsxattr(&directory).map_err(|error| {
-        FilesystemStorageError::io(
-            "inspect managed XFS host directory project attributes",
-            path,
-            error,
-        )
+        FilesystemStorageError::io("inspect XFS host directory project attributes", path, error)
     })?;
     if has_project_identity(&attributes) {
         return Err(FilesystemStorageError::verification(
-            "verify managed XFS host directory has no project identity",
+            "verify XFS host directory has no project identity",
             path,
         ));
     }
     Ok(())
 }
 
-fn validate_managed_xfs_root_location(
+/// Checks that `root` is the root directory of its filesystem and the root of its mount, and gives
+/// the filesystem options of the mount.
+fn validate_xfs_root_location(
     root_fd: &File,
     root: &Path,
-) -> Result<(), FilesystemStorageError> {
+) -> Result<Box<str>, FilesystemStorageError> {
     let location = statx(
         root_fd,
         "",
         AtFlags::EMPTY_PATH | AtFlags::NO_AUTOMOUNT,
-        StatxFlags::empty(),
+        StatxFlags::MNT_ID,
     )
     .map_err(|error| {
-        FilesystemStorageError::io(
-            "inspect managed XFS root mount location",
-            root,
-            errno_to_io(error),
-        )
+        FilesystemStorageError::io("inspect XFS root mount location", root, errno_to_io(error))
     })?;
-    let inode = root_fd.metadata().map_err(|error| {
-        FilesystemStorageError::io("inspect managed XFS root inode", root, error)
+    let mount_table = std::fs::read_to_string(MOUNT_TABLE).map_err(|error| {
+        FilesystemStorageError::io("read the mount table", Path::new(MOUNT_TABLE), error)
     })?;
-    if !managed_xfs_root_location_is_valid(
-        inode.ino(),
-        location.stx_attributes,
-        location.stx_attributes_mask,
-    ) {
-        return Err(FilesystemStorageError::verification(
-            "validate managed XFS root is the filesystem mount root",
+    let mount_id =
+        (location.stx_mask & StatxFlags::MNT_ID.bits() != 0).then_some(location.stx_mnt_id);
+    match mount_id.and_then(|id| mount_line(&mount_table, id)) {
+        Some(line)
+            if xfs_root_location_is_valid(
+                location.stx_attributes,
+                location.stx_attributes_mask,
+                Some(line),
+            ) =>
+        {
+            Ok(Box::from(line.super_options))
+        }
+        _ => Err(FilesystemStorageError::verification(
+            "validate XFS root is the filesystem mount root",
             root,
-        ));
+        )),
     }
-    Ok(())
 }
 
-fn managed_xfs_root_location_is_valid(
-    inode: u64,
+/// Whether an XFS mount accounts project quotas.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectQuotaAccounting {
+    On,
+    Off,
+}
+
+/// The fields of one line of `/proc/self/mountinfo` that the root checks read.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MountLine<'a> {
+    /// The directory of the filesystem that is the root of the mount.
+    root: &'a str,
+    /// The options of the filesystem, as the filesystem shows them.
+    super_options: &'a str,
+}
+
+/// Whether a directory is the root directory of its filesystem and is mounted there.
+///
+/// The directory must be a mount root, and `line`, the line of its mount in the mount table, must
+/// give `/` as the root of the mount within its filesystem. A bind mount of a subdirectory is a
+/// mount root too, but its mount has another root. A directory without a known mount line is not
+/// valid.
+fn xfs_root_location_is_valid(
     attributes: StatxAttributes,
     attributes_mask: StatxAttributes,
+    line: Option<MountLine<'_>>,
 ) -> bool {
-    inode == XFS_ROOT_INODE
-        && attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
+    attributes_mask.contains(StatxAttributes::MOUNT_ROOT)
         && attributes.contains(StatxAttributes::MOUNT_ROOT)
+        && line.is_some_and(|line| line.root == "/")
+}
+
+/// Gives the line of the mount `mount_id` in `mount_table`, which has the format of
+/// `/proc/self/mountinfo`: the mount id is the first field, the root of the mount the fourth, and
+/// the filesystem options the third field after the separator `-`.
+fn mount_line(mount_table: &str, mount_id: u64) -> Option<MountLine<'_>> {
+    mount_table.lines().find_map(|line| {
+        let (mount_fields, filesystem_fields) = line.split_once(" - ")?;
+        let mut fields = mount_fields.split(' ');
+        let id = fields.next()?.parse::<u64>().ok()?;
+        let root = fields.nth(2)?;
+        let super_options = filesystem_fields.split(' ').nth(2)?;
+        (id == mount_id).then_some(MountLine {
+            root,
+            super_options,
+        })
+    })
+}
+
+/// Whether the XFS filesystem options `super_options` account project quotas. XFS shows
+/// `prjquota` when it accounts and enforces them, and `pqnoenforce` when it only accounts them.
+fn project_quota_accounting(super_options: &str) -> ProjectQuotaAccounting {
+    if super_options
+        .split(',')
+        .any(|option| option == "prjquota" || option == "pqnoenforce")
+    {
+        ProjectQuotaAccounting::On
+    } else {
+        ProjectQuotaAccounting::Off
+    }
+}
+
+/// Whether an XFS volume with the superblock flags `geometry_flags` compares names with their
+/// case. A volume made with `mkfs.xfs -n version=ci` folds the case of ASCII names.
+fn names_are_case_sensitive(geometry_flags: u32) -> bool {
+    geometry_flags & XFS_FSOP_GEOM_FLAGS_DIRV2CI == 0
+}
+
+/// Reads the superblock flags of the XFS volume that holds `file`. The call needs no privilege.
+fn geometry_flags(file: &File) -> std::io::Result<u32> {
+    // SAFETY: The opcode encodes the size of `XfsGeometryV1`, which has the layout of
+    // `struct xfs_fsop_geom_v1`, and the kernel writes the complete structure.
+    unsafe {
+        ioctl(
+            file,
+            Getter::<{ XFS_IOC_FSGEOMETRY_V1 }, XfsGeometryV1>::new(),
+        )
+    }
+    .map(|geometry| geometry.flags)
+    .map_err(errno_to_io)
 }
 
 pub(super) fn observe_space(
@@ -789,7 +1131,7 @@ pub(super) fn observe_space(
     if capacity.f_flag.contains(StatVfsMountFlags::RDONLY) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::ReadOnlyFilesystem,
-            "managed XFS mount is read-only",
+            "XFS volume is mounted read-only",
         ));
     }
     space_from_values(
@@ -814,7 +1156,7 @@ fn validate_filesystem_identity(root: &File, expected: FilesystemIdentity) -> st
     } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "managed filesystem capacity authority identity changed",
+            "XFS volume identity changed",
         ))
     }
 }
@@ -894,12 +1236,7 @@ pub(super) fn install_project_limits(
     filesystem_block_bytes: NonZeroU64,
     limits: FilesystemLimits,
 ) -> std::io::Result<()> {
-    if limits.allocated_bytes == 0
-        || !limits
-            .allocated_bytes
-            .is_multiple_of(filesystem_block_bytes.get())
-        || limits.filesystem_objects == 0
-    {
+    if !limits_are_representable(limits, filesystem_block_bytes) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "filesystem limits are not exactly representable by managed XFS",
@@ -918,11 +1255,7 @@ pub(super) fn install_project_limits(
     set_project_quota_record(volume_root(volume), project_id, &mut quota)?;
 
     let installed = project_quota(volume_root(volume), project_id.get())?;
-    if installed.d_blk_hardlimit != block_hard_limit
-        || installed.d_blk_softlimit != 0
-        || installed.d_ino_hardlimit != limits.filesystem_objects
-        || installed.d_ino_softlimit != 0
-    {
+    if !project_quota_holds_limits(&installed, block_hard_limit, limits.filesystem_objects) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("XFS project {project_id} did not retain the complete quota limit pair"),
@@ -933,25 +1266,19 @@ pub(super) fn install_project_limits(
 
 fn volume_root(volume: &FilesystemVolume) -> &File {
     volume
-        .managed_root()
+        .copy_on_write_root()
         .expect("managed XFS operation requires a managed volume")
 }
 
 fn project_quota(root: &File, project_id: u32) -> std::io::Result<FsDiskQuota> {
     let mut quota = FsDiskQuota::default();
     if let Err(error) = get_project_quota(root, project_id, &mut quota) {
-        if matches!(error.raw_os_error(), Some(libc::ENOENT) | Some(libc::ESRCH)) {
-            quota.d_version = FS_DQUOT_VERSION;
-            quota.d_flags = FS_PROJ_QUOTA;
-            quota.d_id = project_id;
-            return Ok(quota);
+        if quota_record_is_missing(&error) {
+            return Ok(empty_project_quota(project_id));
         }
         return Err(error);
     }
-    if quota.d_version != FS_DQUOT_VERSION
-        || quota.d_flags != FS_PROJ_QUOTA
-        || quota.d_id != project_id
-    {
+    if !project_quota_record_is_valid(&quota, project_id) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "XFS returned an invalid project quota record",
@@ -1238,7 +1565,7 @@ impl ManagedProvisioning {
                 project_id,
                 filesystem_block_bytes: self.filesystem_block_bytes,
             },
-            NativeNameModeSource::ValidatedManagedXfs(self.validated_name_mode),
+            NativeNameModeSource::ValidatedXfs(self.validated_name_mode),
         );
         if let Err(error) = assignment_result {
             return Err(rollback_created_filesystem(created, error).await);
@@ -1549,36 +1876,330 @@ mod tests {
     #[test]
     fn managed_name_mode_proof_requires_xfs_filesystem_type() {
         let identity = FilesystemIdentity { device: 17 };
-        let proof = validated_managed_xfs_name_mode(XFS_SUPER_MAGIC, identity).unwrap();
+        let proof = validated_xfs_name_mode(XFS_SUPER_MAGIC, identity).unwrap();
         assert!(proof.matches_device(17));
         assert!(!proof.matches_device(18));
-        assert!(validated_managed_xfs_name_mode(0, identity).is_none());
+        assert!(validated_xfs_name_mode(0, identity).is_none());
+    }
+
+    const MOUNT_TABLE_FIXTURE: &str = "\
+22 1 0:21 / / rw,relatime shared:1 - ext4 /dev/root rw
+36 22 7:0 / /var/lib/golem/agents rw,relatime shared:2 - xfs /dev/loop0 rw,attr2,inode64,noquota
+37 22 7:0 /agents /srv/bound rw,relatime shared:2 - xfs /dev/loop0 rw,attr2,inode64,noquota
+38 22 7:1 / /var/lib/golem/managed rw,relatime - xfs /dev/loop1 rw,attr2,inode64,prjquota
+39 22 7:2 / /var/lib/golem/accounted rw,relatime - xfs /dev/loop2 rw,usrquota,pqnoenforce
+40 22 7:3 / /mnt/with\\040space rw - xfs /dev/loop3 rw,noquota
+41 22 7:4 /dir\\040with\\040space /srv/bound\\040too rw - xfs /dev/loop4 rw,prjquota
+";
+
+    #[test]
+    fn mount_line_gives_the_root_and_the_filesystem_options_of_the_mount() {
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 36),
+            Some(MountLine {
+                root: "/",
+                super_options: "rw,attr2,inode64,noquota",
+            })
+        );
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 37).map(|line| line.root),
+            Some("/agents")
+        );
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 40),
+            Some(MountLine {
+                root: "/",
+                super_options: "rw,noquota",
+            })
+        );
+        assert_eq!(
+            mount_line(MOUNT_TABLE_FIXTURE, 41),
+            Some(MountLine {
+                root: "/dir\\040with\\040space",
+                super_options: "rw,prjquota",
+            })
+        );
+        assert_eq!(mount_line(MOUNT_TABLE_FIXTURE, 99), None);
+        assert_eq!(mount_line("36 22 7:0 / /a rw", 36), None);
+        assert_eq!(mount_line("x 22 7:0 / /a rw - xfs /dev/loop0 rw", 36), None);
+        assert_eq!(mount_line("36 22 7:0 / /a rw - xfs /dev/loop0", 36), None);
     }
 
     #[test]
-    fn managed_root_must_be_the_xfs_filesystem_mount_root() {
-        let mount_root = StatxAttributes::MOUNT_ROOT;
+    fn an_xfs_root_is_a_mount_root_whose_mount_starts_at_the_filesystem_root() {
+        let flag = StatxAttributes::MOUNT_ROOT;
+        let valid = |attributes, mask, id| {
+            xfs_root_location_is_valid(attributes, mask, mount_line(MOUNT_TABLE_FIXTURE, id))
+        };
 
-        assert!(managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            mount_root,
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE + 1,
-            mount_root,
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            StatxAttributes::empty(),
-            mount_root,
-        ));
-        assert!(!managed_xfs_root_location_is_valid(
-            XFS_ROOT_INODE,
-            StatxAttributes::empty(),
-            StatxAttributes::empty(),
-        ));
+        assert!(valid(flag, flag, 36));
+        assert!(!valid(flag, flag, 37));
+        assert!(!valid(flag, flag, 99));
+        assert!(!valid(StatxAttributes::empty(), flag, 36));
+        assert!(!valid(flag, StatxAttributes::empty(), 36));
+        assert!(!xfs_root_location_is_valid(flag, flag, None));
+    }
+
+    #[test]
+    fn project_quota_accounting_follows_the_xfs_quota_options() {
+        let accounting = |id| {
+            mount_line(MOUNT_TABLE_FIXTURE, id)
+                .map(|line| project_quota_accounting(line.super_options))
+        };
+
+        assert_eq!(accounting(36), Some(ProjectQuotaAccounting::Off));
+        assert_eq!(accounting(38), Some(ProjectQuotaAccounting::On));
+        assert_eq!(accounting(39), Some(ProjectQuotaAccounting::On));
+        assert_eq!(
+            project_quota_accounting("rw,usrquota,grpquota"),
+            ProjectQuotaAccounting::Off
+        );
+        assert_eq!(
+            project_quota_accounting("rw,prjquotas"),
+            ProjectQuotaAccounting::Off
+        );
+    }
+
+    #[test]
+    fn names_are_case_sensitive_unless_the_volume_folds_ascii_case() {
+        assert!(names_are_case_sensitive(0));
+        assert!(names_are_case_sensitive(!XFS_FSOP_GEOM_FLAGS_DIRV2CI));
+        assert!(!names_are_case_sensitive(XFS_FSOP_GEOM_FLAGS_DIRV2CI));
+        assert!(!names_are_case_sensitive(u32::MAX));
+    }
+
+    fn project(id: u32) -> NonZeroU32 {
+        NonZeroU32::new(id).unwrap()
+    }
+
+    fn reservations(entries: &[(u32, &str)]) -> HashMap<NonZeroU32, Box<Path>> {
+        entries
+            .iter()
+            .map(|(id, owner)| (project(*id), Box::<Path>::from(Path::new(owner))))
+            .collect()
+    }
+
+    #[test]
+    fn project_of_owner_finds_the_project_of_that_owner_only() {
+        let active = reservations(&[(3, "/a"), (7, "/b")]);
+
+        assert_eq!(project_of_owner(&reservations(&[]), Path::new("/a")), None);
+        assert_eq!(project_of_owner(&active, Path::new("/a")), Some(project(3)));
+        assert_eq!(project_of_owner(&active, Path::new("/b")), Some(project(7)));
+        assert_eq!(project_of_owner(&active, Path::new("/c")), None);
+    }
+
+    #[test]
+    fn an_existing_reservation_is_held_held_by_its_owner_or_free() {
+        let active = reservations(&[(3, "/a")]);
+
+        assert_eq!(
+            existing_reservation(&active, project(3), Path::new("/a")),
+            ExistingReservation::Held
+        );
+        assert_eq!(
+            existing_reservation(&active, project(3), Path::new("/b")),
+            ExistingReservation::HeldByOther(Path::new("/a"))
+        );
+        assert_eq!(
+            existing_reservation(&active, project(4), Path::new("/b")),
+            ExistingReservation::Free
+        );
+    }
+
+    #[test]
+    fn the_next_free_project_scans_from_the_start_and_wraps_after_the_last_id() {
+        let none = reservations(&[]);
+
+        assert_eq!(next_free_project(0, &none), Some(project(1)));
+        assert_eq!(next_free_project(1, &none), Some(project(1)));
+        assert_eq!(next_free_project(5, &none), Some(project(5)));
+        assert_eq!(
+            next_free_project(5, &reservations(&[(5, "/a"), (6, "/b")])),
+            Some(project(7))
+        );
+        assert_eq!(
+            next_free_project(u32::MAX, &reservations(&[(u32::MAX, "/a")])),
+            Some(project(1))
+        );
+        assert_eq!(
+            next_free_project(
+                u32::MAX - 1,
+                &reservations(&[(u32::MAX - 1, "/a"), (u32::MAX, "/b"), (1, "/c")])
+            ),
+            Some(project(2))
+        );
+        assert_eq!(next_free_project(u32::MAX, &none), Some(project(u32::MAX)));
+    }
+
+    #[test]
+    fn the_scan_after_a_project_starts_at_the_next_id_and_wraps_to_one() {
+        assert_eq!(project_after(project(1)), 2);
+        assert_eq!(project_after(project(41)), 42);
+        assert_eq!(project_after(project(u32::MAX)), 1);
+    }
+
+    #[test]
+    fn a_candidate_repeats_only_when_it_is_the_first_candidate() {
+        assert!(!candidate_repeats(None, project(3)));
+        assert!(candidate_repeats(Some(project(3)), project(3)));
+        assert!(!candidate_repeats(Some(project(3)), project(4)));
+    }
+
+    #[test]
+    fn a_project_is_empty_only_without_bytes_and_objects() {
+        let usage = |allocated_bytes, filesystem_objects| FilesystemAllocation {
+            allocated_bytes,
+            filesystem_objects,
+        };
+
+        assert!(project_is_empty(usage(0, 0)));
+        assert!(!project_is_empty(usage(1, 0)));
+        assert!(!project_is_empty(usage(0, 1)));
+        assert!(!project_is_empty(usage(4096, 2)));
+    }
+
+    #[test]
+    fn a_quota_record_is_missing_only_for_enoent_and_esrch() {
+        assert_eq!(
+            [
+                libc::ENOENT,
+                libc::ESRCH,
+                libc::EPERM,
+                libc::EINVAL,
+                libc::ENOSYS,
+            ]
+            .map(|errno| quota_record_is_missing(&std::io::Error::from_raw_os_error(errno))),
+            [true, true, false, false, false]
+        );
+        assert!(!quota_record_is_missing(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not an OS error"
+        )));
+    }
+
+    #[test]
+    fn the_quota_record_of_a_missing_project_has_its_id_and_nothing_else() {
+        let quota = empty_project_quota(7);
+
+        assert_eq!(quota.d_version, FS_DQUOT_VERSION);
+        assert_eq!(quota.d_flags, FS_PROJ_QUOTA);
+        assert_eq!(quota.d_id, 7);
+        assert_eq!(quota.d_fieldmask, 0);
+        assert!(!project_quota_retains_state(&quota));
+        assert_eq!(
+            (quota.d_bcount, quota.d_icount, quota.d_rtbcount),
+            (0, 0, 0)
+        );
+        assert!(project_quota_record_is_valid(&quota, 7));
+    }
+
+    #[test]
+    fn a_project_quota_record_is_valid_only_with_its_version_flags_and_id() {
+        let valid = empty_project_quota(7);
+        let changed: [fn(&mut FsDiskQuota); 3] = [
+            |quota| quota.d_version = FS_DQUOT_VERSION + 1,
+            |quota| quota.d_flags = FS_PROJ_QUOTA << 1,
+            |quota| quota.d_id = 8,
+        ];
+
+        assert!(project_quota_record_is_valid(&valid, 7));
+        assert!(!project_quota_record_is_valid(&valid, 8));
+        changed.iter().for_each(|change| {
+            let mut quota = valid;
+            change(&mut quota);
+            assert!(!project_quota_record_is_valid(&quota, 7));
+        });
+    }
+
+    #[test]
+    fn a_project_quota_retains_state_when_any_limit_timer_or_warning_is_set() {
+        let set: [fn(&mut FsDiskQuota); 15] = [
+            |quota| quota.d_blk_hardlimit = 1,
+            |quota| quota.d_blk_softlimit = 1,
+            |quota| quota.d_ino_hardlimit = 1,
+            |quota| quota.d_ino_softlimit = 1,
+            |quota| quota.d_rtb_hardlimit = 1,
+            |quota| quota.d_rtb_softlimit = 1,
+            |quota| quota.d_itimer = 1,
+            |quota| quota.d_btimer = 1,
+            |quota| quota.d_rtbtimer = 1,
+            |quota| quota.d_iwarns = 1,
+            |quota| quota.d_bwarns = 1,
+            |quota| quota.d_rtbwarns = 1,
+            |quota| quota.d_itimer_hi = 1,
+            |quota| quota.d_btimer_hi = 1,
+            |quota| quota.d_rtbtimer_hi = 1,
+        ];
+        let usage_only = FsDiskQuota {
+            d_bcount: 8,
+            d_icount: 1,
+            d_rtbcount: 8,
+            ..FsDiskQuota::default()
+        };
+
+        assert!(!project_quota_retains_state(&FsDiskQuota::default()));
+        assert!(!project_quota_retains_state(&usage_only));
+        set.iter().enumerate().for_each(|(field, change)| {
+            let mut quota = FsDiskQuota::default();
+            change(&mut quota);
+            assert!(
+                project_quota_retains_state(&quota),
+                "field {field} of the table is not seen"
+            );
+        });
+    }
+
+    #[test]
+    fn limits_are_representable_only_when_positive_and_whole_blocks() {
+        let block = NonZeroU64::new(4096).unwrap();
+        let limits = |allocated_bytes, filesystem_objects| FilesystemLimits {
+            allocated_bytes,
+            filesystem_objects,
+        };
+
+        assert!(limits_are_representable(limits(8192, 1), block));
+        assert!(limits_are_representable(limits(4096, 100), block));
+        assert!(!limits_are_representable(limits(0, 1), block));
+        assert!(!limits_are_representable(limits(4097, 1), block));
+        assert!(!limits_are_representable(limits(2048, 1), block));
+        assert!(!limits_are_representable(limits(8192, 0), block));
+    }
+
+    #[test]
+    fn a_project_quota_holds_limits_only_with_both_hard_limits_and_no_soft_limit() {
+        let holding = FsDiskQuota {
+            d_blk_hardlimit: 16,
+            d_ino_hardlimit: 100,
+            d_bcount: 8,
+            ..FsDiskQuota::default()
+        };
+        let change: [fn(&mut FsDiskQuota); 4] = [
+            |quota| quota.d_blk_hardlimit = 15,
+            |quota| quota.d_blk_softlimit = 1,
+            |quota| quota.d_ino_hardlimit = 99,
+            |quota| quota.d_ino_softlimit = 1,
+        ];
+
+        assert!(project_quota_holds_limits(&holding, 16, 100));
+        assert!(!project_quota_holds_limits(&holding, 17, 100));
+        assert!(!project_quota_holds_limits(&holding, 16, 101));
+        change.iter().enumerate().for_each(|(field, change)| {
+            let mut quota = holding;
+            change(&mut quota);
+            assert!(
+                !project_quota_holds_limits(&quota, 16, 100),
+                "field {field} of the table is not seen"
+            );
+        });
+    }
+
+    #[test]
+    fn geometry_abi_layout_matches_linux_uapi() {
+        assert_eq!(std::mem::size_of::<XfsGeometryV1>(), 112);
+        assert_eq!(std::mem::align_of::<XfsGeometryV1>(), 8);
+        assert_eq!(std::mem::offset_of!(XfsGeometryV1, flags), 92);
+        assert_eq!(XFS_IOC_FSGEOMETRY_V1, 0x8070_5864);
     }
 
     #[test]
@@ -1692,22 +2313,28 @@ mod tests {
             .map(PathBuf::from)
             .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            None,
-            Some(root.clone()),
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
         .unwrap();
         assert!(
             SandboxFilesystemProvisioning::provision(
-                None,
-                Some(root.clone()),
+                &FilesystemStorageMode::ManagedXfs {
+                    root: root.clone().into()
+                },
                 RetryConfig::default()
             )
             .await
             .is_err()
         );
-        assert!(provisioning.volume().is_managed());
+        assert_eq!(
+            provisioning.agent_accounting(),
+            AgentAccounting::ProjectQuotas
+        );
+        assert!(provisioning.volume().copies_on_write());
         assert!(directories.scratch.path().as_path().is_dir());
         assert!(directories.initial_files.path().as_path().is_dir());
 
@@ -1748,8 +2375,9 @@ mod tests {
 
         let unmanaged_parent = tempfile::tempdir().unwrap();
         let unmanaged = SandboxFilesystemProvisioning::new(
-            Some(unmanaged_parent.path().to_path_buf()),
-            None,
+            &FilesystemStorageMode::Directory {
+                root: unmanaged_parent.path().into(),
+            },
             RetryConfig::default(),
         )
         .unwrap()
@@ -2074,7 +2702,7 @@ mod tests {
         Arc::clone(
             provisioning
                 .volume()
-                .managed_root()
+                .copy_on_write_root()
                 .expect("managed test provisioning must have a managed volume"),
         )
     }
@@ -2156,8 +2784,9 @@ mod tests {
         let inherited_project = NonZeroU32::new(0x7fff_0001).unwrap();
         assign_project(&File::open(&root).unwrap(), inherited_project).unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            None,
-            Some(root.clone()),
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -2373,8 +3002,9 @@ mod tests {
 
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            None,
-            Some(root.clone()),
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -2465,8 +3095,9 @@ mod tests {
     async fn managed_xfs_seed_charges_the_project_and_follows_the_placement() {
         let root = managed_test_root();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            None,
-            Some(root.clone()),
+            &FilesystemStorageMode::ManagedXfs {
+                root: root.clone().into(),
+            },
             RetryConfig::default(),
         )
         .await
@@ -2683,5 +3314,221 @@ mod tests {
                     "project {project} must have no allocation after cleanup"
                 );
             });
+    }
+
+    fn reflink_test_root() -> PathBuf {
+        std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect(
+                "GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas",
+            )
+    }
+
+    fn without_reflink_test_root() -> PathBuf {
+        std::env::var_os("GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT")
+            .map(PathBuf::from)
+            .expect(
+                "GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT must name an XFS test root without reflink",
+            )
+    }
+
+    fn reflink_storage(root: PathBuf) -> FilesystemStorageMode {
+        FilesystemStorageMode::ReflinkXfs { root: root.into() }
+    }
+
+    fn bind_error(storage: &FilesystemStorageMode) -> String {
+        match SandboxFilesystemProvisioning::new(storage, RetryConfig::default()) {
+            Ok(_) => panic!("the storage mode must be refused at startup"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    /// Restores the project attributes of a directory when it is dropped, also after a failed
+    /// assertion.
+    struct RestoredProjectAttributes {
+        directory: File,
+        attributes: linux_raw_sys::general::fsxattr,
+    }
+
+    impl Drop for RestoredProjectAttributes {
+        fn drop(&mut self) {
+            if let Err(error) = set_fsxattr(&self.directory, self.attributes) {
+                eprintln!("failed to restore the project attributes of the test root: {error}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the unprivileged reflink XFS test runner"]
+    #[timeout("120s")]
+    async fn reflink_xfs_copy_contents_and_seed_share_extents() {
+        const FILE_COUNT: usize = 48;
+        const FILE_BYTES: usize = 64 * 1024;
+
+        let root = reflink_test_root();
+        let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
+            &reflink_storage(root.clone()),
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            provisioning.agent_accounting(),
+            AgentAccounting::Unaccounted
+        );
+        assert!(provisioning.volume().copies_on_write());
+        [root.join(".scratch"), root.join(".initial-files")]
+            .into_iter()
+            .for_each(|host_directory| {
+                let attributes = get_fsxattr(&File::open(&host_directory).unwrap()).unwrap();
+                assert!(
+                    !has_project_identity(&attributes),
+                    "{} must have no project identity",
+                    host_directory.display()
+                );
+            });
+        let volume_root = volume_root(&provisioning);
+        let block_bytes = filesystem_block_bytes(&volume_root);
+
+        let filesystem = provisioning
+            .create_fresh(managed_test_name("native-test-reflink-copy"))
+            .await
+            .unwrap();
+        let agent_root = filesystem.root().to_path_buf();
+        std::fs::create_dir_all(agent_root.join("data")).unwrap();
+        (0..FILE_COUNT).for_each(|index| {
+            std::fs::write(
+                agent_root.join(format!("data/file-{index}")),
+                vec![index as u8; FILE_BYTES],
+            )
+            .unwrap();
+        });
+        std::fs::hard_link(
+            agent_root.join("data/file-1"),
+            agent_root.join("data/file-1-name"),
+        )
+        .unwrap();
+        rustix::fs::syncfs(&*volume_root).unwrap();
+        let tree_bytes = (FILE_COUNT * FILE_BYTES) as u64;
+
+        let available_before_copy = available_bytes(&provisioning).await;
+        let copy =
+            HostDirectory::create_in(directories.scratch.path(), std::ffi::OsStr::new("copy"))
+                .await
+                .unwrap();
+        let groups = <SandboxFilesystem as SandboxFilesystemAdapter>::copy_contents(
+            &filesystem,
+            SandboxPath::at_root(""),
+            Arc::new(TreeExclusions::new(std::iter::empty::<PathBuf>())),
+            copy.path(),
+        )
+        .await
+        .unwrap();
+        let copy_bytes = available_before_copy.saturating_sub(available_bytes(&provisioning).await);
+        println!(
+            "REFLINK_COPY_BYTES={copy_bytes} tree_bytes={tree_bytes} block_bytes={block_bytes}"
+        );
+        assert!(
+            copy_bytes <= 32 * block_bytes,
+            "the copy consumed {copy_bytes} bytes for a {tree_bytes} byte tree"
+        );
+        assert_eq!(groups.len(), 1);
+        (0..FILE_COUNT).for_each(|index| {
+            assert_eq!(
+                std::fs::read(copy.path().as_path().join(format!("data/file-{index}"))).unwrap(),
+                vec![index as u8; FILE_BYTES],
+                "data/file-{index} in the copy must have the bytes of the agent file"
+            );
+        });
+
+        let source = copy.path().child(std::ffi::OsStr::new("data")).unwrap();
+        let available_before_seed = available_bytes(&provisioning).await;
+        <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
+            &filesystem,
+            Box::new([SeedEntry {
+                source,
+                target: SandboxPath::at_root("seeded"),
+                access: SeedAccess::FromSource,
+                placement: SeedPlacement::CreateNew,
+            }]),
+        )
+        .await
+        .unwrap();
+        let seed_bytes = available_before_seed.saturating_sub(available_bytes(&provisioning).await);
+        println!(
+            "REFLINK_SEED_BYTES={seed_bytes} tree_bytes={tree_bytes} block_bytes={block_bytes}"
+        );
+        assert!(
+            seed_bytes <= 32 * block_bytes,
+            "the seed consumed {seed_bytes} bytes for a {tree_bytes} byte tree"
+        );
+        (0..FILE_COUNT).for_each(|index| {
+            assert_eq!(
+                std::fs::read(agent_root.join(format!("seeded/file-{index}"))).unwrap(),
+                vec![index as u8; FILE_BYTES],
+                "seeded/file-{index} must have the bytes of the copy"
+            );
+        });
+
+        copy.discard().await.unwrap();
+        SandboxFilesystem::delete_and_verify(filesystem)
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires the unprivileged reflink XFS test runner"]
+    #[timeout("60s")]
+    async fn xfs_without_reflink_is_refused_at_startup() {
+        let root = without_reflink_test_root();
+        let error = bind_error(&reflink_storage(root.clone()));
+
+        assert!(error.contains("validate XFS reflink support"), "{error}");
+        assert!(error.contains("Operation not supported"), "{error}");
+        assert!(!root.join(REFLINK_PROBE).exists());
+    }
+
+    #[test]
+    #[ignore = "requires the unprivileged reflink XFS test runner"]
+    #[timeout("60s")]
+    async fn reflink_xfs_refuses_a_volume_with_project_quota_accounting() {
+        let error = bind_error(&reflink_storage(managed_test_root()));
+
+        assert!(
+            error.contains("verify XFS volume has no project quota accounting"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the unprivileged reflink XFS test runner"]
+    #[timeout("60s")]
+    async fn reflink_xfs_refuses_a_root_with_a_project_identity() {
+        let root = reflink_test_root();
+        let directory = File::open(&root).unwrap();
+        let original = get_fsxattr(&directory).unwrap();
+        let _restored = RestoredProjectAttributes {
+            directory: directory.try_clone().unwrap(),
+            attributes: original,
+        };
+        let mut with_project = original;
+        with_project.fsx_projid = 7;
+        with_project.fsx_xflags |= linux_raw_sys::general::FS_XFLAG_PROJINHERIT;
+        set_fsxattr(&directory, with_project).unwrap();
+
+        let error = match SandboxFilesystemProvisioning::provision(
+            &reflink_storage(root.clone()),
+            RetryConfig::default(),
+        )
+        .await
+        {
+            Ok(_) => panic!("a root with a project identity must be refused"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            error.contains("verify XFS root has no project identity"),
+            "{error}"
+        );
     }
 }

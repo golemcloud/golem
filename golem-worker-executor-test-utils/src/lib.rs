@@ -125,7 +125,7 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
     EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
-    GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
+    FilesystemStorageMode, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
     IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
     ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
@@ -597,6 +597,9 @@ pub struct TestWorkerExecutor {
     services: Option<golem_worker_executor::services::All<TestWorkerCtx>>,
     production_active_agents:
         Option<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
+    /// The oplog service of an executor that runs the production worker context, which has no
+    /// test service graph.
+    production_oplog: Option<Arc<dyn golem_worker_executor::services::oplog::OplogService>>,
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
 }
@@ -714,16 +717,17 @@ impl TestWorkerExecutor {
     }
 
     /// Reads the stored oplog of the durable agent from the oplog service. It does not ask the
-    /// executor, so it works when the shard of the agent is no longer assigned here.
+    /// executor, so it works when the shard of the agent is no longer assigned here. It works with
+    /// the test worker context and with the production worker context.
     pub async fn stored_oplog(&self, agent_id: &AgentId) -> Vec<OplogEntry> {
         use golem_worker_executor::services::HasOplogService;
 
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let oplog = self
-            .services
-            .as_ref()
-            .expect("test service graph is captured")
-            .oplog_service();
+        let oplog = match (&self.services, &self.production_oplog) {
+            (Some(services), _) => services.oplog_service(),
+            (None, Some(oplog)) => Arc::clone(oplog),
+            (None, None) => panic!("the executor has no captured oplog service"),
+        };
         let last = oplog
             .get_last_index(&owned_agent_id, AgentMode::Durable)
             .await;
@@ -2287,6 +2291,7 @@ async fn start_executor_with_config(
                 additional_test_deps,
                 services: services.lock().unwrap().take(),
                 production_active_agents: None,
+                production_oplog: None,
                 concurrent_resource_entry: None,
                 leak_detector,
             });
@@ -3489,6 +3494,7 @@ struct ProductionContextTestServerBootstrap {
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
+    oplog: Arc<std::sync::OnceLock<Arc<dyn golem_worker_executor::services::oplog::OplogService>>>,
 }
 
 /// Builds the active agents of an executor that runs in the test process.
@@ -3536,6 +3542,17 @@ async fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn capture_services(
+        &self,
+        services: &golem_worker_executor::services::All<
+            golem_worker_executor::workerctx::default::Context,
+        >,
+    ) {
+        use golem_worker_executor::services::HasOplogService;
+
+        let _ = self.oplog.set(services.oplog_service());
+    }
+
     async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
@@ -3780,12 +3797,14 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
 
     let active_agents = Arc::new(std::sync::OnceLock::new());
+    let oplog = Arc::new(std::sync::OnceLock::new());
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
+            oplog: oplog.clone(),
         },
         config,
         prometheus.clone(),
@@ -3832,6 +3851,7 @@ async fn run_production_context_bootstrap(
                         .expect("active agents initialized")
                         .clone(),
                 ),
+                production_oplog: oplog.get().cloned(),
                 concurrent_resource_entry,
                 leak_detector,
             });
@@ -4067,8 +4087,9 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir =
-                    Some(managed_xfs_root.to_path_buf());
+                config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.clone(),
+                };
                 config.filesystem_snapshots = filesystem_snapshots.clone();
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
                 config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
@@ -4077,6 +4098,78 @@ pub async fn start_with_filesystem_snapshots_on_managed_xfs(
         },
         None,
         "Timeout waiting for managed filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// The per-agent disk limit of the default plan, 1 GiB.
+#[cfg(target_os = "linux")]
+const DEFAULT_PLAN_DISK_SPACE: u64 = 1024 * 1024 * 1024;
+
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, that takes a snapshot after each invocation, with the filesystem snapshot
+/// settings `filesystem_snapshots`.
+///
+/// The plan gives each agent the finite disk limit of the default plan. The storage has no
+/// per-agent accounting, so the executor enforces no disk limit. It meters no filesystem usage.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_snapshots_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+    filesystem_snapshots: golem_worker_executor::services::golem_config::FilesystemSnapshotsConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.resource_usage_metering.filesystem = false;
+                config.filesystem_snapshots = filesystem_snapshots.clone();
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS filesystem snapshot server to start",
+    )
+    .await
+}
+
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, with all resource usage metering on, filesystem metering included.
+#[cfg(target_os = "linux")]
+pub async fn start_with_filesystem_metering_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.resource_usage_metering = ResourceUsageMeteringConfig::all_enabled();
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS metering server to start",
     )
     .await
 }
@@ -4154,6 +4247,42 @@ pub async fn start_with_agent_storage_quota_and_pressure_without_metering_on_man
     .await
 }
 
+/// Starts an executor on XFS storage with reflink and without project quotas, at
+/// `reflink_xfs_root`, with the pressure settings `pressure` and without resource usage metering.
+/// The plan gives each agent the finite disk limit of the default plan, which this storage does
+/// not enforce.
+#[cfg(target_os = "linux")]
+pub async fn start_with_pressure_on_reflink_xfs(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    reflink_xfs_root: PathBuf,
+    pressure: FilesystemPressureConfig,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let reflink_xfs_root: Box<Path> = reflink_xfs_root.into_boxed_path();
+    run_production_context_bootstrap(
+        deps,
+        context,
+        Arc::new(FixedFilesystemStorageQuotaResourceLimits {
+            max_disk_space_bytes: DEFAULT_PLAN_DISK_SPACE,
+        }),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::ReflinkXfs {
+                    root: reflink_xfs_root.clone(),
+                };
+                config.filesystem_storage.pressure = pressure.clone();
+                config.resource_usage_metering = ResourceUsageMeteringConfig::default();
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..Default::default()
+        },
+        None,
+        "Timeout waiting for reflink XFS pressure server to start",
+    )
+    .await
+}
+
 #[cfg(target_os = "linux")]
 async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs(
     deps: &WorkerExecutorTestDependencies,
@@ -4163,6 +4292,7 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
     pressure: FilesystemPressureConfig,
     metering: ResourceUsageMeteringConfig,
 ) -> anyhow::Result<TestWorkerExecutor> {
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     run_production_context_bootstrap(
         deps,
         context,
@@ -4171,7 +4301,9 @@ async fn start_with_agent_storage_quota_and_pressure_and_metering_on_managed_xfs
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.clone(),
+                };
                 config.filesystem_storage.pressure = pressure.clone();
                 config.resource_usage_metering = metering;
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
@@ -4234,6 +4366,7 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         max_disk_space_bytes,
         u64::MAX,
     ));
+    let managed_xfs_root: Box<Path> = managed_xfs_root.into_boxed_path();
     let executor = run_production_context_bootstrap(
         deps,
         context,
@@ -4242,7 +4375,9 @@ async fn start_with_mutable_agent_storage_quota_and_metering_on_managed_xfs(
         }),
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.managed_xfs_root_dir = Some(managed_xfs_root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::ManagedXfs {
+                    root: managed_xfs_root.clone(),
+                };
                 config.resource_usage_metering = metering;
                 config.filesystem_storage.filesystem_object_limit_policy =
                     FilesystemObjectLimitPolicyConfig::new(262_144, 1, 1024).unwrap();

@@ -166,25 +166,28 @@ impl Drop for HostDirectory {
 
 /// Makes `.scratch` and `.initial-files` directly under the volume root of `provisioning`.
 ///
-/// Without a configured root on unmanaged storage, the root is a new temporary directory that the
+/// Without a configured root on development storage, the root is a new temporary directory that the
 /// two host directories keep while they live. Removes what an earlier process left under each
-/// name first. On managed storage, a host directory that has a project identity gives an error.
+/// name first. On XFS storage, a host directory that has a project identity gives an error.
 /// When `.initial-files` cannot be made, the function removes the `.scratch` that it made, and a
 /// failure of that removal is the error. A leftover that the function could not remove stays.
 pub(super) async fn make_host_directories(
     provisioning: &SandboxFilesystemProvisioning,
 ) -> Result<HostDirectories, FilesystemStorageError> {
-    let (root, anchor, verify_no_project) = match &provisioning.mode {
-        SandboxFilesystemProvisioningMode::Unmanaged(unmanaged) => {
-            (unmanaged.deterministic_root().map(Arc::from), None, false)
+    let root: Option<Arc<Path>> = match &provisioning.mode {
+        SandboxFilesystemProvisioningMode::Directories(directories) => {
+            directories.deterministic_root().cloned()
         }
         #[cfg(target_os = "linux")]
-        SandboxFilesystemProvisioningMode::Managed(managed) => (
-            Some(Arc::from(managed.root())),
-            provisioning.volume.managed_root().cloned(),
-            true,
-        ),
+        SandboxFilesystemProvisioningMode::ProjectQuotas(managed) => {
+            Some(Arc::clone(managed.root()))
+        }
     };
+    #[cfg(target_os = "linux")]
+    let anchor = provisioning.volume.copy_on_write_root().cloned();
+    #[cfg(not(target_os = "linux"))]
+    let anchor = None;
+    let verify_no_project = provisioning.host_directory_check == HostDirectoryCheck::NoXfsProject;
     let error_root: Option<Arc<Path>> = root.clone();
     let (scratch, initial_files, temporary_root) = execute_native(
         NativeStorageProfile::Unknown,
@@ -316,8 +319,9 @@ mod tests {
 
     async fn provision(root: Option<&Path>) -> (SandboxFilesystemProvisioning, HostDirectories) {
         SandboxFilesystemProvisioning::provision(
-            root.map(Path::to_path_buf),
-            None,
+            &root.map_or(FilesystemStorageMode::Temporary, |root| {
+                FilesystemStorageMode::Directory { root: root.into() }
+            }),
             RetryConfig::default(),
         )
         .await
@@ -424,8 +428,9 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
 
         let failure = SandboxFilesystemProvisioning::provision(
-            Some(root.path().to_path_buf()),
-            None,
+            &FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             RetryConfig::default(),
         )
         .await

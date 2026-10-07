@@ -8,17 +8,35 @@ Filesystem snapshots are disabled by default. A disabled executor does not save 
 
 ## Requirements
 
-- The executor runs on Linux 5.8 or later and uses managed XFS storage for the agent filesystems. Each executor has its own XFS filesystem.
-- The executor process may change XFS project quotas. See [Prepare managed XFS storage](#prepare-managed-xfs-storage).
+- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
+- With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
 - All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
-- With S3 blob storage, `filesystem_snapshots_bucket` is set and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
+- With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
 - With file system blob storage, all executors that can run the same agents use the same `root`.
 
 ## Enable filesystem snapshots
 
 <Steps>
 
-### Prepare managed XFS storage
+### Prepare XFS storage
+
+#### Choose the XFS storage mode
+
+Filesystem snapshots need storage that makes copy-on-write copies: a capture and a restore copy each file by reflink, so they take time for the number of files and not for their bytes. Two storage modes do that. Both use a dedicated XFS filesystem with reflink.
+
+| | `ManagedXfs` | `ReflinkXfs` |
+| --- | --- | --- |
+| Per-agent disk limit (`max_disk_space_per_worker`) | Enforced by a project quota of each agent | Not enforced. The executor logs this at startup |
+| Filesystem metering (`resource_usage_metering.filesystem`) | Supported | Refused at startup |
+| Free-space checks of the volume, capture admission, write pressure recovery | Yes | Yes |
+| Mount option | `prjquota` | no quota option for projects (`noquota`) |
+| Privilege | `CAP_SYS_ADMIN`, host user namespace | No capability |
+
+Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
+
+The storage mode is one setting, `[filesystem_storage.mode]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
+
+#### Managed XFS storage (`ManagedXfs`)
 
 Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
 
@@ -33,29 +51,89 @@ Make the mount persist across reboots, for example with a line in `/etc/fstab`:
 /dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
 ```
 
-The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Give the container the root directory of the XFS filesystem, for example with a `hostPath` volume at the host mount point. Do not give it a subdirectory of the filesystem, a bind mount of a subdirectory, or a `subPath`: the startup check of the mount root then fails. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
+The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
+
+Set the storage mode to `ManagedXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+#### XFS storage without project quotas (`ReflinkXfs`)
+
+Make a dedicated XFS filesystem with reflink enabled, and mount it without project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o noquota /dev/<device> /var/lib/golem/agents
+```
+
+Make the mount persist across reboots, for example with a line in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  noquota  0 0
+```
+
+Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it:
+
+```shell
+chown <executor-user>:<executor-group> /var/lib/golem/agents
+```
+
+The executor needs no capability. It never changes the project id or the flags of the root. The root must have no XFS project: when an earlier tool set a project or the project-inherit flag on it, clear them once as root, for example with `xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents`.
+
+Set the storage mode to `ReflinkXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ReflinkXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+What `ReflinkXfs` does not give:
+
+- **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets. When the unload frees too little space, the write fails with an out-of-space error. An agent never gets a quota error on `ReflinkXfs`.
+- **No filesystem metering.** The executor measures the disk usage of each agent only through project quotas. An executor with `ReflinkXfs` and `[resource_usage_metering] filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`.
+
+#### Both XFS modes
+
+Give the container the root directory of the XFS filesystem, for example with a `hostPath` volume at the host mount point. Do not give it a subdirectory of the filesystem, a bind mount of a subdirectory, or a `subPath`: the startup check of the mount root then fails.
 
 Use one XFS root for each executor process. At startup, the executor takes an exclusive lock on the root, so a second process on the same root does not start.
 
-Set `managed_xfs_root_dir` in the `[filesystem_storage]` section to the mount point:
+The filesystem must compare names with their case. A filesystem made with `mkfs.xfs -n version=ci` is refused.
 
-```toml
-[filesystem_storage]
-managed_xfs_root_dir = "/var/lib/golem/agents"
-```
+At startup, the executor checks the volume and refuses to start when a check fails. The error has the form `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. `<path>` is the configured root or a path below it, a path below `/proc/self/fd/`, `/proc/self/mountinfo` for the read of the mount table, `<filesystem-volume>` for the read of the free space, or `<configuration>` for a check of the settings, such as the pressure targets against the size of the volume. The `<check>` part tells which check failed.
 
-The environment variable is `GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR`.
-
-At startup, the executor checks the volume and refuses to start when a check fails. The error has the form `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. `<path>` is the configured root, a path below `/proc/self/fd/`, `<managed-volume>` for the read of the free space, or `<configuration>` for a check of the settings. The `<check>` part tells which check failed:
+Checks of both XFS modes:
 
 | Check | `<check>` in the error |
 | --- | --- |
-| The executor can open the path and read its filesystem. | `open managed XFS root` or `inspect managed XFS root` |
-| The path is an XFS filesystem. | `validate managed XFS root filesystem type` |
-| The path is the root of its mount and the root directory of the XFS filesystem. A subdirectory, also through a bind mount, fails. | `inspect managed XFS root mount location`, `inspect managed XFS root inode` or `validate managed XFS root is the filesystem mount root` |
-| No other process holds the lock on the root. | `acquire exclusive ownership of managed XFS root` |
-| The filesystem has a valid block size. | `validate managed XFS filesystem block size` |
-| The executor can open the root through its open file and identify its filesystem. | `open managed XFS root through its stable descriptor` or `identify managed XFS root` |
+| The executor can open the path and read its filesystem. | `open XFS root`, `inspect XFS root` or `identify XFS root` |
+| The path is an XFS filesystem. | `validate XFS root filesystem type` |
+| The filesystem compares names with their case. | `inspect XFS root geometry` or `validate XFS names are case-sensitive` |
+| The path is the root of its mount, and the mount starts at the root directory of the XFS filesystem: the line of the mount in `/proc/self/mountinfo` has the root `/`. A subdirectory, also through a bind mount, fails. | `inspect XFS root mount location`, `read the mount table` or `validate XFS root is the filesystem mount root` |
+| No other process holds the lock on the root. | `acquire exclusive ownership of XFS root` |
+| The filesystem has a valid block size. | `validate XFS filesystem block size` |
+| The executor can open the root through its open file. | `open XFS root through its stable descriptor` |
+| `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within the volume capacity` or `fit filesystem pressure object target within the volume capacity` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root, and they have no project identity. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open XFS host directory`, `inspect XFS host directory project attributes`, `verify XFS host directory has no project identity` or `remove a host directory that has a project identity` |
+| The executor can read the free space of the volume, the volume is mounted read-write, and it is still the volume of the root. | `observe filesystem volume space`, with the cause `XFS volume is mounted read-only` or `XFS volume identity changed` |
+
+Checks of `ManagedXfs` only:
+
+| Check | `<check>` in the error |
+| --- | --- |
 | Project quota accounting and enforcement are on. | `validate managed XFS project quota accounting and enforcement`, with the cause `managed XFS project quota accounting or enforcement is disabled` |
 | The executor can read project quotas. | `validate managed XFS project quota query permissions` |
 | The executor can read the quota of a 32-bit project id. | `validate 32-bit XFS project quota query` |
@@ -63,13 +141,17 @@ At startup, the executor checks the volume and refuses to start when a check fai
 | The executor can change project quotas. | `validate XFS project quota update permissions` |
 | The executor can write to the root. It makes the directory `.golem-xfs-project-probe` there for the next check, and removes it after the check. | `remove stale managed XFS startup probe`, `create managed XFS startup probe`, `remove managed XFS startup probe` or `clear managed XFS startup probe project` |
 | A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
-| `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within managed capacity` or `fit filesystem pressure object target within managed capacity` |
 | The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
-| The executor can make the directories `.scratch` and `.initial-files` under the root. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open managed XFS host directory`, `inspect managed XFS host directory project attributes`, `verify managed XFS host directory has no project identity` or `remove a host directory that has a project identity` |
-| The executor can read the free space of the volume. | `observe managed filesystem space` |
-| `deterministic_root_dir` is not set. The two storage modes exclude each other. | `select exactly one filesystem storage mode` |
 
-The executor makes the directories `.scratch` and `.initial-files` directly under the root, outside the quota of every agent. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
+Checks of `ReflinkXfs` only:
+
+| Check | `<check>` in the error |
+| --- | --- |
+| The mount accounts no project quotas: its options in `/proc/self/mountinfo` have neither `prjquota` nor `pqnoenforce`. | `verify XFS volume has no project quota accounting` |
+| The root has no project id and no project-inherit flag. The executor does not change the project id or the flags of the root. | `inspect XFS root project attributes` or `verify XFS root has no project identity` |
+| A reflink works. The executor makes the directory `.golem-xfs-reflink-probe` under the root, reflinks a file in it, reads the copy back, and removes the directory. A filesystem made with `-m reflink=0` fails with the cause `Operation not supported`. | `remove stale XFS reflink probe`, `create XFS reflink probe`, `validate XFS reflink support` or `remove XFS reflink probe` |
+
+The executor makes the directories `.scratch` and `.initial-files` directly under the root, outside every agent directory, and with `ManagedXfs` outside the quota of every agent. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
 
 ### Make the encryption key
 
@@ -97,6 +179,13 @@ filesystem_snapshots_bucket = "filesystem-snapshots"
 ```
 
 The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
+
+<Callout type="warning">
+  Use a separate bucket for filesystem snapshots. Do not set `filesystem_snapshots_bucket` to the value of `custom_data_bucket`. If the two buckets are the same:
+
+  - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
+  - The blob storage quota of the account counts the filesystem snapshots.
+</Callout>
 
 The executor makes these S3 calls on the bucket. Give its credentials the permissions in the table:
 
@@ -141,17 +230,17 @@ A snapshot record without a filesystem snapshot name means that the agent's file
 
 ### Check that it works
 
-- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`.
+- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
 - Make an agent that writes a file take snapshots. Without filesystem snapshots, such an agent takes no automatic snapshot. An agent that has only its untouched read-only initial files and no provisioned files, and that did not rename or hard link any file, and did not set a given modification time on a file or directory, uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
 - After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
 - `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
 
 </Steps>
 
-An executor that enables filesystem snapshots without managed XFS storage does not start. Its startup fails with this error:
+An executor that enables filesystem snapshots on storage without copy-on-write copies, `Temporary` or `Directory`, does not start. Its startup fails with this error:
 
 ```text
-filesystem snapshots require managed XFS storage
+filesystem snapshots require storage with copy-on-write copies (XFS with reflink)
 ```
 
 <Callout type="warning">
@@ -264,7 +353,7 @@ When an update or a revert replaced the snapshot record during the upload, the c
 
 ### Restores
 
-A start restores the filesystem snapshot of its baseline before the agent's code runs. A restore downloads the whole tree, so a large tree makes the start slower. At most `max_concurrent_restores` restores run at the same time, each with `restore_reader_threads` reader threads. A restored tree counts against the storage quota of the agent, as the files did before.
+A start restores the filesystem snapshot of its baseline before the agent's code runs. A restore downloads the whole tree, so a large tree makes the start slower. At most `max_concurrent_restores` restores run at the same time, each with `restore_reader_threads` reader threads. On `ManagedXfs`, a restored tree counts against the storage quota of the agent, as the files did before.
 
 ### Retention
 

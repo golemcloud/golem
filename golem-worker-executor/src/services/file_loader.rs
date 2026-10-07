@@ -320,6 +320,7 @@ impl Drop for InitializedCacheEntry {
 mod tests {
     use super::*;
     use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
+    use crate::services::golem_config::FilesystemStorageMode;
     use golem_common::model::RetryConfig;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
@@ -332,10 +333,12 @@ mod tests {
 
     /// Makes the cache directory of a loader on unmanaged storage with a temporary root.
     async fn cache_directory() -> HostDirectory {
-        let (_, directories) =
-            SandboxFilesystemProvisioning::provision(None, None, RetryConfig::default())
-                .await
-                .unwrap();
+        let (_, directories) = SandboxFilesystemProvisioning::provision(
+            &FilesystemStorageMode::Temporary,
+            RetryConfig::default(),
+        )
+        .await
+        .unwrap();
         directories.initial_files
     }
 

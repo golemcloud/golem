@@ -489,18 +489,19 @@ struct Core {
 
 impl AgentFilesystemSnapshots {
     /// Makes the service that the configuration asks for, as [`decisions::binding`] says, with the
-    /// store of `source`. `managed_storage` tells whether the sandbox provisioning uses managed
-    /// XFS storage. When `shutdown` ends, the service stops its jobs and shuts the store down.
+    /// store of `source`. `copy_on_write` tells whether the volume of the agent filesystems makes
+    /// copy-on-write copies. When `shutdown` ends, the service stops its jobs and shuts the store
+    /// down.
     /// This is the only constructor of the service.
     pub(crate) fn bind(
         config: &FilesystemSnapshotsConfig,
         source: StoreSource,
-        managed_storage: bool,
+        copy_on_write: bool,
         shutdown: &crate::services::shutdown::Shutdown,
     ) -> Result<Arc<Self>, String> {
         let snapshots = Arc::new(match source.0 {
             Source::Configured(blob_storage, room) => {
-                match decisions::binding(config, managed_storage)? {
+                match decisions::binding(config, copy_on_write)? {
                     decisions::Binding::Disabled => Self::disabled(),
                     decisions::Binding::Managed(config) => Self::enabled(
                         StoreOf::Managed(blob_storage, config),

@@ -364,7 +364,7 @@ A restore downloads the whole filesystem snapshot before the agent's code runs. 
 
 ### Availability
 
-Filesystem snapshots are disabled by default. Only an executor with managed XFS storage can enable them. See [Filesystem Snapshots](/next/operate/filesystem_snapshots) for the operator setup.
+Filesystem snapshots are disabled by default. Only an executor whose agent filesystems are on XFS storage with reflink (the `ManagedXfs` or `ReflinkXfs` storage mode) can enable them. See [Filesystem Snapshots](/next/operate/filesystem_snapshots) for the operator setup.
 
 On an executor without filesystem snapshots, Golem writes a snapshot record only when the agent's files can come back with it:
 

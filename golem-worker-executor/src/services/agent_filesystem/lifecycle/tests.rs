@@ -6,6 +6,7 @@ use crate::sandbox_filesystem::{
     ScriptedSandboxPathCall,
 };
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::services::golem_config::{FilesystemStorageConfig, ResourceUsageMeteringConfig};
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -111,7 +112,9 @@ pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathB
         .join(agent_path_segment(&id.agent_id));
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
-            deterministic_root_dir: Some(parent.to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: parent.into(),
+            },
             ..FilesystemStorageConfig::default()
         })
         .unwrap(),
@@ -175,18 +178,13 @@ pub(super) fn sandbox_error(
 fn sandbox_provisioning(
     settings: &FilesystemStorageConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
-    SandboxFilesystemProvisioning::new(
-        settings.deterministic_root_dir.clone(),
-        settings.managed_xfs_root_dir.clone(),
-        settings.cleanup_retry.clone(),
-    )
+    SandboxFilesystemProvisioning::new(&settings.mode, settings.cleanup_retry.clone())
 }
 
 /// Makes the host directories on unmanaged storage with a temporary root.
 async fn host_directories() -> HostDirectories {
     SandboxFilesystemProvisioning::provision(
-        None,
-        None,
+        &FilesystemStorageMode::Temporary,
         golem_common::model::RetryConfig::default(),
     )
     .await
@@ -330,6 +328,19 @@ async fn bound_reconstructing_with_recovery(
     ScriptedSandboxFilesystemControl,
     Arc<AtomicResourceEntry>,
 ) {
+    bound_reconstructing_with_accounting(limits, pressure_recovery, AgentAccounting::Development)
+        .await
+}
+
+async fn bound_reconstructing_with_accounting(
+    limits: ResolvedStorageLimits,
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
+) -> (
+    TestAgentFilesystem<Reconstructing>,
+    ScriptedSandboxFilesystemControl,
+    Arc<AtomicResourceEntry>,
+) {
     let (provisioning, control) = ScriptedSandboxFilesystemProvisioning::new();
     let created = create_fresh_with_recovery::<ScriptedSandboxFilesystem>(
         provisioning,
@@ -337,6 +348,7 @@ async fn bound_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
+        accounting,
     )
     .await
     .unwrap();
@@ -369,6 +381,7 @@ async fn unmetered_reconstructing_with_recovery(
         agent_id(),
         limits,
         pressure_recovery,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -391,6 +404,7 @@ async fn created_product_supports_observed_verified_cleanup() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -463,6 +477,7 @@ pub(crate) async fn billing_metered_resident_with_open_node_for_unload_test() ->
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -5637,7 +5652,9 @@ async fn idle_downgrade_over_usage_requires_unload_without_resource_window() {
 async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -5667,7 +5684,9 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
     // segments, so the name of the sandbox directory is the path segment of the agent.
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = OwnedAgentId::new(
@@ -5705,7 +5724,9 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -5752,7 +5773,9 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
 async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permissions() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -5955,7 +5978,9 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
 async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read_only_one() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        deterministic_root_dir: Some(parent.path().to_path_buf()),
+        mode: FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         ..FilesystemStorageConfig::default()
     };
     let id = agent_id();
@@ -6094,7 +6119,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
@@ -6141,7 +6166,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        managed_xfs_root_dir: Some(root),
+        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();
@@ -6241,6 +6266,7 @@ async fn timed_out_billing_observer_does_not_block_sandbox_deletion() {
         agent_id(),
         ResolvedStorageLimits::Unlimited,
         None,
+        AgentAccounting::Development,
     )
     .await
     .unwrap();
@@ -7857,8 +7883,9 @@ async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
 async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
-        Some(parent.path().to_path_buf()),
-        None,
+        &FilesystemStorageMode::Directory {
+            root: parent.path().into(),
+        },
         golem_common::model::RetryConfig {
             max_attempts: 1,
             ..Default::default()
@@ -8959,4 +8986,165 @@ fn a_change_of_a_read_only_file_is_refused_and_a_change_of_another_object_is_not
         Err(Error::Access(AccessError::NotPermitted))
     ));
     assert!(refuse_read_only_change(false).is_ok());
+}
+
+/// Gives a resident filesystem on storage with `accounting` that reports no usage, with
+/// `pressure_recovery`, and the window of its resource usage.
+async fn resident_with_accounting(
+    accounting: AgentAccounting,
+    pressure_recovery: Option<FilesystemWriteRecovery>,
+) -> (
+    TestAgentFilesystem<Resident>,
+    ScriptedSandboxFilesystemControl,
+    ResourceUsageMeteringWindow,
+) {
+    let (filesystem, control, entry) = bound_reconstructing_with_accounting(
+        ResolvedStorageLimits::Unlimited,
+        pressure_recovery,
+        accounting,
+    )
+    .await;
+    let filesystem = materialize_baseline(
+        filesystem,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    (filesystem, control, window)
+}
+
+#[test]
+async fn a_full_volume_without_quotas_runs_pressure_recovery_and_retries_the_write() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 48).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    control.push_write(Ok(SandboxWriteAttempt::completed(4)));
+
+    assert_eq!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await
+        .unwrap(),
+        WriteResult { written: 4 }
+    );
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 2);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_volume_without_quotas_and_without_pressure_keeps_the_write_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::NotUnderPressure]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Unaccounted, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    let file = open_file(&generation_handle, &control, 49).await;
+    control.push_write(Ok(SandboxWriteAttempt::failed(
+        0,
+        sandbox_error("write", std::io::ErrorKind::StorageFull),
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        write(
+            &generation_handle,
+            &file,
+            WritePlacement::At(0),
+            Bytes::from_static(b"full"),
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 1);
+    assert_eq!(call_count(&control, "write("), 1);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_close(Ok(()));
+    close(OpenNode::File(file)).await.unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
+async fn a_full_development_volume_with_an_unknown_effect_keeps_an_unclassified_failure() {
+    let recovery = ScriptedWriteRecovery::new([FilesystemWriteRecoveryOutcome::Recovered]);
+    let (filesystem, control, window) =
+        resident_with_accounting(AgentAccounting::Development, Some(recovery.handle())).await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    control.push_get_attributes(Ok(sandbox_attributes(SandboxObjectKind::File)));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename source after",
+        std::io::ErrorKind::Other,
+    )));
+    control.push_get_attributes(Err(sandbox_error(
+        "rename destination after",
+        std::io::ErrorKind::NotFound,
+    )));
+    control.push_rename(Err(sandbox_error(
+        "rename",
+        std::io::ErrorKind::StorageFull,
+    )));
+    control.push_observe_allocation(Err(unsupported_allocation()));
+
+    assert!(matches!(
+        edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Move {
+                source: PathTarget::at_root(&generation_handle, "source").unwrap(),
+                destination: PathTarget::at_root(&generation_handle, "destination").unwrap(),
+            },
+        )
+        .unwrap()
+        .await,
+        Err(Error::Sandbox(_))
+    ));
+    assert_eq!(recovery.calls(), 0);
+    assert_eq!(call_count(&control, "rename("), 1);
+    let admitted = open(
+        &generation_handle,
+        PathTarget::at_root(&generation_handle, "still-valid").unwrap(),
+        OpenOptions::Existing {
+            expected: ObjectKind::File,
+            access: AccessMode::Read,
+            follow: Follow::Yes,
+        },
+    )
+    .expect("a full development volume invalidated the generation");
+    drop(admitted);
+
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
 }

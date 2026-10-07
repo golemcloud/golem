@@ -73,14 +73,14 @@ validate_binary_control() {
 
 load_filesystem_isolation_controls() {
   filesystem_disable_root_capability_reuse=${GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE:-0}
-  filesystem_disable_managed_xfs_name_mode_shortcut=${GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT:-0}
+  filesystem_disable_xfs_name_mode_shortcut=${GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT:-0}
   filesystem_eager_append_coordination=${GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION:-0}
   validate_binary_control GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE "${filesystem_disable_root_capability_reuse}" || return
-  validate_binary_control GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT "${filesystem_disable_managed_xfs_name_mode_shortcut}" || return
+  validate_binary_control GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT "${filesystem_disable_xfs_name_mode_shortcut}" || return
   validate_binary_control GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION "${filesystem_eager_append_coordination}" || return
   filesystem_isolation_environment=(
     "GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE=${filesystem_disable_root_capability_reuse}"
-    "GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT=${filesystem_disable_managed_xfs_name_mode_shortcut}"
+    "GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT=${filesystem_disable_xfs_name_mode_shortcut}"
     "GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION=${filesystem_eager_append_coordination}"
   )
 }
@@ -154,16 +154,16 @@ if [[ ${1:-} == --self-test-workload-environment ]]; then
   export GOLEM_FILESYSTEM_PROTOTYPE_EXECUTION=inherited
   export GOLEM_FILESYSTEM_PROTOTYPE_BLOCKING_PERMITS=inherited
   export GOLEM_FILESYSTEM_PROTOTYPE_MICRO_OPTIMIZATIONS=inherited
-  environment_probe='printf "%s|%s|%s|%s|%s|%s|%s|%s" "${GOLEM_FILESYSTEM_BENCH_QUICK-unset}" "${GOLEM_FILESYSTEM_BENCH_SINGLE_AGENT-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_EXECUTION-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_BLOCKING_PERMITS-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_MICRO_OPTIMIZATIONS-unset}" "${GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE-unset}" "${GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT-unset}" "${GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION-unset}"'
+  environment_probe='printf "%s|%s|%s|%s|%s|%s|%s|%s" "${GOLEM_FILESYSTEM_BENCH_QUICK-unset}" "${GOLEM_FILESYSTEM_BENCH_SINGLE_AGENT-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_EXECUTION-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_BLOCKING_PERMITS-unset}" "${GOLEM_FILESYSTEM_PROTOTYPE_MICRO_OPTIMIZATIONS-unset}" "${GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE-unset}" "${GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT-unset}" "${GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION-unset}"'
   for controls in 'default 0 0 0' 'single 1 0 0' 'single 0 1 0' 'single 0 0 1'; do
     read -r source root_disabled xfs_disabled eager_append <<< "${controls}"
     if [[ ${source} == default ]]; then
       unset GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE
-      unset GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT
+      unset GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT
       unset GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION
     else
       export GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE=${root_disabled}
-      export GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT=${xfs_disabled}
+      export GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT=${xfs_disabled}
       export GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION=${eager_append}
     fi
     load_filesystem_isolation_controls
@@ -188,7 +188,7 @@ if [[ ${1:-} == --self-test-workload-environment ]]; then
   done
   for name in \
     GOLEM_FILESYSTEM_BENCHMARK_DISABLE_ROOT_CAPABILITY_REUSE \
-    GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT \
+    GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT \
     GOLEM_FILESYSTEM_BENCH_EAGER_APPEND_COORDINATION; do
     if (export "${name}=2"; load_filesystem_isolation_controls) 2>/dev/null; then
       echo "workload isolation control accepted an invalid value: ${name}" >&2
@@ -231,7 +231,7 @@ filesystem_image_size=$(select_filesystem_image_size \
   "${filesystem_workload_benchmark}" \
   "${filesystem_native_workload_baseline}")
 
-for command in flock losetup mkfs.xfs mount python3 tee timeout truncate; do
+for command in flock getent losetup mkfs.xfs mount python3 setpriv stat tee timeout truncate; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "missing required command: ${command}" >&2
     exit 1
@@ -285,7 +285,7 @@ run_test() {
   if [[ -n ${SUDO_USER:-} ]]; then
     user_home=$(eval echo "~${SUDO_USER}")
     sudo --user "${SUDO_USER}" --set-home \
-      --preserve-env=GOLEM_MANAGED_XFS_TEST_ROOT,GOLEM_MANAGED_XFS_TARGET_DIR,GOLEM_MANAGED_XFS_CLEAN,GOLEM_MANAGED_XFS_MIN_FREE_GIB,CARGO_TARGET_DIR,CARGO_BUILD_JOBS,CARGO_INCREMENTAL,CARGO_PROFILE_DEV_DEBUG,CARGO_PROFILE_DEV_INCREMENTAL,CARGO_PROFILE_TEST_DEBUG,CARGO_PROFILE_TEST_INCREMENTAL \
+      --preserve-env=GOLEM_MANAGED_XFS_TEST_ROOT,GOLEM_REFLINK_XFS_TEST_ROOT,GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT,GOLEM_MANAGED_XFS_TARGET_DIR,GOLEM_MANAGED_XFS_CLEAN,GOLEM_MANAGED_XFS_MIN_FREE_GIB,CARGO_TARGET_DIR,CARGO_BUILD_JOBS,CARGO_INCREMENTAL,CARGO_PROFILE_DEV_DEBUG,CARGO_PROFILE_DEV_INCREMENTAL,CARGO_PROFILE_TEST_DEBUG,CARGO_PROFILE_TEST_INCREMENTAL \
       env PATH="${user_home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin" "$@"
   else
     "$@"
@@ -296,7 +296,7 @@ run_vm_cargo() {
   if [[ -n ${SUDO_USER:-} ]]; then
     user_home=$(eval echo "~${SUDO_USER}")
     sudo --user "${SUDO_USER}" --set-home \
-      --preserve-env=GOLEM_MANAGED_XFS_TEST_ROOT,GOLEM_MANAGED_XFS_TARGET_DIR,GOLEM_MANAGED_XFS_CLEAN,GOLEM_MANAGED_XFS_MIN_FREE_GIB,CARGO_TARGET_DIR,CARGO_BUILD_JOBS,CARGO_INCREMENTAL,CARGO_PROFILE_DEV_DEBUG,CARGO_PROFILE_DEV_INCREMENTAL,CARGO_PROFILE_TEST_DEBUG,CARGO_PROFILE_TEST_INCREMENTAL \
+      --preserve-env=GOLEM_MANAGED_XFS_TEST_ROOT,GOLEM_REFLINK_XFS_TEST_ROOT,GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT,GOLEM_MANAGED_XFS_TARGET_DIR,GOLEM_MANAGED_XFS_CLEAN,GOLEM_MANAGED_XFS_MIN_FREE_GIB,CARGO_TARGET_DIR,CARGO_BUILD_JOBS,CARGO_INCREMENTAL,CARGO_PROFILE_DEV_DEBUG,CARGO_PROFILE_DEV_INCREMENTAL,CARGO_PROFILE_TEST_DEBUG,CARGO_PROFILE_TEST_INCREMENTAL \
       env PATH="${user_home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin" "$@"
   else
     "$@"
@@ -347,34 +347,81 @@ fi
 
 work_dir=$(mktemp -d /tmp/golem-managed-xfs.XXXXXX)
 chmod 0755 "${work_dir}"
-image=${work_dir}/filesystem.img
-mount_point=${work_dir}/mount
-loop_device=
+loop_devices=()
+mount_points=()
 
 cleanup() {
   set +e
   sync
-  if mountpoint -q "${mount_point}"; then
-    umount "${mount_point}"
-  fi
-  if [[ -n ${loop_device} ]]; then
-    losetup --detach "${loop_device}"
-  fi
+  local index
+  for ((index = ${#mount_points[@]} - 1; index >= 0; index--)); do
+    if mountpoint -q "${mount_points[index]}"; then
+      umount "${mount_points[index]}"
+    fi
+  done
+  for ((index = ${#loop_devices[@]} - 1; index >= 0; index--)); do
+    losetup --detach "${loop_devices[index]}"
+  done
   rm -rf "${work_dir}"
 }
 trap cleanup EXIT INT TERM
 
-truncate --size "${filesystem_image_size}" "${image}"
-loop_device=$(losetup --find --show "${image}")
-mkfs.xfs -f -m reflink=1 -n ftype=1 "${loop_device}"
-mkdir -p "${mount_point}"
-mount -t xfs -o prjquota "${loop_device}" "${mount_point}"
+# Makes the XFS image `name` of `size` in the work directory with the mkfs.xfs options that follow
+# the mount options, and mounts it at ${work_dir}/${name}. Each loop device and mount point is
+# recorded before the next step, so a failure still lets `cleanup` undo what was made.
+mount_xfs_volume() {
+  local name=$1
+  local size=$2
+  local mount_options=$3
+  shift 3
+  local image=${work_dir}/${name}.img
+  local mount_point=${work_dir}/${name}
+  local loop_device
+  truncate --size "${size}" "${image}"
+  loop_device=$(losetup --find --show "${image}")
+  loop_devices+=("${loop_device}")
+  mkfs.xfs -f "$@" "${loop_device}"
+  mkdir -p "${mount_point}"
+  mount -t xfs -o "${mount_options}" "${loop_device}" "${mount_point}"
+  mount_points+=("${mount_point}")
+}
+
+# Gives the root of a mounted volume to the user that started sudo, who runs the tests of XFS
+# storage without project quotas, with write permission for that user only.
+give_volume_to_test_user() {
+  local mount_point=$1
+  if [[ -n ${SUDO_UID:-} && -n ${SUDO_GID:-} ]]; then
+    chown "${SUDO_UID}:${SUDO_GID}" "${mount_point}"
+  fi
+  chmod 0755 "${mount_point}"
+}
+
+mount_point=${work_dir}/mount
+mount_xfs_volume mount "${filesystem_image_size}" prjquota -m reflink=1 -n ftype=1
 chmod 0777 "${mount_point}"
 if [[ -n ${SUDO_UID:-} && -n ${SUDO_GID:-} ]]; then
   chown "${SUDO_UID}:${SUDO_GID}" "${mount_point}"
 fi
 
+# XFS with reflink and without project quotas. The stripe unit moves the root inode away from
+# inode 128, so the mount-root check is tested on a root with another inode number.
+reflink_mount_point=${work_dir}/reflink
+mount_xfs_volume reflink 1G noquota -m reflink=1 -n ftype=1 -d su=256k,sw=1
+give_volume_to_test_user "${reflink_mount_point}"
+reflink_root_inode=$(stat -c %i "${reflink_mount_point}")
+if [[ ${reflink_root_inode} == 128 ]]; then
+  echo "the reflink XFS test volume must have a root inode other than 128" >&2
+  exit 1
+fi
+
+# XFS without reflink, for the startup refusal. 300 MiB is above the 300 MB minimum of mkfs.xfs.
+without_reflink_mount_point=${work_dir}/without-reflink
+mount_xfs_volume without-reflink 300M noquota -m reflink=0 -n ftype=1
+give_volume_to_test_user "${without_reflink_mount_point}"
+
 export GOLEM_MANAGED_XFS_TEST_ROOT=${mount_point}
+export GOLEM_REFLINK_XFS_TEST_ROOT=${reflink_mount_point}
+export GOLEM_XFS_WITHOUT_REFLINK_TEST_ROOT=${without_reflink_mount_point}
 cd "${repo_root}"
 
 build_test_binaries() {
@@ -459,11 +506,36 @@ run_and_verify_privileged_test() {
 }
 
 run_privileged_test() {
-  local target=$1
-  local selected=$2
-  local filter=$3
+  run_selected_test privileged "$@"
+}
+
+# Runs a test as the user that started sudo, with no capabilities and no way to gain any, so the
+# tests of XFS storage without project quotas show that the mode needs no privilege.
+run_unprivileged_test() {
+  run_selected_test unprivileged "$@"
+}
+
+run_selected_test() {
+  local privilege=$1
+  local target=$2
+  local selected=$3
+  local filter=$4
   privileged_test_sequence=$((privileged_test_sequence + 1))
   local result_file=${work_dir}/privileged-test-${privileged_test_sequence}.result
+  local runner=()
+  if [[ ${privilege} == unprivileged ]]; then
+    if [[ -z ${SUDO_UID:-} || -z ${SUDO_GID:-} ]]; then
+      echo "unprivileged XFS selector '${filter}' needs SUDO_UID and SUDO_GID: run the script through sudo" >&2
+      return 1
+    fi
+    local user_home
+    user_home=$(getent passwd "${SUDO_UID}" | cut -d: -f6)
+    runner=(
+      setpriv --reuid="${SUDO_UID}" --regid="${SUDO_GID}" --clear-groups
+      --inh-caps=-all --bounding-set=-all --no-new-privs
+      env HOME="${user_home}" PATH="${user_home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+    )
+  fi
 
   if [[ ${reuse_test_binaries} == 1 ]]; then
     local target_args=()
@@ -474,6 +546,7 @@ run_privileged_test() {
     fi
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       timeout --kill-after=30s 5m \
+      "${runner[@]}" \
       "${cargo_test_r}" run --package golem-worker-executor "${target_args[@]}" \
       "${filter}" -- --exact --include-ignored --nocapture --report-time
     return
@@ -487,11 +560,13 @@ run_privileged_test() {
       cd "${repo_root}/golem-worker-executor"
       run_and_verify_privileged_test "${result_file}" "${filter}" \
         timeout --kill-after=30s 5m \
+        "${runner[@]}" \
         "${capable_binary}" "${filter}" --exact --include-ignored --nocapture --report-time
     )
   else
     run_and_verify_privileged_test "${result_file}" "${filter}" \
       timeout --kill-after=30s 5m \
+      "${runner[@]}" \
       "${capable_binary}" "${filter}" --exact --include-ignored --nocapture --report-time
   fi
 }
@@ -759,3 +834,43 @@ run_privileged_test \
   integration \
   "${integration_test_binary}" \
   wasi::filesystem_downgrade_blocks_guest_until_limit_recovers
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::reflink_xfs_copy_contents_and_seed_share_extents
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::xfs_without_reflink_is_refused_at_startup
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_volume_with_project_quota_accounting
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  sandbox_filesystem::xfs::tests::reflink_xfs_refuses_a_root_with_a_project_identity
+
+run_unprivileged_test \
+  integration \
+  "${integration_test_binary}" \
+  filesystem_snapshots::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+
+run_unprivileged_test \
+  lib \
+  "${lib_test_binary}" \
+  services::agent_filesystem_snapshots::tests::reflink_xfs_a_volume_below_the_pressure_target_admits_no_periodic_upload
+
+run_unprivileged_test \
+  integration \
+  "${integration_test_binary}" \
+  filesystem_snapshots::reflink_xfs_with_filesystem_metering_fails_at_startup
+
+run_unprivileged_test \
+  integration \
+  "${integration_test_binary}" \
+  wasi::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write

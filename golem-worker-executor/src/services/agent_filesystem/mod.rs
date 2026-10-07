@@ -14,11 +14,11 @@
 
 use crate::filesystem_pressure::FilesystemWriteRecovery;
 pub use crate::sandbox_filesystem::FilesystemStorageError;
-pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::sandbox_filesystem::{
-    FilesystemVolume, HostDirectories, HostDirectory, SandboxFilesystemProvisioning,
-    observe_space_blocking,
+    AgentAccounting, FilesystemVolume, HostDirectories, HostDirectory,
+    SandboxFilesystemProvisioning, observe_space_blocking,
 };
+pub(crate) use crate::sandbox_filesystem::{FilesystemLimits, FilesystemSpace};
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
@@ -48,20 +48,28 @@ pub(crate) use lifecycle::*;
 
 const BYTES_PER_GIB: u128 = 1024 * 1024 * 1024;
 
-/// Resolves an agent's byte allocation into storage limits with `policy`.
+/// Resolves an agent's byte allocation into storage limits with `policy`, on storage that
+/// accounts for each agent as `accounting` says.
 ///
-/// An allocation at or above the effectively-unlimited sentinel of the resource service gives
-/// `Unlimited`. A smaller allocation gives the finite limits of `policy`, which refuses zero bytes.
+/// Storage without per-agent accounting enforces no per-agent limit, so every allocation gives
+/// `Unlimited` there. Elsewhere, an allocation at or above the effectively-unlimited sentinel of
+/// the resource service gives `Unlimited`, and a smaller allocation gives the finite limits of
+/// `policy`, which refuses zero bytes.
 fn resolve_storage_limits(
     policy: &FilesystemObjectLimitPolicyConfig,
     allocated_bytes: u64,
+    accounting: AgentAccounting,
 ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
-    if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE {
-        Ok(ResolvedStorageLimits::Unlimited)
-    } else {
-        policy
+    match accounting {
+        AgentAccounting::Unaccounted => Ok(ResolvedStorageLimits::Unlimited),
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development
+            if allocated_bytes >= AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE =>
+        {
+            Ok(ResolvedStorageLimits::Unlimited)
+        }
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development => policy
             .resolve(allocated_bytes)
-            .map(ResolvedStorageLimits::Finite)
+            .map(ResolvedStorageLimits::Finite),
     }
 }
 
@@ -210,7 +218,7 @@ impl AgentFilesystems {
     /// The service changes no state of the process. Making the host directories removes what an
     /// earlier process left under their names. Returns an error for invalid provisioning settings,
     /// host directories that cannot be made, failed volume observation, or a pressure target
-    /// larger than the observed managed volume. After a failed space check, it discards both host
+    /// larger than the observed volume. After a failed space check, it discards both host
     /// directories, logs a failed discard, and returns the error of the check.
     pub(crate) async fn new(
         settings: &FilesystemStorageConfig,
@@ -223,8 +231,7 @@ impl AgentFilesystems {
                 initial_files,
             },
         ) = SandboxFilesystemProvisioning::provision(
-            settings.deterministic_root_dir.clone(),
-            settings.managed_xfs_root_dir.clone(),
+            &settings.mode,
             settings.cleanup_retry.clone(),
         )
         .await?;
@@ -240,6 +247,11 @@ impl AgentFilesystems {
                     );
                 });
             return Err(error);
+        }
+        if provisioning.agent_accounting() == AgentAccounting::Unaccounted {
+            tracing::info!(
+                "Per-agent disk limits are not enforced on storage without per-agent accounting"
+            );
         }
         Ok(Self {
             provisioning,
@@ -274,16 +286,27 @@ impl AgentFilesystems {
         self.provisioning.volume()
     }
 
+    /// How the storage of the agent filesystems accounts for the files of each agent.
+    pub(crate) fn agent_accounting(&self) -> AgentAccounting {
+        self.provisioning.agent_accounting()
+    }
+
     /// Resolves an agent's byte allocation into the limits installed on a new generation.
     ///
-    /// Allocations at or above the resource service's effectively-unlimited sentinel produce
-    /// `Unlimited`; smaller allocations also derive a bounded object limit. Zero or unrepresentable
-    /// finite allocations return a verification error and must be rejected before creation.
+    /// Storage without per-agent accounting gives `Unlimited` for every allocation. On other
+    /// storage, allocations at or above the resource service's effectively-unlimited sentinel
+    /// produce `Unlimited`; smaller allocations also derive a bounded object limit. Zero or
+    /// unrepresentable finite allocations return a verification error and must be rejected before
+    /// creation.
     pub(crate) fn resolved_limits(
         &self,
         allocated_bytes: u64,
     ) -> Result<ResolvedStorageLimits, FilesystemStorageError> {
-        resolve_storage_limits(&self.filesystem_object_limit_policy, allocated_bytes)
+        resolve_storage_limits(
+            &self.filesystem_object_limit_policy,
+            allocated_bytes,
+            self.provisioning.agent_accounting(),
+        )
     }
 
     /// Creates an empty filesystem generation for an agent with the requested limits.
@@ -357,6 +380,7 @@ pub(crate) mod file_creation_mask_for_test {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::golem_config::FilesystemStorageMode;
     #[cfg(target_os = "linux")]
     use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
     use test_r::test;
@@ -406,7 +430,9 @@ mod tests {
     fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
 
@@ -499,35 +525,64 @@ mod tests {
         let policy = FilesystemObjectLimitPolicyConfig::default();
         let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
 
-        assert_eq!(
-            resolve_storage_limits(&policy, sentinel).unwrap(),
-            ResolvedStorageLimits::Unlimited
-        );
-        assert_eq!(
-            resolve_storage_limits(&policy, u64::MAX).unwrap(),
-            ResolvedStorageLimits::Unlimited
-        );
-        match resolve_storage_limits(&policy, sentinel - 1).unwrap() {
-            ResolvedStorageLimits::Finite(limits) => {
-                assert_eq!(limits.allocated_bytes, sentinel - 1)
-            }
-            ResolvedStorageLimits::Unlimited => {
-                panic!("an allocation one byte below the sentinel must be finite")
-            }
-        }
+        [AgentAccounting::ProjectQuotas, AgentAccounting::Development]
+            .into_iter()
+            .for_each(|accounting| {
+                assert_eq!(
+                    resolve_storage_limits(&policy, sentinel, accounting).unwrap(),
+                    ResolvedStorageLimits::Unlimited
+                );
+                assert_eq!(
+                    resolve_storage_limits(&policy, u64::MAX, accounting).unwrap(),
+                    ResolvedStorageLimits::Unlimited
+                );
+                match resolve_storage_limits(&policy, sentinel - 1, accounting).unwrap() {
+                    ResolvedStorageLimits::Finite(limits) => {
+                        assert_eq!(limits.allocated_bytes, sentinel - 1)
+                    }
+                    ResolvedStorageLimits::Unlimited => {
+                        panic!("an allocation one byte below the sentinel must be finite")
+                    }
+                }
+            });
     }
 
     #[test]
     fn storage_limits_refuse_an_allocation_of_zero_bytes() {
-        let error =
-            resolve_storage_limits(&FilesystemObjectLimitPolicyConfig::default(), 0).unwrap_err();
+        [AgentAccounting::ProjectQuotas, AgentAccounting::Development]
+            .into_iter()
+            .for_each(|accounting| {
+                let error = resolve_storage_limits(
+                    &FilesystemObjectLimitPolicyConfig::default(),
+                    0,
+                    accounting,
+                )
+                .unwrap_err();
 
-        assert!(
-            error
-                .to_string()
-                .contains("resolve nonzero agent filesystem storage limit"),
-            "{error}"
-        );
+                assert!(
+                    error
+                        .to_string()
+                        .contains("resolve nonzero agent filesystem storage limit"),
+                    "{error}"
+                );
+            });
+    }
+
+    #[test]
+    fn storage_without_per_agent_accounting_enforces_no_limit() {
+        let policy = FilesystemObjectLimitPolicyConfig::default();
+        let sentinel = AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE;
+
+        [0, 1024 * 1024 * 1024, sentinel - 1, sentinel, u64::MAX]
+            .into_iter()
+            .for_each(|allocated_bytes| {
+                assert_eq!(
+                    resolve_storage_limits(&policy, allocated_bytes, AgentAccounting::Unaccounted)
+                        .unwrap(),
+                    ResolvedStorageLimits::Unlimited,
+                    "{allocated_bytes}"
+                );
+            });
     }
 
     #[test]
@@ -546,6 +601,7 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(filesystems.agent_accounting(), AgentAccounting::Development);
         assert!(matches!(
             filesystems
                 .resolved_limits(AtomicResourceEntry::EFFECTIVELY_UNLIMITED_DISK_SPACE - 1)
@@ -586,7 +642,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("fit filesystem pressure byte target within managed capacity")
+                .contains("fit filesystem pressure byte target within the volume capacity")
         );
     }
 
@@ -619,7 +675,9 @@ mod tests {
                 .unwrap();
         });
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
 
@@ -644,7 +702,9 @@ mod tests {
     async fn agent_filesystems_give_the_initial_files_directory_to_their_one_file_loader() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let initial_files = root.path().join(".initial-files");
@@ -671,7 +731,9 @@ mod tests {
     async fn a_failed_binding_discards_both_host_directories() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let observed_total_bytes = settings.pressure.target_available_bytes() - 1;
@@ -716,7 +778,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("fit filesystem pressure object target within managed capacity")
+                .contains("fit filesystem pressure object target within the volume capacity")
         );
     }
 }

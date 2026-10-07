@@ -86,6 +86,9 @@ maximum_objects = 131072
 minimum_objects = 8192
 objects_per_gib = 32768
 
+[filesystem_storage.mode]
+type = "Temporary"
+
 [filesystem_storage.pressure]
 minimum_available_bytes = 67108864
 minimum_available_filesystem_objects = 8192
@@ -542,6 +545,9 @@ without_time = false
 # minimum_objects = 8192
 # objects_per_gib = 32768
 #
+# [filesystem_storage.mode]
+# type = "Temporary"
+#
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
 # minimum_available_filesystem_objects = 8192
@@ -966,6 +972,9 @@ without_time = false
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
+#
+# [filesystem_storage.mode]
+# type = "Temporary"
 #
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864

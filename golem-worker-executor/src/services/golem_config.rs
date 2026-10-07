@@ -2165,32 +2165,59 @@ impl Default for MemoryConfig {
     }
 }
 
-/// Configuration for managed agent filesystems and their cleanup.
+/// Configuration for agent filesystems, their storage and their cleanup.
+///
+/// An unknown key, such as a key of an earlier storage configuration, makes the configuration fail
+/// to load.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FilesystemStorageConfig {
     /// Retry policy for deleting and verifying runtime filesystem directories.
     /// `max_attempts` includes the initial deletion attempt.
     pub cleanup_retry: RetryConfig,
-    /// When set, use deterministic per-agent directory names rooted at this
-    /// path instead of random OS temp directories. The directory structure is:
-    ///
-    /// ```text
-    /// <root>/<environment_id>/<component_id>/<agent_name>/
-    /// ```
-    ///
-    /// This allows external tools to locate an agent's filesystem by its id.
-    /// Directories are cleaned up when the worker is dropped, just like temp
-    /// dirs. When `None` (the default), random temp directories are used.
-    pub deterministic_root_dir: Option<PathBuf>,
-    /// Dedicated XFS root managed through project quotas. Managed mode is
-    /// fail-closed and cannot be combined with `deterministic_root_dir`.
-    pub managed_xfs_root_dir: Option<PathBuf>,
+    /// Where the agent filesystems live, and how the executor accounts for them.
+    pub mode: FilesystemStorageMode,
     /// Private policy for deriving an agent's filesystem-object hard limit
     /// proportionally from its allocated-byte limit, with fixed bounds.
     pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
     /// Physical capacity watermarks for managed filesystem pressure recovery.
     #[serde(default)]
     pub pressure: FilesystemPressureConfig,
+}
+
+/// The storage of the agent filesystems. Exactly one mode applies.
+///
+/// With a root, an agent filesystem is the directory
+/// `<root>/<environment_id>/<component_id>/<agent segment>/`. The agent segment is the agent name
+/// with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32
+/// characters, then `-` and the BLAKE3 hash of the agent id. An empty agent name gives `agent`.
+/// The executor also makes the host directories `.scratch` and `.initial-files` directly under the
+/// root.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config", deny_unknown_fields)]
+pub enum FilesystemStorageMode {
+    /// Development storage in a new temporary directory for each agent filesystem.
+    Temporary,
+    /// Development storage under `root`, on any filesystem.
+    Directory { root: Box<Path> },
+    /// XFS with project quotas, at the root of a dedicated XFS filesystem. Each agent filesystem
+    /// is a project, which enforces its disk limits and measures its usage. Copies are reflinks.
+    ManagedXfs { root: Box<Path> },
+    /// XFS with reflink and without project quotas, at the root of a dedicated XFS filesystem.
+    /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
+    /// per-agent usage.
+    ReflinkXfs { root: Box<Path> },
+}
+
+impl SafeDisplay for FilesystemStorageMode {
+    fn to_safe_string(&self) -> String {
+        match self {
+            Self::Temporary => "temporary directories".to_string(),
+            Self::Directory { root } => format!("directory at {}", root.display()),
+            Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
+            Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -3002,12 +3029,7 @@ impl SafeDisplay for FilesystemStorageConfig {
             "{}",
             self.cleanup_retry.to_safe_string_indented()
         );
-        if let Some(root) = &self.deterministic_root_dir {
-            let _ = writeln!(&mut result, "deterministic root dir: {}", root.display());
-        }
-        if let Some(root) = &self.managed_xfs_root_dir {
-            let _ = writeln!(&mut result, "managed XFS root dir: {}", root.display());
-        }
+        let _ = writeln!(&mut result, "mode: {}", self.mode.to_safe_string());
         let _ = writeln!(&mut result, "filesystem object limit policy:");
         let _ = writeln!(
             &mut result,
@@ -3031,8 +3053,7 @@ impl Default for FilesystemStorageConfig {
                 multiplier: 4.0,
                 max_jitter_factor: None,
             },
-            deterministic_root_dir: None,
-            managed_xfs_root_dir: None,
+            mode: FilesystemStorageMode::Temporary,
             filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
             pressure: FilesystemPressureConfig::default(),
         }
@@ -3249,6 +3270,26 @@ mod tests {
     use serde_json::{Value, json};
     use std::time::Duration;
     use test_r::test;
+
+    #[test]
+    fn the_storage_mode_shows_its_name_and_its_root() {
+        let root = || Box::from(std::path::Path::new("/var/lib/golem/agents"));
+        assert_eq!(
+            [
+                super::FilesystemStorageMode::Temporary,
+                super::FilesystemStorageMode::Directory { root: root() },
+                super::FilesystemStorageMode::ManagedXfs { root: root() },
+                super::FilesystemStorageMode::ReflinkXfs { root: root() },
+            ]
+            .map(|storage| storage.to_safe_string()),
+            [
+                "temporary directories",
+                "directory at /var/lib/golem/agents",
+                "managed XFS at /var/lib/golem/agents",
+                "reflink XFS at /var/lib/golem/agents",
+            ]
+        );
+    }
 
     #[test]
     fn mcp_transport_config_roundtrips_and_validates() {

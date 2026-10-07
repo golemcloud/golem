@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::golem_config::FilesystemStorageMode;
 use futures::StreamExt as _;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -1750,8 +1751,9 @@ impl UnmanagedAgents {
     async fn new() -> Self {
         let parent = tempfile::tempdir().unwrap();
         let (provisioning, directories) = SandboxFilesystemProvisioning::provision(
-            Some(parent.path().to_path_buf()),
-            None,
+            &FilesystemStorageMode::Directory {
+                root: parent.path().into(),
+            },
             golem_common::model::RetryConfig::default(),
         )
         .await

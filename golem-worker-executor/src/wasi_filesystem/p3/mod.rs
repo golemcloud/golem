@@ -2319,6 +2319,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> types::HostDescriptorWithStore<U> for Du
 mod tests {
     use super::*;
     use crate::services::agent_filesystem::{AccessMode, FileDisposition, Follow, OpenOptions};
+    use crate::services::golem_config::FilesystemStorageMode;
     use crate::wasi_filesystem::p2::types::{
         p2_agent_error, p2_agent_open_error, p2_agent_open_request, p2_agent_stat,
         p2_agent_write_result, p2_link_access_error, p2_time_changes, p2_visible_descriptor_flags,
@@ -2366,19 +2367,18 @@ mod tests {
 
             let root = tempfile::tempdir().unwrap();
             let profile = FilesystemStorageConfig {
-                deterministic_root_dir: Some(root.path().to_path_buf()),
+                mode: FilesystemStorageMode::Directory {
+                    root: root.path().into(),
+                },
                 ..FilesystemStorageConfig::default()
             };
             let agent = OwnedAgentId::new(
                 EnvironmentId::new(),
                 &AgentId::from_agent_name_string(ComponentId::new(), "p3-pull-read").unwrap(),
             );
-            let provisioning = SandboxFilesystemProvisioning::new(
-                profile.deterministic_root_dir.clone(),
-                profile.managed_xfs_root_dir.clone(),
-                profile.cleanup_retry.clone(),
-            )
-            .unwrap();
+            let provisioning =
+                SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
+                    .unwrap();
             let created = create_fresh(
                 provisioning,
                 scratch_directory().await,
@@ -3156,19 +3156,18 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let profile = FilesystemStorageConfig {
-            deterministic_root_dir: Some(root.path().to_path_buf()),
+            mode: FilesystemStorageMode::Directory {
+                root: root.path().into(),
+            },
             ..FilesystemStorageConfig::default()
         };
         let agent = OwnedAgentId::new(
             EnvironmentId::new(),
             &AgentId::from_agent_name_string(ComponentId::new(), "staged-attributes").unwrap(),
         );
-        let provisioning = SandboxFilesystemProvisioning::new(
-            profile.deterministic_root_dir.clone(),
-            profile.managed_xfs_root_dir.clone(),
-            profile.cleanup_retry.clone(),
-        )
-        .unwrap();
+        let provisioning =
+            SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
+                .unwrap();
         let created = create_fresh(
             provisioning,
             scratch_directory().await,

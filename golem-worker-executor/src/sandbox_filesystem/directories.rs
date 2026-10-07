@@ -15,24 +15,30 @@
 use super::*;
 
 #[derive(Clone)]
-pub(super) struct UnmanagedProvisioning {
-    deterministic_root: Option<PathBuf>,
+pub(super) struct DirectoryProvisioning {
+    deterministic_root: Option<Arc<Path>>,
     cleanup_retry: RetryConfig,
+    name_mode: NativeNameModeSource,
 }
 
-impl UnmanagedProvisioning {
+impl DirectoryProvisioning {
     /// Keeps the storage settings. Without a deterministic root, each sandbox gets its own
-    /// temporary directory.
-    pub(super) fn new(deterministic_root: Option<PathBuf>, cleanup_retry: RetryConfig) -> Self {
+    /// temporary directory. `name_mode` tells how the sandboxes compare names.
+    pub(super) fn new(
+        deterministic_root: Option<Arc<Path>>,
+        cleanup_retry: RetryConfig,
+        name_mode: NativeNameModeSource,
+    ) -> Self {
         Self {
             deterministic_root,
             cleanup_retry,
+            name_mode,
         }
     }
 
     /// The configured root of the sandboxes and the host directories, if one is configured.
-    pub(super) fn deterministic_root(&self) -> Option<&Path> {
-        self.deterministic_root.as_deref()
+    pub(super) fn deterministic_root(&self) -> Option<&Arc<Path>> {
+        self.deterministic_root.as_ref()
     }
 
     pub(super) async fn create_fresh(
@@ -54,7 +60,7 @@ impl UnmanagedProvisioning {
                 .await
                 .map_err(|error| {
                     FilesystemStorageError::io(
-                        "provision unmanaged sandbox filesystem",
+                        "provision sandbox filesystem",
                         &error_path,
                         std::io::Error::other(error),
                     )
@@ -87,12 +93,7 @@ impl UnmanagedProvisioning {
         root: PathBuf,
         lifecycle: OwnedMutexGuard<()>,
     ) -> Result<SandboxFilesystem, FilesystemStorageError> {
-        remove_and_verify(
-            &root,
-            "remove stale unmanaged runtime directory",
-            &self.cleanup_retry,
-        )
-        .await?;
+        remove_and_verify(&root, "remove stale runtime directory", &self.cleanup_retry).await?;
         let parent = root
             .parent()
             .expect("deterministic sandbox filesystem path must have a parent");
@@ -126,11 +127,7 @@ impl UnmanagedProvisioning {
             Err(error) => {
                 return Err(rollback_creation(
                     &root,
-                    FilesystemStorageError::io(
-                        "open fresh unmanaged runtime directory",
-                        &root,
-                        error,
-                    ),
+                    FilesystemStorageError::io("open fresh runtime directory", &root, error),
                     &self.cleanup_retry,
                 )
                 .await);
@@ -140,14 +137,14 @@ impl UnmanagedProvisioning {
             NativeRoot::new(root.clone(), directory),
             LeaseState {
                 lifecycle,
-                cleanup: NativeCleanup::Unmanaged {
+                cleanup: NativeCleanup::Directory {
                     path: root.clone(),
                     cleanup_retry: self.cleanup_retry.clone(),
                 },
             },
             volume,
             QuotaAuthority::Unsupported,
-            NativeNameModeSource::NativeDetection,
+            self.name_mode,
         );
         if let Err(error) = verify_fresh_directory(filesystem.root()).await {
             return Err(rollback_created_filesystem(filesystem, error).await);
