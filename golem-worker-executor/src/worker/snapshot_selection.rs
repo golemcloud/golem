@@ -711,17 +711,15 @@ pub(crate) fn names_in_use(status: &AgentStatusRecord) -> Box<[FilesystemSnapsho
                 .filter_map(|update| update.kind.filesystem_snapshot()),
         )
         .chain(authoritative)
-        .fold(
-            (HashSet::new(), Vec::new()),
-            |(mut seen, mut names), name| {
-                if seen.insert(name) {
-                    names.push(name.clone());
-                }
-                (seen, names)
-            },
-        )
-        .1
-        .into_boxed_slice()
+        .fold(Vec::new(), |mut names, name| {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+            names
+        })
+        .into_iter()
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
