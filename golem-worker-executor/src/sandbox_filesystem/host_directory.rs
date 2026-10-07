@@ -126,13 +126,20 @@ impl HostDirectory {
     ///
     /// A directory that is already absent, for example because its parent was removed first, gives
     /// success.
+    ///
+    /// The native work owns the root that the directory keeps, so a drop of the call never frees
+    /// the descriptor of the root while the work can still use the path through it.
     pub(crate) async fn discard(mut self) -> Result<(), FilesystemStorageError> {
         self.removed = true;
         let path = self.path.clone();
+        let root = (self._root.clone(), self._temporary_root.clone());
         execute_native(
             NativeStorageProfile::Unknown,
             NativeOperation::RecursiveCleanup,
-            move || remove_and_verify_blocking(path.as_path(), "discard host directory"),
+            move || {
+                let _root = root;
+                remove_and_verify_blocking(path.as_path(), "discard host directory")
+            },
         )
         .await
         .map_err(|error| {
@@ -878,5 +885,66 @@ mod tests {
             SandboxFilesystemProvisioning::new(&storage, RetryConfig::default()).is_ok();
 
         assert_eq!((held, left, bound_again), (true, [false, false], true));
+    }
+
+    /// The discards of both host directories, which a caller drops while they wait for the blocking
+    /// thread, keep the root descriptor and its lock until they end, and remove only the host
+    /// directories of their root.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn discards_dropped_while_queued_keep_their_root_until_their_native_work_ends() {
+        use futures::FutureExt as _;
+        let parent = tempfile::tempdir().unwrap();
+        let original = parent.path().join("original");
+        std::fs::create_dir(&original).unwrap();
+        let unrelated = cancelled_setup::unrelated_with_host_directory_names(parent.path());
+        let unrelated_descriptor = File::open(&unrelated).unwrap();
+        let runtime = cancelled_setup::one_blocking_thread();
+        let (provisioning, number) = cancelled_setup::descriptor_rooted(&original);
+        let HostDirectories {
+            scratch,
+            initial_files,
+        } = runtime
+            .block_on(make_host_directories(&provisioning))
+            .unwrap();
+        let made = cancelled_setup::has_host_directories(&original);
+        let release = cancelled_setup::hold_the_blocking_thread(&runtime);
+        runtime.block_on(async {
+            let queued = futures::future::join_all([scratch.discard(), initial_files.discard()])
+                .now_or_never();
+            assert!(
+                queued.is_none(),
+                "the discards must wait for the blocking thread"
+            );
+        });
+        drop(provisioning);
+
+        let reused = cancelled_setup::reuse(&unrelated_descriptor, number);
+        let kept = reused != number && cancelled_setup::names(number, &original);
+        let locked = cancelled_setup::lock_is_held(&original);
+        release.send(()).unwrap();
+        cancelled_setup::wait_for_the_blocking_thread(&runtime);
+        cancelled_setup::close(reused);
+
+        assert_eq!(
+            (
+                made,
+                kept,
+                locked,
+                cancelled_setup::holds_its_data(&unrelated),
+                cancelled_setup::has_host_directories(&original),
+                !cancelled_setup::names(number, &original),
+                !cancelled_setup::lock_is_held(&original),
+            ),
+            (
+                [true, true],
+                true,
+                true,
+                [true, true],
+                [false, false],
+                true,
+                true
+            )
+        );
     }
 }
