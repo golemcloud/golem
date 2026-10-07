@@ -33,11 +33,11 @@ mod syntax;
 use self::completion::{Completions, Fetch};
 pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
-    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LateAnswer,
-    LocalCommand, Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel,
-    classify_invoke_error, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
-    global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
-    run_argv, runs_nothing, strip_cursor_reports, time_limit, tools_listing,
+    BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
+    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_invoke_error,
+    decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice, global_args,
+    help_text, input_mode, interrupted_message, local_command, lookup_command, prompt, run_argv,
+    runs_nothing, strip_cursor_reports, time_limit, tools_listing,
 };
 use self::editor::{PLAIN_CONTINUATION, SshPrompt};
 use self::history::{SessionHistory, history_file};
@@ -425,14 +425,10 @@ impl SshCommandHandler {
             background,
         } = terminal;
         let at_terminal = mode != InputMode::Lines;
-        // The band behind every prompt, a shade off the terminal's own background, what was
-        // typed while the session connected, and whether the terminal may still answer.
-        let backdrop::Answer {
-            band,
-            typed_ahead,
-            late,
-        } = background.map(backdrop::Query::finish).unwrap_or_default();
-        let mut late_answer = LateAnswer::expected(late);
+        // The band behind every prompt, a shade off the terminal's own background, and what
+        // was typed while the session connected.
+        let backdrop::Answer { band, typed_ahead } =
+            background.map(backdrop::Query::finish).unwrap_or_default();
         // Output of a command that could not be written.
         let mut lost_output = false;
         if let Some(palette) = styled {
@@ -549,7 +545,7 @@ impl SshCommandHandler {
                 spaced: colorize,
             };
             let line = match input.read(prompt).await {
-                Ok(ReadLine::Line(line)) => late_answer.taken_from(line),
+                Ok(ReadLine::Line(line)) => line,
                 Ok(ReadLine::Cancelled) => continue,
                 Ok(ReadLine::End) => return ended(last_status, lost_output),
                 Ok(ReadLine::Interrupted) => {
