@@ -1265,6 +1265,7 @@ impl EntityInvocationDurability {
             ));
         }
 
+        let mut neutral = None;
         let replay = async {
             Ok(
                 match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
@@ -1275,6 +1276,14 @@ impl EntityInvocationDurability {
                         EntityReconstructionResolution::Cancelled(recorded)
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
+                        neutral = store.with(|mut access| {
+                            get_ctx(access.data_mut())
+                                .runtime_suspension
+                                .as_ref()
+                                .and_then(|runtime| {
+                                    runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                                })
+                        });
                         EntityReconstructionResolution::Incomplete(handle)
                     }
                     ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
@@ -1303,6 +1312,7 @@ impl EntityInvocationDurability {
             cancellation.as_ref(),
         )
         .await;
+        drop(neutral);
         let reconstruction = match reconstruction {
             Ok(reconstruction) => ensure_body_claimed_retained_descendants(
                 &replay_state,

@@ -5347,7 +5347,7 @@ async fn consumed_input_boundary(
             SchemaValueStreamReference { stream_id },
         )),
     };
-    let numbers = vec![23, 169, 7, 201];
+    let numbers = [23, 169, 7, 201];
     let (method, argument, streams, expected) = match kind {
         "byte" => {
             let values = numbers

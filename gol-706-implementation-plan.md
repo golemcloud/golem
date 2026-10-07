@@ -261,7 +261,72 @@ is building for comparison; the first comparison keeps the same patched runtime 
 isolate Golem changes. No lifecycle fix is authorized merely by this observation.
 Broader groups and miscellaneous runs, lint completion and M6 remain outstanding.
 Clippy found test-only type-complexity, unnecessary-Vec and manual-noop-waker warnings;
-scoped corrections/reruns are in progress. M6 documentation is drafted, not approved.
+scoped corrections/reruns are in progress.
+
+The baseline build completed and group1 passed with the same patched runtime:
+265 passed, 0 failed, 4 ignored in 398.372s (`baseline-group1.log`).
+At 07:59 UTC its process had 2523 threads (2202 SQLx SQLite workers, 317 Tokio
+workers) and 20935252 kB resident memory; see `baseline-resource-sample.txt` and
+`baseline-group1.log` under `tmp/gol706-m5/`. This reproduces substantial resource
+growth without the new Golem coordinator, but does not exonerate the shared runtime
+or explain the changed branch's failed run. No lifecycle change follows from this
+observation. The remaining comparison must distinguish the additional workload and
+orb resource pressure from a semantic regression; the failure is not waived.
+Kernel records now confirm that the changed run's exact process was OOM-killed at
+roughly 24 GB anonymous RSS (`group1-oom-evidence.txt`). This establishes the cause
+of exit 137, not each preceding timeout.
+
+Oracle approved resource-bounded verification, with trajectory AT RISK, not
+DERAILED: rerun the four late failures together, run the final binary's intact
+baseline-common cohort at four test threads, and run its added cohort separately.
+Monitor RSS, threads, cgroup limits/events and test progress without concurrent
+heavy builds. Reconcile the exact final inventory across runs, including explicit
+ignored cases. Repeat a monitored baseline only if needed to explain an apparent
+resource difference. An unexplained increase on equivalent work or a timeout
+without resource pressure remains blocking. Partitioned coverage never relabels
+the original monolithic run green; no lifecycle change is authorized.
+
+Scoped integration-test clippy with `-D warnings` passed after its final test-only
+Vec-to-array correction (`clippy-test-fix.log`). The locked integration build without
+the scratch dependency override passed against the published Wasmtime pin
+(`published-build.log`, 15m29s). Its four late failures plus three lint-affected
+input tests passed together (7/7, `published-late-and-lint.log`).
+
+The initial common-cohort attempt stopped during Docker dependency creation with
+no disk space; obsolete build products were removed. The corrected full baseline
+cohort then completed with 264 passed, 1 failed, 4 ignored in 343.191s
+(`published-group1-common-retry.log`). Its peak sampled RSS was about 25.8 GB with
+2991 threads, no additional OOM event. Resource attribution remains open.
+
+The failure is `duplicate_secret_policy_occurrences_are_isolated_from_leaf`:
+the second promise checkpoint does not reach Suspended within its unchanged 30s
+budget. It reproduces repeatedly alone on current code, while the baseline passes
+alone (`published-secret-policy*.log`, `baseline-secret-policy-debug.log`). It is
+therefore not dismissed as broad-suite pressure. Oracle identified a concrete
+missing classification: `EntityInvocationDurability::drive_access` marks fresh
+live body waits neutral, but not reconstructed body waits after the incomplete
+replay-to-live transition. The diagnostic snapshot confirmed current blocked
+evidence in all three Stores, the promise classified OnActivation, and two
+non-root ancestor activities left Unknown. There was no empty retired-Store veto.
+
+The ten-line correction classifies those ancestor waits only after the resolver
+returns Incomplete and drops the guard before validation/terminal persistence.
+Eligibility, lifecycle and timeout assertions remain unchanged; all temporary
+diagnostics were removed. Existing suspension/entity units passed (50/50), and
+the unchanged regression passed three runs: 8.272s, 6.921s, and the final repeat
+in `replay-neutral-repeat3.log`. Evidence: `replay-neutral-fix.log`,
+`bug-finder-ground-truth.log` (also includes one temporary adversarial unit, removed
+after passing). Oracle conditionally APPROVED with these verification conditions
+now met; bug-finder `gol706-m5-replay-neutral` run 1 clean. Overall trajectory
+remains AT RISK verification, not DERAILED. The common/added cohorts and remaining
+groups are running again on the corrected binary with `fixed-*` logs. M5 remains
+open for resource attribution, full final-source coverage and final review; no
+acceptance obligation has been waived.
+
+M6 documentation checkpoint: Oracle APPROVED, bug-finder `gol706-m6-docs` run 1
+clean. Desktop and narrow Chromium captures were inspected; all three narrow
+owner-suspension cards are complete and readable. Oracle trajectory remains
+AT RISK for unresolved M5 verification, not DERAILED. Final M6 delivery remains open.
 
 #### Draft publication requested during verification
 
