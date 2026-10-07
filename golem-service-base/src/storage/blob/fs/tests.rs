@@ -780,6 +780,101 @@ fn a_copy_from_a_directory_or_from_below_a_file_gives_false_and_makes_nothing() 
     );
 }
 
+/// A copy and a move give the target the permissions of the source: to an absent target, over a
+/// target with other permissions, to another namespace, and in a move, which then removes the
+/// source.
+#[cfg(unix)]
+#[test]
+async fn a_copy_and_a_move_keep_the_permissions_of_the_source() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
+    let on_disk = |namespace: BlobStorageNamespace, blob: &str| {
+        storage
+            .path_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
+            .unwrap()
+    };
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    let set_mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    let put = async |namespace: BlobStorageNamespace, blob: &str, data: &[u8], mode: u32| {
+        storage
+            .put_raw("test", "put-raw", namespace.clone(), Path::new(blob), data)
+            .await
+            .unwrap();
+        set_mode(&on_disk(namespace, blob), mode);
+    };
+    put(namespace(), "source", b"shared payload", 0o640).await;
+    put(namespace(), "existing", b"older", 0o604).await;
+    put(namespace(), "moved", b"moved payload", 0o640).await;
+
+    storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("source"),
+            Path::new("absent"),
+        )
+        .await
+        .unwrap();
+    storage
+        .copy(
+            "test",
+            "copy",
+            namespace(),
+            Path::new("source"),
+            Path::new("existing"),
+        )
+        .await
+        .unwrap();
+    storage
+        .copy_between(
+            "test",
+            "copy-between",
+            namespace(),
+            Path::new("source"),
+            snapshots(),
+            Path::new("other"),
+        )
+        .await
+        .unwrap();
+    storage
+        .r#move(
+            "test",
+            "move",
+            namespace(),
+            Path::new("moved"),
+            Path::new("target"),
+        )
+        .await
+        .unwrap();
+    let target = |namespace: BlobStorageNamespace, blob: &str| {
+        let path = on_disk(namespace, blob);
+        (std::fs::read(&path).unwrap(), mode(&path))
+    };
+
+    assert_eq!(
+        (
+            target(namespace(), "absent"),
+            target(namespace(), "existing"),
+            target(snapshots(), "other"),
+            target(namespace(), "target"),
+            on_disk(namespace(), "moved").exists(),
+            staged_files(root.path()),
+        ),
+        (
+            (b"shared payload".to_vec(), 0o640),
+            (b"shared payload".to_vec(), 0o640),
+            (b"shared payload".to_vec(), 0o640),
+            (b"moved payload".to_vec(), 0o640),
+            false,
+            Vec::new(),
+        )
+    );
+}
+
 /// The filesystem backend writes each name of a blob path as hex, cut into parts of at most 242
 /// bytes. So a `\`, a prefix of Windows and two names that differ only in case keep their
 /// meaning on every host, a long name fits the name limit of the filesystem, and no part of a

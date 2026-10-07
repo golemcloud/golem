@@ -790,7 +790,8 @@ fn no_source_file(kind: std::io::ErrorKind) -> bool {
 
 /// Copies the file at `source` to `target` through a new file in `staging`, and gives false when
 /// `source` has no file: no entry, a directory, or a path below a file. The source is opened and
-/// checked before anything is written. A `commit` whose call was dropped stops the copy before it
+/// checked before anything is written. The new file gets the permissions of the source before it
+/// gets the name `target`; when it cannot get them, the copy fails and names no file. A `commit` whose call was dropped stops the copy before it
 /// makes a directory and before the step that names the target.
 fn copy_staged(
     commit: &Commit,
@@ -804,7 +805,8 @@ fn copy_staged(
         Err(error) if no_source_file(error.kind()) => return Ok(false),
         Err(error) => return Err(error),
     };
-    if !source.metadata()?.is_file() {
+    let metadata = source.metadata()?;
+    if !metadata.is_file() {
         return Ok(false);
     }
     if let Some(parent) = target.parent() {
@@ -814,6 +816,7 @@ fn copy_staged(
     let mut staged = tempfile::NamedTempFile::new_in(staging)?;
     // A copy between two `File`s lets the standard library use the copy of the kernel.
     std::io::copy(&mut source, staged.as_file_mut())?;
+    staged.as_file().set_permissions(metadata.permissions())?;
     commit.before_commit()?;
     staged.persist(target).map_err(|error| error.error)?;
     Ok(true)
