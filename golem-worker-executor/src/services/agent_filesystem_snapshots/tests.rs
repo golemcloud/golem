@@ -3393,9 +3393,7 @@ async fn a_volume_below_the_pressure_target_admits_no_periodic_upload(
         CancellationToken::new(),
     );
 
-    let admitted = snapshots
-        .admit_periodic(&agent_snapshots(name))
-        .await;
+    let admitted = snapshots.admit_periodic(&agent_snapshots(name)).await;
 
     assert_eq!(admitted.err(), Some(SnapshotSkip::VolumeUnderPressure));
 }
