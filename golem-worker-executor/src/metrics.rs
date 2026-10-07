@@ -1306,8 +1306,8 @@ pub mod oplog {
             "Oplog operations checked against the shard epoch: `op` is `record` for an open \
              recording its epoch, `append` for a write and `drop_prefix` for a trim after \
              archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
-             `archive_delete_empty` for the same on a compressed archive level; `outcome` is \
-             `accepted` or `refused`",
+             `archive_delete_empty` for the same on a compressed archive level or a blob level's \
+             manifest; `outcome` is `accepted` or `refused`",
             &["op", "outcome"]
         )
         .unwrap();
