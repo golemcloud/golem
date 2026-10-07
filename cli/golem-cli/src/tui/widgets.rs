@@ -1871,7 +1871,15 @@ impl HelpRow<'_> {
     }
 }
 
+pub(super) struct CommandMarker<'a> {
+    pub glyph: &'a str,
+    pub style: Style,
+    pub matched: bool,
+}
+
 pub(super) struct CommandRow<'a> {
+    pub category: CommandMarker<'a>,
+    pub risk: Option<CommandMarker<'a>>,
     pub label: &'a str,
     pub shortcut: Option<&'a str>,
     pub description: &'a str,
@@ -1885,7 +1893,8 @@ pub(super) struct CommandRow<'a> {
 impl CommandRow<'_> {
     pub fn line(self, width: usize, visual: &TuiVisualStyle) -> Line<'static> {
         let marker_width = width.min(2);
-        let available = width.saturating_sub(marker_width);
+        let semantic_width = width.saturating_sub(marker_width).min(4);
+        let available = width.saturating_sub(marker_width + semantic_width);
         let selected_style = Style::default()
             .fg(visual.selection_text)
             .bg(visual.selection_background)
@@ -1923,6 +1932,30 @@ impl CommandRow<'_> {
             fit(if self.selected { "▌" } else { "" }, marker_width),
             marker_style,
         )];
+        if semantic_width > 0 {
+            let category_width = semantic_width.min(2);
+            let category_style = command_marker_style(
+                self.category.style,
+                self.category.matched,
+                self.selected,
+                visual,
+            );
+            spans.push(Span::styled(
+                fit(self.category.glyph, category_width),
+                category_style,
+            ));
+            let risk_width = semantic_width.saturating_sub(category_width);
+            if risk_width > 0 {
+                let (glyph, style, matched) = self
+                    .risk
+                    .map(|marker| (marker.glyph, marker.style, marker.matched))
+                    .unwrap_or(("", Style::default(), false));
+                spans.push(Span::styled(
+                    fit(glyph, risk_width),
+                    command_marker_style(style, matched, self.selected, visual),
+                ));
+            }
+        }
         if available < 34 {
             let compact = self
                 .shortcut
@@ -1979,6 +2012,26 @@ impl CommandRow<'_> {
             ));
         }
         Line::from(spans).alignment(Alignment::Left)
+    }
+}
+
+fn command_marker_style(
+    style: Style,
+    matched: bool,
+    selected: bool,
+    visual: &TuiVisualStyle,
+) -> Style {
+    if matched {
+        Style::default()
+            .fg(visual.search_match_text)
+            .bg(visual.search_match_background)
+            .add_modifier(Modifier::BOLD)
+    } else if selected {
+        style
+            .bg(visual.selection_background)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        style
     }
 }
 
@@ -3057,6 +3110,12 @@ mod tests {
     fn command_rows_highlight_matched_characters_in_visible_fields() {
         let visual = TuiVisualStyle::production();
         let command = CommandRow {
+            category: CommandMarker {
+                glyph: "●",
+                style: Style::default().fg(visual.success),
+                matched: true,
+            },
+            risk: None,
             label: "Ops",
             shortcut: Some("ctrl+x o"),
             description: "Navigate to Ops",
@@ -3075,6 +3134,10 @@ mod tests {
             (0..60).any(|x| buffer[(x, 0)].bg == visual.search_match_background),
             "expected a visible match highlight"
         );
+        assert_eq!(buffer[(2, 0)].symbol(), "●");
+        assert_eq!(buffer[(2, 0)].bg, visual.search_match_background);
+        assert_eq!(buffer[(4, 0)].symbol(), " ");
+        assert_eq!(buffer[(6, 0)].symbol(), "O");
     }
 
     #[test]
@@ -3349,6 +3412,16 @@ mod tests {
         }
         .line(48, &visual);
         let command = CommandRow {
+            category: CommandMarker {
+                glyph: "▶",
+                style: Style::default().fg(visual.accent),
+                matched: false,
+            },
+            risk: Some(CommandMarker {
+                glyph: "!",
+                style: Style::default().fg(visual.marker),
+                matched: false,
+            }),
             label: "A command with a long name",
             shortcut: Some("ctrl+x v"),
             description: "A description that must never wrap into another row",
@@ -3367,6 +3440,11 @@ mod tests {
         assert_eq!(buffer[(2, 0)].symbol(), "c");
         assert_eq!(buffer[(0, 1)].symbol(), "▌");
         assert_eq!(buffer[(0, 1)].fg, visual.accent);
+        assert_eq!(buffer[(2, 1)].symbol(), "▶");
+        assert_eq!(buffer[(2, 1)].fg, visual.accent);
+        assert_eq!(buffer[(4, 1)].symbol(), "!");
+        assert_eq!(buffer[(4, 1)].fg, visual.marker);
+        assert_eq!(buffer[(6, 1)].symbol(), "A");
         assert!((0..48).all(|x| buffer[(x, 1)].bg == visual.selection_background));
     }
 

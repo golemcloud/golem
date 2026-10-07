@@ -62,8 +62,8 @@ use crate::tui::terminal_screen::TerminalScreen;
 use crate::tui::visual::active_style;
 use crate::tui::visual::{TuiVisualStyle, with_style};
 use crate::tui::widgets::{
-    ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandRow,
-    ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow,
+    ActionButton, CellPolicy, CellTone, CollectionQueryBar, ColumnChooserState, CommandMarker,
+    CommandRow, ContextHeader, ContextPair, CursorCollectionState, DecisionTableRow, FieldRow,
     FooterStatusCluster, FooterStatusItem, HelpRow, JsonDocument, KeyHint, Notice, NoticeKind,
     OverlayFrame, PaneChrome, PaneEnding, PaneFocus, PaneHeader, PaneHeaderStatus, PaneLayout,
     PaneScrollbarSlot, PaneStatusTone, PaneTable, PaneTableCell, PaneTableCellSpan,
@@ -1697,7 +1697,7 @@ impl TuiApp {
                 self.toggle_dev_view(DevView::Repl);
                 self.close_palette();
             }
-            ActionId::MakeFocusedDevViewMain => {
+            ActionId::MoveCurrentDevViewToMain => {
                 self.make_focused_dev_view_primary();
                 self.close_palette();
             }
@@ -1873,7 +1873,7 @@ impl TuiApp {
             {
                 ActionAvailability::Unavailable("at least one Dev view must remain visible")
             }
-            ActionId::MakeFocusedDevViewMain if self.dev_focus == self.dev_primary => {
+            ActionId::MoveCurrentDevViewToMain if self.dev_focus == self.dev_primary => {
                 ActionAvailability::Unavailable("focused view is already main")
             }
             ActionId::ForceStopServer
@@ -1885,22 +1885,6 @@ impl TuiApp {
                 ActionAvailability::Unavailable("available five seconds after stop is requested")
             }
             _ => ActionAvailability::Available,
-        }
-    }
-
-    fn action_target_summary(&self, action: &ActionDefinition) -> String {
-        match action.target() {
-            ActionTarget::Interface => "TUI session".to_string(),
-            ActionTarget::ApplicationEnvironment => format!(
-                "{}/{}/{}",
-                self.selected_target.context.application,
-                self.selected_target.context.environment,
-                self.selected_target.context.server
-            ),
-            ActionTarget::LocalServer => self.selected_target.context.server.clone(),
-            ActionTarget::LoadedAgents => {
-                format!("{} loaded agents", self.filtered_agents().len())
-            }
         }
     }
 
@@ -11182,17 +11166,6 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
     .render_aligned(frame, area, lines, Alignment::Left, &theme());
 }
 
-fn palette_match_indices(text: &str, query: &str) -> Vec<usize> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Vec::new();
-    }
-    SkimMatcherV2::default()
-        .fuzzy_indices(&text.to_lowercase(), &query.to_lowercase())
-        .map(|(_, indices)| indices)
-        .unwrap_or_default()
-}
-
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     let matches = app.palette_matches();
     let area = adaptive_data_popup_rect(frame.area(), 36, 10);
@@ -11207,7 +11180,7 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
         .iter()
         .skip(start)
         .take(visible_count)
-        .copied()
+        .cloned()
         .collect::<Vec<_>>();
     let scope_line = Line::from(vec![
         Span::styled("Scope  ", Style::default().fg(theme().text_muted)),
@@ -11263,24 +11236,25 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             let action = &matched.action;
             let availability = app.action_availability(action);
             let description = palette_action_description(app, action);
-            let label_matches = palette_match_indices(action.label, &app.palette.query);
-            let shortcut_matches = action
-                .shortcut
-                .map(|shortcut| palette_match_indices(shortcut, &app.palette.query))
-                .unwrap_or_default();
-            let description_matches = palette_match_indices(&description, &app.palette.query);
+            let visual = theme();
             lines.push(
                 CommandRow {
+                    category: palette_category_marker(
+                        action.category,
+                        matched.category_matched,
+                        &visual,
+                    ),
+                    risk: palette_risk_marker(action.risk(), &visual),
                     label: action.label,
                     shortcut: action.shortcut,
                     description: &description,
-                    label_matches: &label_matches,
-                    shortcut_matches: &shortcut_matches,
-                    description_matches: &description_matches,
+                    label_matches: &matched.label_matches,
+                    shortcut_matches: &matched.shortcut_matches,
+                    description_matches: &matched.description_matches,
                     selected: start + index == selected,
                     unavailable: availability.is_unavailable(),
                 }
-                .line(content_width, &theme()),
+                .line(content_width, &visual),
             );
         }
     }
@@ -11324,6 +11298,42 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
             selected,
         );
     }
+}
+
+fn palette_category_marker(
+    category: ActionCategory,
+    matched: bool,
+    visual: &TuiVisualStyle,
+) -> CommandMarker<'static> {
+    let (glyph, color) = match category {
+        ActionCategory::Navigation => ("→", visual.info),
+        ActionCategory::Dev => ("▶", visual.accent),
+        ActionCategory::Ops => ("●", visual.success),
+        ActionCategory::Repl => ("›", visual.input_text),
+        ActionCategory::Settings => ("≡", visual.text_secondary),
+        ActionCategory::System => ("•", visual.text_muted),
+    };
+    CommandMarker {
+        glyph,
+        style: Style::default().fg(color),
+        matched,
+    }
+}
+
+fn palette_risk_marker(
+    risk: ActionRisk,
+    visual: &TuiVisualStyle,
+) -> Option<CommandMarker<'static>> {
+    let color = match risk {
+        ActionRisk::Disruptive => visual.marker,
+        ActionRisk::Destructive => visual.error,
+        ActionRisk::ReadOnly | ActionRisk::RoutineWrite => return None,
+    };
+    Some(CommandMarker {
+        glyph: "!",
+        style: Style::default().fg(color),
+        matched: false,
+    })
 }
 
 fn overlay_lines_with_footer(
@@ -11395,7 +11405,7 @@ enum ActionId {
     ToggleBuildDeployView,
     ToggleServerView,
     ToggleReplView,
-    MakeFocusedDevViewMain,
+    MoveCurrentDevViewToMain,
     RefreshAgents,
     OpenAgentDatasetFilter,
     OpenAgentColumns,
@@ -11471,42 +11481,6 @@ enum ActionRisk {
     Destructive,
 }
 
-impl ActionRisk {
-    fn label(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read-only",
-            Self::RoutineWrite => "routine-write",
-            Self::Disruptive => "disruptive",
-            Self::Destructive => "destructive",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionReview {
-    None,
-    ReviewForm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionTarget {
-    Interface,
-    ApplicationEnvironment,
-    LocalServer,
-    LoadedAgents,
-}
-
-impl ActionTarget {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Interface => "interface",
-            Self::ApplicationEnvironment => "application-environment",
-            Self::LocalServer => "local-server",
-            Self::LoadedAgents => "loaded-agents",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct ActionDefinition {
     id: ActionId,
@@ -11534,7 +11508,7 @@ impl ActionDefinition {
             | ActionId::ToggleBuildDeployView
             | ActionId::ToggleServerView
             | ActionId::ToggleReplView
-            | ActionId::MakeFocusedDevViewMain => Some("ctrl+x l"),
+            | ActionId::MoveCurrentDevViewToMain => Some("ctrl+x l"),
             ActionId::OpenContextPicker => Some("ctrl+x e"),
             ActionId::OpenPalette | ActionId::ShowHelp | ActionId::Quit => None,
             _ => Some("ctrl+x a"),
@@ -11557,48 +11531,6 @@ impl ActionDefinition {
             _ => ActionRisk::ReadOnly,
         }
     }
-
-    fn review(self) -> ActionReview {
-        match self.id {
-            ActionId::Plan
-            | ActionId::Build
-            | ActionId::Deploy
-            | ActionId::Clean
-            | ActionId::StartServer
-            | ActionId::RestartServer
-            | ActionId::StartRepl
-            | ActionId::RestartRepl => ActionReview::ReviewForm,
-            _ => ActionReview::None,
-        }
-    }
-
-    fn target(self) -> ActionTarget {
-        match self.id {
-            ActionId::Plan
-            | ActionId::Build
-            | ActionId::Deploy
-            | ActionId::Clean
-            | ActionId::StartRepl
-            | ActionId::StopRepl
-            | ActionId::ForceStopRepl
-            | ActionId::RestartRepl => ActionTarget::ApplicationEnvironment,
-            ActionId::StartServer
-            | ActionId::StopServer
-            | ActionId::ForceStopServer
-            | ActionId::RestartServer => ActionTarget::LocalServer,
-            ActionId::RefreshAgents
-            | ActionId::OpenAgentDatasetFilter
-            | ActionId::OpenAgentColumns
-            | ActionId::IncludeAgentMatches
-            | ActionId::ExcludeAgentMatches
-            | ActionId::LoadMoreAgents
-            | ActionId::ToggleAgentAutoRefresh
-            | ActionId::CycleAgentMode
-            | ActionId::ToggleAgentDetails
-            | ActionId::CycleAgentFindScope => ActionTarget::LoadedAgents,
-            _ => ActionTarget::Interface,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11617,7 +11549,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::Plan,
         label: "Plan",
-        description: "Review a golem deploy --plan command",
+        description: "Preview deployment changes",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Global,
@@ -11627,7 +11559,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::Build,
         label: "Build",
-        description: "Run golem build",
+        description: "Build the application",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Global,
@@ -11637,7 +11569,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::Deploy,
         label: "Deploy",
-        description: "Run golem deploy",
+        description: "Deploy the application environment",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Global,
@@ -11647,7 +11579,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::Clean,
         label: "Clean",
-        description: "Run golem clean",
+        description: "Clean application build output",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Global,
@@ -11657,7 +11589,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectDevBuildDeploy,
         label: "Dev / Build & Deploy",
-        description: "Show and focus the Build & Deploy view",
+        description: "Show and focus",
         shortcut: None,
         category: ActionCategory::Navigation,
         scope: ActionSurface::Global,
@@ -11667,7 +11599,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectDevServer,
         label: "Dev / Server",
-        description: "Show and focus the Server view",
+        description: "Show and focus",
         shortcut: None,
         category: ActionCategory::Navigation,
         scope: ActionSurface::Global,
@@ -11677,7 +11609,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectDevRepl,
         label: "Dev / REPL",
-        description: "Show and focus the REPL view",
+        description: "Show and focus",
         shortcut: None,
         category: ActionCategory::Navigation,
         scope: ActionSurface::Global,
@@ -11737,7 +11669,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::ToggleBuildDeployView,
         label: "Toggle Build & Deploy View",
-        description: "Show or hide the Build & Deploy view",
+        description: "Show or hide",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -11747,7 +11679,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::ToggleServerView,
         label: "Toggle Server View",
-        description: "Show or hide the Server view",
+        description: "Show or hide",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -11757,7 +11689,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::ToggleReplView,
         label: "Toggle REPL View",
-        description: "Show or hide the REPL view",
+        description: "Show or hide",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -11765,9 +11697,9 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::MakeFocusedDevViewMain,
-        label: "Make Focused Dev View Main",
-        description: "Promote the focused view without hiding other views",
+        id: ActionId::MoveCurrentDevViewToMain,
+        label: "Move Current View to Main",
+        description: "Promote without hiding other views",
         shortcut: None,
         category: ActionCategory::Dev,
         scope: ActionSurface::Leader,
@@ -11887,7 +11819,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectDev,
         label: "Dev",
-        description: "Switch to Dev workspace",
+        description: "Switch workspace",
         shortcut: None,
         category: ActionCategory::Navigation,
         scope: ActionSurface::Global,
@@ -11897,7 +11829,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectOps,
         label: "Ops",
-        description: "Switch to Ops workspace",
+        description: "Switch workspace",
         shortcut: None,
         category: ActionCategory::Navigation,
         scope: ActionSurface::Global,
@@ -11907,7 +11839,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectOpsAgents,
         label: "Ops / Agents",
-        description: "Open the Ops Agents collection",
+        description: "Open collection",
         shortcut: None,
         category: ActionCategory::Ops,
         scope: ActionSurface::Global,
@@ -11917,7 +11849,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectOpsDeployment,
         label: "Ops / Deployment",
-        description: "Open the current Deployment overview",
+        description: "Open overview",
         shortcut: None,
         category: ActionCategory::Ops,
         scope: ActionSurface::Global,
@@ -11927,7 +11859,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectOpsEnvironment,
         label: "Ops / Environment",
-        description: "Open the selected Environment overview",
+        description: "Open overview",
         shortcut: None,
         category: ActionCategory::Ops,
         scope: ActionSurface::Global,
@@ -11937,7 +11869,7 @@ const ACTIONS: &[ActionDefinition] = &[
     ActionDefinition {
         id: ActionId::SelectOpsServer,
         label: "Ops / Server",
-        description: "Open the selected Server overview",
+        description: "Open overview",
         shortcut: None,
         category: ActionCategory::Ops,
         scope: ActionSurface::Global,
@@ -12094,68 +12026,26 @@ fn action_relevant_to_context(action: &ActionDefinition, app: &TuiApp) -> bool {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+const PALETTE_FUZZY_RESULT_LIMIT: usize = 5;
+const PALETTE_FUZZY_EXTRA_SPAN: usize = 3;
+
+#[derive(Debug, Clone)]
 struct PaletteMatch {
     action: ActionDefinition,
     rank: u8,
     score: i64,
     registry_index: usize,
+    label_matches: Vec<usize>,
+    shortcut_matches: Vec<usize>,
+    description_matches: Vec<usize>,
+    category_matched: bool,
 }
 
 fn palette_action_description(app: &TuiApp, action: &ActionDefinition) -> String {
-    let reason = match app.action_availability(action) {
-        ActionAvailability::Available => String::new(),
-        ActionAvailability::Unavailable(reason) => format!(" — unavailable: {reason}"),
-    };
-    let review = if action.review() == ActionReview::ReviewForm {
-        " · review"
-    } else {
-        ""
-    };
-    format!(
-        "{} · {}{reason} · {} · target: {} ({}){review}",
-        action.category.label(),
-        action.description,
-        action.risk().label(),
-        action.target().label(),
-        app.action_target_summary(action)
-    )
-}
-
-fn palette_search_metadata(app: &TuiApp, action: &ActionDefinition) -> String {
-    format!(
-        "{} {}",
-        action.shortcut.unwrap_or_default(),
-        palette_action_description(app, action)
-    )
-}
-
-fn palette_label_rank(label: &str, query: &str, matcher: &SkimMatcherV2) -> Option<(u8, i64)> {
-    let label = label.to_lowercase();
-    let query = query.to_lowercase();
-    let fuzzy_score = matcher.fuzzy_match(&label, &query).unwrap_or_default();
-    if label == query {
-        return Some((0, fuzzy_score));
+    match app.action_availability(action) {
+        ActionAvailability::Available => action.description.to_string(),
+        ActionAvailability::Unavailable(reason) => format!("Unavailable — {reason}"),
     }
-    if label.starts_with(&query) {
-        return Some((1, fuzzy_score));
-    }
-    let label_words = label
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect::<Vec<_>>();
-    let query_words = query.split_whitespace().collect::<Vec<_>>();
-    if !query_words.is_empty()
-        && query_words
-            .iter()
-            .all(|query| label_words.iter().any(|word| word.starts_with(query)))
-    {
-        return Some((2, fuzzy_score));
-    }
-    if label.contains(&query) {
-        return Some((3, fuzzy_score));
-    }
-    matcher.fuzzy_match(&label, &query).map(|score| (4, score))
 }
 
 fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<PaletteMatch> {
@@ -12171,31 +12061,32 @@ fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec
                     .iter()
                     .position(|registered| registered.id == action.id)
                     .expect("registered palette action"),
+                label_matches: Vec::new(),
+                shortcut_matches: Vec::new(),
+                description_matches: Vec::new(),
+                category_matched: false,
             })
             .collect();
     }
-    let matcher = SkimMatcherV2::default();
-    let mut matches = palette_actions(scope, app)
+
+    let actions = palette_actions(scope, app);
+    let mut matches = actions
+        .iter()
+        .copied()
         .into_iter()
         .filter_map(|action| {
             let registry_index = ACTIONS
                 .iter()
                 .position(|registered| registered.id == action.id)
                 .expect("registered palette action");
-            let (rank, score) =
-                palette_label_rank(action.label, query, &matcher).or_else(|| {
-                    matcher
-                        .fuzzy_match(&palette_search_metadata(app, &action), query)
-                        .map(|score| (5, score))
-                })?;
-            Some(PaletteMatch {
-                action,
-                rank,
-                score,
-                registry_index,
-            })
+            structured_palette_match(action, query, registry_index, app)
         })
         .collect::<Vec<_>>();
+
+    if matches.is_empty() && query.chars().count() >= 3 {
+        matches = fuzzy_palette_matches(&actions, query, app);
+    }
+
     matches.sort_by(|left, right| {
         left.rank
             .cmp(&right.rank)
@@ -12207,7 +12098,183 @@ fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec
             })
             .then_with(|| left.registry_index.cmp(&right.registry_index))
     });
+    if matches.first().is_some_and(|matched| matched.rank == 5) {
+        matches.truncate(PALETTE_FUZZY_RESULT_LIMIT);
+    }
     matches
+}
+
+fn structured_palette_match(
+    action: ActionDefinition,
+    query: &str,
+    registry_index: usize,
+    app: &TuiApp,
+) -> Option<PaletteMatch> {
+    let query = query.to_ascii_lowercase();
+    let label = action.label.to_ascii_lowercase();
+    let query_tokens = query.split_whitespace().collect::<Vec<_>>();
+    let mut matched = PaletteMatch {
+        action,
+        rank: 0,
+        score: 0,
+        registry_index,
+        label_matches: Vec::new(),
+        shortcut_matches: Vec::new(),
+        description_matches: Vec::new(),
+        category_matched: false,
+    };
+
+    if label == query {
+        matched.label_matches = (0..action.label.chars().count()).collect();
+        return Some(matched);
+    }
+    if label.starts_with(&query) {
+        matched.rank = 1;
+        matched.label_matches = (0..query.chars().count()).collect();
+        return Some(matched);
+    }
+    if let Some(indices) = word_prefix_match_indices(action.label, &query_tokens) {
+        matched.rank = 2;
+        matched.label_matches = indices;
+        return Some(matched);
+    }
+    if let Some(indices) = substring_match_indices(action.label, &query) {
+        matched.rank = 3;
+        matched.label_matches = indices;
+        return Some(matched);
+    }
+
+    let searchable_description = matches!(
+        app.action_availability(&action),
+        ActionAvailability::Available
+    )
+    .then_some(action.description);
+    for token in query_tokens {
+        if let Some(indices) = word_prefix_match_indices(action.label, &[token]) {
+            matched.label_matches.extend(indices);
+        } else if action.category.label().starts_with(token) {
+            matched.category_matched = true;
+        } else if let Some(indices) = searchable_description
+            .and_then(|description| word_prefix_match_indices(description, &[token]))
+        {
+            matched.description_matches.extend(indices);
+        } else if let Some(indices) = action
+            .shortcut
+            .and_then(|shortcut| substring_match_indices(shortcut, token))
+        {
+            matched.shortcut_matches.extend(indices);
+        } else {
+            return None;
+        }
+    }
+
+    matched.rank = 4;
+    normalize_match_indices(&mut matched.label_matches);
+    normalize_match_indices(&mut matched.shortcut_matches);
+    normalize_match_indices(&mut matched.description_matches);
+    Some(matched)
+}
+
+fn fuzzy_palette_matches(
+    actions: &[ActionDefinition],
+    query: &str,
+    app: &TuiApp,
+) -> Vec<PaletteMatch> {
+    let matcher = SkimMatcherV2::default();
+    let query = query.to_ascii_lowercase();
+    let query_length = query.chars().count();
+    let mut matches = actions
+        .iter()
+        .copied()
+        .filter_map(|action| {
+            let (score, indices) =
+                matcher.fuzzy_indices(&action.label.to_ascii_lowercase(), &query)?;
+            let span = indices
+                .last()
+                .zip(indices.first())
+                .map(|(last, first)| last.saturating_sub(*first) + 1)
+                .unwrap_or_default();
+            if span > query_length + PALETTE_FUZZY_EXTRA_SPAN {
+                return None;
+            }
+            Some(PaletteMatch {
+                action,
+                rank: 5,
+                score,
+                registry_index: ACTIONS
+                    .iter()
+                    .position(|registered| registered.id == action.id)
+                    .expect("registered palette action"),
+                label_matches: indices,
+                shortcut_matches: Vec::new(),
+                description_matches: Vec::new(),
+                category_matched: false,
+            })
+        })
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| {
+                app.action_availability(&left.action)
+                    .is_unavailable()
+                    .cmp(&app.action_availability(&right.action).is_unavailable())
+            })
+            .then_with(|| left.registry_index.cmp(&right.registry_index))
+    });
+    matches.truncate(PALETTE_FUZZY_RESULT_LIMIT);
+    matches
+}
+
+fn substring_match_indices(text: &str, query: &str) -> Option<Vec<usize>> {
+    let text = text.to_ascii_lowercase().chars().collect::<Vec<_>>();
+    let query = query.to_ascii_lowercase().chars().collect::<Vec<_>>();
+    if query.is_empty() || query.len() > text.len() {
+        return None;
+    }
+    let start = text
+        .windows(query.len())
+        .position(|candidate| candidate == query)?;
+    Some((start..start + query.len()).collect())
+}
+
+fn word_prefix_match_indices(text: &str, query_tokens: &[&str]) -> Option<Vec<usize>> {
+    if query_tokens.is_empty() {
+        return None;
+    }
+    let words = indexed_words(text);
+    let mut matches = Vec::new();
+    for query in query_tokens {
+        let query = query.to_ascii_lowercase();
+        let (_, indices) = words.iter().find(|(word, _)| word.starts_with(&query))?;
+        matches.extend(indices.iter().take(query.chars().count()).copied());
+    }
+    normalize_match_indices(&mut matches);
+    Some(matches)
+}
+
+fn indexed_words(text: &str) -> Vec<(String, Vec<usize>)> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut indices = Vec::new();
+    for (index, character) in text.chars().enumerate() {
+        if character.is_alphanumeric() {
+            word.extend(character.to_lowercase());
+            indices.push(index);
+        } else if !word.is_empty() {
+            words.push((std::mem::take(&mut word), std::mem::take(&mut indices)));
+        }
+    }
+    if !word.is_empty() {
+        words.push((word, indices));
+    }
+    words
+}
+
+fn normalize_match_indices(indices: &mut Vec<usize>) {
+    indices.sort_unstable();
+    indices.dedup();
 }
 
 fn filtered_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
@@ -13005,17 +13072,15 @@ mod tests {
     }
 
     #[test]
-    fn action_metadata_captures_path_risk_review_and_target() {
+    fn action_metadata_captures_path_risk_and_execution() {
         let clean = *action(ActionId::Clean);
         assert_eq!(clean.leader_path(), Some("ctrl+x a"));
         assert_eq!(clean.risk(), ActionRisk::Destructive);
-        assert_eq!(clean.review(), ActionReview::ReviewForm);
-        assert_eq!(clean.target(), ActionTarget::ApplicationEnvironment);
+        assert_eq!(clean.execution_kind, ActionExecution::NestedCli);
 
         let refresh = *action(ActionId::RefreshAgents);
         assert_eq!(refresh.risk(), ActionRisk::ReadOnly);
-        assert_eq!(refresh.review(), ActionReview::None);
-        assert_eq!(refresh.target(), ActionTarget::LoadedAgents);
+        assert_eq!(refresh.execution_kind, ActionExecution::Direct);
     }
 
     #[test]
@@ -13100,12 +13165,46 @@ mod tests {
             "{ops_actions:?}"
         );
 
-        let target_actions = filtered_actions("sample-app/local/local", PaletteScope::All, &app);
         assert!(
-            target_actions
+            filtered_actions("sample-app/local/local", PaletteScope::All, &app).is_empty(),
+            "dynamic targets must not affect palette matching"
+        );
+        assert!(filtered_actions("read-only", PaletteScope::All, &app).is_empty());
+        assert!(filtered_actions("interface", PaletteScope::All, &app).is_empty());
+    }
+
+    #[test]
+    fn palette_prefers_structured_matches_before_bounded_label_fallback() {
+        let app = test_app();
+        let plan = ranked_palette_actions("plan", PaletteScope::All, &app);
+
+        assert_eq!(plan.len(), 1, "{plan:?}");
+        assert_eq!(plan[0].action.id, ActionId::Plan);
+        assert_eq!(plan[0].rank, 0);
+
+        let typo = ranked_palette_actions("pln", PaletteScope::All, &app);
+        assert!(!typo.is_empty(), "{typo:?}");
+        assert_eq!(typo[0].action.id, ActionId::Plan);
+        assert!(typo.iter().all(|matched| matched.rank == 5));
+        assert!(typo.len() <= PALETTE_FUZZY_RESULT_LIMIT);
+    }
+
+    #[test]
+    fn palette_tokens_can_match_across_visible_fields() {
+        let app = test_app();
+        let matches = filtered_actions("ops agent", PaletteScope::All, &app);
+
+        assert!(
+            matches
                 .iter()
-                .any(|action| action.id == ActionId::Build),
-            "{target_actions:?}"
+                .any(|action| action.id == ActionId::RefreshAgents),
+            "{matches:?}"
+        );
+        assert!(
+            matches
+                .iter()
+                .any(|action| action.id == ActionId::SelectOpsAgents),
+            "{matches:?}"
         );
     }
 
@@ -14873,6 +14972,24 @@ mod tests {
                 .any(|x| buffer[(x, y)].bg == visual.search_match_background)),
             "expected visible palette match highlighting"
         );
+    }
+
+    #[test]
+    fn command_palette_uses_compact_visible_metadata() {
+        let mut app = test_app();
+        app.dev_focus = DevView::Server;
+        app.open_palette(PaletteScope::All);
+
+        let frame = render_app_text_at(&app, 140, 40);
+
+        assert!(frame.contains("Move Current View to Main"), "{frame}");
+        assert!(
+            frame.contains("Promote without hiding other views"),
+            "{frame}"
+        );
+        assert!(!frame.contains("read-only"), "{frame}");
+        assert!(!frame.contains("target:"), "{frame}");
+        assert!(!frame.contains("TUI session"), "{frame}");
     }
 
     #[test]
