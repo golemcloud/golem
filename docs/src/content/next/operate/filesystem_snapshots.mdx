@@ -102,7 +102,7 @@ The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs`
 
 What `ReflinkXfs` does not give:
 
-- **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets.
+- **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets. When the unload frees too little space, the write fails with an out-of-space error. An agent never gets a quota error on `ReflinkXfs`.
 - **No filesystem metering.** The executor measures the disk usage of each agent only through project quotas. An executor with `ReflinkXfs` and `[resource_usage_metering] filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`.
 
 #### Both XFS modes
