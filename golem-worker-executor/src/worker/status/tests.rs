@@ -799,7 +799,7 @@ fn export_fork_admission_fold_ignores_ancestor_after_reverting_before_fork_cut()
         AgentStatusRecord::default(),
         entries,
         &RetryConfig::default(),
-        &regions_without_updates(deleted),
+        regions_without_updates(deleted),
         std::collections::VecDeque::new(),
         true,
     )
@@ -5826,7 +5826,7 @@ fn oplog_processor_checkpoint_fold_is_chunk_composable() {
                 status,
                 chunk,
                 &RetryConfig::default(),
-                &regions_without_updates(DeletedRegions::new()),
+                regions_without_updates(DeletedRegions::new()),
                 std::collections::VecDeque::new(),
                 finalize,
             )
@@ -7055,12 +7055,12 @@ fn manual_update_baseline(authoritative: &Option<AuthoritativeSnapshot>) -> Opti
 }
 
 /// A region fold with `deleted` as its deleted regions, no skipped regions and no update steps.
-fn regions_without_updates(deleted: DeletedRegions) -> super::RegionFold {
-    super::RegionFold {
+fn regions_without_updates(deleted: DeletedRegions) -> super::FoldedRegions<'static> {
+    static NO_STEPS: BTreeMap<OplogIndex, super::update_queue::UpdateStep> = BTreeMap::new();
+    super::FoldedRegions {
         deleted,
         skipped: DeletedRegions::new(),
-        queue: super::update_queue::UpdateQueue::default(),
-        steps: BTreeMap::new(),
+        steps: &NO_STEPS,
     }
 }
 

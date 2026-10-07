@@ -458,7 +458,11 @@ where
             baseline,
             entries,
             &this.config().retry,
-            &regions,
+            FoldedRegions {
+                deleted: regions.deleted.clone(),
+                skipped: regions.skipped.clone(),
+                steps: &regions.steps,
+            },
             pending_updates,
             finalize_oplog_processor_checkpoints,
         )?;
@@ -594,25 +598,33 @@ fn update_status_with_new_entries_internal(
     validate_baseline: bool,
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<Option<AgentStatusRecord>, String> {
-    let mut regions = fold_regions(&last_known, &new_entries);
+    let RegionFold {
+        deleted,
+        skipped,
+        queue,
+        steps,
+    } = fold_regions(&last_known, &new_entries);
 
     // If the last known status is from a deleted region based on the latest deleted region status,
     // we cannot fold the new status from the new entries only, and need to recalculate the whole status
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &regions.deleted, &regions.skipped)
-    {
+    if validate_baseline && baseline_is_invalidated(&last_known, &deleted, &skipped) {
         return Ok(None);
     }
 
-    let pending_updates = std::mem::take(&mut regions.queue).into_open().0;
+    let pending_updates = queue.into_open().0;
     Ok(Some(update_status_with_precomputed_regions(
         agent_mode,
         last_known,
         new_entries,
         default_retry_policy,
-        &regions,
+        FoldedRegions {
+            deleted,
+            skipped,
+            steps: &steps,
+        },
         pending_updates,
         finalize_oplog_processor_checkpoints,
     )?))
@@ -662,22 +674,34 @@ fn baseline_is_invalidated(
             || has_uncovered_prefix(&baseline_without_overrides, &new_without_overrides))
 }
 
+/// The regions and the update steps of a region fold, which the status after the folded range
+/// takes: it moves the regions in.
+struct FoldedRegions<'a> {
+    deleted: DeletedRegions,
+    skipped: DeletedRegions,
+    steps: &'a BTreeMap<OplogIndex, UpdateStep>,
+}
+
 /// The status after `new_entries`, with the regions and the update steps of `regions`, which a
 /// region fold gave for a range that holds `new_entries`. `pending_updates` are the pending
 /// updates of the status after `new_entries`; the caller takes them from the queue of the region
-/// fold. The queue of `regions` is not read.
+/// fold.
 fn update_status_with_precomputed_regions(
     agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     default_retry_policy: &RetryConfig,
-    regions: &RegionFold,
+    regions: FoldedRegions<'_>,
     pending_updates: VecDeque<PendingUpdateRef>,
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<AgentStatusRecord, String> {
-    let deleted_regions = &regions.deleted;
-    let skipped_regions = &regions.skipped;
-    let steps = &regions.steps;
+    let FoldedRegions {
+        deleted,
+        skipped,
+        steps,
+    } = regions;
+    let deleted_regions = &deleted;
+    let skipped_regions = &skipped;
     let active_plugins = last_known.active_plugins.clone();
     let mut atomic_rollback = last_known.atomic_rollback;
     for (index, entry) in &new_entries {
@@ -821,7 +845,7 @@ fn update_status_with_precomputed_regions(
         overridden_retry_config,
         pending_invocations,
         pending_card_events,
-        skipped_regions: skipped_regions.clone(),
+        skipped_regions: skipped,
         atomic_rollback,
         pending_updates,
         failed_updates,
@@ -841,7 +865,7 @@ fn update_status_with_precomputed_regions(
         active_plugins,
         oplog_processor_checkpoints,
         revoked_cards,
-        deleted_regions: deleted_regions.clone(),
+        deleted_regions: deleted,
         component_revision_for_replay,
         component_revision_start_index,
         current_retry_state,
