@@ -264,7 +264,7 @@ type commandSettings struct {
 
 // outputDecl is a declared standard output or standard error.
 type outputDecl struct {
-	doc      string
+	doc      toolDoc
 	mime     []string
 	required bool
 }
@@ -445,7 +445,7 @@ func (s *CommandSpec) output(method string, slot **outputDecl) *OutputSpec {
 }
 
 func (o *outputDecl) toWit() toolCommon.StreamSpec {
-	return toolCommon.StreamSpec{Doc: toolDoc{summary: o.doc}.toWit(), Mime: slices.Clone(o.mime), Required: o.required}
+	return toolCommon.StreamSpec{Doc: o.doc.toWit(), Mime: slices.Clone(o.mime), Required: o.required}
 }
 
 // OutputSpec is a declared output stream. Each setter returns it, so
@@ -453,7 +453,10 @@ func (o *outputDecl) toWit() toolCommon.StreamSpec {
 type OutputSpec struct{ d *outputDecl }
 
 // Doc documents what the stream carries.
-func (o *OutputSpec) Doc(text string) *OutputSpec { o.d.doc = text; return o }
+func (o *OutputSpec) Doc(text string) *OutputSpec { o.d.doc.summary = text; return o }
+
+// Description adds a longer explanation of the stream.
+func (o *OutputSpec) Description(text string) *OutputSpec { o.d.doc.description = text; return o }
 
 // Mime lists the media types the stream carries.
 func (o *OutputSpec) Mime(types ...string) *OutputSpec {
@@ -519,8 +522,12 @@ func newToolTailArg[T any](b *argBinding) *TailArg[T] {
 	return a
 }
 
-func (a *TailArg[T]) Name(name string) *TailArg[T]     { a.b.name = name; return a }
-func (a *TailArg[T]) Doc(summary string) *TailArg[T]   { a.b.doc.summary = summary; return a }
+func (a *TailArg[T]) Name(name string) *TailArg[T]   { a.b.name = name; return a }
+func (a *TailArg[T]) Doc(summary string) *TailArg[T] { a.b.doc.summary = summary; return a }
+func (a *TailArg[T]) Description(text string) *TailArg[T] {
+	a.b.doc.description = text
+	return a
+}
 func (a *TailArg[T]) ValueName(n string) *TailArg[T]   { a.b.valueName = n; return a }
 func (a *TailArg[T]) Min(n uint32) *TailArg[T]         { a.b.min = n; return a }
 func (a *TailArg[T]) Max(n uint32) *TailArg[T]         { a.b.max = &n; return a }
@@ -553,6 +560,10 @@ func (a *OptionArg[T]) Env(name string) *OptionArg[T]    { a.b.env = name; retur
 func (a *OptionArg[T]) ValueName(n string) *OptionArg[T] { a.b.valueName = n; return a }
 func (a *OptionArg[T]) Doc(summary string) *OptionArg[T] {
 	a.b.doc.summary = summary
+	return a
+}
+func (a *OptionArg[T]) Description(text string) *OptionArg[T] {
+	a.b.doc.description = text
 	return a
 }
 func (a *OptionArg[T]) Aliases(names ...string) *OptionArg[T] {
@@ -595,6 +606,10 @@ func (a *ListArg[T]) Short(r rune) *ListArg[T]       { a.b.short = r; return a }
 func (a *ListArg[T]) Env(name string) *ListArg[T]    { a.b.env = name; return a }
 func (a *ListArg[T]) ValueName(n string) *ListArg[T] { a.b.valueName = n; return a }
 func (a *ListArg[T]) Doc(summary string) *ListArg[T] { a.b.doc.summary = summary; return a }
+func (a *ListArg[T]) Description(text string) *ListArg[T] {
+	a.b.doc.description = text
+	return a
+}
 func (a *ListArg[T]) Aliases(names ...string) *ListArg[T] {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -618,6 +633,12 @@ func (a *ListArg[T]) Either(sep rune) *ListArg[T] {
 	return a
 }
 
+// Default is the list taken when the option is not given.
+func (a *ListArg[T]) Default(v []T) *ListArg[T] {
+	a.b.def = reflect.ValueOf(&v).Elem()
+	return a
+}
+
 // ValueIs refers to one of the values being v, for a constraint.
 func (a *ListArg[T]) ValueIs(v T) Ref    { return valueRef(a.b, v) }
 func (a *ListArg[T]) toolRef() refDecl   { return refDecl{b: a.b} }
@@ -632,6 +653,10 @@ func (a *MapArg[K, V]) Env(name string) *MapArg[K, V]    { a.b.env = name; retur
 func (a *MapArg[K, V]) ValueName(n string) *MapArg[K, V] { a.b.valueName = n; return a }
 func (a *MapArg[K, V]) Doc(summary string) *MapArg[K, V] {
 	a.b.doc.summary = summary
+	return a
+}
+func (a *MapArg[K, V]) Description(text string) *MapArg[K, V] {
+	a.b.doc.description = text
 	return a
 }
 func (a *MapArg[K, V]) Aliases(names ...string) *MapArg[K, V] {
@@ -657,6 +682,12 @@ func (a *MapArg[K, V]) Either(sep rune) *MapArg[K, V] {
 	return a
 }
 
+// Default is the map taken when the option is not given.
+func (a *MapArg[K, V]) Default(v map[K]V) *MapArg[K, V] {
+	a.b.def = reflect.ValueOf(&v).Elem()
+	return a
+}
+
 // LastKeyWins keeps the last value of a repeated key; by default a repeated
 // key is a usage error.
 func (a *MapArg[K, V]) LastKeyWins() *MapArg[K, V] { a.b.lastKeyWins = true; return a }
@@ -673,6 +704,10 @@ func (a *FlagArg) Name(name string) *FlagArg   { a.b.name = name; return a }
 func (a *FlagArg) Short(r rune) *FlagArg       { a.b.short = r; return a }
 func (a *FlagArg) Env(name string) *FlagArg    { a.b.env = name; return a }
 func (a *FlagArg) Doc(summary string) *FlagArg { a.b.doc.summary = summary; return a }
+func (a *FlagArg) Description(text string) *FlagArg {
+	a.b.doc.description = text
+	return a
+}
 func (a *FlagArg) Aliases(names ...string) *FlagArg {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -694,6 +729,10 @@ func (a *CountFlagArg) Name(name string) *CountFlagArg   { a.b.name = name; retu
 func (a *CountFlagArg) Short(r rune) *CountFlagArg       { a.b.short = r; return a }
 func (a *CountFlagArg) Env(name string) *CountFlagArg    { a.b.env = name; return a }
 func (a *CountFlagArg) Doc(summary string) *CountFlagArg { a.b.doc.summary = summary; return a }
+func (a *CountFlagArg) Description(text string) *CountFlagArg {
+	a.b.doc.description = text
+	return a
+}
 func (a *CountFlagArg) Aliases(names ...string) *CountFlagArg {
 	a.b.aliases = append(a.b.aliases, names...)
 	return a
@@ -709,6 +748,10 @@ func (a *CountFlagArg) toolRefs() refsDecl { return single(a) }
 type StdinArg struct{ b *stdinBinding }
 
 func (a *StdinArg) Doc(summary string) *StdinArg { a.b.doc.summary = summary; return a }
+func (a *StdinArg) Description(text string) *StdinArg {
+	a.b.doc.description = text
+	return a
+}
 
 // Mime lists the media types the command accepts.
 func (a *StdinArg) Mime(mime ...string) *StdinArg {

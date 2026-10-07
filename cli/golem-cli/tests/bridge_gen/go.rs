@@ -56,7 +56,7 @@ use golem_common::schema::schema_type::{
 use golem_common::schema::schema_value::SchemaValue;
 use golem_common::schema::tool::{
     CommandBody, CommandIndex, DuplicateKeyPolicy, ErrorCase, ErrorKind, Formatter, OptionShape,
-    OptionSpec, Positional, Positionals, RepeatableMapShape, Repetition,
+    OptionSpec, Positional, Positionals, RepeatableListShape, RepeatableMapShape, Repetition,
     ResultSpec as ToolResultSpec, StreamSpec, Tool,
 };
 use golem_common::schema::{AgentTypeSchema, AutoInjectedKind, NamedField, Role, SchemaType};
@@ -1114,14 +1114,34 @@ fn go_grep_tool() -> Tool {
             }],
             tail: None,
         },
-        options: vec![option(
-            "labels",
-            OptionShape::RepeatableMap(RepeatableMapShape {
-                repetition: Repetition::Repeated,
-                map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
-                duplicate_key_policy: DuplicateKeyPolicy::Reject,
-            }),
-        )],
+        options: vec![
+            OptionSpec {
+                default: Some(SchemaValue::Map {
+                    entries: vec![(
+                        SchemaValue::String("env".to_string()),
+                        SchemaValue::String("dev".to_string()),
+                    )],
+                }),
+                ..option(
+                    "labels",
+                    OptionShape::RepeatableMap(RepeatableMapShape {
+                        repetition: Repetition::Repeated,
+                        map_type: SchemaType::map(SchemaType::string(), SchemaType::string()),
+                        duplicate_key_policy: DuplicateKeyPolicy::Reject,
+                    }),
+                )
+            },
+            OptionSpec {
+                default: Some(SchemaValue::List { elements: vec![] }),
+                ..option(
+                    "tag",
+                    OptionShape::RepeatableList(RepeatableListShape {
+                        repetition: Repetition::Repeated,
+                        item_type: SchemaType::string(),
+                    }),
+                )
+            },
+        ],
         result: Some(ToolResultSpec {
             type_: SchemaType::option(SchemaType::string()),
             doc: doc("value"),
@@ -1162,7 +1182,8 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
         "s.Stderr()\n",
         "var ConfigGet = configGroup.Command[ConfigGetArgs, values.Option[string]](\"get\"",
         "s.Positional(&a.Key).Default(\"all\")",
-        "s.Map(&a.Labels)",
+        "s.Map(&a.Labels).Default(map[string]string{\"env\": \"dev\"})",
+        "s.List(&a.Tag).Default(nil)",
         "s.Stdin(&a.Stdin).Optional()",
         "s.CountFlag(&a.Verbosity)",
     ] {

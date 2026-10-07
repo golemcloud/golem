@@ -871,9 +871,14 @@ func shortOf(r rune) witTypes.Option[rune] {
 	return witTypes.Some(r)
 }
 
+// defaultOf is the declared default, typed as the field: a list option's
+// default is the whole list, not one of its values.
 func defaultOf(a boundArg) witTypes.Option[types.SchemaValueTree] {
 	if !a.b.def.IsValid() {
 		return witTypes.None[types.SchemaValueTree]()
+	}
+	if a.b.kind == argList || a.b.kind == argMap {
+		return witTypes.Some(engine.EncodeWith(a.field, a.b.def))
 	}
 	return witTypes.Some(engine.EncodeWith(a.value, a.b.def))
 }

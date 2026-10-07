@@ -407,7 +407,7 @@ impl GoToolBridgeGenerator {
         let mut out = Vec::with_capacity(surfaces.len());
         for ((surface, field), ident) in surfaces.iter().zip(&canonical).zip(idents) {
             let typ = self.inner.render(&field.type_, writer)?;
-            let (method, default) = self.binding_of(command_index, *surface)?;
+            let (method, default) = self.binding_of(command_index, *surface, &typ)?;
             let mut binding = format!("{method}(&{{}}.{ident})");
             if go_kebab(&ident) != field.name {
                 binding.push_str(&format!(".Name({})", go_string(&field.name)));
@@ -426,11 +426,13 @@ impl GoToolBridgeGenerator {
     }
 
     /// The spec method a surface binds with, and the Go literal of its default
-    /// when it has one a literal can spell.
+    /// when it has one a literal can spell. `typ` is the field's Go type, which
+    /// spells a non-empty list or map default.
     fn binding_of(
         &self,
         command_index: usize,
         surface: CanonicalSurfaceRef,
+        typ: &str,
     ) -> anyhow::Result<(&'static str, Option<String>)> {
         let option = |o: &golem_common::schema::tool::OptionSpec| {
             let method = match o.shape {
@@ -441,6 +443,37 @@ impl GoToolBridgeGenerator {
             let default = match (&o.shape, &o.default) {
                 (OptionShape::Scalar(t) | OptionShape::OptionalScalar(t), Some(v)) => {
                     self.literal(t, v)
+                }
+                (OptionShape::RepeatableList(_), Some(SchemaValue::List { elements }))
+                    if elements.is_empty() =>
+                {
+                    Some("nil".to_string())
+                }
+                (OptionShape::RepeatableList(l), Some(SchemaValue::List { elements })) => elements
+                    .iter()
+                    .map(|e| self.literal(&l.item_type, e))
+                    .collect::<Option<Vec<_>>>()
+                    .map(|items| format!("{typ}{{{}}}", items.join(", "))),
+                (OptionShape::RepeatableMap(_), Some(SchemaValue::Map { entries }))
+                    if entries.is_empty() =>
+                {
+                    Some("nil".to_string())
+                }
+                (OptionShape::RepeatableMap(m), Some(SchemaValue::Map { entries })) => {
+                    let SchemaType::Map { key, value, .. } = self.inner.resolve(&m.map_type) else {
+                        return (method, None);
+                    };
+                    entries
+                        .iter()
+                        .map(|(k, v)| {
+                            Some(format!(
+                                "{}: {}",
+                                self.literal(key, k)?,
+                                self.literal(value, v)?
+                            ))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                        .map(|items| format!("{typ}{{{}}}", items.join(", ")))
                 }
                 _ => None,
             };

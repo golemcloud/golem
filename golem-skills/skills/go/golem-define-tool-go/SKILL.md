@@ -50,15 +50,15 @@ var Greet = Tool.Command[GreetArgs, string]("greet", func(a *GreetArgs, s *tool.
 })
 ```
 
-The wire name is the field name in kebab case (`Times` → `times`, `GitDir` → `git-dir`); `.Name("…")` overrides it. The field's type decides the shape:
+The wire name is the field name in kebab case (`Times` → `times`, `GitDir` → `git-dir`); `.Name("…")` overrides it. Every binding, output and stdin takes `.Doc(summary)` and `.Description(text)`. The field's type decides the shape:
 
 | Field | Bound with | Shape |
 |---|---|---|
 | `T` | `Positional`, `Option` | Required, unless it has a `.Default(v)` |
 | `golem.Option[T]` | `Positional`, `Option` | Optional |
 | `[]T` | `Tail` | The variadic positional after the fixed ones: `.Min`, `.Max`, `.Separator("--")`, `.Verbatim()` |
-| `[]T` | `List` | `--inc a --inc b`; `.Delimited(',')` takes `--inc a,b`, `.Either(',')` both |
-| `map[K]V` | `Map` | `-l k=v`; `.LastKeyWins()` instead of rejecting a repeated key |
+| `[]T` | `List` | `--inc a --inc b`; `.Delimited(',')` takes `--inc a,b`, `.Either(',')` both; `.Default(nil)` publishes an empty default |
+| `map[K]V` | `Map` | `-l k=v`; `.LastKeyWins()` instead of rejecting a repeated key; `.Default(map[K]V{})` |
 | `bool` | `Flag` | A switch; `.Negatable()` adds `--no-<name>`, `.Default(true)` |
 | `uint32` | `CountFlag` | `-vvv`; `.Max(3)` |
 | `io.Reader` | `Stdin` | The command's standard input; `.Optional()`, `.Mime(…)` |
