@@ -225,7 +225,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   initialization cycle). A configured agent whose constructor reads config uses `Agent.ImplementConfigured`
   and reads config in a method via `ctx.Config(Agent)`.
 - Handlers may be plain closures or ordinary Go methods bound with a method expression
-  (`impl.Handle(Cart.AddItem, golem.Bind((*state).AddItem))`).
+  (`impl.Handle(Cart.AddItem, golem.Adapt((*state).AddItem))`).
 
 ## Tooling
 

@@ -30,5 +30,5 @@ func init() {
 		return ctx.State.value
 	})
 	// A handler can also be an ordinary Go method, bound with a method expression.
-	agent.Handle(counter.Value, golem.Bind0((*state).current))
+	agent.Handle(counter.Value, golem.Adapt0((*state).current))
 }

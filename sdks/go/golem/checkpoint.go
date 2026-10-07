@@ -69,14 +69,3 @@ func WithCheckpoint[T any](f func(cp Checkpoint) (T, error)) T {
 	cp := NewCheckpoint()
 	return cp.Must(f(cp))
 }
-
-// Fork copies the running agent under a new phantom id. Both copies continue
-// from here: forked tells them apart, and phantomID is the copy's id in both.
-func Fork() (forked bool, phantomID UUID, err error) { return hostOps.fork() }
-
-// MustFork is [Fork], panicking on failure.
-func MustFork() (forked bool, phantomID UUID) {
-	forked, phantomID, err := Fork()
-	mustDo(err)
-	return forked, phantomID
-}

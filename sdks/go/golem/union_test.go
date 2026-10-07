@@ -38,8 +38,8 @@ type Square struct {
 func (Square) isShape() {}
 
 var _ = DefineUnion[Shape](
-	Branch[Circle]("circle", FieldEquals("kind", "circle")),
-	Branch[Square]("square", FieldEquals("kind", "square")),
+	Branch[Circle]("circle", ByFieldEquals("kind", "circle")),
+	Branch[Square]("square", ByFieldEquals("kind", "square")),
 )
 
 func TestUnionRoundTrips(t *testing.T) {
@@ -76,7 +76,7 @@ func TestUnionCarriesBranchTagsAndRules(t *testing.T) {
 
 func TestDefineUnionRejectsNonInterface(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		defineUnionInto[Circle](d, Branch[Circle]("circle", FieldPresent("kind")))
+		defineUnionInto[Circle](d, Branch[Circle]("circle", ByFieldPresent("kind")))
 		mustDefErr(t, d, "DefineUnion requires an interface type")
 	})
 }
@@ -87,7 +87,7 @@ func TestDefineUnionRejectsNonInterface(t *testing.T) {
 func TestDefineUnionRejectsNonImplementingBranch(t *testing.T) {
 	type Stranger struct{ Kind string }
 	withDefs(t, func(d *definitions) {
-		defineUnionInto[Shape](d, Branch[Stranger]("stranger", FieldPresent("kind")))
+		defineUnionInto[Shape](d, Branch[Stranger]("stranger", ByFieldPresent("kind")))
 		mustDefErr(t, d, "does not implement")
 	})
 }
@@ -95,8 +95,8 @@ func TestDefineUnionRejectsNonImplementingBranch(t *testing.T) {
 func TestDefineUnionRejectsDuplicateTags(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		defineUnionInto[Shape](d,
-			Branch[Circle]("shape", FieldEquals("kind", "circle")),
-			Branch[Square]("shape", FieldEquals("kind", "square")),
+			Branch[Circle]("shape", ByFieldEquals("kind", "circle")),
+			Branch[Square]("shape", ByFieldEquals("kind", "square")),
 		)
 		mustDefErr(t, d, "duplicate branch tag")
 	})
@@ -107,7 +107,7 @@ func TestDefineUnionRejectsDuplicateTags(t *testing.T) {
 func TestDefineUnionRejectsAVariantInterface(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		defineVariantInto[Shape](d, Case[Circle]("circle"))
-		defineUnionInto[Shape](d, Branch[Circle]("circle", FieldPresent("kind")))
+		defineUnionInto[Shape](d, Branch[Circle]("circle", ByFieldPresent("kind")))
 		mustDefErr(t, d, "already defined as a variant")
 	})
 }
@@ -118,21 +118,21 @@ func TestDiscriminatorRules(t *testing.T) {
 		d    Discriminator
 		want uint8
 	}{
-		{"FieldEquals", FieldEquals("kind", "circle"), types.DiscriminatorRuleFieldEquals},
-		{"FieldPresent", FieldPresent("kind"), types.DiscriminatorRuleFieldEquals},
-		{"FieldAbsent", FieldAbsent("kind"), types.DiscriminatorRuleFieldAbsent},
-		{"Prefix", Prefix("re-"), types.DiscriminatorRulePrefix},
-		{"Suffix", Suffix("-v2"), types.DiscriminatorRuleSuffix},
-		{"Contains", Contains("::"), types.DiscriminatorRuleContains},
-		{"Matches", Matches("^a+$"), types.DiscriminatorRuleRegex},
+		{"ByFieldEquals", ByFieldEquals("kind", "circle"), types.DiscriminatorRuleFieldEquals},
+		{"ByFieldPresent", ByFieldPresent("kind"), types.DiscriminatorRuleFieldEquals},
+		{"ByFieldAbsent", ByFieldAbsent("kind"), types.DiscriminatorRuleFieldAbsent},
+		{"ByPrefix", ByPrefix("re-"), types.DiscriminatorRulePrefix},
+		{"BySuffix", BySuffix("-v2"), types.DiscriminatorRuleSuffix},
+		{"ByContains", ByContains("::"), types.DiscriminatorRuleContains},
+		{"ByRegex", ByRegex("^a+$"), types.DiscriminatorRuleRegex},
 	} {
 		if got := tc.d.rule.Tag(); got != tc.want {
 			t.Errorf("%s produced tag %d, want %d", tc.name, got, tc.want)
 		}
 	}
-	// FieldPresent is field-equals with no literal: the field must be there,
+	// ByFieldPresent is field-equals with no literal: the field must be there,
 	// whatever it holds.
-	if d := FieldPresent("kind").rule.FieldEquals(); d.Literal.IsSome() {
-		t.Errorf("FieldPresent carries a literal %q", d.Literal.Some())
+	if d := ByFieldPresent("kind").rule.FieldEquals(); d.Literal.IsSome() {
+		t.Errorf("ByFieldPresent carries a literal %q", d.Literal.Some())
 	}
 }

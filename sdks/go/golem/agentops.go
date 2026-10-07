@@ -373,6 +373,17 @@ func ForkAgent(source, target AgentID, cutOff uint64) error {
 // MustForkAgent is [ForkAgent], panicking on failure.
 func MustForkAgent(source, target AgentID, cutOff uint64) { mustDo(ForkAgent(source, target, cutOff)) }
 
+// ForkSelf copies the running agent under a new phantom id. Both copies continue
+// from here: forked tells them apart, and phantomID is the copy's id in both.
+func ForkSelf() (forked bool, phantomID UUID, err error) { return hostOps.fork() }
+
+// MustForkSelf is [ForkSelf], panicking on failure.
+func MustForkSelf() (forked bool, phantomID UUID) {
+	forked, phantomID, err := ForkSelf()
+	mustDo(err)
+	return forked, phantomID
+}
+
 // ResolveComponentID looks a component up by reference: its name, or on Golem
 // Cloud "project/component" or "account/project/component".
 func ResolveComponentID(reference string) (UUID, bool) {

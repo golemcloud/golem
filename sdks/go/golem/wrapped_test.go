@@ -140,8 +140,8 @@ func (HandleUser) isHandle() {}
 func (HandleTeam) isHandle() {}
 
 var _ = DefineUnion[Handle](
-	WrappedBranch[HandleUser]("user", Prefix("@")),
-	WrappedBranch[HandleTeam]("team", Prefix("#")),
+	WrappedBranch[HandleUser]("user", ByPrefix("@")),
+	WrappedBranch[HandleTeam]("team", ByPrefix("#")),
 )
 
 func TestAWrappedBranchPublishesAndRoundTripsItsBody(t *testing.T) {

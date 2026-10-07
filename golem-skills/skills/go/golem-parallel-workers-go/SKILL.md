@@ -11,7 +11,7 @@ A single Golem agent processes invocations **sequentially** — it cannot run wo
 
 1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. `Call` awaits one call at a time; `CallAsync` returns immediately, so several calls are in flight together, and a goroutine blocked in `Future.Get` yields to the component-model event loop while the others proceed.
 2. **`Trigger` + promises** — fire-and-forget each worker, hand each a promise ID, then await all the promises. Best for long-running work where you don't want a call in flight the whole time.
-3. **`golem.Fork`** — copy the running agent, state included, at the current point; the copy continues under a new phantom id.
+3. **`golem.ForkSelf`** — copy the running agent, state included, at the current point; the copy continues under a new phantom id.
 
 > **Platform contract:** a single target instance handles one invocation at a time. Concurrency comes from fanning out to **different** target instances (distinct `ID`s), not from calling the same instance repeatedly.
 
@@ -128,15 +128,15 @@ agent.Handle(worker.RunReport, func(ctx *golem.Context[state], in worker.RunRepo
 
 `Trigger` returns a `golem.InvocationID` and does not wait; a failure after the invocation is accepted is not reported at the trigger site — the worker signals completion (or failure) through its promise.
 
-## Approach 3: `golem.Fork`
+## Approach 3: `golem.ForkSelf`
 
-`golem.Fork` copies the running agent at the current point. Both copies continue from there: `forked` tells them apart, and `phantomID` is the copy's id on both sides. Synchronize them with a promise:
+`golem.ForkSelf` copies the running agent at the current point. Both copies continue from there: `forked` tells them apart, and `phantomID` is the copy's id on both sides. Synchronize them with a promise:
 
 ```go
 agent.Handle(coordinator.Compute, func(ctx *golem.Context[state], _ golem.Unit) string {
 	result := golem.NewPromise[string]()
 
-	if forked, _ := golem.MustFork(); forked {
+	if forked, _ := golem.MustForkSelf(); forked {
 		// The copy does its share of the work and hands the result over.
 		golem.CompletePromise(result.ID(), "forked-result")
 		return "forked done" // seen only by the copy's invocation
@@ -147,7 +147,7 @@ agent.Handle(coordinator.Compute, func(ctx *golem.Context[state], _ golem.Unit) 
 })
 ```
 
-Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and returns, while the original awaits every promise. `Fork` returns an error (a `*golem.AgentOperationError`) where the host refuses; `MustFork` panics instead.
+Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and returns, while the original awaits every promise. `ForkSelf` returns an error (a `*golem.AgentOperationError`) where the host refuses; `MustForkSelf` panics instead.
 
 ## When to use which
 
@@ -157,7 +157,7 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 | Long-running work, don't hold a call open | ⚠️ Call stays in flight | ✅ Best fit |
 | Need the invocation identity for other work | `Future.ID` | `Trigger` returns `InvocationID` |
 | Per-item error as a value | Return `golem.Result` in the method | Encode outcome in the promise payload |
-| Workers need the current state | Pass it as arguments | Pass it as arguments — or use `golem.Fork`, whose copy inherits it |
+| Workers need the current state | Pass it as arguments | Pass it as arguments — or use `golem.ForkSelf`, whose copy inherits it |
 
 ## Key Constraints
 

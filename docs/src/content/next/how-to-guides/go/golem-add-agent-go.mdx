@@ -83,11 +83,11 @@ func init() {
 		return ctx.State.value
 	})
 	// A handler can also be an ordinary Go method, bound with a method expression.
-	agent.Handle(counter.Value, golem.Bind0((*state).current))
+	agent.Handle(counter.Value, golem.Adapt0((*state).current))
 }
 ```
 
-The handler receives `*golem.Context[state]`; `ctx.State` is your `*state`. `golem.Bind0` adapts a no-input `(*state)` method into a handler; `golem.Bind` adapts a one-input method.
+The handler receives `*golem.Context[state]`; `ctx.State` is your `*state`. `golem.Adapt0` adapts a no-input `(*state)` method into a handler; `golem.Adapt` adapts a one-input method.
 
 ## Wiring: `main.go`
 

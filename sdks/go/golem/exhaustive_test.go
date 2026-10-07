@@ -60,7 +60,7 @@ func tagCount(t *testing.T, pkg, prefix string) int {
 func TestToolTagSwitchesCoverEveryCase(t *testing.T) {
 	for _, c := range []struct {
 		pkg, prefix, where string
-		handled         int
+		handled            int
 	}{
 		// reflection.go canonicalFields: scalar, optional scalar, list, map.
 		{"golem_tool_common", "OptionShape", "reflection.go canonicalFields", 4},

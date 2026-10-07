@@ -300,7 +300,7 @@ func (a *AgentDefinition[Id, Cfg]) ImplementConfigured[S any](
 // Out are inferred from the handler, and Id and S come from the handle, so
 // binding a descriptor of another agent, or a handler with the wrong signature
 // or state type, is a compile error. Compose it with the method-expression
-// adapters ([Bind] etc.) to author handlers as ordinary Go methods. Call it once
+// adapters ([Adapt] etc.) to author handlers as ordinary Go methods. Call it once
 // per method — typically inside func init(). The handler is wrapped once, here,
 // into a uniform dispatcher; dispatch itself never uses reflection to call it.
 //
@@ -463,29 +463,29 @@ func bindMethodInto[Id any, S any, In any, Out any](
 // Go methods with full compile-time checking and no reflection:
 //
 //	func (s *CartState) AddItem(in AddItemIn) int64 { ... }
-//	golem.Implement(Cart, CartAdd, golem.Bind((*CartState).AddItem))
+//	golem.Implement(Cart, CartAdd, golem.Adapt((*CartState).AddItem))
 //
 // Methods signal failure by panicking, like any handler. Go has no overloading,
 // so there is one adapter per method shape: `0` = no input, `Unit` = no output.
 // ---------------------------------------------------------------------------
 
-// Bind adapts func(*S, In) Out — the canonical shape.
-func Bind[S, In, Out any](m func(*S, In) Out) func(*Context[S], In) Out {
+// Adapt adapts func(*S, In) Out — the canonical shape.
+func Adapt[S, In, Out any](m func(*S, In) Out) func(*Context[S], In) Out {
 	return func(ctx *Context[S], in In) Out { return m(ctx.State, in) }
 }
 
-// Bind0 adapts func(*S) Out — no input.
-func Bind0[S, Out any](m func(*S) Out) func(*Context[S], Unit) Out {
+// Adapt0 adapts func(*S) Out — no input.
+func Adapt0[S, Out any](m func(*S) Out) func(*Context[S], Unit) Out {
 	return func(ctx *Context[S], _ Unit) Out { return m(ctx.State) }
 }
 
-// BindUnit adapts func(*S, In) — no output.
-func BindUnit[S, In any](m func(*S, In)) func(*Context[S], In) Unit {
+// AdaptUnit adapts func(*S, In) — no output.
+func AdaptUnit[S, In any](m func(*S, In)) func(*Context[S], In) Unit {
 	return func(ctx *Context[S], in In) Unit { m(ctx.State, in); return Unit{} }
 }
 
-// Bind0Unit adapts func(*S) — neither input nor output.
-func Bind0Unit[S any](m func(*S)) func(*Context[S], Unit) Unit {
+// Adapt0Unit adapts func(*S) — neither input nor output.
+func Adapt0Unit[S any](m func(*S)) func(*Context[S], Unit) Unit {
 	return func(ctx *Context[S], _ Unit) Unit { m(ctx.State); return Unit{} }
 }
 

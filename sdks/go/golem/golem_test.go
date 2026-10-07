@@ -42,7 +42,7 @@ func init() {
 		ctx.State.count += in.By
 		return ctx.State.count
 	})
-	c.Handle(tReset, Bind0Unit((*tCounterState).reset)) // method-expression binding
+	c.Handle(tReset, Adapt0Unit((*tCounterState).reset)) // method-expression binding
 	c.Handle(tBoom, func(*Context[tCounterState], Unit) int64 {
 		panic("kaboom from agent code")
 	})

@@ -23,21 +23,21 @@ func TestBindAdapters(t *testing.T) {
 	type S struct{ n int }
 	ctx := &Context[S]{State: &S{}}
 
-	add := Bind(func(s *S, in int) int { s.n += in; return s.n })
+	add := Adapt(func(s *S, in int) int { s.n += in; return s.n })
 	if got := add(ctx, 5); got != 5 || ctx.State.n != 5 {
-		t.Fatalf("Bind = %d, state %d", got, ctx.State.n)
+		t.Fatalf("Adapt = %d, state %d", got, ctx.State.n)
 	}
-	get := Bind0(func(s *S) int { return s.n })
+	get := Adapt0(func(s *S) int { return s.n })
 	if got := get(ctx, Unit{}); got != 5 {
-		t.Fatalf("Bind0 = %d", got)
+		t.Fatalf("Adapt0 = %d", got)
 	}
-	set := BindUnit(func(s *S, in int) { s.n = in })
+	set := AdaptUnit(func(s *S, in int) { s.n = in })
 	if set(ctx, 9); ctx.State.n != 9 {
-		t.Fatalf("BindUnit state = %d", ctx.State.n)
+		t.Fatalf("AdaptUnit state = %d", ctx.State.n)
 	}
-	clear := Bind0Unit(func(s *S) { s.n = 0 })
+	clear := Adapt0Unit(func(s *S) { s.n = 0 })
 	if clear(ctx, Unit{}); ctx.State.n != 0 {
-		t.Fatalf("Bind0Unit state = %d", ctx.State.n)
+		t.Fatalf("Adapt0Unit state = %d", ctx.State.n)
 	}
 }
 
@@ -72,7 +72,7 @@ func TestImplementRegistersMethods(t *testing.T) {
 		// method, In/Out inferred from the handler and tied to the agent's Id + St.
 		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
 		impl.Handle(add, func(ctx *Context[St], in AddIn) int64 { ctx.State.n += in.N; return ctx.State.n })
-		impl.Handle(get, Bind0(func(s *St) int64 { return s.n })) // method-expression style
+		impl.Handle(get, Adapt0(func(s *St) int64 { return s.n })) // method-expression style
 
 		e := d.agents["Counter"]
 		if e == nil || e.methods["add"] == nil || e.methods["get"] == nil {

@@ -160,7 +160,7 @@ func TestRpcErrorsMapToDistinguishableKinds(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		in   host.RpcError
-		want RemoteErrorKind
+		want RemoteCallErrorKind
 	}{
 		{"protocol", host.MakeRpcErrorProtocolError("bad frame"), RemoteProtocol},
 		{"denied", host.MakeRpcErrorDenied("nope"), RemoteDenied},

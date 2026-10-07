@@ -36,8 +36,8 @@ import (
 //	func (Square) isShape() {}
 //
 //	var _ = golem.DefineUnion[Shape](
-//	    golem.Branch[Circle]("circle", golem.FieldEquals("kind", "circle")),
-//	    golem.Branch[Square]("square", golem.FieldEquals("kind", "square")),
+//	    golem.Branch[Circle]("circle", golem.ByFieldEquals("kind", "circle")),
+//	    golem.Branch[Square]("square", golem.ByFieldEquals("kind", "square")),
 //	)
 //
 // Reach for a union when the wire format is fixed by something outside Golem —
@@ -45,48 +45,48 @@ import (
 // makes decoding unambiguous by construction.
 
 // Discriminator is the rule that selects a union branch. Build one with
-// [FieldEquals], [FieldPresent], [FieldAbsent], [Prefix], [Suffix], [Contains]
-// or [Matches].
+// [ByFieldEquals], [ByFieldPresent], [ByFieldAbsent], [ByPrefix], [BySuffix], [ByContains]
+// or [ByRegex].
 type Discriminator struct{ rule types.DiscriminatorRule }
 
-// FieldEquals matches a record carrying field with exactly this literal value.
-func FieldEquals(field, literal string) Discriminator {
+// ByFieldEquals matches a record carrying field with exactly this literal value.
+func ByFieldEquals(field, literal string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleFieldEquals(types.FieldDiscriminator{
 		FieldName: field,
 		Literal:   witTypes.Some(literal),
 	})}
 }
 
-// FieldPresent matches a record carrying field, whatever its value.
-func FieldPresent(field string) Discriminator {
+// ByFieldPresent matches a record carrying field, whatever its value.
+func ByFieldPresent(field string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleFieldEquals(types.FieldDiscriminator{
 		FieldName: field,
 		Literal:   witTypes.None[string](),
 	})}
 }
 
-// FieldAbsent matches a record that does not carry field.
-func FieldAbsent(field string) Discriminator {
+// ByFieldAbsent matches a record that does not carry field.
+func ByFieldAbsent(field string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleFieldAbsent(field)}
 }
 
-// Prefix matches a string value starting with the given text.
-func Prefix(text string) Discriminator {
+// ByPrefix matches a string value starting with the given text.
+func ByPrefix(text string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRulePrefix(text)}
 }
 
-// Suffix matches a string value ending with the given text.
-func Suffix(text string) Discriminator {
+// BySuffix matches a string value ending with the given text.
+func BySuffix(text string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleSuffix(text)}
 }
 
-// Contains matches a string value containing the given text.
-func Contains(text string) Discriminator {
+// ByContains matches a string value containing the given text.
+func ByContains(text string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleContains(text)}
 }
 
-// Matches matches a string value against a regular expression.
-func Matches(pattern string) Discriminator {
+// ByRegex matches a string value against a regular expression.
+func ByRegex(pattern string) Discriminator {
 	return Discriminator{types.MakeDiscriminatorRuleRegex(pattern)}
 }
 

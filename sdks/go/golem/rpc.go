@@ -221,12 +221,12 @@ func instantFrom(t time.Time) clock.Instant {
 // errors
 // ---------------------------------------------------------------------------
 
-// RemoteErrorKind classifies an RPC failure, mirroring the WIT rpc-error cases.
-type RemoteErrorKind uint8
+// RemoteCallErrorKind classifies an RPC failure, mirroring the WIT rpc-error cases.
+type RemoteCallErrorKind uint8
 
 const (
 	// RemoteProtocol is a transport or encoding level failure.
-	RemoteProtocol RemoteErrorKind = iota
+	RemoteProtocol RemoteCallErrorKind = iota
 	// RemoteDenied means the caller is not permitted to make this call.
 	RemoteDenied
 	// RemoteNotFound means the target agent or method does not exist.
@@ -237,7 +237,7 @@ const (
 	RemoteAgent
 )
 
-func (k RemoteErrorKind) String() string {
+func (k RemoteCallErrorKind) String() string {
 	switch k {
 	case RemoteDenied:
 		return "denied"
@@ -259,7 +259,7 @@ func (k RemoteErrorKind) String() string {
 type RemoteCallError struct {
 	Target  string
 	Method  string
-	Kind    RemoteErrorKind
+	Kind    RemoteCallErrorKind
 	Message string
 	Cause   error
 }

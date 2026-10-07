@@ -948,22 +948,22 @@ fn descriptor_var(agent: &str, method: &str) -> String {
 /// The guest SDK constructor for a union discriminator.
 fn discriminator(rule: &DiscriminatorRule) -> String {
     match rule {
-        DiscriminatorRule::Prefix { prefix } => format!("golem.Prefix({})", go_string(prefix)),
-        DiscriminatorRule::Suffix { suffix } => format!("golem.Suffix({})", go_string(suffix)),
+        DiscriminatorRule::Prefix { prefix } => format!("golem.ByPrefix({})", go_string(prefix)),
+        DiscriminatorRule::Suffix { suffix } => format!("golem.BySuffix({})", go_string(suffix)),
         DiscriminatorRule::Contains { substring } => {
-            format!("golem.Contains({})", go_string(substring))
+            format!("golem.ByContains({})", go_string(substring))
         }
-        DiscriminatorRule::Regex { regex } => format!("golem.Matches({})", go_string(regex)),
+        DiscriminatorRule::Regex { regex } => format!("golem.ByRegex({})", go_string(regex)),
         DiscriminatorRule::FieldEquals(field) => match &field.literal {
             Some(literal) => format!(
-                "golem.FieldEquals({}, {})",
+                "golem.ByFieldEquals({}, {})",
                 go_string(&field.field_name),
                 go_string(literal)
             ),
-            None => format!("golem.FieldPresent({})", go_string(&field.field_name)),
+            None => format!("golem.ByFieldPresent({})", go_string(&field.field_name)),
         },
         DiscriminatorRule::FieldAbsent { field_name } => {
-            format!("golem.FieldAbsent({})", go_string(field_name))
+            format!("golem.ByFieldAbsent({})", go_string(field_name))
         }
     }
 }

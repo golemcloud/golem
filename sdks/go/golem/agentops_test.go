@@ -115,7 +115,7 @@ func TestCheckpointRevertsOnlyOnFailure(t *testing.T) {
 
 func TestForkReportsTheSide(t *testing.T) {
 	withFakeHost(t, &fakeHost{})
-	forked, phantom := MustFork()
+	forked, phantom := MustForkSelf()
 	if !forked || phantom != (UUID{7}) {
 		t.Fatalf("forked=%v phantom=%v", forked, phantom)
 	}

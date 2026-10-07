@@ -23,5 +23,5 @@ func init() {
 		ctx.State.value += in.By
 		return ctx.State.value
 	})
-	agent.Handle(counter.Value, golem.Bind0((*state).current)) // method-expression binding
+	agent.Handle(counter.Value, golem.Adapt0((*state).current)) // method-expression binding
 }

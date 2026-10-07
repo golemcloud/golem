@@ -284,7 +284,7 @@ func init() {
 
 	ops.Handle(ForkJoin, func(*golem.Context[opsState], golem.Unit) string {
 		result := golem.NewPromise[string]()
-		forked, phantom := golem.MustFork()
+		forked, phantom := golem.MustForkSelf()
 		if forked {
 			golem.CompletePromise(result.ID(), "from-fork")
 			return "fork"

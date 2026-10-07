@@ -73,7 +73,7 @@ type definitions struct {
 	unions    map[reflect.Type]*unionDef
 	pins      map[reflect.Type]string // NameType type-id overrides
 	codecs    map[reflect.Type]*codec // compile() memoization
-	errs      []definitionError // registration-phase errors (derivation adds more)
+	errs      []definitionError       // registration-phase errors (derivation adds more)
 }
 
 func newDefinitions() *definitions {

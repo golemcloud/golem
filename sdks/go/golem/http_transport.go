@@ -41,9 +41,9 @@ import (
 // net.Dial, most SQL drivers, custom gRPC transports. Those cannot work in a
 // component; use the SDK's typed host wrappers instead.
 
-// Transport is an http.RoundTripper backed by wasi:http/client@0.3.0.
+// HTTPTransport is an http.RoundTripper backed by wasi:http/client@0.3.0.
 // The zero value is ready to use; the SDK installs one as http.DefaultTransport.
-type Transport struct{}
+type HTTPTransport struct{}
 
 // RoundTrip implements http.RoundTripper.
 //
@@ -54,7 +54,7 @@ type Transport struct{}
 // side timer goroutine, which can't preempt the blocking host Send on this
 // single-threaded target, and it never stamps req.Context().Deadline() for the
 // transport to read. Use a context deadline instead.
-func (Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (HTTPTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// A context deadline (or an already-cancelled context) lands on req; honor a
 	// cancellation before doing any work.
 	if err := req.Context().Err(); err != nil {
@@ -368,6 +368,6 @@ func errorCodeString(e httptypes.ErrorCode) string {
 func init() {
 	// Route net/http through wasi:http/client. The default transport can't dial
 	// on this target, so any code using http.DefaultClient depends on this.
-	http.DefaultClient.Transport = Transport{}
-	http.DefaultTransport = Transport{}
+	http.DefaultClient.Transport = HTTPTransport{}
+	http.DefaultTransport = HTTPTransport{}
 }
