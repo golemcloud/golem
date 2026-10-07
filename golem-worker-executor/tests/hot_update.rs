@@ -4085,13 +4085,15 @@ pub(crate) struct FlakyComponentService {
 
 /// The revision that a [`FlakyComponentService`] cannot give, whether it is down, and how many
 /// fetches it refused. A revision whose metadata is lost gives its component, and after that no
-/// metadata, as if the revision were deleted between the two fetches.
+/// metadata, as if the revision were deleted between the two fetches. A revision whose metadata
+/// is unavailable gives its component, and after that no metadata while the service is down.
 #[derive(Default)]
 pub(crate) struct Outage {
     revision: std::sync::Mutex<Option<ComponentRevision>>,
     down: std::sync::atomic::AtomicBool,
     refused: std::sync::atomic::AtomicUsize,
     metadata_lost: std::sync::Mutex<Option<ComponentRevision>>,
+    metadata_unavailable: std::sync::Mutex<Option<ComponentRevision>>,
     fetched: std::sync::atomic::AtomicBool,
 }
 
@@ -4113,8 +4115,15 @@ impl Outage {
         *self.metadata_lost.lock().unwrap() = Some(revision);
     }
 
+    fn make_metadata_unavailable_after_get(&self, revision: ComponentRevision) {
+        *self.metadata_unavailable.lock().unwrap() = Some(revision);
+        self.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     fn got(&self, revision: ComponentRevision) {
-        if *self.metadata_lost.lock().unwrap() == Some(revision) {
+        if *self.metadata_lost.lock().unwrap() == Some(revision)
+            || *self.metadata_unavailable.lock().unwrap() == Some(revision)
+        {
             self.fetched
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
@@ -4129,10 +4138,22 @@ impl Outage {
         let lost = revision.is_some()
             && *self.metadata_lost.lock().unwrap() == revision
             && self.fetched.load(std::sync::atomic::Ordering::SeqCst);
+        let unavailable = revision.is_some()
+            && *self.metadata_unavailable.lock().unwrap() == revision
+            && self.fetched.load(std::sync::atomic::Ordering::SeqCst)
+            && self.down.load(std::sync::atomic::Ordering::SeqCst);
         if lost {
             self.refused
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Err(WorkerExecutorError::ComponentNotFound { component_id })
+        } else if unavailable {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(WorkerExecutorError::ComponentServiceUnavailable {
+                component_id,
+                component_revision: revision,
+                reason: "the component service is down".to_string(),
+            })
         } else {
             self.check(component_id, revision)
         }
@@ -4405,6 +4426,118 @@ async fn a_failure_at_the_update_point_fails_the_update_once_and_keeps_the_sourc
     assert_eq!(accumulated.into_typed::<u32>()?, 30);
     assert_eq!(metadata.component_revision, component.revision);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
+    Ok(())
+}
+
+/// While the component service cannot give the metadata of the target at the update point, and
+/// the replay reaches the update point inside a host call of the in-flight invocation, the agent
+/// retries through recovery: the invocation records no error and no failed update is written,
+/// and after the outage the update completes and the invocation finishes on the target.
+#[test]
+#[timeout("120s")]
+async fn an_unavailable_component_service_at_a_host_call_update_point_retries_and_fails_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let mut http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let mut control = http_server.f1_control(100).await;
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(&component_clone, &agent_id_clone, "f1", data_value!(50u64))
+                .await
+        }
+        .in_current_span(),
+    );
+    control.await_reached().await;
+
+    outage.make_metadata_unavailable_after_get(updated_component.revision);
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if outage.refused() > 0
+                && metadata
+                    .last_error
+                    .as_deref()
+                    .is_some_and(|error| error.contains("component service is unavailable"))
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let during = executor.get_worker_metadata(&worker_id).await?;
+    outage.end();
+
+    control.resume();
+    let mut control2 = http_server.f1_control(110).await;
+    control2.await_reached().await;
+    control2.resume();
+    let result = fiber.await??;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_errors = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Invocation
+            )
+        })
+        .count();
+
+    drop(executor);
+    http_server.abort();
+
+    assert_eq!(during.component_revision, component.revision);
+    assert_eq!(update_counts(&during), (1, 0, 0));
+    assert_eq!(invocation_errors, 0);
+    assert_eq!(result.into_typed::<u64>()?, 150);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
 }
 

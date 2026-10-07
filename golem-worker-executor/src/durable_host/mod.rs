@@ -7510,7 +7510,15 @@ pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
             worker.reject_periodic(index);
             restart
         }
-        start_outcome::StartAction::Error(error) => error,
+        // A passed error leaves the update pending and retries the start. The update point can be
+        // inside a host call of a replayed invocation, where only a required recovery stays off
+        // the guest's failure path, so the error retries as a recovery.
+        start_outcome::StartAction::Error(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
+            error
+        }
+        start_outcome::StartAction::Error(error) => {
+            WorkerExecutorError::recovery_required(format!("the update point failed: {error}"))
+        }
         start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
             kind: InterruptKind::ShardLost,
         },
