@@ -8453,6 +8453,74 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
 }
 
 #[test]
+async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
+    // The entity body reserved Start(3), then appended its NoOp(2) before the asynchronous Start
+    // write completed. The owner's reader must leave 2 for the body while its reconstruction
+    // claim scans ahead to 3, rather than rejecting the forward attribution as orphaned history.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        entity_start,
+        end_for(3, 1),
+        noop(),
+    ])
+    .await;
+
+    let mut owner_read = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(&mut owner_read, "the owner's positional read").await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = entity_handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let (idx, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(2));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+
+    assert!(matches!(
+        rs.await_resolution_outcome(entity_handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(4)
+    ));
+    reconstruction.body_settled();
+    let (idx, entry) = owner_read.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+}
+
+#[test]
+async fn positional_reader_rejects_forward_body_owner_that_is_not_an_entity_start() {
+    // The future Start at 3 is an ordinary monotonic-clock call, so no entity body can ever claim
+    // it and consume the NoOp attributed to it at 2. Treating every retainable future Start as an
+    // entity owner would park this read forever instead of rejecting the orphaned attribution.
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        start_now(),
+        end_for(3, 42),
+        noop(),
+    ])
+    .await;
+
+    let result = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry(None)).await;
+    let error = result
+        .expect("an ordinary future Start must not leave the positional reader parked")
+        .expect_err("an entry attributed to a non-entity Start must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("neither retained, claimed nor replaying"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
     // [NoOp(1), Start(entity=2), End(2→3), BeginAtomicRegion(4, entity 2),
     //  AgentInvocationFinished(5)] — the entity body settled without consuming its own marker at

@@ -20,7 +20,7 @@
 import {
   cloneSchemaValue,
   deepEqual,
-  schemaValueToWit,
+  GuestSchemaValueStreamHandle,
   SchemaGraph,
   SchemaType,
   SchemaValue,
@@ -29,6 +29,7 @@ import {
   numericRestrictionsMatch,
 } from '../internal/schema-model';
 import {
+  GuestSecretHandle,
   createUntrackedGuestSecretHandle,
   peekGuestSecretHandle,
   releaseGuestSecretHandle,
@@ -36,6 +37,7 @@ import {
 } from '../internal/schema-model/secretHandle';
 import { SECRET_INTERNAL } from '../internal/schema-model/secretInternal';
 import {
+  GuestQuotaTokenHandle,
   createUntrackedGuestQuotaTokenHandle,
   peekGuestQuotaTokenHandle,
   releaseGuestQuotaTokenHandle,
@@ -43,6 +45,7 @@ import {
 } from '../internal/schema-model/quotaTokenHandle';
 import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
 import {
+  GuestPermissionCardHandle,
   createUntrackedGuestPermissionCardHandle,
   peekGuestPermissionCardHandle,
   releaseGuestPermissionCardHandle,
@@ -489,7 +492,8 @@ export function sourceValueIsCanonical(
   const probe = cloneWithSentinelHandles(encoded, sentinels);
   try {
     return deepEqual(source, codec.fromValue(probe), (raw, sentinel) => {
-      return sentinels.has(raw) && sentinels.get(raw) === sentinel;
+      const identity = peekCapabilityHandle(raw) ?? raw;
+      return sentinels.has(identity) && sentinels.get(identity) === sentinel;
     });
   } finally {
     drainCapabilityHandles(probe);
@@ -511,7 +515,10 @@ export function schemaValueIsCanonical(codec: SchemaCodec, value: SchemaValue): 
   let roundTrip: SchemaValue | undefined;
   try {
     roundTrip = codec.toValue(codec.fromValue(probe));
-    return deepEqual(schemaValueToWit(roundTrip), schemaValueToWit(expected));
+    return deepEqual(roundTrip, expected, (left, right) => {
+      const identity = peekCapabilityHandle(left);
+      return identity !== undefined && identity === peekCapabilityHandle(right);
+    });
   } finally {
     drainCapabilityHandles(probe);
     drainCapabilityHandles(expected);
@@ -520,6 +527,16 @@ export function schemaValueIsCanonical(codec: SchemaCodec, value: SchemaValue): 
 }
 
 const capabilityGraphCache = new WeakMap<SchemaGraph, boolean>();
+
+function peekCapabilityHandle(value: unknown): unknown {
+  if (value instanceof GuestSecretHandle) return peekGuestSecretHandle(SECRET_INTERNAL, value);
+  if (value instanceof GuestQuotaTokenHandle)
+    return peekGuestQuotaTokenHandle(QUOTA_INTERNAL, value);
+  if (value instanceof GuestPermissionCardHandle)
+    return peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value);
+  if (value instanceof GuestSchemaValueStreamHandle) return value.peek()?.value;
+  return undefined;
+}
 
 function graphMayContainCapability(graph: SchemaGraph): boolean {
   const cached = capabilityGraphCache.get(graph);
@@ -532,6 +549,7 @@ function graphMayContainCapability(graph: SchemaGraph): boolean {
       case 'secret':
       case 'quota-token':
       case 'permission-card':
+      case 'stream':
         return true;
       case 'ref': {
         if (visitedRefs.has(body.id)) return false;
@@ -560,7 +578,6 @@ function graphMayContainCapability(graph: SchemaGraph): boolean {
       case 'union':
         return body.branches.some((branch) => visit(branch.body));
       case 'future':
-      case 'stream':
         return body.element !== undefined && visit(body.element);
       default:
         return false;
@@ -613,6 +630,24 @@ function cloneWithSentinelHandles(
           PERMISSION_CARD_INTERNAL,
           sentinelFor(raw) as RawPermissionCard,
         ),
+      };
+    }
+    case 'stream': {
+      const endpoint = value.handle.peek();
+      if (endpoint === undefined) throw new Error('schema value stream was already transferred');
+      let sentinel = sentinels.get(endpoint.value);
+      if (sentinel === undefined) {
+        sentinel = Object.freeze({
+          [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: undefined }) }),
+        });
+        sentinels.set(endpoint.value, sentinel);
+      }
+      return {
+        tag: 'stream',
+        handle: new GuestSchemaValueStreamHandle({
+          kind: 'native',
+          value: sentinel as AsyncIterable<WireValueTree>,
+        }),
       };
     }
     case 'record':
@@ -690,6 +725,9 @@ function drainCapabilityHandles(value: SchemaValue): void {
       return;
     case 'permission-card':
       takeGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value.handle);
+      return;
+    case 'stream':
+      value.handle.take();
       return;
     case 'record':
       value.fields.forEach(drainCapabilityHandles);

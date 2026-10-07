@@ -256,6 +256,41 @@ impl CompilerFixture {
 }
 
 #[test]
+fn discoverable_middleware_metadata_does_not_self_install() {
+    let fixture = CompilerFixture::new();
+    let registration = registered_middleware("audit", ToolMiddlewareScope::Universal);
+
+    let uninstalled = fixture.compile(
+        std::slice::from_ref(&registration),
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+    assert!(uninstalled.errors.is_empty());
+    assert_eq!(uninstalled.chains.len(), 1);
+    assert!(uninstalled.chains[0].occurrences.is_empty());
+
+    let installed = fixture.compile(
+        &[registration],
+        &[installation("audit", 17)],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        ToolCompatibilityMode::StructuralSubtype,
+    );
+    assert!(installed.errors.is_empty());
+    assert_eq!(installed.chains.len(), 1);
+    assert_eq!(installed.chains[0].occurrences.len(), 1);
+    assert_eq!(
+        installed.chains[0].occurrences[0]
+            .middleware
+            .definition
+            .name,
+        "audit"
+    );
+}
+
+#[test]
 fn same_ref_id_in_distinct_graphs_does_not_hide_different_payloads() {
     let presented = tool(
         "presented",

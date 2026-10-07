@@ -64,6 +64,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{Level, debug};
 
+pub(crate) use app::tool_middleware::ResolvedToolMiddlewareGrants;
+
 mod account;
 mod agent;
 mod api;
@@ -581,45 +583,6 @@ fn raw_tool_outputs(subcommand: &GolemCliSubcommand) -> Option<(bool, bool)> {
     ))
 }
 
-#[cfg(test)]
-mod raw_tool_output_tests {
-    use super::raw_tool_outputs;
-    use crate::command::GolemCliCommand;
-    use clap::Parser;
-    use test_r::test;
-
-    #[test]
-    fn raw_tool_fds_are_reserved_before_context_and_tracing_initialization() {
-        let command = GolemCliCommand::try_parse_from([
-            "golem",
-            "tool",
-            "invoke",
-            "--component",
-            "example:component",
-            "--stdout",
-            "--output",
-            "stdout.bin",
-            "--stderr",
-            "native",
-        ])
-        .unwrap();
-        assert_eq!(raw_tool_outputs(&command.subcommand), Some((false, true)));
-
-        let command = GolemCliCommand::try_parse_from([
-            "golem",
-            "tool",
-            "invoke",
-            "--component",
-            "example:component",
-            "--stdout",
-            "--stderr",
-            "native",
-        ])
-        .unwrap();
-        assert_eq!(raw_tool_outputs(&command.subcommand), Some((true, true)));
-    }
-}
-
 #[cfg(feature = "server-commands")]
 pub fn requires_executor_runtime(command_parse_result: &GolemCliCommandParseResult) -> bool {
     matches!(
@@ -865,5 +828,44 @@ mod tests {
         ]));
         assert!(!requires_executor_runtime_for(&["golem", "templates"]));
         assert!(!requires_executor_runtime_for(&["golem"]));
+    }
+}
+
+#[cfg(test)]
+mod raw_tool_output_tests {
+    use super::raw_tool_outputs;
+    use crate::command::GolemCliCommand;
+    use clap::Parser;
+    use test_r::test;
+
+    #[test]
+    fn raw_tool_fds_are_reserved_before_context_and_tracing_initialization() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--output",
+            "stdout.bin",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((false, true)));
+
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((true, true)));
     }
 }

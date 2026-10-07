@@ -57,11 +57,13 @@ import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
 import {
   adoptGuestPermissionCardHandle,
   GuestPermissionCardHandle,
+  permissionCardHandleWasLiftedFromWire,
   releaseGuestPermissionCardHandle,
 } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   BinaryRestrictions,
+  TextRestrictions,
   PathDirection,
   PathKind,
   QuantitySpec,
@@ -617,6 +619,37 @@ function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array
   );
 }
 
+function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
+  const restrictions: TextRestrictions = {
+    languages: options.languages ? [...options.languages] : undefined,
+    minLength: options.minLength,
+    maxLength: options.maxLength,
+    regex: options.regex,
+  };
+  return marker(
+    (value) => {
+      if (typeof value !== 'string') return fail('Expected a string for WIT text');
+      const length = [...value].length;
+      if (restrictions.minLength !== undefined && length < restrictions.minLength) {
+        return fail(`Text value has fewer than ${restrictions.minLength} characters`);
+      }
+      if (restrictions.maxLength !== undefined && length > restrictions.maxLength) {
+        return fail(`Text value has more than ${restrictions.maxLength} characters`);
+      }
+      if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(value)) {
+        return fail('Text value does not match the required pattern');
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: schemaType({ tag: 'text', restrictions }) },
+      concrete: { tag: 'plain-text' },
+      toValue: (value) => v.text(value as string),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'text' }>).text,
+    }),
+  );
+}
+
 /** A filesystem path value backed by the rich WIT `path` schema node. */
 export function Path(options?: PathOptions): MarkerSchema<string> {
   return pathMarker(options);
@@ -793,16 +826,20 @@ export interface PermissionCardOptions {
   polymorphic: boolean;
 }
 
-function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawPermissionCard> {
-  const validate: Validator<RawPermissionCard> = (value) =>
+function permissionCardMarker(
+  options: PermissionCardOptions,
+): MarkerSchema<GuestPermissionCardHandle> {
+  const validate: Validator<GuestPermissionCardHandle> = (value) =>
     value !== null && typeof value === 'object'
-      ? ok(value as RawPermissionCard)
+      ? ok(value as GuestPermissionCardHandle)
       : fail('Expected an opaque permission-card handle for WIT permission-card');
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.permissionCard(options) },
     toValue: (value) =>
       v.permissionCard(
-        adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
+        value instanceof GuestPermissionCardHandle
+          ? value
+          : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
       ),
     fromValue: (sv) => {
       const handle = (
@@ -811,12 +848,9 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawP
           handle: GuestPermissionCardHandle;
         }
       ).handle;
+      if (permissionCardHandleWasLiftedFromWire(PERMISSION_CARD_INTERNAL, handle)) return handle;
       const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle);
-      if (raw === undefined) {
-        throw new Error(
-          'permission-card handle was already consumed; an owned permission-card can only be decoded once',
-        );
-      }
+      if (raw === undefined) throw new Error('permission-card handle was already consumed');
       return raw;
     },
   });
@@ -1254,6 +1288,7 @@ export const s = {
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),
+  text: (opts?: TextRestrictions) => textMarker(opts),
   bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
   binary: (opts?: BinaryRestrictions) => binaryMarker(opts),
 

@@ -4,6 +4,8 @@ import type * as Common from "golem:agent/common@2.0.0"
 import { ConfigError } from "../Config.js"
 import { ConfigClient } from "../host/ConfigClient.js"
 import { SecretsClient } from "../host/SecretsClient.js"
+import { createGuestSecretHandle } from "./schema-model/secretHandle.js"
+import { SECRET_INTERNAL } from "./schema-model/secretInternal.js"
 
 export interface WireConfigLeaf {
   readonly source: Common.AgentConfigSource
@@ -49,7 +51,7 @@ export function compiledConfigRuntime(
               (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
             )
           })
-          const borrow = Effect.gen(function* () {
+          const borrowRaw = Effect.gen(function* () {
             const tree = yield* Effect.try({
               try: () => config.getConfigValue(leaf.path, leaf.declarationSchema),
               catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
@@ -64,12 +66,15 @@ export function compiledConfigRuntime(
               )
             return node.val
           })
+          const borrow = borrowRaw.pipe(
+            Effect.map((raw) => createGuestSecretHandle(SECRET_INTERNAL, raw)),
+          )
           const value =
             leaf.source === "secret"
               ? {
                   borrow,
                   get: Effect.gen(function* () {
-                    const raw = yield* borrow
+                    const raw = yield* borrowRaw
                     const revealed = yield* Effect.try({
                       try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
                       catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),

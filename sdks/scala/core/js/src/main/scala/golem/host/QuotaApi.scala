@@ -28,6 +28,7 @@ import golem.schema.{
   SchemaTypeBody,
   SchemaValue
 }
+import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
 
 import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future}
@@ -109,7 +110,10 @@ object QuotaApi {
    *   }
    * }}}
    */
-  final class QuotaToken private[golem] (private[golem] val handle: GuestQuotaTokenHandle) {
+  class QuotaToken private[golem] (private[golem] val handle: GuestQuotaTokenHandle) {
+
+    /** True while this token has not been transferred. */
+    def isPresent: Boolean = handle.isPresent
 
     /**
      * Reserve `amount` units from the local allocation.
@@ -211,6 +215,13 @@ object QuotaApi {
         GuestQuotaTokenHandle.fromRaw(QuotaModule.newToken(resourceName, js.BigInt(expectedUse.toString)))
       )
 
+    def named[Resource <: String](
+      expectedUse: BigInt
+    )(implicit resource: ValueOf[Resource]): NamedQuotaToken[Resource] =
+      new NamedQuotaToken[Resource](
+        GuestQuotaTokenHandle.fromRaw(QuotaModule.newToken(resource.value, js.BigInt(expectedUse.toString)))
+      )
+
     /**
      * Automatic serialization for RPC: a `QuotaToken` is a schema-native
      * capability node (`golem:core/types@2.0.0` `quota-token` /
@@ -236,6 +247,51 @@ object QuotaApi {
               Left(FromSchemaError(s"expected quota-token handle for QuotaToken, got $other"))
           }
       }
+
+    implicit val concreteCodec: ConcreteCodec[QuotaToken] =
+      ConcreteCodec
+        .scalar[GuestQuotaTokenHandle](WitSchemaTypeBody.QuotaTokenType(QuotaTokenSpec()))(
+          WitSchemaValueNode.QuotaTokenHandle.apply
+        ) { case WitSchemaValueNode.QuotaTokenHandle(handle) => handle }
+        .xmap(new QuotaToken(_), _.handle)
+  }
+
+  final class NamedQuotaToken[Resource <: String] private[golem] (handle: GuestQuotaTokenHandle)
+      extends QuotaToken(handle)
+
+  object NamedQuotaToken {
+    implicit def intoSchema[Resource <: String](implicit
+      resource: ValueOf[Resource]
+    ): IntoSchema[NamedQuotaToken[Resource]] =
+      new IntoSchema[NamedQuotaToken[Resource]] {
+        override lazy val graph: SchemaGraph =
+          SchemaGraph(
+            ListMap.empty,
+            SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec(Some(resource.value))))
+          )
+
+        override def toValue(token: NamedQuotaToken[Resource]): SchemaValue =
+          SchemaValue.QuotaTokenHandle(token.handle)
+      }
+
+    implicit def fromSchema[Resource <: String]: FromSchema[NamedQuotaToken[Resource]] =
+      new FromSchema[NamedQuotaToken[Resource]] {
+        override def fromValue(value: SchemaValue): Either[FromSchemaError, NamedQuotaToken[Resource]] =
+          value match {
+            case SchemaValue.QuotaTokenHandle(handle) => Right(new NamedQuotaToken[Resource](handle))
+            case other                                =>
+              Left(FromSchemaError(s"expected quota-token handle for NamedQuotaToken, got $other"))
+          }
+      }
+
+    implicit def concreteCodec[Resource <: String](implicit
+      resource: ValueOf[Resource]
+    ): ConcreteCodec[NamedQuotaToken[Resource]] =
+      ConcreteCodec
+        .scalar[GuestQuotaTokenHandle](
+          WitSchemaTypeBody.QuotaTokenType(QuotaTokenSpec(Some(resource.value)))
+        )(WitSchemaValueNode.QuotaTokenHandle.apply) { case WitSchemaValueNode.QuotaTokenHandle(handle) => handle }
+        .xmap(new NamedQuotaToken[Resource](_), _.handle)
   }
 
   private val TOKEN_CONSUMED =

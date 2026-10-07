@@ -1,0 +1,69 @@
+manifestVersion: 1.6.0
+
+app: tool-middleware-conformance
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+    tools:
+      middleware: []
+      manifest-probe:
+        filesystemAccess: allowed
+      compat-leaf:
+        filesystemAccess: allowed
+
+components:
+  conformance:middleware:
+    dir: middleware
+    templates: rust
+  conformance:caller:
+    dir: caller
+    templates: rust
+    tools:
+      compat-leaf:
+        filesystemAccess: allowed
+      nominal-leaf:
+        filesystemAccess: allowed
+    dependencies:
+      tools:
+        - conformance:middleware/manifest-probe
+        - conformance:middleware/compat-leaf
+
+tools:
+  manifest-probe: {}
+  compat-leaf: {}
+  nominal-leaf: {}
+  middleware:
+    manifest-universal:
+      component: conformance:middleware
+    manifest-label-layer:
+      component: conformance:middleware
+    control-retry-transform:
+      component: conformance:middleware
+    structural-adapter:
+      component: conformance:middleware
+    structural-projection:
+      component: conformance:middleware
+    nominal-adapter:
+      component: conformance:middleware
+
+agents:
+  MiddlewareConformanceAgent:
+    tools:
+      manifest-probe:
+        filesystemAccess: allowed
+      compat-leaf:
+        middleware:
+          - name: structural-adapter
+            filesystemAccess: allowed
+        middlewareMergeMode: replace
+        filesystemAccess: allowed
+  AdapterConformanceAgent:
+    tools:
+      compat-leaf:
+        middleware:
+          - name: structural-adapter
+            filesystemAccess: allowed
+        middlewareMergeMode: replace
+        filesystemAccess: allowed

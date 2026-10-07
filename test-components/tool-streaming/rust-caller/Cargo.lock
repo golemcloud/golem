@@ -231,6 +231,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7454e41ff9012c00d53cf7f475c5e3afa3b91b7c90568495495e8d9bf47a1055"
 
 [[package]]
+name = "environment-probe-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,8 +454,12 @@ name = "golem_it_tool_streaming_rust_caller"
 version = "0.0.1"
 dependencies = [
  "capable-streaming-tool-guest-client",
+ "environment-probe-tool-guest-client",
  "futures-concurrency",
  "golem-rust",
+ "matrix-core-tool-guest-client",
+ "matrix-permission-issuer-tool-guest-client",
+ "matrix-resource-tool-guest-client",
  "secret-policy-probe-tool-guest-client",
  "streaming-tool-guest-client",
  "typed-output-stream-tool-guest-client",
@@ -589,6 +603,36 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "matrix-core-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "matrix-permission-issuer-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "matrix-resource-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
 ]
 
 [[package]]

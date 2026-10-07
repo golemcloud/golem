@@ -27,6 +27,28 @@ extern "wasm" fn tool_client_resource_drop_count(kind : Int) -> Int = "golem:tes
 extern "wasm" fn set_tool_client_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
+extern "wasm" fn set_tool_client_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
+
+///|
+fn empty_tool_input() -> @types.TypedSchemaValue raise {
+  let value = @schema.try_into_typed_schema_value(())
+  @model.typed_schema_value_to_wit(value)
+}
+
+///|
+fn start_output_invocation(
+  client : ToolClient,
+) -> ToolInvocation[NoToolError] raise {
+  match
+    client.start(["stream"], empty_tool_input(), None, true, false, fn(_, _) {
+      None
+    }) {
+    Ok(invocation) => invocation
+    Err(_) => fail("failed to start output invocation")
+  }
+}
+
+///|
 priv suberror UnknownCollectedFailure derive(Debug)
 
 ///|
@@ -156,4 +178,135 @@ test "client input encoding preserves cancellation and drops input and stdin" {
   assert_false(stdin_started[0])
   assert_eq(stdin_cleanup_runs[0], 1)
   assert_eq(tool_client_resource_drop_count(0), 1)
+}
+
+///|
+test "explicit invocation cancellation is distinct from observer and output drop" {
+  reset_tool_client_resource_drop_counts()
+  set_tool_client_host_mode(1)
+  defer set_tool_client_host_mode(0)
+  run_tool_client_stream_async(async fn() {
+    let created : Result[ToolClient, ToolError[NoToolError]] = ToolClient::try_new(
+      "terminal-test",
+    )
+    let client = match created {
+      Ok(client) => client
+      Err(_) => fail("failed to create tool client")
+    }
+    defer client.drop()
+    let invocation = start_output_invocation(client)
+    invocation.cancel()
+    assert_eq(tool_client_resource_drop_count(5), 1)
+    assert_eq(tool_client_resource_drop_count(4), 0)
+    assert_eq(tool_client_resource_drop_count(6), 0)
+    match invocation.get() {
+      Err(ToolError::Rpc(RpcError::Cancelled)) => ()
+      _ => fail("explicit cancellation did not select cancelled result")
+    }
+    invocation.drop()
+  })
+  assert_eq(tool_client_resource_drop_count(4), 1)
+  assert_eq(tool_client_resource_drop_count(6), 1)
+}
+
+///|
+test "dropping a raw result observer does not cancel its output reader" {
+  reset_tool_client_resource_drop_counts()
+  set_tool_client_host_mode(2)
+  defer set_tool_client_host_mode(0)
+  run_tool_client_stream_async(async fn() {
+    let rpc = match @toolHost.ToolRpc::create("terminal-test") {
+      Ok(rpc) => rpc
+      Err(_) => fail("failed to create raw tool client")
+    }
+    defer rpc.drop()
+    let (target, output) = @toolHost.create_output()
+    let observer = rpc.async_invoke_and_await(
+      ["stream"],
+      empty_tool_input(),
+      None,
+      Some(target),
+      None,
+    )
+    observer.drop()
+    assert_eq(tool_client_resource_drop_count(4), 1)
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    assert_eq(tool_client_resource_drop_count(6), 0)
+    output.drop()
+    assert_eq(tool_client_resource_drop_count(6), 1)
+  })
+}
+
+///|
+test "detaching a generated invocation result preserves its output reader" {
+  reset_tool_client_resource_drop_counts()
+  set_tool_client_host_mode(2)
+  defer set_tool_client_host_mode(0)
+  run_tool_client_stream_async(async fn() {
+    let created : Result[ToolClient, ToolError[NoToolError]] = ToolClient::try_new(
+      "terminal-test",
+    )
+    let client = match created {
+      Ok(client) => client
+      Err(_) => fail("failed to create tool client")
+    }
+    defer client.drop()
+    let invocation = start_output_invocation(client)
+    invocation.detach_result_observer()
+    assert_eq(tool_client_resource_drop_count(4), 1)
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    assert_eq(tool_client_resource_drop_count(6), 0)
+    match invocation.get() {
+      Err(ToolError::Rpc(RpcError::Protocol("result observer was detached"))) =>
+        ()
+      _ => fail("detached invocation result remained observable")
+    }
+    invocation.cancel()
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    invocation.drop()
+  })
+  assert_eq(tool_client_resource_drop_count(4), 1)
+  assert_eq(tool_client_resource_drop_count(6), 1)
+}
+
+///|
+test "cancelling a blocked output read preserves the result observer" {
+  reset_tool_client_resource_drop_counts()
+  set_tool_client_host_mode(3)
+  defer set_tool_client_host_mode(0)
+  run_tool_client_stream_async(async fn() {
+    let created : Result[ToolClient, ToolError[NoToolError]] = ToolClient::try_new(
+      "terminal-test",
+    )
+    let client = match created {
+      Ok(client) => client
+      Err(_) => fail("failed to create tool client")
+    }
+    defer client.drop()
+    let invocation = start_output_invocation(client)
+    let stdout = invocation.stdout.unwrap()
+    @async-core.with_task_group(async fn(group) {
+      let read = group.spawn(async fn() { stdout.read(1) })
+      let (turn, next_turn) = @async-core.Future::new()
+      group.spawn_bg(fn() { ignore(next_turn.complete(())) })
+      turn.get()
+      assert_true(read.try_wait() is None)
+      read.cancel()
+      try read.wait() catch {
+        @async-core.Cancelled::Cancelled => ()
+        _ => fail("blocked output read raised the wrong cancellation")
+      } noraise {
+        _ => fail("blocked output read unexpectedly completed")
+      }
+    })
+    assert_eq(tool_client_resource_drop_count(7), 1)
+    assert_eq(tool_client_resource_drop_count(6), 1)
+    assert_eq(tool_client_resource_drop_count(5), 0)
+    match invocation.get() {
+      Ok(_) => ()
+      Err(_) => fail("reader cancellation changed the invocation result")
+    }
+    invocation.drop()
+  })
+  assert_eq(tool_client_resource_drop_count(4), 1)
 }

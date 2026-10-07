@@ -1,6 +1,6 @@
 package toolstreaming
 
-import golem.BaseAgent
+import golem.{BaseAgent, UInt}
 import golem.runtime.annotations.*
 import golem.runtime.tool.client.ToolRpcClient
 import golem.schema.IntoSchema
@@ -124,6 +124,7 @@ object ScalaDualOutputEvidence {
 trait ScalaToolStreamingCaller extends BaseAgent {
   class Id(val name: String)
   def markerBeforeEof(payload: String): Future[ScalaStreamEvidence]
+  def matrix_core_observation(): Future[MatrixCoreObservation]
   def invalidCommandPathCleanup(): Future[ScalaCleanupEvidence]
   def outputEvidence(mode: String): Future[ScalaOutputEvidence]
   def declaredErrorCompletion(): Future[ScalaOutputEvidence]
@@ -133,6 +134,40 @@ trait ScalaToolStreamingCaller extends BaseAgent {
 @agentImplementation()
 final class ScalaToolStreamingCallerImpl(name: String) extends ScalaToolStreamingCaller {
   private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  override def matrix_core_observation(): Future[MatrixCoreObservation] = {
+    val successRequest = MatrixRequest(
+      source = "matrix.sample",
+      dimensions = MatrixDimensions(width = UInt(3), height = UInt(5)),
+      labels = Seq("north", "east", "south")
+    )
+    val rejectedRequest = successRequest.copy(source = "reject.me")
+    val artifact = MatrixCoreToolClient().artifact()
+
+    for {
+      success <- artifact.inspect(successRequest, multiplier = 7L)
+      rejected <- artifact.inspect(rejectedRequest, multiplier = 7L)
+    } yield (success, rejected) match {
+      case (
+            Right(result),
+            Left(ToolError.Tool(MatrixError.Rejected(error)))
+          ) =>
+        MatrixCoreObservation(
+          provider = result.provider,
+          command = result.command,
+          normalizedSource = result.normalizedSource,
+          weightedSize = result.weightedSize,
+          labelSummary = result.labelSummary,
+          principal = result.principal,
+          ownerAgentId = result.ownerAgentId,
+          errorField = error.field,
+          errorReason = error.reason,
+          errorRetryable = error.retryable
+        )
+      case other =>
+        throw new IllegalStateException(s"unexpected matrix-core results: $other")
+    }
+  }
 
   override def dualOutputDeclaredError(): Future[ScalaDualOutputEvidence] =
     ScalaStreamingToolClient().dualOutput() match {

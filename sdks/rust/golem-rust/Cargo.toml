@@ -35,6 +35,11 @@ name = "tool_canonical"
 harness = false
 
 [[test]]
+name = "rich_tool_conformance"
+harness = false
+required-features = ["export_golem_agentic"]
+
+[[test]]
 name = "ui"
 harness = false
 

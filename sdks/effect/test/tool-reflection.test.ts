@@ -20,6 +20,13 @@ const registered = {
 }
 
 describe("native tool reflection", () => {
+  it("emits the authored tool version while retaining the default", () => {
+    expect(compileDefinition(toolDefinition("default-version")).wire.version).toBe("0.1.0")
+    expect(
+      compileDefinition(toolDefinition("authored-version", { version: "1.0.0" })).wire.version,
+    ).toBe("1.0.0")
+  })
+
   it("treats a default-true negatable flag as present when set to false", () => {
     const definition = toolDefinition("negatable-reflection").body((body) =>
       body

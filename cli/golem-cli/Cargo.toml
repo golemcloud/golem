@@ -123,6 +123,7 @@ wax = { workspace = true }
 which = { workspace = true }
 wasm-metadata = { workspace = true }
 wasm-rquickjs = { workspace = true }
+wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wit-component = { workspace = true }
 wit-parser = { workspace = true }
@@ -139,6 +140,7 @@ expectrl = { workspace = true }
 flate2 = { workspace = true }
 goldenfile = { workspace = true }
 golem-common = { workspace = true, features = ["proptest"] }
+golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
 pretty_assertions = { workspace = true }

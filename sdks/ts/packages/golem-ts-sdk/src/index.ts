@@ -30,7 +30,7 @@ import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import {
   encodeDeclaredToolErrorPayload,
-  encodeToolValue,
+  encodeToolValueAsync,
   invalidToolResult,
   isDeclaredToolError,
 } from './internal/tool/invocationResult';
@@ -61,6 +61,7 @@ export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
+export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -402,7 +403,7 @@ async function invokeTool(
 
     const outcome = await prepared.invoke(context);
     await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
-    const result = projectToolOutcome(body, outcome);
+    const result = await projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
@@ -415,7 +416,10 @@ async function invokeTool(
   }
 }
 
-function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
+async function projectToolOutcome(
+  body: ExtendedCommandBody,
+  outcome: unknown,
+): Promise<InvocationResult> {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -431,7 +435,7 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       return { result: undefined };
     }
     return {
-      result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
+      result: await encodeToolValueAsync(body.result.codec, outcome.value, 'tool result'),
     };
   }
 

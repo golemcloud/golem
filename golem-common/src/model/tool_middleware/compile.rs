@@ -577,7 +577,7 @@ fn validate_unselected_parameters(
     }
 }
 
-fn effective_installations(
+pub fn effective_installations(
     environment: Option<&ToolBindingInput>,
     agent: Option<&ToolBindingInput>,
 ) -> Vec<ToolMiddlewareInstallation> {
@@ -660,7 +660,7 @@ fn resolve_registration<'a>(
     Ok(registration)
 }
 
-fn synthesize_effective_definition(
+pub fn synthesize_effective_definition(
     presented: &Tool,
     expected: Option<&Tool>,
     next: &Tool,

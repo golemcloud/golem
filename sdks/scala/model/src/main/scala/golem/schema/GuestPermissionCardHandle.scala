@@ -16,6 +16,8 @@
 
 package golem.schema
 
+import golem.schema.wire.{ConcreteCodec, WitSchemaTypeBody, WitSchemaValueNode}
+
 import scala.collection.immutable.ListMap
 
 /** Opaque, affine holder for an owned `permission-card` resource handle. */
@@ -37,6 +39,8 @@ final class GuestPermissionCardHandle private (private var cell: Option[Any]) {
 
 object GuestPermissionCardHandle {
 
+  val nonPolymorphicSpec: PermissionCardSpec = PermissionCardSpec(polymorphic = false)
+
   /** Wrap a freshly received card. Guest code cannot forge or re-wrap cards. */
   private[golem] def fromRaw(raw: Any): GuestPermissionCardHandle =
     new GuestPermissionCardHandle(Some(raw))
@@ -54,6 +58,17 @@ object GuestPermissionCardHandle {
       override def toValue(handle: GuestPermissionCardHandle): SchemaValue =
         SchemaValue.PermissionCardHandle(handle)
     }
+
+  implicit val nonPolymorphicIntoSchema: IntoSchema[GuestPermissionCardHandle] =
+    intoSchema(nonPolymorphicSpec)
+
+  def concreteCodec(spec: PermissionCardSpec): ConcreteCodec[GuestPermissionCardHandle] =
+    ConcreteCodec.scalar[GuestPermissionCardHandle](WitSchemaTypeBody.PermissionCardType(spec))(
+      WitSchemaValueNode.PermissionCardHandle.apply
+    ) { case WitSchemaValueNode.PermissionCardHandle(handle) => handle }
+
+  implicit val nonPolymorphicConcreteCodec: ConcreteCodec[GuestPermissionCardHandle] =
+    concreteCodec(nonPolymorphicSpec)
 
   implicit val fromSchema: FromSchema[GuestPermissionCardHandle] =
     new FromSchema[GuestPermissionCardHandle] {

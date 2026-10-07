@@ -1434,6 +1434,7 @@ mod tests {
                 .unwrap(),
             },
             assume_idempotence: true,
+            authority_wallet: Vec::new(),
         };
         let accepted = EntityInvocationRequestIdentity {
             entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
