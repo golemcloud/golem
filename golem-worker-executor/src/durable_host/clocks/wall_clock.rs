@@ -16,7 +16,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::concurrent::{DurableCallSession, NotCancellable};
 use crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::wall_clock::{Datetime, HostWithStore};
 use crate::workerctx::WorkerCtx;
-use futures::executor::block_on;
+use futures::FutureExt;
 use golem_common::model::oplog::{
     DurableFunctionType, HostRequestNoInput, HostResponseWallClock, host_functions,
 };
@@ -82,7 +82,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             {
                 return accessor.with(|mut access| {
                     let mut view = access.get().as_wasi_view();
-                    let value = block_on(Host::now(&mut view.clocks()))?;
+                    let value = Host::now(&mut view.clocks())
+                        .now_or_never()
+                        .expect("the WASI wall clock must be immediately ready")?;
                     Ok(Datetime {
                         seconds: value.seconds,
                         nanoseconds: value.nanoseconds,
@@ -102,7 +104,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
                 async || {
                     let time = accessor.with(|mut access| {
                         let mut view = access.get().as_wasi_view();
-                        block_on(Host::now(&mut view.clocks()))
+                        Host::now(&mut view.clocks())
+                            .now_or_never()
+                            .expect("the WASI wall clock must be immediately ready")
                     })?;
                     Ok::<_, anyhow::Error>(HostResponseWallClock { time: time.into() })
                 },
@@ -120,7 +124,9 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             async || {
                 let time = accessor.with(|mut access| {
                     let mut view = access.get().as_wasi_view();
-                    block_on(Host::resolution(&mut view.clocks()))
+                    Host::resolution(&mut view.clocks())
+                        .now_or_never()
+                        .expect("the WASI wall clock must be immediately ready")
                 })?;
                 Ok::<_, anyhow::Error>(HostResponseWallClock { time: time.into() })
             },

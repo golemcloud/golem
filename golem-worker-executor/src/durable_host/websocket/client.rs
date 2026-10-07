@@ -874,10 +874,10 @@ async fn write_websocket_access<U: Send + 'static, Ctx: WorkerCtx>(
     .map_err(anyhow::Error::from)?
     .map_err(|error| Error::SendFailure(error.to_string()));
     // Publish a successful close before releasing the writer so a queued send cannot use it.
-    if result.is_ok() {
-        if let Some(error) = terminal_on_success {
-            accessor.with(|mut access| mark_websocket_terminal(access.get(), resource, error))?;
-        }
+    if result.is_ok()
+        && let Some(error) = terminal_on_success
+    {
+        accessor.with(|mut access| mark_websocket_terminal(access.get(), resource, error))?;
     }
     Ok(result)
 }

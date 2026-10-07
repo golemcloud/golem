@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::executor::block_on;
+use futures::{FutureExt, executor::block_on};
 use wasmtime::component::{Accessor, HasSelf, Resource};
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
@@ -150,7 +150,9 @@ fn current_monotonic_time<U: Send + 'static, Ctx: WorkerCtx>(
 ) -> wasmtime::Result<Instant> {
     accessor.with(|mut access| {
         let mut view = access.get().as_wasi_view();
-        block_on(WasiMonotonicClockHost::now(&mut view.clocks()))
+        WasiMonotonicClockHost::now(&mut view.clocks())
+            .now_or_never()
+            .expect("the WASI monotonic clock must be immediately ready")
     })
 }
 
@@ -159,6 +161,8 @@ fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
 ) -> wasmtime::Result<Duration> {
     accessor.with(|mut access| {
         let mut view = access.get().as_wasi_view();
-        block_on(WasiMonotonicClockHost::resolution(&mut view.clocks()))
+        WasiMonotonicClockHost::resolution(&mut view.clocks())
+            .now_or_never()
+            .expect("the WASI monotonic clock must be immediately ready")
     })
 }
