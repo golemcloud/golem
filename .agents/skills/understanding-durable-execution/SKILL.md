@@ -365,8 +365,11 @@ Source and target guards are never held together, and publication releases the t
 resuming the child. Before the publication, a `ForkCopy` ticket copies the filesystem snapshots of
 the source into the repository of the stage (`AgentSnapshots::agent(target, stage_id)`), and
 `Copied::publish` gives the `StagePublication` that `OplogService::publish_staged` requires.
-Attempts of one request share one copy. A fork refuses a missing manual-update baseline after it
-reconciled; an export fork checks the source first. With filesystem snapshots disabled, the copy
+Attempts of one request share one copy. The fork cancels every update that the copied prefix
+leaves open: one `FailedUpdate` per pending update in queue order, then one per manual-update
+invocation that no `PendingUpdate` paired, with that invocation as its attempt index. The baseline of a fork is the record of the last
+successful snapshot-based or snapshot-assisted update in the copied prefix. A fork refuses a
+missing baseline after it reconciled; an export fork checks the source first. With filesystem snapshots disabled, the copy
 copies nothing, so a baseline that names a filesystem snapshot is missing, and the fork is refused
 the same way unless the reconciliation finds the target. A copy catches up with the source in rounds,
 and each round copies its packs before its index files, so a pack that a prune removed ends the
