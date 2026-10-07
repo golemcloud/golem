@@ -800,7 +800,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // Track unmatched work so the fork can cancel unrelated queued invocations and
         // updates. Export forks retain their selected invocation and its constructor.
         let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
-        let mut updates = ForkUpdates::default();
+        // The entries that the update queue reads, kept from the copy, so the fold over them
+        // after the copy, when the deleted regions are known, reads no entry again.
+        let mut update_entries: Vec<(OplogIndex, OplogEntry)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -872,12 +874,16 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             // and outputs in deleted regions are still accounted for (see calculate_pending_invocations).
             // A manual update invocation has no idempotency key in the status; its failed update
             // from `ForkUpdates` cancels it.
+            let manual_update = match &entry {
+                OplogEntry::PendingAgentInvocation { payload, .. } => {
+                    manual_update_target_revision_of(payload).is_some()
+                }
+                _ => false,
+            };
             match &entry {
                 OplogEntry::PendingAgentInvocation {
-                    idempotency_key,
-                    payload,
-                    ..
-                } if manual_update_target_revision_of(payload).is_none() => {
+                    idempotency_key, ..
+                } if !manual_update => {
                     pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
@@ -892,21 +898,24 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 }
                 _ => {}
             }
+            if ForkUpdates::reads(&entry, manual_update) {
+                update_entries.push((oplog_index, entry));
+            }
         }
 
         // The update queue pairs the update entries as the status fold does: entries in a
         // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
-        let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
-        for oplog_index in oplog_range {
-            let entry = read_source(oplog_index).await;
-            updates = updates.after(
-                oplog_index,
-                &entry,
-                deleted_regions.is_in_deleted_region(oplog_index),
-            );
-        }
-        let (cancellations, baseline) = updates.into_parts();
+        let (cancellations, baseline) = update_entries
+            .iter()
+            .fold(ForkUpdates::default(), |updates, (oplog_index, entry)| {
+                updates.after(
+                    *oplog_index,
+                    entry,
+                    deleted_regions.is_in_deleted_region(*oplog_index),
+                )
+            })
+            .into_parts();
 
         // The marker precedes every target-authored cancellation or synthetic result.
         let now = Timestamp::now_utc();
@@ -1320,6 +1329,18 @@ pub(crate) struct ForkUpdates {
 }
 
 impl ForkUpdates {
+    /// Whether [`ForkUpdates::after`] reads `entry`: an update entry, or a manual update
+    /// invocation, which `manual_update` tells. Every other entry leaves the updates unchanged.
+    pub(crate) fn reads(entry: &OplogEntry, manual_update: bool) -> bool {
+        manual_update
+            || matches!(
+                entry,
+                OplogEntry::PendingUpdate { .. }
+                    | OplogEntry::SuccessfulUpdate { .. }
+                    | OplogEntry::FailedUpdate { .. }
+            )
+    }
+
     /// The updates after `entry` at `oplog_index`. `deleted` tells whether the entry is in a
     /// deleted region of the copied prefix. A successful snapshot-based or snapshot-assisted
     /// update makes the filesystem snapshot of its record the baseline, also when it has none,
@@ -1672,6 +1693,77 @@ mod tests {
                 false
             )]
         );
+    }
+
+    /// The updates of a prefix with deleted regions are the same when the fold reads only the
+    /// entries that [`ForkUpdates::reads`] keeps.
+    #[test]
+    fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
+        let invocation = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::fresh(),
+            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::SaveSnapshot)),
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        };
+        let entries = [
+            automatic_admission(3),
+            invocation.clone(),
+            manual_invocation(4),
+            assisted_strategy(3, 2, 1, Some(FilesystemSnapshotName::periodic())),
+            OplogEntry::pending_update(
+                UpdateDescription::SnapshotBased {
+                    target_revision: revision(4),
+                    payload: OplogPayload::Inline(Box::new(vec![])),
+                    mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
+                },
+                Some(index(4)),
+            ),
+            invocation,
+            succeeded(3),
+            manual_invocation(5),
+            OplogEntry::failed_update(revision(5), None, None, Some(index(9)), None),
+            manual_pending_update(6, Some(FilesystemSnapshotName::update())),
+            manual_invocation(7),
+        ];
+        let kept = |entries: &[OplogEntry]| {
+            entries
+                .iter()
+                .map(|entry| {
+                    let manual_update = matches!(
+                        entry,
+                        OplogEntry::PendingAgentInvocation { payload, .. }
+                            if manual_update_target_revision_of(payload).is_some()
+                    );
+                    ForkUpdates::reads(entry, manual_update)
+                        .then(|| entry.clone())
+                        .unwrap_or_else(|| OplogEntry::no_op(None))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let outcome = |entries: &[OplogEntry], deleted: &[u64]| {
+            let (cancellations, baseline) = fork_updates(entries, deleted);
+            (failed_updates(&cancellations), baseline)
+        };
+
+        [
+            vec![],
+            vec![4, 5, 6],
+            vec![8, 9, 10],
+            vec![3, 4, 5, 6, 7, 8],
+        ]
+        .iter()
+        .for_each(|deleted| {
+            assert_eq!(
+                outcome(&kept(&entries), deleted),
+                outcome(&entries, deleted),
+                "{deleted:?}"
+            )
+        });
+        assert!(!fork_updates(&entries, &[]).0.is_empty());
     }
 
     #[test]
