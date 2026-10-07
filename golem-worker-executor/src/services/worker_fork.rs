@@ -70,13 +70,16 @@ use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
+    OplogPayload,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    AgentFingerprint, AgentInvocationPayload, AgentMetadata, PendingUpdateKind, PendingUpdateRef,
+    Timestamp,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
@@ -876,14 +879,14 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             // from `ForkUpdates` cancels it.
             let manual_update = match &entry {
                 OplogEntry::PendingAgentInvocation { payload, .. } => {
-                    manual_update_target_revision_of(payload).is_some()
+                    manual_update_target_revision_of(payload)
                 }
-                _ => false,
+                _ => None,
             };
             match &entry {
                 OplogEntry::PendingAgentInvocation {
                     idempotency_key, ..
-                } if !manual_update => {
+                } if manual_update.is_none() => {
                     pending_invocation_keys.push((idempotency_key.clone(), oplog_index));
                 }
                 OplogEntry::AgentInvocationStarted {
@@ -898,7 +901,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 }
                 _ => {}
             }
-            if ForkUpdates::reads(&entry, manual_update) {
+            if let Some(entry) = ForkUpdates::update_entry(entry, manual_update) {
                 update_entries.push((oplog_index, entry));
             }
         }
@@ -1329,16 +1332,43 @@ pub(crate) struct ForkUpdates {
 }
 
 impl ForkUpdates {
-    /// Whether [`ForkUpdates::after`] reads `entry`: an update entry, or a manual update
-    /// invocation, which `manual_update` tells. Every other entry leaves the updates unchanged.
-    pub(crate) fn reads(entry: &OplogEntry, manual_update: bool) -> bool {
-        manual_update
-            || matches!(
-                entry,
-                OplogEntry::PendingUpdate { .. }
-                    | OplogEntry::SuccessfulUpdate { .. }
-                    | OplogEntry::FailedUpdate { .. }
-            )
+    /// The entry that [`ForkUpdates::after`] reads for `entry`: an update entry as it is, and a
+    /// manual update invocation, whose target `manual_update` gives, with that target as its
+    /// payload, so the fold does not decode the payload again. `None` for every other entry, which
+    /// leaves the updates unchanged.
+    pub(crate) fn update_entry(
+        entry: OplogEntry,
+        manual_update: Option<ComponentRevision>,
+    ) -> Option<OplogEntry> {
+        match (entry, manual_update) {
+            (
+                OplogEntry::PendingAgentInvocation {
+                    timestamp,
+                    idempotency_key,
+                    trace_id,
+                    trace_states,
+                    invocation_context,
+                    ..
+                },
+                Some(target_revision),
+            ) => Some(OplogEntry::PendingAgentInvocation {
+                timestamp,
+                idempotency_key,
+                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                })),
+                trace_id,
+                trace_states,
+                invocation_context,
+            }),
+            (
+                entry @ (OplogEntry::PendingUpdate { .. }
+                | OplogEntry::SuccessfulUpdate { .. }
+                | OplogEntry::FailedUpdate { .. }),
+                _,
+            ) => Some(entry),
+            _ => None,
+        }
     }
 
     /// The updates after `entry` at `oplog_index`. `deleted` tells whether the entry is in a
@@ -1732,13 +1762,13 @@ mod tests {
             entries
                 .iter()
                 .map(|entry| {
-                    let manual_update = matches!(
-                        entry,
-                        OplogEntry::PendingAgentInvocation { payload, .. }
-                            if manual_update_target_revision_of(payload).is_some()
-                    );
-                    ForkUpdates::reads(entry, manual_update)
-                        .then(|| entry.clone())
+                    let manual_update = match entry {
+                        OplogEntry::PendingAgentInvocation { payload, .. } => {
+                            manual_update_target_revision_of(payload)
+                        }
+                        _ => None,
+                    };
+                    ForkUpdates::update_entry(entry.clone(), manual_update)
                         .unwrap_or_else(|| OplogEntry::no_op(None))
                 })
                 .collect::<Vec<_>>()
@@ -1764,6 +1794,30 @@ mod tests {
             )
         });
         assert!(!fork_updates(&entries, &[]).0.is_empty());
+
+        let stored = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: IdempotencyKey::fresh(),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(
+                    &AgentInvocationPayload::ManualUpdate {
+                        target_revision: revision(4),
+                    },
+                )
+                .unwrap(),
+                cached: None,
+            },
+            trace_id: TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        };
+        assert!(matches!(
+            ForkUpdates::update_entry(stored, Some(revision(4))),
+            Some(OplogEntry::PendingAgentInvocation {
+                payload: OplogPayload::Inline(payload),
+                ..
+            }) if *payload == AgentInvocationPayload::ManualUpdate { target_revision: revision(4) }
+        ));
     }
 
     #[test]

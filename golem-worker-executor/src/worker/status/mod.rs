@@ -416,7 +416,7 @@ where
     let agent_mode = reader.agent_mode;
     let last_oplog_index = reader.horizon;
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) = read_region_entries(reader, start, chunk_size).await else {
+    let Some(region_entries) = read_region_entries(reader, start, chunk_size, true).await else {
         return Ok(None);
     };
     let mut regions = fold_regions(&baseline, &region_entries);
@@ -1132,16 +1132,22 @@ pub(crate) async fn skipped_regions_at(
     horizon: OplogIndex,
 ) -> Result<DeletedRegions, String> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
-    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024)
+    // A manual update invocation changes only the manual admissions, which no skipped region
+    // depends on, so the read does not decode the invocation payloads.
+    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await
         .ok_or("Missing fork source history")?;
     Ok(fold_regions(&AgentStatusRecord::default(), &entries).skipped)
 }
 
+/// The entries from `first` to the horizon of `reader` that the region fold reads: the jumps,
+/// the reverts and the update entries, and the manual update invocations when
+/// `manual_admissions` is true.
 async fn read_region_entries(
     reader: &StatusOplogReader<'_>,
     mut first: OplogIndex,
     chunk_size: u64,
+    manual_admissions: bool,
 ) -> Option<BTreeMap<OplogIndex, OplogEntry>> {
     let mut regions = BTreeMap::new();
     let horizon = reader.horizon;
@@ -1157,11 +1163,12 @@ async fn read_region_entries(
                     | OplogEntry::PendingUpdate { .. }
                     | OplogEntry::SuccessfulUpdate { .. }
                     | OplogEntry::FailedUpdate { .. }
-            ) || matches!(
-                entry,
-                OplogEntry::PendingAgentInvocation { payload, .. }
-                    if manual_update_target_revision_of(payload).is_some()
-            )
+            ) || manual_admissions
+                && matches!(
+                    entry,
+                    OplogEntry::PendingAgentInvocation { payload, .. }
+                        if manual_update_target_revision_of(payload).is_some()
+                )
         }));
     }
     Some(regions)

@@ -7784,6 +7784,43 @@ mod region_fold {
         assert_eq!(regions, fold_status(list).skipped_regions);
         assert!(regions.is_overridden());
     }
+
+    /// The skipped regions do not depend on the manual update invocations, which the read of
+    /// `skipped_regions_at` leaves out: snapshot-based updates that pair them, and one in a
+    /// deleted region, give the regions of the status fold.
+    #[test]
+    async fn skipped_regions_at_gives_the_regions_of_the_status_fold_with_paired_manual_updates() {
+        let test_case = [
+            update_fields_snapshot(None),
+            manual_invocation(3),
+            manual_pending_update(3, Some(3)),
+            succeeded(3),
+            manual_invocation(4),
+            manual_pending_update(4, Some(6)),
+            manual_invocation(5),
+            revert(8, 8),
+        ]
+        .into_iter()
+        .fold(TestCase::builder(1), |builder, entry| {
+            builder.add(entry, |status| status)
+        })
+        .build();
+        let list = test_case
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(position, entry)| (idx(position as u64 + 1), entry.oplog_entry.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let horizon = *list.keys().next_back().unwrap();
+
+        let regions =
+            super::super::skipped_regions_at(&test_case, &test_case.owned_agent_id, horizon)
+                .await
+                .unwrap();
+
+        assert_eq!(regions, fold_status(list).skipped_regions);
+        assert!(regions.is_overridden());
+    }
 }
 
 mod update_entry_sequences {
