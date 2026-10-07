@@ -1299,6 +1299,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await
     }
 
+    /// Decides the start of `status` as [`Worker::decide_start`] does, under the exclusions that
+    /// this incarnation holds in memory, without a read of storage. A start decides with it again
+    /// after it wrote a strategy entry: its first decision already added the stored rejections.
+    fn decide_start_in_memory(&self, status: &AgentStatusRecord) -> StartDecision {
+        let enabled = self.filesystem_snapshots_enabled();
+        self.read_exclusions(|exclusions| {
+            snapshot_selection::decide_start(status, exclusions, enabled)
+        })
+    }
+
     /// Loads the rejected entries that storage keeps for the incarnation, adds them to the
     /// exclusions of the agent for a start of `status`, and gives `read` of the exclusions.
     async fn with_persisted_exclusions<T>(
@@ -11875,11 +11885,26 @@ impl RunningWorker {
             .map_err(WorkerExecutorError::from)?;
         parent.hydrated_invocation_results.write().await.clear();
 
-        let worker_metadata = parent.get_latest_worker_metadata().await;
-        let selection = match parent
+        let mut worker_metadata = parent.get_latest_worker_metadata().await;
+        let mut decision = parent
             .decide_start(&worker_metadata.last_known_status)
-            .await?
+            .await?;
+        if let StartDecision::PersistStrategy {
+            description,
+            admission_index,
+        } = decision
         {
+            parent
+                .add_and_commit_oplog(OplogEntry::pending_update(
+                    description,
+                    Some(admission_index),
+                ))
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            worker_metadata = parent.get_latest_worker_metadata().await;
+            decision = parent.decide_start_in_memory(&worker_metadata.last_known_status);
+        }
+        let selection = match decision {
             StartDecision::PersistStrategy {
                 description,
                 admission_index,
