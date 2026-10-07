@@ -4309,7 +4309,7 @@ async fn deletion_retry_preserves_actual_filesystem_failure_until_verified_clean
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
                 config.suspend.suspend_after = Duration::from_secs(3600);
-                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
                     root: root_path.clone().into(),
                 };
                 config.filesystem_storage.cleanup_retry.max_attempts = 1;

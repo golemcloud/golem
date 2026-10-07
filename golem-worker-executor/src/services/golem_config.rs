@@ -2176,7 +2176,7 @@ pub struct FilesystemStorageConfig {
     /// `max_attempts` includes the initial deletion attempt.
     pub cleanup_retry: RetryConfig,
     /// Where the agent filesystems live, and how the executor accounts for them.
-    pub storage: FilesystemStorageMode,
+    pub mode: FilesystemStorageMode,
     /// Private policy for deriving an agent's filesystem-object hard limit
     /// proportionally from its allocated-byte limit, with fixed bounds.
     pub filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig,
@@ -3029,7 +3029,7 @@ impl SafeDisplay for FilesystemStorageConfig {
             "{}",
             self.cleanup_retry.to_safe_string_indented()
         );
-        let _ = writeln!(&mut result, "storage: {}", self.storage.to_safe_string());
+        let _ = writeln!(&mut result, "mode: {}", self.mode.to_safe_string());
         let _ = writeln!(&mut result, "filesystem object limit policy:");
         let _ = writeln!(
             &mut result,
@@ -3053,7 +3053,7 @@ impl Default for FilesystemStorageConfig {
                 multiplier: 4.0,
                 max_jitter_factor: None,
             },
-            storage: FilesystemStorageMode::Temporary,
+            mode: FilesystemStorageMode::Temporary,
             filesystem_object_limit_policy: FilesystemObjectLimitPolicyConfig::default(),
             pressure: FilesystemPressureConfig::default(),
         }

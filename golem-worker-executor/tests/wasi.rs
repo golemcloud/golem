@@ -1702,7 +1702,7 @@ async fn start_on_empty_root_without_snapshots(
         context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
                     root: root.clone().into(),
                 };
                 config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
@@ -1933,7 +1933,7 @@ async fn filesystem_guest_latency_benchmark(
                 &context,
                 TestExecutorOverrides {
                     configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                        config.filesystem_storage.mode = FilesystemStorageMode::Directory {
                             root: unmanaged_root.clone().into(),
                         };
                         config.resource_usage_metering = Default::default();
@@ -2490,7 +2490,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
                     root: root.clone().into(),
                 };
                 full_replay_config(config);
@@ -2590,7 +2590,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
                     root: root.clone().into(),
                 };
                 full_replay_config(config);

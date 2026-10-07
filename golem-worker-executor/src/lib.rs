@@ -1520,7 +1520,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let key: Box<str> = "00".repeat(64).into_boxed_str();
         let mut golem_config = GolemConfig::default();
-        golem_config.filesystem_storage.storage = FilesystemStorageMode::Directory {
+        golem_config.filesystem_storage.mode = FilesystemStorageMode::Directory {
             root: root.path().into(),
         };
         golem_config.filesystem_snapshots =

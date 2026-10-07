@@ -254,8 +254,8 @@ mod tests {
         let error = make_config_loader()
             .default_figment()
             .merge(Toml::string(
-                "[filesystem_storage.storage]\ntype = \"ReflinkXfs\"\n\
-                 [filesystem_storage.storage.config]\nroot = \"/var/lib/golem/agents\"\n\
+                "[filesystem_storage.mode]\ntype = \"ReflinkXfs\"\n\
+                 [filesystem_storage.mode.config]\nroot = \"/var/lib/golem/agents\"\n\
                  project_quotas = false",
             ))
             .extract::<GolemConfig>()
@@ -289,9 +289,9 @@ mod tests {
     fn the_storage_mode_loads_from_the_environment() {
         Jail::expect_with(|jail| {
             jail.clear_env();
-            jail.set_env("GOLEM__FILESYSTEM_STORAGE__STORAGE__TYPE", "ReflinkXfs");
+            jail.set_env("GOLEM__FILESYSTEM_STORAGE__MODE__TYPE", "ReflinkXfs");
             jail.set_env(
-                "GOLEM__FILESYSTEM_STORAGE__STORAGE__CONFIG__ROOT",
+                "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
                 "/var/lib/golem/agents",
             );
             let config = make_config_loader()
@@ -300,7 +300,7 @@ mod tests {
                 .extract::<GolemConfig>()
                 .unwrap();
             assert_eq!(
-                config.filesystem_storage.storage,
+                config.filesystem_storage.mode,
                 crate::services::golem_config::FilesystemStorageMode::ReflinkXfs {
                     root: std::path::PathBuf::from("/var/lib/golem/agents").into(),
                 }
