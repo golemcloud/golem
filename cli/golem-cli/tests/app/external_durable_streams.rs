@@ -200,6 +200,16 @@ async fn invoke<T: FromSchema>(
 }
 
 async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values: Vec<Value>) -> T {
+    invoke_template_raw(ctx, method, values.iter().map(Value::to_string).collect()).await
+}
+
+/// Invokes the template agent with arguments already written in its source
+/// language's syntax.
+async fn invoke_template_raw<T: FromSchema>(
+    ctx: &TestContext,
+    method: &str,
+    values: Vec<String>,
+) -> T {
     let mut args = vec![
         flag::YES.to_owned(),
         cmd::AGENT.to_owned(),
@@ -207,7 +217,7 @@ async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values:
         "StreamingAgent(\"external\")".to_owned(),
         method.to_owned(),
     ];
-    args.extend(values.iter().map(Value::to_string));
+    args.extend(values);
     args.extend([
         "--no-stream".to_owned(),
         flag::FORMAT.to_owned(),
@@ -431,24 +441,27 @@ async fn go_external_durable_streams_e2e() {
 
     let server = ReferenceServer::start().await;
     let external = server.create("/go", "application/json").await;
+    // Go agents read their arguments in Go syntax: a list is `{…}`.
+    let url = json!(external).to_string();
     let append_args = vec![
-        json!(external),
-        json!("stable-go-producer"),
-        json!(["once"]),
-        json!(false),
+        url.clone(),
+        r#""stable-go-producer""#.to_string(),
+        r#"{"once"}"#.to_string(),
+        "false".to_string(),
     ];
-    let first: Option<String> = invoke_template(&ctx, "appendExternal", append_args.clone()).await;
+    let first: Option<String> =
+        invoke_template_raw(&ctx, "appendExternal", append_args.clone()).await;
     assert!(first.is_some());
-    let duplicate: Option<String> = invoke_template(&ctx, "appendExternal", append_args).await;
+    let duplicate: Option<String> = invoke_template_raw(&ctx, "appendExternal", append_args).await;
     assert_eq!(duplicate, None);
-    let _: Option<String> = invoke_template(
+    let _: Option<String> = invoke_template_raw(
         &ctx,
         "appendExternal",
         vec![
-            json!(external),
-            json!("closer"),
-            json!(["tail"]),
-            json!(true),
+            url.clone(),
+            r#""closer""#.to_string(),
+            r#"{"tail"}"#.to_string(),
+            "true".to_string(),
         ],
     )
     .await;
