@@ -18,6 +18,7 @@ use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
+use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
 use golem_common::model::oplog::{
@@ -31,8 +32,13 @@ use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_worker_executor::filesystem_snapshot_testing::{
+    TestFilesystemSnapshotStore, with_snapshot_store,
+};
 use golem_worker_executor::services::component::ComponentService;
-use golem_worker_executor::services::golem_config::{OplogConfig, SnapshotPolicy};
+use golem_worker_executor::services::golem_config::{
+    FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
+};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -163,6 +169,156 @@ impl TestHttpServer {
             resume: resume_tx,
         }
     }
+}
+
+/// The files of the agent of a snapshot-assisted update test.
+#[derive(Clone)]
+enum AgentFiles {
+    /// The agent writes no file, and the executor keeps no filesystem snapshots.
+    Untouched,
+    /// The agent writes files before and after the selected snapshot record, and the executor
+    /// keeps filesystem snapshots in the store.
+    Snapshotted(TestFilesystemSnapshotStore),
+}
+
+impl AgentFiles {
+    fn snapshotted(&self) -> bool {
+        matches!(self, Self::Snapshotted(_))
+    }
+
+    /// The overrides of an executor with the snapshot policy `policy`.
+    fn overrides(&self, policy: SnapshotPolicy) -> TestExecutorOverrides {
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.oplog.default_snapshotting = policy.clone();
+            })),
+            filesystem_snapshot_store: match self {
+                Self::Untouched => None,
+                Self::Snapshotted(store) => {
+                    Some((store.clone(), FilesystemSnapshotUploadConfig::default()))
+                }
+            },
+            ..Default::default()
+        }
+    }
+
+    async fn start(
+        &self,
+        deps: &WorkerExecutorTestDependencies,
+        context: &TestContext,
+        policy: SnapshotPolicy,
+    ) -> anyhow::Result<TestWorkerExecutor> {
+        start_with_overrides(deps, context, self.overrides(policy)).await
+    }
+
+    async fn start_with_local_resume(
+        &self,
+        deps: &WorkerExecutorTestDependencies,
+        context: &TestContext,
+        policy: SnapshotPolicy,
+    ) -> anyhow::Result<TestWorkerExecutor> {
+        crate::fork::start_with_local_resume_and(deps, context, self.overrides(policy)).await
+    }
+
+    /// Writes the file `path` with `path` as its content, when the agent writes files.
+    async fn write(
+        &self,
+        executor: &TestWorkerExecutor,
+        component: &ComponentDto,
+        agent_id: &golem_common::model::agent::ParsedAgentId,
+        path: &str,
+    ) -> anyhow::Result<()> {
+        if self.snapshotted() {
+            executor
+                .invoke_and_await_agent(
+                    component,
+                    agent_id,
+                    "write_file",
+                    data_value!(path.to_string(), path.to_string()),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Checks that the agent holds each file of `paths` with its path as its content, when the
+    /// agent writes files.
+    async fn assert_files(
+        &self,
+        executor: &TestWorkerExecutor,
+        component: &ComponentDto,
+        agent_id: &golem_common::model::agent::ParsedAgentId,
+        paths: &[&str],
+    ) -> anyhow::Result<()> {
+        if self.snapshotted() {
+            let read = futures::stream::iter(paths)
+                .then(|path| async move {
+                    executor
+                        .invoke_and_await_agent(
+                            component,
+                            agent_id,
+                            "read_file",
+                            data_value!(path.to_string()),
+                        )
+                        .await?
+                        .into_typed::<Option<String>>()
+                })
+                .try_collect::<Vec<_>>()
+                .await?;
+            assert_eq!(
+                read,
+                paths
+                    .iter()
+                    .map(|path| Some(path.to_string()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        Ok(())
+    }
+
+    /// The snapshot record that a snapshot-assisted update selects: the first one after
+    /// `untouched_after` when the agent writes no file, and the first one after the last start
+    /// of `method` when it writes files, as the writes move the records.
+    async fn selected_record(
+        &self,
+        executor: &TestWorkerExecutor,
+        worker_id: &AgentId,
+        untouched_after: OplogIndex,
+        method: &str,
+    ) -> anyhow::Result<OplogIndex> {
+        let after = if self.snapshotted() {
+            last_start_of(executor, worker_id, method).await?
+        } else {
+            untouched_after
+        };
+        wait_for_snapshot_after(executor, worker_id, after).await
+    }
+}
+
+/// The index of the last start of an invocation of `method`.
+async fn last_start_of(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+    method: &str,
+) -> anyhow::Result<OplogIndex> {
+    executor
+        .get_oplog(worker_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::AgentInvocationStarted(params)
+                if matches!(
+                    &params.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(invoked)
+                        if invoked.method_name == method
+                ) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("no invocation of {method} started"))
 }
 
 async fn wait_for_snapshot_after(
@@ -539,13 +695,49 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = crate::fork::start_with_local_resume_and_snapshot_policy(
+    skips_pre_snapshot_history_and_replays_in_flight_tail(
+        last_unique_id,
         deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 2 },
+        agent_update_v1,
+        AgentFiles::Untouched,
     )
-    .await?;
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_update_with_filesystem_snapshots_skips_pre_snapshot_history_and_keeps_the_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    with_snapshot_store(|store| async move {
+        skips_pre_snapshot_history_and_replays_in_flight_tail(
+            last_unique_id,
+            deps,
+            agent_update_v1,
+            AgentFiles::Snapshotted(store),
+        )
+        .await
+    })
+    .await
+}
+
+async fn skips_pre_snapshot_history_and_replays_in_flight_tail(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    files: AgentFiles,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = files
+        .start_with_local_resume(
+            deps,
+            &context,
+            SnapshotPolicy::EveryNInvocation { count: 2 },
+        )
+        .await?;
     let mut http_server = TestHttpServer::start().await;
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
@@ -560,17 +752,37 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
             Vec::new(),
         )
         .await?;
+    files
+        .write(&executor, &component, &agent_id, "/before.txt")
+        .await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
         .await?;
     assert_eq!(result.into_typed::<u32>()?, 1);
-    let snapshot_index =
-        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let untouched_snapshot = if files.snapshotted() {
+        None
+    } else {
+        Some(wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?)
+    };
     let post_snapshot = executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
         .await?;
     assert_eq!(post_snapshot.into_typed::<u32>()?, 7);
+    let snapshot_index = match untouched_snapshot {
+        Some(snapshot_index) => snapshot_index,
+        None => {
+            files
+                .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
+                .await?
+        }
+    };
+    files
+        .write(&executor, &component, &agent_id, "/tail.txt")
+        .await?;
+    if files.snapshotted() {
+        assert!(snapshot_index < last_start_of(&executor, &worker_id, "write_file").await?);
+    }
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
@@ -659,12 +871,13 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
     );
     drop(executor);
 
-    let executor = crate::fork::start_with_local_resume_and_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 2 },
-    )
-    .await?;
+    let executor = files
+        .start_with_local_resume(
+            deps,
+            &context,
+            SnapshotPolicy::EveryNInvocation { count: 2 },
+        )
+        .await?;
     let loaded = executor
         .invoke_and_await_agent(
             &component,
@@ -716,6 +929,9 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
         .invoke_and_await_agent(&component, &fork, "accumulated_value", data_value!())
         .await?;
     assert_eq!(fork_value.into_typed::<u32>()?, 111);
+    files
+        .assert_files(&executor, &component, &fork, &["/before.txt", "/tail.txt"])
+        .await?;
 
     let later_snapshot = wait_for_snapshot_after(&executor, &worker_id, success_index).await?;
     executor
@@ -756,6 +972,14 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
         assert!(rejected_later_snapshot);
     })
     .await?;
+    files
+        .assert_files(
+            &executor,
+            &component,
+            &agent_id,
+            &["/before.txt", "/tail.txt"],
+        )
+        .await?;
     executor.check_oplog_is_queryable(&worker_id).await?;
     http_server.abort();
     Ok(())
@@ -1032,14 +1256,16 @@ async fn assert_snapshot_assisted_suffix_failure(
     deps: &WorkerExecutorTestDependencies,
     agent_update_v1: &PrecompiledComponent,
     failure: SnapshotAssistedSuffixFailure,
+    files: AgentFiles,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_snapshot_policy(
-        deps,
-        &context,
-        SnapshotPolicy::EveryNInvocation { count: 2 },
-    )
-    .await?;
+    let executor = files
+        .start(
+            deps,
+            &context,
+            SnapshotPolicy::EveryNInvocation { count: 2 },
+        )
+        .await?;
     let http_server = TestHttpServer::start().await;
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
@@ -1054,11 +1280,19 @@ async fn assert_snapshot_assisted_suffix_failure(
             Vec::new(),
         )
         .await?;
+    // Two writes keep the records where the agent without files has them.
+    files
+        .write(&executor, &component, &agent_id, "/before.txt")
+        .await?;
+    files
+        .write(&executor, &component, &agent_id, "/before-2.txt")
+        .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
         .await?;
-    let snapshot_index =
-        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let snapshot_index = files
+        .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
+        .await?;
 
     let (function, input, expected_cause) = match failure {
         SnapshotAssistedSuffixFailure::HostCallDivergence => {
@@ -1124,6 +1358,14 @@ async fn assert_snapshot_assisted_suffix_failure(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
     );
+    files
+        .assert_files(
+            &executor,
+            &component,
+            &agent_id,
+            &["/before.txt", "/before-2.txt"],
+        )
+        .await?;
     http_server.abort();
     Ok(())
 }
@@ -1141,7 +1383,29 @@ async fn snapshot_assisted_host_call_divergence_preserves_source(
         deps,
         agent_update_v1,
         SnapshotAssistedSuffixFailure::HostCallDivergence,
+        AgentFiles::Untouched,
     )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_host_call_divergence_with_filesystem_snapshots_preserves_source_and_its_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    with_snapshot_store(|store| async move {
+        assert_snapshot_assisted_suffix_failure(
+            last_unique_id,
+            deps,
+            agent_update_v1,
+            SnapshotAssistedSuffixFailure::HostCallDivergence,
+            AgentFiles::Snapshotted(store),
+        )
+        .await
+    })
     .await
 }
 
@@ -1158,6 +1422,7 @@ async fn snapshot_assisted_guest_trap_preserves_source(
         deps,
         agent_update_v1,
         SnapshotAssistedSuffixFailure::Trap,
+        AgentFiles::Untouched,
     )
     .await
 }
@@ -1175,6 +1440,7 @@ async fn snapshot_assisted_guest_exit_preserves_source(
         deps,
         agent_update_v1,
         SnapshotAssistedSuffixFailure::Exit,
+        AgentFiles::Untouched,
     )
     .await
 }
@@ -1369,16 +1635,35 @@ async fn snapshot_assisted_missing_payload_fails_the_update_once(
         "{details}"
     );
     assert_eq!(metadata.component_revision, component.revision);
+    drop(executor);
 
-    executor
+    // A fresh start folds the failed update from the oplog: it never selects the lost record
+    // again, also where its payload downloads, and replays the whole history.
+    let executor = start_customized(
+        deps,
+        &context,
+        None,
+        None,
+        None,
+        None,
+        Some(OplogConfig {
+            max_payload_size: 0,
+            default_snapshotting: SnapshotPolicy::EveryNInvocation { count: 2 },
+            ..Default::default()
+        }),
+    )
+    .await?;
+    let loaded = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
             "loaded_snapshot_revision",
             data_value!(),
         )
-        .await?;
+        .await?
+        .into_typed::<u32>()?;
     let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    assert_eq!(loaded, 0);
     assert_eq!(metadata.component_revision, component.revision);
     Ok(())
 }
@@ -1501,9 +1786,44 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    restart_before_attempt_and_later_update_modes_succeed(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        AgentFiles::Untouched,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_with_filesystem_snapshots_keep_the_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    with_snapshot_store(|store| async move {
+        restart_before_attempt_and_later_update_modes_succeed(
+            last_unique_id,
+            deps,
+            agent_update_v1,
+            AgentFiles::Snapshotted(store),
+        )
+        .await
+    })
+    .await
+}
+
+async fn restart_before_attempt_and_later_update_modes_succeed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    files: AgentFiles,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
-    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let executor = files.start(deps, &context, policy.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_update_v1)
         .store()
@@ -1518,10 +1838,19 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed
             Vec::new(),
         )
         .await?;
+    // Two writes keep the records where the agent without files has them.
+    files
+        .write(&executor, &component, &agent_id, "/before.txt")
+        .await?;
+    files
+        .write(&executor, &component, &agent_id, "/before-2.txt")
+        .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
         .await?;
-    wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    files
+        .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
+        .await?;
 
     let mut control = http_server.f1_control(901).await;
     let executor_clone = executor.clone();
@@ -1561,7 +1890,7 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed
     assert_eq!(pending.component_revision, component.revision);
     drop(executor);
 
-    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    let executor = files.start(deps, &context, policy).await?;
     executor.resume(&worker_id, true).await?;
     executor
         .wait_for_component_revision(&worker_id, assisted.revision, Duration::from_secs(30))
@@ -1623,6 +1952,14 @@ async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed
         update_counts(&executor.get_worker_metadata(&worker_id).await?),
         (0, 4, 0)
     );
+    files
+        .assert_files(
+            &executor,
+            &component,
+            &agent_id,
+            &["/before.txt", "/before-2.txt"],
+        )
+        .await?;
     http_server.abort();
     Ok(())
 }
@@ -1753,14 +2090,50 @@ async fn snapshot_assisted_revert_retries_retained_successful_and_failed_request
     #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    revert_retries_retained_successful_and_failed_requests(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        AgentFiles::Untouched,
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn snapshot_assisted_revert_with_filesystem_snapshots_retries_retained_requests_with_the_files(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    with_snapshot_store(|store| async move {
+        revert_retries_retained_successful_and_failed_requests(
+            last_unique_id,
+            deps,
+            agent_update_v1,
+            AgentFiles::Snapshotted(store),
+        )
+        .await
+    })
+    .await
+}
+
+async fn revert_retries_retained_successful_and_failed_requests(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    files: AgentFiles,
+) -> anyhow::Result<()> {
     for succeeds in [true, false] {
         let context = TestContext::new(last_unique_id);
-        let executor = start_with_snapshot_policy(
-            deps,
-            &context,
-            SnapshotPolicy::EveryNInvocation { count: 3 },
-        )
-        .await?;
+        let executor = files
+            .start(
+                deps,
+                &context,
+                SnapshotPolicy::EveryNInvocation { count: 3 },
+            )
+            .await?;
         let component = executor
             .component_dep(&context.default_environment_id, agent_update_v1)
             .store()
@@ -1769,12 +2142,29 @@ async fn snapshot_assisted_revert_retries_retained_successful_and_failed_request
         let worker_id = executor
             .start_agent(&component.id, agent_id.clone())
             .await?;
-        for _ in 0..2 {
-            executor
-                .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
-                .await?;
-        }
-        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+        // The write takes the place of one invocation, so the records stay where the agent
+        // without files has them.
+        files
+            .write(&executor, &component, &agent_id, "/before.txt")
+            .await?;
+        let before_record = if files.snapshotted() { 1 } else { 2 };
+        futures::stream::iter(0..before_record)
+            .then(|_| {
+                executor.invoke_and_await_agent(
+                    &component,
+                    &agent_id,
+                    "stable_value",
+                    data_value!(),
+                )
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        files
+            .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
+            .await?;
+        files
+            .write(&executor, &component, &agent_id, "/tail.txt")
+            .await?;
         if !succeeds {
             executor
                 .invoke_and_await_agent(&component, &agent_id, "pre_snapshot_value", data_value!())
@@ -1887,6 +2277,14 @@ async fn snapshot_assisted_revert_retries_retained_successful_and_failed_request
                 .count(),
             0
         );
+        files
+            .assert_files(
+                &executor,
+                &component,
+                &agent_id,
+                &["/before.txt", "/tail.txt"],
+            )
+            .await?;
     }
     Ok(())
 }
@@ -4630,5 +5028,548 @@ async fn auto_update_on_idle_after_manual_update(
     assert_eq!(metadata.component_revision, later.revision);
     assert_eq!(update_counts(&metadata), (0, 2, 0));
 
+    Ok(())
+}
+
+/// Stores agent-updates v1 and starts its `SnapshotUpdateTest` agent with the port of
+/// `http_server`. The agent writes `/before.txt` with its path as its content before its first
+/// snapshot boundary, so an executor without filesystem snapshots writes no snapshot record for
+/// it.
+async fn agent_with_a_written_file(
+    executor: &TestWorkerExecutor,
+    context: &TestContext,
+    agent_update_v1: &PrecompiledComponent,
+    http_server: &TestHttpServer,
+) -> anyhow::Result<(
+    ComponentDto,
+    golem_common::model::agent::ParsedAgentId,
+    AgentId,
+)> {
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_file",
+            data_value!("/before.txt".to_string(), "/before.txt".to_string()),
+        )
+        .await?;
+    Ok((component, agent_id, worker_id))
+}
+
+/// The content of the file `/before.txt` of the agent.
+async fn written_file(
+    executor: &TestWorkerExecutor,
+    component: &ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<Option<String>> {
+    executor
+        .invoke_and_await_agent(
+            component,
+            agent_id,
+            "read_file",
+            data_value!("/before.txt".to_string()),
+        )
+        .await?
+        .into_typed::<Option<String>>()
+}
+
+/// The descriptions of the `PendingUpdate` entries of the agent, and whether its oplog holds a
+/// snapshot record.
+async fn update_entries(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<(Vec<PublicUpdateDescription>, bool)> {
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    Ok((
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::PendingUpdate(params) => Some(params.description.clone()),
+                _ => None,
+            })
+            .collect(),
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_))),
+    ))
+}
+
+/// Whether each description is a plain automatic update.
+fn all_automatic(descriptions: &[PublicUpdateDescription]) -> bool {
+    descriptions
+        .iter()
+        .all(|description| matches!(description, PublicUpdateDescription::Automatic(_)))
+}
+
+#[test]
+#[timeout("120s")]
+async fn an_automatic_update_after_a_file_write_without_filesystem_snapshots_replays_the_full_history_and_keeps_the_file(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor =
+        crate::fork::start_with_local_resume_and_snapshot_policy(deps, &context, policy.clone())
+            .await?;
+    let http_server = TestHttpServer::start().await;
+    let (component, agent_id, worker_id) =
+        agent_with_a_written_file(&executor, &context, agent_update_v1, &http_server).await?;
+    futures::stream::iter(0..2)
+        .then(|_| {
+            executor.invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+    let updated = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, updated.revision, Duration::from_secs(30))
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let (descriptions, has_snapshot_record) = update_entries(&executor, &worker_id).await?;
+    let file_after_update = written_file(&executor, &component, &agent_id).await?;
+    let accumulated_after_update = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    drop(executor);
+    let restarted =
+        crate::fork::start_with_local_resume_and_snapshot_policy(deps, &context, policy).await?;
+    let file_after_restart = written_file(&restarted, &component, &agent_id).await?;
+
+    assert!(!has_snapshot_record);
+    assert_eq!(descriptions.len(), 2, "{descriptions:?}");
+    assert!(all_automatic(&descriptions), "{descriptions:?}");
+    assert!(metadata.updates.iter().all(|record| match record {
+        UpdateRecord::SuccessfulUpdate(update) => update.snapshot_assisted_details.is_none(),
+        _ => true,
+    }));
+    assert_eq!(accumulated_after_update, 20);
+    assert_eq!(file_after_update, Some("/before.txt".to_string()));
+    assert_eq!(file_after_restart, Some("/before.txt".to_string()));
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[ignore = "a host call divergence in the full replay of an automatic update writes an invocation error entry before the failed update, so the source agent fails at its next start"]
+async fn a_host_call_divergence_of_an_automatic_update_after_a_file_write_without_filesystem_snapshots_fails_the_full_replay_and_keeps_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let http_server = TestHttpServer::start().await;
+    let (component, agent_id, worker_id) =
+        agent_with_a_written_file(&executor, &context, agent_update_v1, &http_server).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "suffix_host_value", data_value!())
+        .await?;
+    let updated = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, updated.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    let failed = metadata
+        .updates
+        .iter()
+        .find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("the update fails");
+    let (descriptions, has_snapshot_record) = update_entries(&executor, &worker_id).await?;
+    let healthy = executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+    let file = written_file(&executor, &component, &agent_id).await?;
+
+    assert!(!has_snapshot_record);
+    assert!(all_automatic(&descriptions), "{descriptions:?}");
+    assert!(
+        failed
+            .details
+            .as_deref()
+            .is_some_and(|details| details.starts_with("UPDATE_REPLAY_FAILED")),
+        "{:?}",
+        failed.details
+    );
+    assert!(failed.snapshot_assisted_details.is_none());
+    assert_eq!(metadata.component_revision, component.revision);
+    assert_eq!(healthy, 7);
+    assert_eq!(file, Some("/before.txt".to_string()));
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn an_automatic_update_after_a_file_write_without_filesystem_snapshots_survives_a_restart_before_its_attempt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let (component, agent_id, worker_id) =
+        agent_with_a_written_file(&executor, &context, agent_update_v1, &http_server).await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let mut control = http_server.f1_control(902).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let invocation = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_id_clone,
+                "blocking_stable",
+                data_value!(902u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let interrupt = spawn(async move { executor_clone.interrupt(&worker_id_clone).await });
+    control.resume();
+    interrupt.await??;
+    let _ = invocation.await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Interrupted,
+            Duration::from_secs(10),
+        )
+        .await?;
+    let updated = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated.revision, true)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_component_revision(&worker_id, updated.revision, Duration::from_secs(30))
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let (descriptions, has_snapshot_record) = update_entries(&executor, &worker_id).await?;
+    let file = written_file(&executor, &component, &agent_id).await?;
+
+    assert_eq!(pending.component_revision, component.revision);
+    assert!(!has_snapshot_record);
+    assert!(all_automatic(&descriptions), "{descriptions:?}");
+    assert_eq!(metadata.component_revision, updated.revision);
+    assert_eq!(file, Some("/before.txt".to_string()));
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_revert_of_an_automatic_update_after_a_file_write_without_filesystem_snapshots_retries_the_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    futures::stream::iter([true, false])
+        .then(|succeeds| async move {
+            let context = TestContext::new(last_unique_id);
+            let executor = start_with_snapshot_policy(
+                deps,
+                &context,
+                SnapshotPolicy::EveryNInvocation { count: 3 },
+            )
+            .await?;
+            let http_server = TestHttpServer::start().await;
+            let (component, agent_id, worker_id) =
+                agent_with_a_written_file(&executor, &context, agent_update_v1, &http_server)
+                    .await?;
+            futures::stream::iter(0..2)
+                .then(|_| {
+                    executor.invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "stable_value",
+                        data_value!(),
+                    )
+                })
+                .try_collect::<Vec<_>>()
+                .await?;
+            if !succeeds {
+                executor
+                    .invoke_and_await_agent(
+                        &component,
+                        &agent_id,
+                        "pre_snapshot_value",
+                        data_value!(),
+                    )
+                    .await?;
+            }
+            let target = executor
+                .update_component(&component.id, "it_agent_update_v2_release")
+                .await?;
+            executor
+                .auto_update_worker(&worker_id, target.revision, false)
+                .await?;
+            let expected = if succeeds { (0, 1, 0) } else { (0, 0, 1) };
+            wait_for_update_counts(&executor, &worker_id, expected).await?;
+            let strategy_index = executor
+                .get_oplog(&worker_id, OplogIndex::INITIAL)
+                .await?
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+                .map(|entry| entry.oplog_index)
+                .next_back()
+                .ok_or_else(|| anyhow::anyhow!("the update has no strategy entry"))?;
+            executor
+                .revert(
+                    &worker_id,
+                    RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                        last_oplog_index: strategy_index,
+                    }),
+                )
+                .await?;
+            executor.resume(&worker_id, true).await?;
+            let retried = wait_for_update_counts(&executor, &worker_id, expected).await?;
+            let (descriptions, has_snapshot_record) = update_entries(&executor, &worker_id).await?;
+            let file = written_file(&executor, &component, &agent_id).await?;
+
+            assert!(!has_snapshot_record);
+            assert_eq!(descriptions.len(), 2, "{descriptions:?}");
+            assert!(all_automatic(&descriptions), "{descriptions:?}");
+            assert_eq!(
+                retried.component_revision,
+                if succeeds {
+                    target.revision
+                } else {
+                    component.revision
+                }
+            );
+            assert!(retried.updates.iter().all(|record| match record {
+                UpdateRecord::SuccessfulUpdate(update) =>
+                    update.snapshot_assisted_details.is_none(),
+                UpdateRecord::FailedUpdate(update) => update.snapshot_assisted_details.is_none(),
+                UpdateRecord::PendingUpdate(_) => true,
+            }));
+            assert_eq!(file, Some("/before.txt".to_string()));
+            http_server.abort();
+            anyhow::Ok(())
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+    Ok(())
+}
+
+/// The details of each failed update of the agent, and the description of each `PendingUpdate`
+/// entry, in oplog order.
+async fn failures_and_strategies(
+    executor: &TestWorkerExecutor,
+    worker_id: &AgentId,
+) -> anyhow::Result<(Vec<String>, Vec<PublicUpdateDescription>)> {
+    let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+    Ok((
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::FailedUpdate(params) => {
+                    Some(params.details.clone().unwrap_or_default())
+                }
+                _ => None,
+            })
+            .collect(),
+        oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::PendingUpdate(params) => Some(params.description.clone()),
+                _ => None,
+            })
+            .collect(),
+    ))
+}
+
+#[test]
+#[timeout("120s")]
+async fn a_snapshot_the_target_cannot_load_makes_the_next_request_of_the_same_update_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let snapshot_index =
+        wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    // The target cannot load an empty snapshot; a full replay does not read it.
+    executor
+        .return_empty_snapshot_payload(&worker_id, snapshot_index)
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, target.revision, false)
+        .await?;
+    wait_for_update_counts(&executor, &worker_id, (0, 0, 1)).await?;
+    executor
+        .auto_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 1)).await?;
+    let (failures, strategies) = failures_and_strategies(&executor, &worker_id).await?;
+    let accumulated = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].starts_with("UPDATE_SNAPSHOT_INCOMPATIBLE"),
+        "{failures:?}"
+    );
+    assert_eq!(strategies.len(), 4, "{strategies:?}");
+    assert!(matches!(
+        strategies[1],
+        PublicUpdateDescription::SnapshotAssistedAutomatic(_)
+    ));
+    assert!(matches!(
+        strategies[3],
+        PublicUpdateDescription::Automatic(_)
+    ));
+    assert!(metadata.updates.iter().all(|record| match record {
+        UpdateRecord::SuccessfulUpdate(update) => update.snapshot_assisted_details.is_none(),
+        _ => true,
+    }));
+    assert_eq!(metadata.component_revision, target.revision);
+    assert_eq!(accumulated, 10);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_load_fails_at_once_and_keeps_the_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 2 },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    wait_for_snapshot_after(&executor, &worker_id, OplogIndex::INITIAL).await?;
+    let assisted = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, assisted.revision, false)
+        .await?;
+    wait_for_update_counts(&executor, &worker_id, (0, 1, 0)).await?;
+    let rejecting = executor
+        .update_component(&component.id, "it_agent_update_v4_release")
+        .await?;
+
+    executor
+        .auto_update_worker(&worker_id, rejecting.revision, false)
+        .await?;
+    let metadata = wait_for_update_counts(&executor, &worker_id, (0, 1, 1)).await?;
+    let (failures, strategies) = failures_and_strategies(&executor, &worker_id).await?;
+    let accumulated = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?
+        .into_typed::<u32>()?;
+
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].starts_with("UPDATE_REPLAY_FAILED"),
+        "{failures:?}"
+    );
+    assert_eq!(strategies.len(), 4, "{strategies:?}");
+    assert!(matches!(
+        strategies[1],
+        PublicUpdateDescription::SnapshotAssistedAutomatic(_)
+    ));
+    assert!(matches!(
+        strategies[3],
+        PublicUpdateDescription::Automatic(_)
+    ));
+    assert_eq!(metadata.component_revision, assisted.revision);
+    assert_eq!(accumulated, 10);
     Ok(())
 }

@@ -16,8 +16,8 @@
 //!
 //! The store keeps the snapshots in memory. A clone shares the snapshots, so a test keeps its store
 //! across a restart of the executor; a shutdown stops only the clone that was shut down. A test can
-//! make saves fail, slow or held, make restores and copies fail, hold a copy, and count the
-//! calls.
+//! make saves fail, slow or held, make restores fail for good or for a number of tries, make
+//! copies fail, hold a copy or a restore, and count the calls.
 
 use crate::filesystem_snapshot::{
     AgentSnapshots, CallError, ChangeDetection, Failed, FilesystemSnapshotStore,
@@ -40,6 +40,8 @@ struct Faults {
     failing_saves: AtomicUsize,
     save_delay: Mutex<Duration>,
     failing_restore_names: Mutex<std::collections::HashSet<Box<str>>>,
+    /// The number of next restores that fail as a restore does whose storage fails.
+    failing_restores: AtomicUsize,
     /// The directory of the tree of each save, in the order of the saves.
     trees: Mutex<Vec<Box<Path>>>,
     /// The time that the store adds to the time of each later save.
@@ -58,6 +60,8 @@ struct Faults {
     copy_hold: Mutex<Option<SaveHold>>,
     /// The hold of the next delete of all snapshots of an agent, when a test asked for one.
     delete_all_hold: Mutex<Option<SaveHold>>,
+    /// The hold of the next restore, when a test asked for one.
+    restore_hold: Mutex<Option<SaveHold>>,
     /// The number of saves and listings that returned.
     returned: AtomicUsize,
     /// The value of `returned` after the save of each name returned.
@@ -81,9 +85,10 @@ impl SaveHold {
     }
 }
 
-/// The test side of a held save, copy or delete of all snapshots, which
-/// [`TestFilesystemSnapshotStore::hold_next_save`], [`TestFilesystemSnapshotStore::hold_next_copy`]
-/// and [`TestFilesystemSnapshotStore::hold_next_delete_all`] give. The call stays held until
+/// The test side of a held save, copy, delete of all snapshots or restore, which
+/// [`TestFilesystemSnapshotStore::hold_next_save`], [`TestFilesystemSnapshotStore::hold_next_copy`],
+/// [`TestFilesystemSnapshotStore::hold_next_delete_all`] and
+/// [`TestFilesystemSnapshotStore::hold_next_restore`] give. The call stays held until
 /// [`HeldSave::release`] or a drop of this value.
 pub struct HeldSave {
     started: watch::Receiver<Option<Box<str>>>,
@@ -91,8 +96,8 @@ pub struct HeldSave {
 }
 
 impl HeldSave {
-    /// The name of the held save, the target of the held copy, or the agent of the held delete of
-    /// all snapshots, once it started.
+    /// The name of the held save or restore, the target of the held copy, or the agent of the held
+    /// delete of all snapshots, once it started.
     pub fn name(&self) -> Option<String> {
         self.started.borrow().as_deref().map(String::from)
     }
@@ -217,6 +222,25 @@ impl TestFilesystemSnapshotStore {
         }
     }
 
+    /// Holds the next restore that starts: it reports its name, then waits before it restores
+    /// anything, until the test releases it or drops the [`HeldSave`].
+    pub fn hold_next_restore(&self) -> HeldSave {
+        let (started, started_receiver) = watch::channel(None);
+        let (released, released_receiver) = watch::channel(false);
+        *self
+            .faults
+            .restore_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SaveHold {
+            started,
+            released: released_receiver,
+        });
+        HeldSave {
+            started: started_receiver,
+            released,
+        }
+    }
+
     /// Makes the next `count` copies fail, as a copy does whose storage fails in each run.
     pub fn fail_next_copies(&self, count: usize) {
         self.faults.failing_copies.store(count, Ordering::SeqCst);
@@ -268,6 +292,12 @@ impl TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(Box::from(name));
+    }
+
+    /// Makes the next `count` restores fail as a restore does whose storage fails, which a new try
+    /// can change.
+    pub fn fail_next_restores(&self, count: usize) {
+        self.faults.failing_restores.store(count, Ordering::SeqCst);
     }
 
     /// Whether a listing returned after the save of `name` returned, as the retention of the job
@@ -496,6 +526,27 @@ impl FilesystemSnapshotStore for TestFilesystemSnapshotStore {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(Box::from(name.as_str()));
+        let hold = self
+            .faults
+            .restore_hold
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(hold) = hold {
+            hold.hold(name.as_str()).await;
+        }
+        let failing = self
+            .faults
+            .failing_restores
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok();
+        if failing {
+            return Err(RestoreFailure::Failed(Failed::new(anyhow::anyhow!(
+                "an injected restore failure of the storage"
+            ))));
+        }
         if self
             .faults
             .failing_restore_names

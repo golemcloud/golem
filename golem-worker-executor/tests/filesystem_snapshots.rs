@@ -535,6 +535,81 @@ impl Agent {
         ))
     }
 
+    /// Asks for an automatic update to the revision of `target`, and waits until the oplog holds
+    /// one more update outcome.
+    async fn automatic_update_to(
+        &self,
+        executor: &TestWorkerExecutor,
+        target: &ComponentDto,
+    ) -> anyhow::Result<()> {
+        let outcomes = self.update_results(executor).await?.len();
+        executor
+            .auto_update_worker(&self.worker_id, target.revision, false)
+            .await?;
+        eventually(Duration::from_secs(60), || async {
+            Ok((self.update_results(executor).await?.len() > outcomes).then_some(()))
+        })
+        .await
+    }
+
+    /// The snapshot record and its filesystem snapshot name that the last successful
+    /// snapshot-assisted update of the agent restored.
+    async fn assisted_selection(
+        &self,
+        executor: &TestWorkerExecutor,
+    ) -> anyhow::Result<Option<(OplogIndex, Option<String>)>> {
+        Ok(executor
+            .get_worker_metadata(&self.worker_id)
+            .await?
+            .updates
+            .iter()
+            .rev()
+            .find_map(|record| match record {
+                UpdateRecord::SuccessfulUpdate(update) => {
+                    Some(update.snapshot_assisted_details.as_ref().map(|details| {
+                        (details.snapshot_index, details.filesystem_snapshot.clone())
+                    }))
+                }
+                _ => None,
+            })
+            .flatten())
+    }
+
+    /// The same agent on the revision of `component`.
+    fn on(&self, component: &ComponentDto) -> Agent {
+        Agent {
+            component: component.clone(),
+            agent: self.agent.clone(),
+            worker_id: self.worker_id.clone(),
+        }
+    }
+
+    /// The index of the newest snapshot record of the agent.
+    async fn newest_record(&self, executor: &TestWorkerExecutor) -> anyhow::Result<OplogIndex> {
+        executor
+            .get_oplog(&self.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .rev()
+            .find_map(|entry| {
+                matches!(entry.entry, PublicOplogEntry::Snapshot(_)).then_some(entry.oplog_index)
+            })
+            .ok_or_else(|| anyhow!("the agent has no snapshot record"))
+    }
+
+    /// Asks for an update to a new revision with the same initial files, and gives the new
+    /// component.
+    async fn new_revision(&self, executor: &TestWorkerExecutor) -> anyhow::Result<ComponentDto> {
+        executor
+            .update_component_with_files(
+                &self.component.id,
+                AGENT_TYPE,
+                "it_initial_file_system_release",
+                vec![],
+            )
+            .await
+    }
+
     /// The outcome of each update in the oplog, in oplog order.
     async fn update_results(&self, executor: &TestWorkerExecutor) -> anyhow::Result<Vec<String>> {
         Ok(executor
@@ -5040,4 +5115,947 @@ async fn a_fork_after_an_assisted_update_restores_its_snapshot_and_is_refused_wi
         Ok(())
     })
     .await
+}
+
+/// Deletes each periodic snapshot of the incarnation from `store` except `kept`.
+async fn lose_periodic_snapshots_except(
+    store: &TestFilesystemSnapshotStore,
+    incarnation: &(OwnedAgentId, AgentFingerprint),
+    kept: &str,
+) {
+    futures::stream::iter(store.snapshot_names(&incarnation.0, incarnation.1).await)
+        .filter(|name| std::future::ready(name.starts_with("p-") && name != kept))
+        .for_each(|name| async move { store.lose(&incarnation.0, incarnation.1, &name).await })
+        .await;
+}
+
+fn write(path: &'static str) -> Operation {
+    Operation::Write {
+        path,
+        content: path,
+    }
+}
+
+/// The line of `describe` for a written file whose content is its path.
+fn written(path: &str) -> String {
+    format!(r#"{path} file links=1 writable=true content="{path}""#)
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_assisted_update_restores_the_files_before_its_record_and_replays_a_write_after_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(2), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-files",
+            &[],
+        )
+        .await?;
+        let (selected_index, selected) = agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        // The save of the record after the next write stays held, so that record is not usable
+        // and the write is in the history after the selected record.
+        let held = store.hold_next_save();
+        agent.apply_all(&executor, &[write("after.txt")]).await?;
+        eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let target = agent.new_revision(&executor).await?;
+
+        agent.automatic_update_to(&executor, &target).await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&executor).await?;
+        let outcomes = updated.update_results(&executor).await?;
+        let after_update = updated.describe(&executor).await?;
+        held.release();
+        let (_, after_restart) = updated.restart_and_describe(&executor, &context).await?;
+
+        assert_eq!(selection, Some((selected_index, Some(selected.clone()))));
+        assert_eq!(outcomes, [format!("updated to {:?}", target.revision)]);
+        assert!(store.restored_names().contains(&selected));
+        assert_eq!(after_update, [written("after.txt"), written("before.txt")]);
+        assert_eq!(after_restart, after_update);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_start_after_an_assisted_update_whose_newer_records_are_lost_restores_the_record_of_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-baseline",
+            &[],
+        )
+        .await?;
+        let (selected_index, selected) = agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let target = agent.new_revision(&executor).await?;
+        agent.automatic_update_to(&executor, &target).await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&executor).await?;
+        // More newer records than retention keeps, each older than the next by more than the
+        // clock skew margin of the store.
+        futures::stream::iter(["first.txt", "second.txt", "third.txt"])
+            .then(|path| {
+                store.advance_clock(SNAPSHOT_SPACING);
+                updated.apply_and_confirm(&executor, write(path))
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        let incarnation = updated.incarnation(&executor, &context).await?;
+        let live = updated.describe(&executor).await?;
+        lose_periodic_snapshots_except(&store, &incarnation, &selected).await;
+        let restores = store.restored_names().len();
+
+        let (_, restarted) = updated.restart_and_describe(&executor, &context).await?;
+        let completed = store.completed_restore_names();
+        let outcomes = updated.update_results(&executor).await?;
+
+        assert_eq!(selection, Some((selected_index, Some(selected.clone()))));
+        assert_eq!(restarted, live);
+        assert_eq!(completed.last(), Some(&selected));
+        assert!(
+            store
+                .restored_names()
+                .get(restores..)
+                .is_some_and(|names| names.contains(&selected)),
+            "{:?}",
+            store.restored_names()
+        );
+        assert_eq!(outcomes, [format!("updated to {:?}", target.revision)]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_assisted_update_waits_for_the_upload_of_the_newest_record_and_selects_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-unconfirmed",
+            &[],
+        )
+        .await?;
+        agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let held = store.hold_next_save();
+        agent.apply_all(&executor, &[write("after.txt")]).await?;
+        let unconfirmed = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let unconfirmed_index = eventually(Duration::from_secs(30), || async {
+            Ok(executor
+                .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .find_map(|entry| match entry.entry {
+                    PublicOplogEntry::Snapshot(snapshot)
+                        if snapshot.filesystem_snapshot.as_deref()
+                            == Some(unconfirmed.as_str()) =>
+                    {
+                        Some(entry.oplog_index)
+                    }
+                    _ => None,
+                }))
+        })
+        .await?;
+        let target = agent.new_revision(&executor).await?;
+        // A stop does not wait for the upload; the next start of the agent does.
+        agent.stop(&executor, &context).await?;
+
+        executor
+            .auto_update_worker(&agent.worker_id, target.revision, false)
+            .await?;
+        executor.resume(&agent.worker_id, false).await?;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        held.release();
+        executor
+            .wait_for_component_revision(&agent.worker_id, target.revision, Duration::from_secs(60))
+            .await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&executor).await?;
+        let records = updated.records(&executor).await?;
+        let tree = updated.describe(&executor).await?;
+
+        let kinds = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .map(|entry| format!("{} {}", entry.oplog_index, entry_kind(&entry.entry)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            selection,
+            Some((unconfirmed_index, Some(unconfirmed.clone()))),
+            "{kinds:?}"
+        );
+        assert!(records.is_confirmed(&unconfirmed), "{records:?}");
+        assert_eq!(tree, [written("after.txt"), written("before.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_lost_snapshot_of_an_assisted_update_fails_it_once_and_the_next_request_takes_the_previous_record(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-lost",
+            &[],
+        )
+        .await?;
+        let (previous_index, previous) = agent
+            .apply_and_confirm(&executor, write("first.txt"))
+            .await?;
+        let (_, lost) = agent
+            .apply_and_confirm(&executor, write("second.txt"))
+            .await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+        store.lose(&incarnation.0, incarnation.1, &lost).await;
+        let target = agent.new_revision(&executor).await?;
+
+        agent.automatic_update_to(&executor, &target).await?;
+        let first = agent.update_results(&executor).await?;
+        let source_revision = executor
+            .get_worker_metadata(&agent.worker_id)
+            .await?
+            .component_revision;
+        agent.automatic_update_to(&executor, &target).await?;
+        let second = agent.update_results(&executor).await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&executor).await?;
+        let tree = updated.describe(&executor).await?;
+
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert!(
+            first[0].contains("UPDATE_SNAPSHOT_UNAVAILABLE: "),
+            "{first:?}"
+        );
+        assert_eq!(source_revision, agent.component.revision);
+        assert_eq!(
+            second.get(1),
+            Some(&format!("updated to {:?}", target.revision)),
+            "{second:?}"
+        );
+        assert_eq!(selection, Some((previous_index, Some(previous))));
+        assert_eq!(tree, [written("first.txt"), written("second.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("6m")]
+async fn a_revert_to_records_whose_snapshots_retention_deleted_fails_one_request_per_record_and_then_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-revert-deleted",
+            &[],
+        )
+        .await?;
+        let confirmed = futures::stream::iter(["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"])
+            .then(|path| {
+                store.advance_clock(SNAPSHOT_SPACING);
+                agent.apply_and_confirm(&executor, write(path))
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        let incarnation = agent.incarnation(&executor, &context).await?;
+        let (_, kept) = &confirmed[4];
+        let held = store_keeps(&store, &incarnation, kept, 2).await?;
+        // The cut keeps the records of the first two writes, whose snapshots retention deleted.
+        let cut = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .find_map(|entry| match entry.entry {
+                PublicOplogEntry::SnapshotConfirmed(confirmed_record)
+                    if confirmed_record.filesystem_snapshot == confirmed[1].1 =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .ok_or_else(|| anyhow!("the second record has no confirmation"))?;
+        executor
+            .revert(
+                &agent.worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        let target = agent.new_revision(&executor).await?;
+
+        // The update reaches the first start after the revert, which selects the last record.
+        executor
+            .auto_update_worker(&agent.worker_id, target.revision, false)
+            .await?;
+        executor.resume(&agent.worker_id, false).await?;
+        let first = eventually(Duration::from_secs(60), || async {
+            let results = agent.update_results(&executor).await?;
+            Ok((!results.is_empty()).then_some(results))
+        })
+        .await;
+        let outcomes = match first {
+            Ok(_) => {
+                futures::stream::iter(0..2)
+                    .then(|_| agent.automatic_update_to(&executor, &target))
+                    .try_collect::<Vec<_>>()
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        let results = agent.update_results(&executor).await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&executor).await?;
+        let tree = updated.describe(&executor).await?;
+
+        assert!(!held.contains(&confirmed[0].1) && !held.contains(&confirmed[1].1));
+        outcomes.with_context(|| format!("{results:?}"))?;
+        // Each request fails on one record whose snapshot is gone, and excludes that record.
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert!(
+            results[..2]
+                .iter()
+                .all(|result| result.contains("UPDATE_SNAPSHOT_UNAVAILABLE: ")),
+            "{results:?}"
+        );
+        assert_eq!(results[2], format!("updated to {:?}", target.revision));
+        assert_eq!(selection, None);
+        assert_eq!(tree, [written("a.txt"), written("b.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_an_agent_with_only_initial_files_gets_an_assisted_update_from_a_record_without_a_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_without_filesystem_snapshots(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
+    let files = [entry(
+        "foo.txt",
+        "/ro-top.txt",
+        AgentFilePermissions::ReadOnly,
+    )];
+    let agent = Agent::start(
+        &executor,
+        &context,
+        initial_file_system,
+        "assisted-initial-files",
+        &files,
+    )
+    .await?;
+    agent.applied(&executor).await?;
+    eventually(Duration::from_secs(30), || async {
+        Ok((!agent.records(&executor).await?.snapshots.is_empty()).then_some(()))
+    })
+    .await?;
+    let record = agent.newest_record(&executor).await?;
+    let target = executor
+        .update_component_with_files(
+            &agent.component.id,
+            AGENT_TYPE,
+            "it_initial_file_system_release",
+            files.to_vec(),
+        )
+        .await?;
+
+    agent.automatic_update_to(&executor, &target).await?;
+    let updated = agent.on(&target);
+    let selection = updated.assisted_selection(&executor).await?;
+    let tree = updated.describe(&executor).await?;
+
+    assert_eq!(selection, Some((record, None)));
+    assert_eq!(
+        tree,
+        [r#"ro-top.txt file links=1 writable=false content="foo\n""#.to_string()]
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_a_pending_assisted_update_of_a_named_record_fails_and_the_agent_stays_on_its_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-named-disabled",
+            &[],
+        )
+        .await?;
+        let (selected_index, selected) = agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let target = agent.new_revision(&executor).await?;
+        // The restore of the attempt stays held, so the strategy is written and the update stays
+        // pending when the executor goes.
+        let held = store.hold_next_restore();
+        executor
+            .auto_update_worker(&agent.worker_id, target.revision, false)
+            .await?;
+        let restoring = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        drop(executor);
+
+        let root = tempfile::tempdir()?;
+        let disabled = start_replaying(deps, &context, root.path()).await?;
+        let tree = agent.describe(&disabled).await?;
+        let failed = agent.failed_updates(&disabled).await?;
+        let metadata = disabled.get_worker_metadata(&agent.worker_id).await?;
+        held.release();
+
+        assert_eq!(restoring, selected);
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS: "),
+            "{failed:?}"
+        );
+        assert_eq!(metadata.component_revision, agent.component.revision);
+        assert!(metadata.updates.iter().any(|record| matches!(
+            record,
+            UpdateRecord::FailedUpdate(update)
+                if update
+                    .snapshot_assisted_details
+                    .as_ref()
+                    .is_some_and(|details| details.snapshot_index == selected_index)
+        )));
+        assert_eq!(tree, [written("before.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn without_filesystem_snapshots_a_pending_manual_update_of_a_named_record_fails_and_the_agent_stays_on_its_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "manual-named-disabled",
+            &[],
+        )
+        .await?;
+        agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let target = agent.new_revision(&executor).await?;
+        // The restore of the start of the update stays held, so the update stays pending when
+        // the executor goes.
+        let held = store.hold_next_restore();
+        executor
+            .manual_update_worker(&agent.worker_id, target.revision, false)
+            .await?;
+        let restoring = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        drop(executor);
+
+        let root = tempfile::tempdir()?;
+        let disabled = start_replaying(deps, &context, root.path()).await?;
+        let tree = agent.describe(&disabled).await?;
+        let failed = agent.failed_updates(&disabled).await?;
+        let metadata = disabled.get_worker_metadata(&agent.worker_id).await?;
+        held.release();
+
+        assert!(restoring.starts_with("u-"), "{restoring}");
+        assert_eq!(failed.len(), 1, "{failed:?}");
+        assert!(
+            failed[0].starts_with("UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS: "),
+            "{failed:?}"
+        );
+        assert_eq!(metadata.component_revision, agent.component.revision);
+        assert_eq!(tree, [written("before.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_executor_shutdown_while_an_assisted_update_restores_its_record_writes_no_failed_update_and_a_start_from_a_status_checkpoint_completes_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_with_overrides(deps, &context, snapshotting_with_checkpoints(&store)).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-shutdown",
+            &[],
+        )
+        .await?;
+        let (selected_index, selected) = agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let target = agent.new_revision(&executor).await?;
+        let held = store.hold_next_restore();
+        executor
+            .auto_update_worker(&agent.worker_id, target.revision, false)
+            .await?;
+        let restoring = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        drop(executor);
+
+        let restarted =
+            start_with_overrides(deps, &context, snapshotting_with_checkpoints(&store)).await?;
+        restarted.remove_cached_status(&agent.worker_id).await?;
+        restarted.resume(&agent.worker_id, false).await?;
+        restarted
+            .wait_for_component_revision(&agent.worker_id, target.revision, Duration::from_secs(60))
+            .await?;
+        let updated = agent.on(&target);
+        let selection = updated.assisted_selection(&restarted).await?;
+        let outcomes = updated.update_results(&restarted).await?;
+        let tree = updated.describe(&restarted).await?;
+        held.release();
+
+        assert_eq!(restoring, selected);
+        assert_eq!(selection, Some((selected_index, Some(selected))));
+        assert_eq!(outcomes, [format!("updated to {:?}", target.revision)]);
+        assert_eq!(tree, [written("before.txt")]);
+        Ok(())
+    })
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retries_the_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let assisted = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-transient-restore",
+            &[],
+        )
+        .await?;
+        let (_, selected) = assisted
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let assisted_target = assisted.new_revision(&executor).await?;
+        assisted
+            .automatic_update_to(&executor, &assisted_target)
+            .await?;
+        let manual = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "manual-transient-restore",
+            &[],
+        )
+        .await?;
+        manual
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let manual_target = manual.manual_update(&executor, vec![]).await?;
+        let manual_incarnation = manual.incarnation(&executor, &context).await?;
+        let manual_name = update_names(&store, &manual_incarnation)
+            .await
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("the manual update has no snapshot"))?;
+
+        let restarts = futures::stream::iter([
+            (assisted.on(&assisted_target), selected),
+            (manual.on(&manual_target), manual_name),
+        ])
+        .then(|(agent, baseline)| {
+            let (store, executor, context) = (&store, &executor, &context);
+            async move {
+                let incarnation = agent.incarnation(executor, context).await?;
+                lose_periodic_snapshots_except(store, &incarnation, &baseline).await;
+                let restores = store.restored_names().len();
+                store.fail_next_restores(1);
+                agent.stop(executor, context).await?;
+                executor.resume(&agent.worker_id, false).await?;
+                // The start that fails to restore fails the invocation that waits for it, and
+                // the agent waits to retry; a resume starts it again.
+                let tree = eventually(Duration::from_secs(60), || async {
+                    match agent.describe(executor).await {
+                        Ok(tree) => Ok(Some(tree)),
+                        Err(_) => {
+                            executor.resume(&agent.worker_id, false).await?;
+                            Ok(None)
+                        }
+                    }
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "restores {:?}, updates {:?}",
+                        store.restored_names(),
+                        futures::executor::block_on(agent.update_results(executor)).ok()
+                    )
+                })?;
+                let restored = store.restored_names().split_off(restores);
+                let outcomes = agent.update_results(executor).await?;
+                anyhow::Ok((baseline, tree, restored, outcomes))
+            }
+        })
+        .try_collect::<Vec<_>>()
+        .await?;
+
+        restarts
+            .into_iter()
+            .for_each(|(baseline, tree, restored, outcomes)| {
+                assert_eq!(tree, [written("before.txt")]);
+                assert_eq!(restored, [baseline.clone(), baseline]);
+                assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+                assert!(outcomes[0].starts_with("updated to"), "{outcomes:?}");
+            });
+        Ok(())
+    })
+    .await
+}
+
+/// One step of a generated history with automatic updates.
+#[derive(Clone, Copy, Debug)]
+enum AutomaticStep {
+    Operation(Operation),
+    /// An automatic update to a new revision with the declaration set of `set`. With
+    /// `reject_last`, a snapshot-assisted run rejects the last snapshot record first, so the
+    /// update selects the record before it and replays the history after that record.
+    AutomaticUpdate {
+        set: usize,
+        reject_last: bool,
+    },
+}
+
+fn automatic_step_strategy() -> impl proptest::strategy::Strategy<Value = AutomaticStep> {
+    use proptest::prelude::*;
+    prop_oneof![
+        3 => step_strategy().prop_filter_map("an operation", |step| match step {
+            Step::Operation(operation) => Some(AutomaticStep::Operation(operation)),
+            Step::ManualUpdate(_) => None,
+        }),
+        1 => (0usize..4, any::<bool>())
+            .prop_map(|(set, reject_last)| AutomaticStep::AutomaticUpdate { set, reject_last }),
+    ]
+}
+
+/// How the automatic updates of a run of a generated history choose their strategy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateStrategy {
+    /// From a snapshot record, as the start selects it.
+    Assisted,
+    /// A full replay: each snapshot record is rejected before each update.
+    FullReplay,
+}
+
+/// What a run of a generated history with automatic updates gives.
+#[derive(Debug)]
+struct AutomaticHistoryRun {
+    /// The result of each operation, the outcome of each update without its details, and the
+    /// tree right after a restart that follows each update.
+    results: Box<[Box<str>]>,
+    finished: Outcome,
+    /// Whether an update restored a snapshot record and replayed a history after it.
+    assisted_with_tail: bool,
+    /// Whether an update restored a snapshot record.
+    assisted: bool,
+}
+
+/// The outcome of the last update of `agent`, without its details.
+async fn last_update_outcome(
+    agent: &Agent,
+    executor: &TestWorkerExecutor,
+) -> anyhow::Result<String> {
+    agent
+        .update_results(executor)
+        .await?
+        .pop()
+        .map(|outcome| {
+            outcome
+                .split_once(':')
+                .map_or(outcome.clone(), |(kind, _)| kind.to_string())
+        })
+        .ok_or_else(|| anyhow!("the update has no outcome"))
+}
+
+/// Runs `steps` on a new agent with snapshots after each invocation, with the updates of
+/// `strategy`.
+async fn run_automatic_history(
+    deps: &WorkerExecutorTestDependencies,
+    last_unique_id: &LastUniqueId,
+    component: &PrecompiledComponent,
+    initial: usize,
+    steps: &[AutomaticStep],
+    strategy: UpdateStrategy,
+) -> anyhow::Result<AutomaticHistoryRun> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            component,
+            "automatic-history",
+            &declaration_set(initial),
+        )
+        .await?;
+        let (agent, results, assisted_with_tail, assisted) = futures::stream::iter(steps)
+            .map(Ok::<_, anyhow::Error>)
+            .try_fold(
+                (agent, Vec::new(), false, false),
+                |(agent, mut results, with_tail, assisted), step| {
+                    let (executor, context) = (&executor, &context);
+                    async move {
+                        match step {
+                            AutomaticStep::Operation(operation) => {
+                                results.push(agent.apply(executor, *operation).await?);
+                                Ok((agent, results, with_tail, assisted))
+                            }
+                            AutomaticStep::AutomaticUpdate { set, reject_last } => {
+                                // The last record is usable: it has no name, or its
+                                // confirmation is in the oplog.
+                                eventually(Duration::from_secs(30), || async {
+                                    let records = agent.records(executor).await?;
+                                    Ok(records
+                                        .snapshots
+                                        .last()
+                                        .is_none_or(|name| {
+                                            name.as_deref()
+                                                .is_none_or(|name| records.is_confirmed(name))
+                                        })
+                                        .then_some(()))
+                                })
+                                .await?;
+                                let records = executor
+                                    .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+                                    .await?
+                                    .into_iter()
+                                    .filter(|entry| {
+                                        matches!(entry.entry, PublicOplogEntry::Snapshot(_))
+                                    })
+                                    .map(|entry| entry.oplog_index)
+                                    .collect::<Vec<_>>();
+                                let rejected = match (strategy, reject_last) {
+                                    (UpdateStrategy::FullReplay, _) => records.clone(),
+                                    (UpdateStrategy::Assisted, true) => {
+                                        records.last().copied().into_iter().collect()
+                                    }
+                                    (UpdateStrategy::Assisted, false) => Vec::new(),
+                                };
+                                executor
+                                    .reject_automatic_snapshots(&agent.worker_id, rejected)
+                                    .await?;
+                                let target = executor
+                                    .update_component_with_files(
+                                        &agent.component.id,
+                                        AGENT_TYPE,
+                                        "it_initial_file_system_release",
+                                        declaration_set(*set),
+                                    )
+                                    .await?;
+                                agent.automatic_update_to(executor, &target).await?;
+                                let outcome = last_update_outcome(&agent, executor).await?;
+                                let selection = agent.assisted_selection(executor).await?;
+                                let updated = outcome.starts_with("updated");
+                                let agent = if updated { agent.on(&target) } else { agent };
+                                // The selection is the one of the last successful update; it
+                                // counts only when this update succeeded.
+                                let selected = selection.filter(|_| updated);
+                                let tail = selected.as_ref().is_some_and(|(index, _)| {
+                                    records.last().is_some_and(|last| index < last)
+                                });
+                                results.push(outcome);
+                                let (_, tree) =
+                                    agent.restart_and_describe(executor, context).await?;
+                                results.push(tree.join("\n"));
+                                Ok((
+                                    agent,
+                                    results,
+                                    with_tail || tail,
+                                    assisted || selected.is_some(),
+                                ))
+                            }
+                        }
+                    }
+                },
+            )
+            .await?;
+        let finished = agent.outcome(&executor).await?;
+        executor.release().await?;
+        Ok(AutomaticHistoryRun {
+            results: results.into_iter().map(String::into_boxed_str).collect(),
+            finished,
+            assisted_with_tail,
+            assisted,
+        })
+    })
+    .await
+}
+
+#[test]
+#[timeout("20m")]
+async fn generated_histories_with_automatic_updates_give_the_tree_and_the_results_of_a_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use proptest::strategy::{Strategy, ValueTree};
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let histories = (
+        0usize..3,
+        proptest::collection::vec(automatic_step_strategy(), 2..10),
+    );
+    let cases = std::iter::repeat_with(|| {
+        histories
+            .new_tree(&mut runner)
+            .map(|tree| tree.current())
+            .map_err(|error| anyhow!("{error}"))
+    })
+    .take(16)
+    .collect::<anyhow::Result<Vec<_>>>()?;
+
+    let outcomes = futures::stream::iter(cases)
+        .then(|(initial, steps)| async move {
+            let run = |strategy| {
+                run_automatic_history(
+                    deps,
+                    last_unique_id,
+                    initial_file_system,
+                    initial,
+                    &steps,
+                    strategy,
+                )
+            };
+            let assisted = run(UpdateStrategy::Assisted).await?;
+            let full_replay = run(UpdateStrategy::FullReplay).await?;
+            let differs = assisted.results != full_replay.results
+                || assisted.finished != full_replay.finished;
+            Ok::<_, anyhow::Error>((
+                differs.then(|| {
+                    format!(
+                        "{initial} {steps:?}: assisted {assisted:#?}, full replay {full_replay:#?}"
+                    )
+                }),
+                assisted.assisted_with_tail,
+                full_replay.assisted.then(|| format!("{initial} {steps:?}")),
+            ))
+        })
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let failures = outcomes
+        .iter()
+        .filter_map(|(failure, _, _)| failure.clone())
+        .collect::<Vec<_>>();
+    let assisted_full_replays = outcomes
+        .iter()
+        .filter_map(|(_, _, assisted)| assisted.clone())
+        .collect::<Vec<_>>();
+
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert!(
+        outcomes.iter().any(|(_, with_tail, _)| *with_tail),
+        "no case ran a snapshot-assisted update with a history after its record"
+    );
+    assert!(
+        assisted_full_replays.is_empty(),
+        "a full-replay run restored a snapshot record: {assisted_full_replays:#?}"
+    );
+    Ok(())
 }
