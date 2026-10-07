@@ -237,6 +237,10 @@ property this relies on (bare Wasmtime, no oplog); the marker mechanics are cove
 #90 SuccessfulUpdate { r2 } (h)
 ```
 
+When the agent is loaded at `#70` and the upload of its newest record is not confirmed, the agent
+waits for that upload before it unloads, so the update can select that record
+(`Worker::confirm_filesystem_snapshot_before_an_update`, at most `confirmation_wait`).
+
 Instance creation (`worker/mod.rs::create_instance`): `snapshot_selection::decide_start` sees the
 unselected admission `#70` at the queue head, selects `S` (the last usable record of r1 that
 passes; it can be newer than `#70`) and gives `PersistStrategy`. The start appends `#71` and
@@ -269,7 +273,7 @@ creation in the outer loop, not from the cursor.
 With no update pending, failure to load an automatic snapshot or divergence while replaying its
 recorded suffix rejects that exact record and returns `RetryDecision::Immediate`. The outer loop
 recreates the full Store and revision/plugin context and selects again: the previous usable
-record, the manual-update baseline, or a full replay, so history before a migration is never
+record, the authoritative baseline, or a full replay, so history before a migration is never
 replayed. Once preparation has succeeded, `prepare_instance` merges the rejected indexes into the
 set stored under the worker's `AgentFingerprint` before publishing readiness. A payload-download
 failure, or a filesystem snapshot that does not restore, is different: an in-memory unavailable

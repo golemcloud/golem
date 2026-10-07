@@ -893,7 +893,9 @@ element (attempt index, the snapshot-assisted details of the head, `snapshot_fau
 details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry`, `Succeed`
 or `ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
 entry. After `FailUpdate` the start returns `RetryDecision::Immediate` and the outer loop rebuilds
-on the source revision. The codes are `pub(crate) const` items of `start_outcome`:
+on the source revision. The details have the form `CODE: text: cause`, and the text says what to
+do next (`Code::prefix`), for example request the update again, or use a manual snapshot-based
+update. The codes are `pub(crate) const` items of `start_outcome`:
 
 - `UPDATE_SNAPSHOT_UNAVAILABLE`: the store lost the filesystem snapshot (`RestoreClass::Lost`) or
   the application snapshot payload of the selected record of an assisted update
@@ -911,7 +913,8 @@ on the source revision. The codes are `pub(crate) const` items of `start_outcome
   writes no failed update: the recovery path retries the start.
 
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
-that cannot take its snapshot on an executor without filesystem snapshots.
+that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
+agent differ from its initial files.
 
 Transient causes write no failed update, and the start retries: for every pending column,
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
@@ -932,10 +935,13 @@ decision retries, such as `OutOfMemory` (`ReacquirePermits`), keeps that retry
 (`DurableWorkerCtx::speculative_retry`). Any other error trap ends the replay with its error, and
 the start outcome decides: `UPDATE_REPLAY_FAILED` for `AutomaticUpdate`, a divergence or a plain
 failure for `AssistedUpdate`, a rejection or a pass-through for `PeriodicRecovery`. An
-`Interrupt` trap takes its fixed decision and writes no `Interrupted` entry: the folded status is
-not `Interrupted`, the pending update stays pending, and a restart of the executor or a shard
-move runs the attempt again. This holds for all three purposes. The purpose is `None` again when
-the replay finishes. No retry counter exists. Once
+`Interrupt` trap takes its fixed decision. The replay writes no `Interrupted` entry and no
+`FailedUpdate`, and the pending update stays pending. After the start, the invocation loop takes
+the interrupt request and records it as at the end of any generation
+(`InvocationLoop::record_retry_interrupt_failure`, which calls `on_invocation_failure`): an API
+interrupt writes `Interrupted`, and the next start, after a resume, runs the attempt again. A lost
+shard writes nothing, and the new owner runs the attempt again. This holds for all three purposes.
+The purpose is `None` again when the replay finishes. No retry counter exists. Once
 `S` is selected, an attempt never tries another record or a full replay. On success the fold sets
 `authoritative_snapshot` to `{ S, SnapshotAssistedAutomatic { filesystem_snapshot } }` and
 `component_revision_for_replay` to the source revision. A later start may use a newer periodic
@@ -984,7 +990,8 @@ confirmation. The update then waits until the job is gone or an admission can re
 again; another refusal fails the update. The admission and the slot takes of its upload end
 `confirmation_wait` after `admit_update` started, with `SaveRunning` or `NoSlot`; a run of the
 upload that started before then runs to its end. A terminal interrupt ends that wait, or the upload
-of the update, and fails the update. `SavedUpdate::delete_older_snapshots` runs after
+of the update, and fails the update; after a lost shard it writes nothing, and the update stays
+pending for the new owner (`interrupted_update`). `SavedUpdate::delete_older_snapshots` runs after
 `PendingUpdate` commits, and keeps every name that the status uses
 (`snapshot_selection::names_in_use`: the two start candidates, the successful and the pending
 updates, manual and snapshot-assisted, and the authoritative snapshot-assisted baseline);
@@ -1055,22 +1062,23 @@ it waits for an upload of that record on this executor, for at most
 `confirmation_wait`. Then it asks the store once whether the snapshot is whole, for at most what is
 left of `confirmation_wait`, or for at most `store_check_limit` when it did not wait. When the store
 holds it, the start appends `SnapshotConfirmed` as the owner of the agent. A terminal interrupt ends
-the wait. A start that finds no whole snapshot falls back to the previous usable record. A loaded
-agent whose automatic update restarts it in place waits the same way before its generation ends
-(`Worker::confirm_filesystem_snapshot_before_an_update`); a stop, a retirement of the owner and a
-terminal interrupt end that wait, and the unload deadline of the restart moves by the time of the
-wait.
+the wait. A start that finds no whole snapshot falls back to the previous usable record.
 
 A loaded agent that restarts in place for an automatic update waits the same way before it ends
-its generation (`Worker::confirm_filesystem_snapshot_before_an_update`, from the invocation loop
-when the final decision is `RetryDecision::Immediate`). When the head of the queue is an automatic
-update without a strategy and the newest record that the update would select once confirmed is
-not confirmed (`snapshot_selection::upload_before_an_automatic_update`), it waits for the upload of
-that record for at most `confirmation_wait`, or asks the store once for at most
-`store_check_limit` when no upload runs. When the store holds the whole snapshot, the running
-generation appends `SnapshotConfirmed` (`Confirmer::Running`), so the strategy can select that
-record. A terminal interrupt, such as a lost shard, ends the wait. A `Delayed` retry does not
-wait.
+its generation, so that the strategy can select the newest record. The invocation loop asks
+`Worker::upload_before_an_update` only when the final decision is `RetryDecision::Immediate`; a
+`Delayed` retry does not wait. It gives a name when the head of the queue is an automatic update
+without a strategy and the newest record that the update would select once confirmed is not
+confirmed (`snapshot_selection::upload_before_an_automatic_update`). Then
+`Worker::confirm_filesystem_snapshot_before_an_update` calls `prepare_start` for that name: it
+waits for the upload for at most `confirmation_wait` and asks the store, or asks the store once
+for at most `store_check_limit` when no upload runs. When the store holds the whole snapshot, the
+running generation appends `SnapshotConfirmed` (`Confirmer::Running`). The wait ends at
+`confirmation_wait`, at a terminal interrupt such as a lost shard, at a stop of the worker, which
+closes its command channel (a revert and a delete stop it), or at a requested retirement of the
+owner (`InvocationLoop::confirm_filesystem_snapshot_before_an_update`). The loop keeps the
+commands that arrive during the wait for the next generation. The unload deadline of the restart
+moves by the time of the wait, so the wait does not use it up.
 
 `create_instance` restores the tree of the selected baseline. `StartFilesystem::load_and_plan`
 plans the baseline with `plan_start` and makes its restore, and `StartFilesystem::materialize`
@@ -1090,9 +1098,11 @@ holds nothing else; a read-write initial file counts as a change. A rename or ha
 file, or a given time that the agent sets, counts as a change; a time that Golem puts back from a
 recorded stat does not. A tree of initial files gives a record without a name. Any other tree,
 or a check that cannot decide (a file call that stays open, a sandbox error), gives no periodic
-record, so a start uses an older usable record or replays the whole oplog; a snapshot-based manual
-update fails as a failed update, with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` for changed files and with
-`UPDATE_CHECK_FAILED` and the cause for a failed check, and the agent stays on its revision. A periodic boundary that writes no record waits one period before the next attempt
+record, so a start uses an older usable record or replays the whole oplog. A snapshot-based manual
+update then fails as a failed update, and the agent stays on its revision: changed files give
+`UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and a failed check gives the details "failed to check the
+agent filesystem for the update: <cause>", with no code (`UPDATE_CHECK_FAILED` is only the name of
+the Rust constant). A periodic boundary that writes no record waits one period before the next attempt
 (`invocation_loop.rs::snapshot_baseline_timestamp`). A save hook must not write files of the
 agent: a boundary that writes no record is not replayed. A start from the initial files of the
 source revision of a manual update counts as an install, not a restore of saved times
