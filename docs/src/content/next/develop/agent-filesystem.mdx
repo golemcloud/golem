@@ -73,7 +73,7 @@ replay, at the update point, Golem applies the initial files of the new revision
 initial file at a path where the agent wrote, changed or deleted a file. See [Automatic update](/next/develop/updating#how-the-update-restores-the-agents-files).
 * **Manual updates**: On an executor with [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem saves the agent's files
 with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. The update fails when the target revision
-changes the declaration of an initial file that the agent changed. See [Manual updates](/next/develop/snapshotting#manual-updates). On other executors, a snapshot-based
+changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file. See [Manual updates](/next/develop/snapshotting#manual-updates). On other executors, a snapshot-based
 update works only while the agent's files are its initial files. Otherwise the update fails, and the agent stays on its current revision.
 See [Availability](/next/develop/snapshotting#availability).
 

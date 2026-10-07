@@ -12,7 +12,7 @@ The **automatic update** mode works as described in the general [Agents](/next/c
 golem agent update <AGENT_ID> auto --await
 ```
 
-Golem restarts the agent at once. When the agent is loaded and an upload of its newest automatic snapshot is in progress, the agent first waits for that upload, for at most a limit that the operator sets, 60 seconds by default. Then the update can use that snapshot. When the update gets to the head of the update queue, Golem selects the strategy of the update and writes it into the oplog before the update runs. After that, the strategy does not change. A restart or a retry of the update uses the same strategy.
+Golem restarts the agent at once. When the agent is loaded and an upload of its newest automatic snapshot is in progress, the agent first waits for that upload, for at most a limit that the operator sets, 60 seconds by default. A stop or an interrupt of the agent ends the wait earlier. Then the update can use that snapshot. When the update gets to the head of the update queue, Golem selects the strategy of the update and writes it into the oplog before the update runs. After that, the strategy does not change. A restart or a retry of the update uses the same strategy.
 
 The replay continues through the source history that the agent committed before it stopped. It does not stop at the update request. So the work that the agent committed after the request stays, and an invocation that was in progress continues on the target revision. `--await` returns only after the update writes `SuccessfulUpdate` or `FailedUpdate`. Golem writes `SuccessfulUpdate` before the target revision does live work.
 

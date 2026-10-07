@@ -2,7 +2,7 @@ import { Callout, Steps } from "nextra/components"
 
 # Filesystem Snapshots
 
-A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record and after a manual update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
+A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record, after a manual update and after a snapshot-assisted automatic update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
 
 Filesystem snapshots are disabled by default. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
 
@@ -163,10 +163,10 @@ openssl rand -hex 64
 
 Keep the key secret, and give the same key to every executor. Do not change the key after executors wrote snapshots with it. An executor with a different key cannot read the existing snapshots:
 
-- No named automatic snapshot of an existing location restores, so a start uses an older record without a name, the manual-update record, or a full replay.
-- When the manual-update record names a filesystem snapshot, the start of the agent does not succeed.
+- No named automatic snapshot of an existing location restores, so a start uses an older record without a name, the authoritative recovery baseline, or a full replay.
+- When the authoritative recovery baseline, the record of the last successful manual update or snapshot-assisted update, names a filesystem snapshot, the start of the agent does not succeed.
 - Uploads, retention and deletes of single snapshots in an existing location fail.
-- A fork whose new agent starts from a manual-update snapshot fails, because the check of that snapshot needs the key.
+- A fork whose new agent starts from the snapshot of a manual update or a snapshot-assisted update fails, because the check of that snapshot needs the key.
 - A delete of all snapshots of an agent still works.
 
 ### Set the blob storage bucket
@@ -244,7 +244,7 @@ filesystem snapshots require storage with copy-on-write copies (XFS with reflink
 ```
 
 <Callout type="warning">
-  Enable filesystem snapshots on every executor or on none. On an executor without them, a start does not use an automatic snapshot record that names a filesystem snapshot, and uses an older record without a name, the manual-update record or a full replay. A start whose baseline is a manual-update record that names a filesystem snapshot fails with this cause: `the record names a filesystem snapshot, and filesystem snapshots are disabled on this executor`.
+  Enable filesystem snapshots on every executor or on none. On an executor without them, a start does not use an automatic snapshot record that names a filesystem snapshot, and uses an older record without a name, the authoritative recovery baseline or a full replay. A start whose authoritative recovery baseline, the record of the last successful manual update or snapshot-assisted update, names a filesystem snapshot fails with this cause: `the record names a filesystem snapshot, and filesystem snapshots are disabled on this executor`. A pending update whose snapshot names a filesystem snapshot fails with `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`, and the agent stays on its revision.
 </Callout>
 
 ## Configuration
@@ -284,8 +284,8 @@ multiplier = 4.0
 | `storage_call_deadline` | `60s` | The longest time that one blob storage call waits for an answer. A call that gets no answer in this time fails. Keep it well above the slowest normal call of your storage. It stops a call that never returns. It must be from `1s` to `112.5s`. |
 | `restore_reader_threads` | `6` | The number of threads that read data in one restore. |
 | `save_threads` | `2` | The number of threads of each parallel stage of one save. |
-| `confirmation_wait` | `60s` | How long a start of an agent waits for an upload of the same agent on this executor, together with the check of blob storage after the wait. It is also the longest time that a manual update waits for a running upload of the agent and for a free upload slot. |
-| `store_check_limit` | `5s` | How long a start that did not wait for an upload may check blob storage for the snapshot of the agent's newest unconfirmed record. A fork checks the snapshot of its baseline in the same time. |
+| `confirmation_wait` | `60s` | How long a start of an agent waits for an upload of the same agent on this executor, together with the check of blob storage after the wait. A loaded agent that an automatic update restarts waits for the upload of its newest snapshot for the same time. It is also the longest time that a manual update waits for a running upload of the agent and for a free upload slot. |
+| `store_check_limit` | `5s` | How long a start that did not wait for an upload may check blob storage for the snapshot of the agent's newest unconfirmed record. A loaded agent that an automatic update restarts, and that has no running upload of its newest record, checks blob storage in the same time. A fork checks the snapshot of its baseline in the same time. |
 | `capture_wait` | `5s` | How long a capture waits for the agent's open file calls. When a call is still open after this time, the capture gives up. |
 | `retained_periodic_snapshots` | `128` | The number of automatic filesystem snapshots that retention keeps for each agent. A revert restores exactly only from a snapshot that blob storage still holds, so this number sets how far back a revert can go without a full replay. |
 | `retained_update_snapshots` | `2` | The number of manual-update filesystem snapshots that retention keeps for each agent, among those that no successful or pending update uses. |
@@ -349,6 +349,8 @@ The executor uploads a capture in the background. When the upload is complete, t
 
 A start on another executor does only steps 2 and 3. An upload that still runs when the agent moves to another executor is lost for that start, and the start uses an older snapshot.
 
+An automatic update of a loaded agent restarts the agent on the same executor. Before the restart, when the update has no strategy yet and its newest snapshot record is not confirmed, the agent waits for the upload of that record, for at most `confirmation_wait`, so the update can use that record. When no upload of the record runs, the agent checks blob storage once, for at most `store_check_limit`. A stop of the agent, a retirement of the agent on this executor and a terminal interrupt end the wait. The wait does not count against the time limit of the unload for the restart.
+
 When an update or a revert replaced the snapshot record during the upload, the confirmation finds no record with the name. The executor then deletes the snapshot and counts a dropped confirmation.
 
 ### Restores
@@ -361,9 +363,10 @@ After an upload confirms an automatic snapshot, the executor deletes the older a
 
 - the new snapshot and the `retained_periodic_snapshots - 1` newest older ones,
 - the snapshots of the records that a start of the agent can select now, whatever their age,
+- the snapshots of the successful and pending updates of the agent, manual and snapshot-assisted, and of its authoritative recovery baseline, whatever their age,
 - each snapshot whose time is at most 2 minutes before the time of the new snapshot, or later, because the clocks of two executors can differ.
 
-The last two kinds do not count toward `retained_periodic_snapshots`.
+The last three kinds do not count toward `retained_periodic_snapshots`.
 
 After a manual update record is written, the executor applies the same rule to the manual-update snapshots with `retained_update_snapshots`. It never deletes the snapshot of a successful or pending update of the agent, because a revert or a fork can make that update the baseline again. `retained_update_snapshots` limits only the other manual-update snapshots.
 
@@ -375,7 +378,7 @@ The executor deletes filesystem snapshots in the background when the life of an 
 
 - **Delete.** After it deletes the oplog of an agent, the executor deletes all filesystem snapshots of that incarnation. It first stops the upload of the agent, and waits until every snapshot operation of the agent has ended.
 - **Revert.** A revert first writes its revert entry. Then the executor deletes the snapshots of the records in the reverted part of the oplog, except a snapshot that a remaining record uses. When another executor took over the agent before the revert entry was written, the revert fails with `OplogFenced` and deletes nothing.
-- **Fork.** The executor copies the snapshots of the source incarnation into the location of the new agent, inside blob storage, before it creates the new agent. With S3 and SQLite, the data does not pass through the executor. With file system blob storage, the executor copies the files. The executor checks the last successful snapshot-based manual update in the part of the oplog that the fork copies. When that update names a filesystem snapshot that is not in blob storage, the fork is refused: `Cannot fork worker at oplog index <index>: the filesystem snapshot <name> of the target's baseline is not in the store`. An executor without filesystem snapshots copies nothing, so it refuses such a fork too. A fork attempt that does not create the new agent deletes its copy.
+- **Fork.** The executor copies the snapshots of the source incarnation into the location of the new agent, inside blob storage, before it creates the new agent. With S3 and SQLite, the data does not pass through the executor. With file system blob storage, the executor copies the files. The executor checks the last successful snapshot-based manual update or snapshot-assisted automatic update in the part of the oplog that the fork copies. When that update names a filesystem snapshot that is not in blob storage, the fork is refused: `Cannot fork worker at oplog index <index>: the filesystem snapshot <name> of the target's baseline is not in the store`. An executor without filesystem snapshots copies nothing, so it refuses such a fork too. A fork attempt that does not create the new agent deletes its copy.
 
 The clean-ups wait in a queue in the memory of the executor. At most `max_concurrent_uploads` clean-ups run at the same time. Retention does not use this queue. These deletes do: the deletes of a revert, the delete of all snapshots of a deleted agent, the delete of all snapshots of an incarnation that the recovery of a shard finds stale, and the delete of the copy of a fork attempt that did not create its new agent.
 
@@ -444,7 +447,7 @@ The executor writes these messages. Search for the quoted text.
 | `Periodic snapshot save function failed; restarting worker to recover the store` | WARN | The agent's snapshot code failed. The agent restarts and replays its oplog. |
 | `Failed to make the periodic snapshot record` | WARN | The executor could not make the periodic snapshot record, for example because the upload of the application snapshot failed. It writes no record, discards the capture, and the agent continues. |
 | `Failed to append the periodic snapshot record` | WARN | The executor could not write the periodic snapshot record to the oplog. It discards the capture, and the agent restarts. |
-| `Manual update failed with a conflict of the initial files` | WARN | At the start in the target revision, an initial file of the target revision conflicts with a file that the agent wrote, changed or deleted, or with a file of the agent in the place of a directory that the initial file needs. The update is recorded as failed, and the agent stays on its revision. |
+| `Pending update failed at the start` | WARN | A pending update failed before the start replayed the history, for example because the snapshot of the update did not restore, or because an initial file of the target revision of a manual update conflicts with a file that the agent wrote, changed or deleted, or with a file of the agent in the place of a directory that the initial file needs. The `entry` field holds the failed update with its details. The update is recorded as failed, and the agent stays on its revision. |
 | `Failed to upload a filesystem snapshot; no confirmation record follows its record` | WARN | The upload of an automatic snapshot failed after its retries. A start uses an older snapshot. A failed upload of a manual update does not write this message: it fails the update with the error `failed to upload the filesystem snapshot for the update`. |
 | `The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it` | WARN | A restore failed at a start. The start falls back. |
 | `Failed to check a filesystem snapshot before a start` | WARN | The check of blob storage at a start failed. The start uses an older snapshot. |
