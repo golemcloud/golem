@@ -11671,8 +11671,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rquickjs.git?branch=fix%2Foptimizer-hostcall-fuel#2ec7d9298ecdf5d3b34494166d0c2cfafb4cb4fb"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a0f14051c159b3c2aa1def708d1ce36db0a4b2237cd45dc3e4f4c5cc2c2e70b"
 dependencies = [
  "anyhow",
  "camino",
