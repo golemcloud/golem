@@ -29,6 +29,11 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "file_creation_mask"
+path = "tests/file_creation_mask.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }

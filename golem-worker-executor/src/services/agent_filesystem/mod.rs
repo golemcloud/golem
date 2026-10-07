@@ -24,6 +24,8 @@ use crate::services::golem_config::{
     FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageConfig,
 };
 use crate::services::resource_limits::AtomicResourceEntry;
+#[cfg(unix)]
+pub(crate) use file_creation_mask::keep_owner_write_permission;
 use golem_common::model::OwnedAgentId;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use std::path::Path;
@@ -36,6 +38,8 @@ thread_local! {
     };
 }
 
+#[cfg(unix)]
+mod file_creation_mask;
 mod lifecycle;
 
 #[cfg(test)]
@@ -125,79 +129,6 @@ impl FilesystemObjectLimitPolicyConfig {
             filesystem_objects: proportional.clamp(self.minimum_objects(), self.maximum_objects()),
         })
     }
-}
-
-/// The owner write bit of a file mode creation mask.
-#[cfg(unix)]
-const OWNER_WRITE_BIT: libc::mode_t = 0o200;
-
-/// Clears bit 0o200 of the file mode creation mask of the process, and keeps the other bits.
-///
-/// Each file that an agent creates then has write permission for its owner. The initial-file rule
-/// counts a file without write permission at a read-only declared path as the initial file when
-/// its content equals the declaration, so a file of an agent must always have this permission. The
-/// call is idempotent, and it changes only the owner write bit of the mask.
-///
-/// On Linux the function reads the current mask from the `Umask:` line of
-/// `/proc/thread-self/status`. That read does not change the mask. On other Unix platforms, and on
-/// Linux when the line is not available, the function sets the mask two times: to 0o022, which
-/// gives the current mask, and then to that mask without the owner write bit. Between the two
-/// calls, a file that another thread creates gets the usual permissions of the mask 0o022.
-#[cfg(unix)]
-pub(crate) fn keep_owner_write_permission() {
-    let mask = current_file_creation_mask();
-    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-    unsafe {
-        libc::umask(mask_without_owner_write(mask));
-    }
-}
-
-/// Gives the current file mode creation mask of the calling thread. Where
-/// `/proc/thread-self/status` has no `Umask:` line, the mask is 0o022 after the call.
-///
-/// The function reads `/proc/thread-self/status`, not `/proc/self/status`. `/proc/self` is the
-/// thread group leader, and a thread that does not share the filesystem attributes of the process
-/// has its own mask. All threads of the executor share one mask, so there the read gives the mask
-/// of the process.
-#[cfg(target_os = "linux")]
-fn current_file_creation_mask() -> libc::mode_t {
-    std::fs::read_to_string("/proc/thread-self/status")
-        .ok()
-        .as_deref()
-        .and_then(status_umask)
-        .unwrap_or_else(replaced_file_creation_mask)
-}
-
-/// Gives the current file mode creation mask of the process. The mask is 0o022 after the call.
-#[cfg(all(unix, not(target_os = "linux")))]
-fn current_file_creation_mask() -> libc::mode_t {
-    replaced_file_creation_mask()
-}
-
-/// Sets the file mode creation mask of the process to 0o022, and gives the mask before the call.
-///
-/// The probe mask is 0o022, not 0o777. Other services of the process can create files at the same
-/// time, such as a database file or a log file. With 0o777 such a file gets mode 000 and fails at
-/// random. With 0o022 it gets the usual permissions for that moment.
-#[cfg(unix)]
-fn replaced_file_creation_mask() -> libc::mode_t {
-    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-    unsafe { libc::umask(0o022) }
-}
-
-/// Gives `mask` without the owner write bit. Every other bit stays as it is.
-#[cfg(unix)]
-fn mask_without_owner_write(mask: libc::mode_t) -> libc::mode_t {
-    mask & !OWNER_WRITE_BIT
-}
-
-/// Gives the file mode creation mask on the `Umask:` line of a `/proc/<pid>/status` text.
-#[cfg(target_os = "linux")]
-fn status_umask(status: &str) -> Option<libc::mode_t> {
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("Umask:"))
-        .and_then(|value| libc::mode_t::from_str_radix(value.trim(), 8).ok())
 }
 
 #[derive(Clone)]
@@ -381,6 +312,10 @@ pub(crate) mod file_creation_mask_for_test {
 mod tests {
     use super::*;
     use crate::services::golem_config::FilesystemStorageMode;
+    #[cfg(unix)]
+    use file_creation_mask::mask_without_owner_write;
+    #[cfg(target_os = "linux")]
+    use file_creation_mask::{probed_file_creation_mask, status_umask};
     #[cfg(target_os = "linux")]
     use file_creation_mask_for_test::{thread_file_creation_mask, with_private_file_creation_mask};
     use test_r::test;
@@ -454,18 +389,19 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn the_file_mode_creation_mask_probe_sets_0o022_and_gives_the_mask_before_the_call() {
-        let (replaced, after) = with_private_file_creation_mask(0o227, || {
-            (replaced_file_creation_mask(), thread_file_creation_mask())
+    fn the_file_mode_creation_mask_probe_masks_group_and_other_and_gives_the_mask_before_the_call()
+    {
+        let (probed, after) = with_private_file_creation_mask(0o227, || {
+            (probed_file_creation_mask(), thread_file_creation_mask())
         });
 
         assert_eq!(
-            replaced, 0o227,
-            "the call must give the mask 227 from before the call, and it gave {replaced:o}"
+            probed, 0o227,
+            "the call must give the mask 227 from before the call, and it gave {probed:o}"
         );
         assert_eq!(
-            after, 0o022,
-            "the call must set the mask 22, and the mask is {after:o}"
+            after, 0o077,
+            "the call must set the mask 77, and the mask is {after:o}"
         );
     }
 
