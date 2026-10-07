@@ -5471,8 +5471,22 @@ async fn a_revert_to_records_whose_snapshots_retention_deleted_fails_one_request
             Ok((!results.is_empty()).then_some(results))
         })
         .await;
-        let outcomes = match first {
+        // The start on the source after the failure skips the previous record too, because its
+        // snapshot is also gone, and only a start that prepares the agent ends that skip. The
+        // agent waits for a command only after that start, so the next request selects the
+        // previous record and fails on it. An invocation would add a newer record.
+        let owned = agent.owned(&context);
+        let prepared = match first {
             Ok(_) => {
+                eventually(Duration::from_secs(60), || async {
+                    Ok(executor.worker_eviction_class(&owned).await.map(|_| ()))
+                })
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        let outcomes = match prepared {
+            Ok(()) => {
                 futures::stream::iter(0..2)
                     .then(|_| agent.automatic_update_to(&executor, &target))
                     .try_collect::<Vec<_>>()
