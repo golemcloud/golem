@@ -68,10 +68,7 @@ pub async fn start_router(
 
     let app = Route::new();
     #[cfg(feature = "local-observability")]
-    let app = app.nest(
-        "/",
-        crate::observability::routes(observability, crate::launch::ADMIN_TOKEN),
-    );
+    let app = crate::observability::add_routes(app, observability, crate::launch::ADMIN_TOKEN);
     let app = app
         // Worker endpoints
         .at("/v1/agents/create-agent", worker_service_api.clone())

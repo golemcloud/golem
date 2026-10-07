@@ -573,102 +573,105 @@ impl OtlpIngestResult {
     }
 }
 
-pub fn routes(service: Arc<LocalObservability>, authorization_token: &'static str) -> Route {
+pub fn add_routes(
+    app: Route,
+    service: Arc<LocalObservability>,
+    authorization_token: &'static str,
+) -> Route {
     let capability = service.clone();
     let families = service.clone();
     let series = service.clone();
     let samples = service.clone();
     let ingest = service;
-    Route::new()
-        .at(
-            LOCAL_OBSERVABILITY_CAPABILITY_PATH,
-            poem::get(poem::endpoint::make(move |request: Request| {
-                let service = capability.clone();
-                async move {
-                    if !authorized(&request, authorization_token) {
-                        return unauthorized();
+    app.at(
+        LOCAL_OBSERVABILITY_CAPABILITY_PATH,
+        poem::get(poem::endpoint::make(move |request: Request| {
+            let service = capability.clone();
+            async move {
+                if !authorized(&request, authorization_token) {
+                    return unauthorized();
+                }
+                json_response(StatusCode::OK, &service.capability().await)
+            }
+        })),
+    )
+    .at(
+        LOCAL_OBSERVABILITY_FAMILIES_PATH,
+        poem::post(poem::endpoint::make(move |request: Request| {
+            let service = families.clone();
+            async move {
+                query_response::<LocalMetricFamiliesRequest, _, _>(
+                    request,
+                    authorization_token,
+                    |request| async move { service.families(&request).await },
+                )
+                .await
+            }
+        })),
+    )
+    .at(
+        LOCAL_OBSERVABILITY_SERIES_PATH,
+        poem::post(poem::endpoint::make(move |request: Request| {
+            let service = series.clone();
+            async move {
+                query_response::<LocalMetricSeriesRequest, _, _>(
+                    request,
+                    authorization_token,
+                    |request| async move { service.series(&request).await },
+                )
+                .await
+            }
+        })),
+    )
+    .at(
+        LOCAL_OBSERVABILITY_SAMPLES_PATH,
+        poem::post(poem::endpoint::make(move |request: Request| {
+            let service = samples.clone();
+            async move {
+                query_response::<LocalMetricSamplesRequest, _, _>(
+                    request,
+                    authorization_token,
+                    |request| async move { service.samples(&request).await },
+                )
+                .await
+            }
+        })),
+    )
+    .at(
+        LOCAL_OTLP_METRICS_PATH,
+        poem::post(poem::endpoint::make(move |request: Request| {
+            let service = ingest.clone();
+            async move {
+                if !authorized(&request, authorization_token) {
+                    return unauthorized();
+                }
+                let environment_id = request
+                    .headers()
+                    .get("x-golem-environment-id")
+                    .and_then(|value| value.to_str().ok())
+                    .map(ToString::to_string);
+                let content_type_ok = request
+                    .content_type()
+                    .is_some_and(|value| value.starts_with("application/json"));
+                if !content_type_ok {
+                    return json_error(
+                        StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                        "Only OTLP/HTTP JSON metrics are supported",
+                    );
+                }
+                let body = match request.into_body().into_vec().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        return json_error(StatusCode::BAD_REQUEST, error.to_string());
                     }
-                    json_response(StatusCode::OK, &service.capability().await)
-                }
-            })),
-        )
-        .at(
-            LOCAL_OBSERVABILITY_FAMILIES_PATH,
-            poem::post(poem::endpoint::make(move |request: Request| {
-                let service = families.clone();
-                async move {
-                    query_response::<LocalMetricFamiliesRequest, _, _>(
-                        request,
-                        authorization_token,
-                        |request| async move { service.families(&request).await },
-                    )
-                    .await
-                }
-            })),
-        )
-        .at(
-            LOCAL_OBSERVABILITY_SERIES_PATH,
-            poem::post(poem::endpoint::make(move |request: Request| {
-                let service = series.clone();
-                async move {
-                    query_response::<LocalMetricSeriesRequest, _, _>(
-                        request,
-                        authorization_token,
-                        |request| async move { service.series(&request).await },
-                    )
-                    .await
-                }
-            })),
-        )
-        .at(
-            LOCAL_OBSERVABILITY_SAMPLES_PATH,
-            poem::post(poem::endpoint::make(move |request: Request| {
-                let service = samples.clone();
-                async move {
-                    query_response::<LocalMetricSamplesRequest, _, _>(
-                        request,
-                        authorization_token,
-                        |request| async move { service.samples(&request).await },
-                    )
-                    .await
-                }
-            })),
-        )
-        .at(
-            LOCAL_OTLP_METRICS_PATH,
-            poem::post(poem::endpoint::make(move |request: Request| {
-                let service = ingest.clone();
-                async move {
-                    if !authorized(&request, authorization_token) {
-                        return unauthorized();
-                    }
-                    let environment_id = request
-                        .headers()
-                        .get("x-golem-environment-id")
-                        .and_then(|value| value.to_str().ok())
-                        .map(ToString::to_string);
-                    let content_type_ok = request
-                        .content_type()
-                        .is_some_and(|value| value.starts_with("application/json"));
-                    if !content_type_ok {
-                        return json_error(
-                            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                            "Only OTLP/HTTP JSON metrics are supported",
-                        );
-                    }
-                    let body = match request.into_body().into_vec().await {
-                        Ok(body) => body,
-                        Err(error) => {
-                            return json_error(StatusCode::BAD_REQUEST, error.to_string());
-                        }
-                    };
-                    let result = service
-                        .ingest_otlp_json(&body, environment_id.as_deref())
-                        .await;
-                    json_response(StatusCode::OK, &result)
-                }
-            })),
-        )
+                };
+                let result = service
+                    .ingest_otlp_json(&body, environment_id.as_deref())
+                    .await;
+                json_response(StatusCode::OK, &result)
+            }
+        })),
+    )
 }
 
 async fn query_response<T, R, U>(
@@ -1498,7 +1501,11 @@ mod tests {
             last_service_sample: AtomicI64::new(0),
             last_agent_ingest: AtomicI64::new(0),
         });
-        let client = TestClient::new(routes(service, "expected-token"));
+        let app = add_routes(Route::new(), service, "expected-token").at(
+            "*",
+            poem::endpoint::make(|_: Request| async { StatusCode::NOT_FOUND }),
+        );
+        let client = TestClient::new(app);
 
         client
             .get(LOCAL_OBSERVABILITY_CAPABILITY_PATH)
