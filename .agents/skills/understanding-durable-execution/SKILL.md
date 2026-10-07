@@ -907,8 +907,15 @@ host-call observation counter is still incremented on the successful fast path. 
 
 ## Concurrency and guest completion delivery
 
-p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized
-(`concurrent/mod.rs`). Concurrent completions may finish in any host order, but the guest observes
+`Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
+the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock and monotonic-clock calls and
+WebSocket connect/send/close use accessor bindings even when the guest calls synchronously.
+Boundary-lock acquisition and synchronization must run outside Store windows: an accessor
+holding `card_event_boundary_lock` may need the Store to finish synchronizing authority, so a
+direct call that waits for that lock while retaining the Store creates a lock inversion.
+The internal permission wall-clock helper remains direct; this is not a conversion of all
+direct host imports. WebSocket drop only removes local state and does not await boundary work.
+Concurrent completions may finish in any host order, but the guest observes
 them in exactly one order per run, and that order is recorded by the `CompletionDelivered` markers.
 `ReplayDeliveryBarrier` transfers the cursor gate so replay releases each completion at its
 recorded boundary. `supersede_prior_completion_delivery` hard-errors if an observer is still armed:
@@ -931,8 +938,8 @@ Cursor operations and recorded-marker waits stay active; durable `Start`/`End` w
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
 per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
-handle goes through `ensure_websocket_connection_live` (direct) or
-`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+handle goes through `ensure_websocket_connection_live_access` in
+`durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
 still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and

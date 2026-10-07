@@ -81,7 +81,7 @@ pub fn create_linker<Ctx: WorkerCtx + Send + Sync>(
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;
-    wasmtime_wasi::p2::bindings::clocks::wall_clock::add_to_linker::<
+    crate::preview2::p2_monotonic_clock::wasi::clocks0_2_6::wall_clock::add_to_linker::<
         _,
         HasSelf<DurableWorkerCtx<Ctx>>,
     >(&mut linker, get)?;

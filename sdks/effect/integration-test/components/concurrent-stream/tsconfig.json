@@ -1,0 +1,5 @@
+{
+  "extends": "../agents/tsconfig.json",
+  "include": ["src/**/*.ts"],
+  "compilerOptions": { "moduleResolution": "bundler" }
+}

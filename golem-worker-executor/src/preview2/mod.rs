@@ -37,6 +37,9 @@ wasmtime::component::bindgen!({
         "golem:agent/durable-streams.[method]durable-stream-reader.read": store | async | trappable,
         "golem:agent/durable-streams.[method]durable-stream-writer.append": store | async | trappable,
         "golem:api/host.create-promise": store | async | trappable,
+        "golem:websocket/client.[static]websocket-connection.connect": store | async | trappable,
+        "golem:websocket/client.[method]websocket-connection.send": store | async | trappable,
+        "golem:websocket/client.[method]websocket-connection.close": store | async | trappable,
         "golem:websocket/client.[method]websocket-connection.receive": store | async | trappable,
         "golem:websocket/client.[method]websocket-connection.receive-with-timeout": store | async | trappable,
         "golem:durability/durability.begin-custom-durable-invocation": store | async | trappable,
@@ -114,8 +117,8 @@ pub mod p2_monotonic_clock {
         path: r"../wit",
         world: "wasi:clocks/imports@0.2.6",
         imports: {
-            "wasi:clocks/monotonic-clock.now": async | trappable,
             "wasi:clocks/monotonic-clock": store | async | trappable,
+            "wasi:clocks/wall-clock": store | async | trappable,
             default: async | trappable,
         },
         require_store_data_send: true,
@@ -123,7 +126,6 @@ pub mod p2_monotonic_clock {
         wasmtime_crate: ::wasmtime,
         with: {
             "wasi:io/poll@0.2.6": wasmtime_wasi::p2::bindings::io::poll,
-            "wasi:clocks/wall-clock@0.2.6": wasmtime_wasi::p2::bindings::clocks::wall_clock,
         },
     });
 }

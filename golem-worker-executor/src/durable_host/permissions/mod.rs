@@ -836,9 +836,7 @@ fn select_wallet_derivation_parent(
 async fn durable_now<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
 ) -> anyhow::Result<DateTime<Utc>> {
-    let now =
-        <DurableWorkerCtx<Ctx> as wasmtime_wasi::p2::bindings::clocks::wall_clock::Host>::now(ctx)
-            .await?;
+    let now = ctx.durable_wall_clock_now().await?;
     let seconds = i64::try_from(now.seconds)
         .map_err(|_| anyhow!("durable wall-clock timestamp is out of range"))?;
     DateTime::from_timestamp(seconds, now.nanoseconds)

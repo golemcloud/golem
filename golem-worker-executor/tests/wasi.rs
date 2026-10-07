@@ -3898,6 +3898,97 @@ async fn interrupt_while_parked_in_p3_tcp_receive(
     Ok(())
 }
 
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn synchronous_clock_wait_releases_store_for_concurrent_http(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let release_response = Arc::new(tokio::sync::Semaphore::new(0));
+    let response_gate = release_response.clone();
+    let route = Router::new().route(
+        "/simulated-slow-request",
+        get(move || {
+            let response_gate = response_gate.clone();
+            async move {
+                response_gate.acquire().await.unwrap().forget();
+                "response while clock is gated"
+            }
+        }),
+    );
+    let mut server = tokio::task::JoinSet::new();
+    server.spawn(async move { axum::serve(listener, route).await });
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "synchronous-clock-concurrent-http");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut clock = executor.gate_next_wall_clock_now(&owner).await?;
+
+    let invoke = async {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "p2_clock_during_request",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<String>()
+    };
+    let control = async {
+        clock.entered().await;
+        // The HTTP response cannot finish before the synchronous guest clock is waiting.
+        release_response.add_permits(1);
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let http_start = oplog.iter().find_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start) if start.function_name == "http::client::send" => {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            });
+            if http_start.is_some_and(|start| {
+                oplog.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)
+                })
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // A Store-retaining clock binding prevents the HTTP host task from reaching End.
+        clock.release();
+        Ok::<_, anyhow::Error>(())
+    };
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::try_join!(invoke, control)
+    })
+    .await
+    .map_err(|_| anyhow!("concurrent HTTP did not complete while the P2 clock was gated"))??;
+    assert_eq!(result, "response while clock is gated");
+    Ok(())
+}
+
 async fn simulated_slow_request_server(delay: Duration) -> (u16, JoinHandle<()>) {
     let (port, server, _) = counting_slow_request_server(delay).await;
     (port, server)
