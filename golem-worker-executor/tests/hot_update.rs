@@ -186,15 +186,22 @@ impl AgentFiles {
         matches!(self, Self::Snapshotted(_))
     }
 
-    /// Holds the next save of a filesystem snapshot when the executor keeps filesystem
-    /// snapshots, so the snapshot record of that save is not usable until the release.
-    fn hold_next_save(
+    /// Rejects the snapshot record after the last start of `method` when the agent writes files,
+    /// as a start that could not load it does, so no update selects it.
+    async fn reject_record_after(
         &self,
-    ) -> Option<golem_worker_executor::filesystem_snapshot_testing::HeldSave> {
-        match self {
-            Self::Untouched => None,
-            Self::Snapshotted(store) => Some(store.hold_next_save()),
+        executor: &TestWorkerExecutor,
+        worker_id: &AgentId,
+        method: &str,
+    ) -> anyhow::Result<()> {
+        if self.snapshotted() {
+            let after = last_start_of(executor, worker_id, method).await?;
+            let record = wait_for_snapshot_after(executor, worker_id, after).await?;
+            executor
+                .reject_automatic_snapshots(worker_id, [record])
+                .await?;
         }
+        Ok(())
     }
 
     /// The overrides of an executor with the snapshot policy `policy`.
@@ -1304,9 +1311,6 @@ async fn assert_snapshot_assisted_suffix_failure(
     let snapshot_index = files
         .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
         .await?;
-    // The record after the tail write and the diverging call stays unusable while its save is
-    // held, so the update selects the record before them and replays both.
-    let held = files.hold_next_save();
     files
         .write(&executor, &component, &agent_id, "/tail.txt")
         .await?;
@@ -1322,6 +1326,11 @@ async fn assert_snapshot_assisted_suffix_failure(
         .invoke_and_await_agent(&component, &agent_id, function, input)
         .await?;
     assert_eq!(source_result.into_typed::<u32>()?, 7);
+    // The record after the tail write and the diverging call is rejected, so the update selects
+    // the record before them and replays both.
+    files
+        .reject_record_after(&executor, &worker_id, function)
+        .await?;
 
     let updated_component = executor
         .update_component(&component.id, "it_agent_update_v2_release")
@@ -1375,9 +1384,6 @@ async fn assert_snapshot_assisted_suffix_failure(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
     );
-    if let Some(held) = held {
-        held.release();
-    }
     files
         .assert_files(
             &executor,
