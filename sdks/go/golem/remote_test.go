@@ -82,7 +82,7 @@ func TestRemoteAgentRecordsWhatACallNeeds(t *testing.T) {
 		if !e.remote {
 			t.Error("the entry is not marked remote")
 		}
-		if len(e.idFields) != 1 || e.idFields[0].name != "name" {
+		if len(e.idFields) != 1 || e.idFields[0].Name != "name" {
 			t.Errorf("id fields are %+v, want one named name", e.idFields)
 		}
 	})

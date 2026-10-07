@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"mime"
 	"reflect"
 	"strings"
@@ -99,11 +100,11 @@ func (s streamSlots) any() bool {
 }
 
 // methodStreamSlots finds the slots of a method from its Go types.
-func methodStreamSlots(in []fieldInfo, out reflect.Type) streamSlots {
+func methodStreamSlots(in []engine.Field, out reflect.Type) streamSlots {
 	slots := streamSlots{inputs: map[string]bool{}, outputs: map[string]bool{}}
 	for _, f := range in {
-		if elem, ok := streamElemOf(f.typ); ok {
-			slots.inputs[f.name] = elem.Kind() == reflect.Uint8
+		if elem, ok := streamElemOf(f.Typ); ok {
+			slots.inputs[f.Name] = elem.Kind() == reflect.Uint8
 		}
 	}
 	if out == nil {
@@ -121,7 +122,7 @@ func methodStreamSlots(in []fieldInfo, out reflect.Type) streamSlots {
 				continue
 			}
 			if elem, ok := streamElemOf(f.Type); ok {
-				slots.outputs[lowerFirst(f.Name)] = elem.Kind() == reflect.Uint8
+				slots.outputs[engine.LowerFirst(f.Name)] = elem.Kind() == reflect.Uint8
 			}
 		}
 	}

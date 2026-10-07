@@ -18,6 +18,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/secretref"
@@ -97,7 +98,7 @@ func (s *Secret[T]) secretAdopt(h *types.Secret) {
 // the config-materialization path.
 func readSecretValue[T any](d *definitions, path []string) (T, error) {
 	var zero T
-	handleRes := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
+	handleRes := host.GetConfigValue(path, d.GraphForType(reflect.TypeFor[Secret[T]]()))
 	if handleRes.IsErr() {
 		return zero, configValueErrorToGo(path, handleRes.Err())
 	}
@@ -110,7 +111,7 @@ func readSecretValue[T any](d *definitions, path []string) (T, error) {
 
 // configSecretHandle mints a fresh handle to a config secret, for sending it.
 func configSecretHandle[T any](d *definitions, path []string) (*types.Secret, error) {
-	handleRes := host.GetConfigValue(path, d.graphForType(reflect.TypeFor[Secret[T]]()))
+	handleRes := host.GetConfigValue(path, d.GraphForType(reflect.TypeFor[Secret[T]]()))
 	if handleRes.IsErr() {
 		return nil, configValueErrorToGo(path, handleRes.Err())
 	}
@@ -122,13 +123,13 @@ func configSecretHandle[T any](d *definitions, path []string) (*types.Secret, er
 func revealSecret[T any](d *definitions, path []string, handle *types.Secret) (T, error) {
 	var zero T
 	innerType := reflect.TypeFor[T]()
-	res := reveal.Reveal(handle, d.graphForType(innerType))
+	res := reveal.Reveal(handle, d.GraphForType(innerType))
 	if res.IsErr() {
 		return zero, secretErrorToGo(path, res.Err())
 	}
 	dst := reflect.New(innerType).Elem()
-	dec := decoder{nodes: res.Ok().ValueNodes}
-	if err := d.compile(innerType).decode(&dec, dst, res.Ok().Root); err != nil {
+	dec := engine.Decoder{Nodes: res.Ok().ValueNodes}
+	if err := d.Compile(innerType).Decode(&dec, dst, res.Ok().Root); err != nil {
 		return zero, fmt.Errorf("golem/secret %v: %w", path, err)
 	}
 	return dst.Interface().(T), nil

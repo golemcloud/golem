@@ -218,12 +218,12 @@ func validateFileOwner(e *agentEntry, mp parsedPath) []string {
 		}
 	}
 	for _, f := range userFields(e.idFields) {
-		if captured[f.name] != 1 {
-			errs = append(errs, fmt.Sprintf("ExposeFiles needs Id field %q captured exactly once by the mount path: unbound-constructor", f.name))
+		if captured[f.Name] != 1 {
+			errs = append(errs, fmt.Sprintf("ExposeFiles needs Id field %q captured exactly once by the mount path: unbound-constructor", f.Name))
 			continue
 		}
-		if !bindableKind(f.typ.Kind()) {
-			errs = append(errs, fmt.Sprintf("ExposeFiles needs scalar Id fields, but %q is %s: unbound-constructor", f.name, f.typ))
+		if !bindableKind(f.Typ.Kind()) {
+			errs = append(errs, fmt.Sprintf("ExposeFiles needs scalar Id fields, but %q is %s: unbound-constructor", f.Name, f.Typ))
 		}
 	}
 	return errs

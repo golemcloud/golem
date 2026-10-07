@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
@@ -77,13 +78,13 @@ func (v TypedValue) WithJSON(value any) (TypedValue, error) {
 // match.
 func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	var out T
-	c := defs.compile(reflect.TypeFor[T]())
-	if c.invalid != "" {
-		return out, fmt.Errorf("golem: %s cannot be decoded: %s", reflect.TypeFor[T](), c.invalid)
+	c := defs.Compile(reflect.TypeFor[T]())
+	if c.Invalid != "" {
+		return out, fmt.Errorf("golem: %s cannot be decoded: %s", reflect.TypeFor[T](), c.Invalid)
 	}
-	d := decoder{nodes: v.wit.Value.ValueNodes}
+	d := engine.Decoder{Nodes: v.wit.Value.ValueNodes}
 	slot := reflect.ValueOf(&out).Elem()
-	if err := c.decode(&d, slot, v.wit.Value.Root); err != nil {
+	if err := c.Decode(&d, slot, v.wit.Value.Root); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -91,16 +92,16 @@ func DecodeTypedValue[T any](v TypedValue) (T, error) {
 
 // EncodeTypedValue packages a Go value together with its derived schema.
 func EncodeTypedValue[T any](value T) (TypedValue, error) {
-	c := defs.compile(reflect.TypeFor[T]())
-	if c.invalid != "" {
-		return TypedValue{}, fmt.Errorf("golem: %s cannot be encoded: %s", reflect.TypeFor[T](), c.invalid)
+	c := defs.Compile(reflect.TypeFor[T]())
+	if c.Invalid != "" {
+		return TypedValue{}, fmt.Errorf("golem: %s cannot be encoded: %s", reflect.TypeFor[T](), c.Invalid)
 	}
-	g := graphBuilder{d: defs}
-	root := g.node(c)
-	graph := g.build()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(c)
+	graph := g.Build()
 	graph.Root = root
 	return TypedValue{wit: types.TypedSchemaValue{
 		Graph: graph,
-		Value: encodeWith(c, reflect.ValueOf(&value).Elem()),
+		Value: engine.EncodeWith(c, reflect.ValueOf(&value).Elem()),
 	}}, nil
 }

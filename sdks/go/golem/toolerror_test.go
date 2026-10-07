@@ -74,7 +74,7 @@ func buildToolFor(t *testing.T, declare func(r *toolRegistry, d *definitions)) (
 	declare(r, d)
 	tools, ok := r.discover(d)
 	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
 	}
 	if len(tools) != 1 {
 		t.Fatalf("discovered %d tools, want 1", len(tools))
@@ -87,7 +87,7 @@ func encodeArgs[A any](t *testing.T, ce *commandEntry, fill func(*A)) types.Type
 	t.Helper()
 	l, ok := ce.resolve()
 	if !ok {
-		t.Fatalf("command %s is not well-defined: %s", ce.label(), allDefErrors(ce.node.entry.d.errs))
+		t.Fatalf("command %s is not well-defined: %s", ce.label(), allDefErrors(ce.node.entry.d.Errs))
 	}
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
@@ -272,7 +272,7 @@ func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
 	declareLookup(r, d)
 	tools, ok := r.discover(d)
 	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
 	}
 	tool := newReflectedTool("lookup", tools[0])
 	errs := tool.Root().Errors()

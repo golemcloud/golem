@@ -60,7 +60,7 @@ func TestCallerEncodingMatchesCalleeDecoding(t *testing.T) {
 	}
 
 	// Decode it the way the callee's invoke path does.
-	fields := defs.structFields(reflect.TypeFor[tChargeIn]())
+	fields := defs.StructFields(reflect.TypeFor[tChargeIn]())
 	dst := reflect.New(reflect.TypeFor[tChargeIn]()).Elem()
 	if err := decodeParams(tree, fields, dst, nil); err != nil {
 		t.Fatalf("callee could not decode the caller's arguments: %v", err)

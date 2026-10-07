@@ -16,6 +16,7 @@ package golem
 
 import (
 	"encoding/json"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"os"
 	"reflect"
 	"strings"
@@ -166,9 +167,9 @@ func TestExposeFilesNeedsAnAddressableOwner(t *testing.T) {
 	}
 }
 
-func anyErrContains(errs []definitionError, want string) bool {
+func anyErrContains(errs []engine.DefError, want string) bool {
 	for _, e := range errs {
-		if strings.Contains(e.detail, want) {
+		if strings.Contains(e.Detail, want) {
 			return true
 		}
 	}

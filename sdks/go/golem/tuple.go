@@ -15,11 +15,7 @@
 package golem
 
 import (
-	"fmt"
-	"reflect"
-
 	"github.com/golemcloud/golem/sdks/go/core/values"
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
 // Tuples are positional, unnamed groups, lowering to the WIT tuple type. The
@@ -45,42 +41,3 @@ type Tuple7[A, B, C, D, E, F, G any] = values.Tuple7[A, B, C, D, E, F, G]
 
 // Tuple8 is an 8-element tuple.
 type Tuple8[A, B, C, D, E, F, G, H any] = values.Tuple8[A, B, C, D, E, F, G, H]
-
-// compileTuple lowers a TupleN to the WIT tuple type. The struct's fields are
-// the elements in order, so both directions walk them positionally.
-func compileTuple(c *codec, elems []*codec) {
-	c.body = func(g *graphBuilder) types.SchemaTypeBody {
-		idx := make([]int32, len(elems))
-		for i, e := range elems {
-			idx[i] = g.node(e)
-		}
-		return types.MakeSchemaTypeBodyTupleType(idx)
-	}
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
-		idx := make([]int32, len(elems))
-		for i, e := range elems {
-			idx[i] = e.encode(b, v.Field(i))
-		}
-		return b.push(types.MakeSchemaValueNodeTupleValue(idx))
-	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
-		if err != nil {
-			return err
-		}
-		if n.Tag() != types.SchemaValueNodeTupleValue {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
-		}
-		items := n.TupleValue()
-		if len(items) != len(elems) {
-			return fmt.Errorf("%s: tuple value has %d elements, but %s has %d",
-				c.typ, len(items), c.typ, len(elems))
-		}
-		for i, e := range elems {
-			if err := e.decode(d, dst.Field(i), items[i]); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-}

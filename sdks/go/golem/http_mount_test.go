@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"strings"
 	"testing"
@@ -246,7 +247,7 @@ func TestBuildHTTPValidations(t *testing.T) {
 		{
 			"non-scalar field not bindable",
 			agent("A", &Mount{Path: "/a/{id}"}, fields("id"),
-				method("m", []fieldInfo{{name: "blob", typ: reflect.TypeFor[[]byte]()}}, GET("/m/{blob}"))),
+				method("m", []engine.Field{{Name: "blob", Typ: reflect.TypeFor[[]byte]()}}, GET("/m/{blob}"))),
 			"only scalar fields",
 		},
 		{
@@ -274,19 +275,19 @@ func TestBuildHTTPValidations(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-func fields(names ...string) []fieldInfo {
-	out := make([]fieldInfo, len(names))
+func fields(names ...string) []engine.Field {
+	out := make([]engine.Field, len(names))
 	for i, n := range names {
-		out[i] = fieldInfo{name: n, typ: reflect.TypeFor[string]()}
+		out[i] = engine.Field{Name: n, Typ: reflect.TypeFor[string]()}
 	}
 	return out
 }
 
-func method(name string, in []fieldInfo, eps ...Endpoint) *methodEntry {
+func method(name string, in []engine.Field, eps ...Endpoint) *methodEntry {
 	return &methodEntry{name: name, inFields: in, endpoints: eps}
 }
 
-func agent(name string, mount *Mount, idFields []fieldInfo, methods ...*methodEntry) *agentEntry {
+func agent(name string, mount *Mount, idFields []engine.Field, methods ...*methodEntry) *agentEntry {
 	e := &agentEntry{name: name, mount: mount, idFields: idFields, methods: map[string]*methodEntry{}}
 	for _, m := range methods {
 		e.methods[m.name] = m
@@ -351,7 +352,7 @@ func containsSubstr(errs []string, want string) bool {
 	return false
 }
 
-func containsDefErr(errs []definitionError, want string) bool {
+func containsDefErr(errs []engine.DefError, want string) bool {
 	for _, e := range errs {
 		if strings.Contains(e.Error(), want) {
 			return true

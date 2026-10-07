@@ -222,5 +222,5 @@ func (c *ToolOutputContext) Stderr() *ToolOutput { return c.stderr }
 // do: its name field is the tool's own declared error case, and a definition
 // failure is not one of those.
 func toolDefinitionError(d *definitions) types.ToolError {
-	return types.MakeToolErrorInvalidResult("tool definition errors:\n" + allDefErrors(d.errs))
+	return types.MakeToolErrorInvalidResult("tool definition errors:\n" + allDefErrors(d.Errs))
 }

@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"strings"
 	"testing"
@@ -346,8 +347,8 @@ type SecretIn struct{ Key Secret[string] }
 func TestASecretTravelsAsAHandle(t *testing.T) {
 	h := &types.Secret{}
 	in := SecretIn{Key: Secret[string]{take: func() (*types.Secret, error) { return h, nil }}}
-	c := defs.compile(reflect.TypeFor[SecretIn]())
-	tree := encodeWith(c, reflect.ValueOf(in))
+	c := defs.Compile(reflect.TypeFor[SecretIn]())
+	tree := engine.EncodeWith(c, reflect.ValueOf(in))
 	var found bool
 	for _, n := range tree.ValueNodes {
 		if n.Tag() == types.SchemaValueNodeSecretValue && n.SecretValue() == h {
@@ -358,8 +359,8 @@ func TestASecretTravelsAsAHandle(t *testing.T) {
 		t.Fatal("the secret was not sent as its handle")
 	}
 	out := reflect.New(reflect.TypeFor[SecretIn]()).Elem()
-	d := decoder{nodes: tree.ValueNodes}
-	if err := c.decode(&d, out, tree.Root); err != nil {
+	d := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := c.Decode(&d, out, tree.Root); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	if out.Interface().(SecretIn).Key.take == nil {
@@ -372,7 +373,7 @@ func TestASecretTravelsAsAHandle(t *testing.T) {
 				t.Error("a secret without a source was sent")
 			}
 		}()
-		encodeWith(c, reflect.ValueOf(SecretIn{}))
+		engine.EncodeWith(c, reflect.ValueOf(SecretIn{}))
 	}()
 }
 

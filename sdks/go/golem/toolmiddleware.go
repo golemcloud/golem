@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
 	"slices"
@@ -82,15 +83,15 @@ type middlewareEntry struct {
 type middlewareHandler func(*middlewareInvocation, reflect.Value) (reflect.Value, error)
 
 func (e *middlewareEntry) fail(format string, args ...any) {
-	e.d.recordErr("", "", "tool middleware %s: %s", e.name, fmt.Sprintf(format, args...))
+	e.d.RecordErr("", "", "tool middleware %s: %s", e.name, fmt.Sprintf(format, args...))
 }
 
 func registerMiddleware(r *toolRegistry, d *definitions, e *middlewareEntry) {
 	switch {
 	case e.name == "":
-		d.recordErr("", "", "a tool middleware requires a name")
+		d.RecordErr("", "", "a tool middleware requires a name")
 	case r.middlewaresByName[e.name] != nil:
-		d.recordErr("", "", "tool middleware already defined: %s", e.name)
+		d.RecordErr("", "", "tool middleware already defined: %s", e.name)
 	default:
 		r.middlewareOrder = append(r.middlewareOrder, e.name)
 		r.middlewaresByName[e.name] = e
@@ -485,11 +486,11 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 		ok = false
 	}
 
-	g := graphBuilder{d: d}
-	paramsRoot := g.node(d.compile(e.paramsType))
-	paramsGraph := g.build()
+	g := engine.GraphBuilder{E: d.Engine}
+	paramsRoot := g.Node(d.Compile(e.paramsType))
+	paramsGraph := g.Build()
 	paramsGraph.Root = paramsRoot
-	for typ, why := range g.invalids {
+	for typ, why := range g.Invalids {
 		e.fail("takes parameters of %s, which cannot be represented: %s", typ, why)
 		ok = false
 	}

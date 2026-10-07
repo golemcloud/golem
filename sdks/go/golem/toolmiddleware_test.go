@@ -256,7 +256,7 @@ func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 	m, _ := r.getMiddleware("vcs2-on-vcs")
 	built, ok := d.buildToolMiddleware(m)
 	if !ok {
-		t.Fatalf("metadata: %s", allDefErrors(d.errs))
+		t.Fatalf("metadata: %s", allDefErrors(d.Errs))
 	}
 	scope := built.Scope.Monomorphic()
 	if scope.Presented.Version != "2.0.0" || scope.Expected.IsNone() || scope.Expected.Some().Version != "1.2.0" {
@@ -336,7 +336,7 @@ func TestMiddlewareMetadata(t *testing.T) {
 	})
 	found, ok := r.discoverMiddlewares(d)
 	if !ok || len(found) != 2 {
-		t.Fatalf("discovery: %v %s", ok, allDefErrors(d.errs))
+		t.Fatalf("discovery: %v %s", ok, allDefErrors(d.Errs))
 	}
 	typed, universal := found[0], found[1]
 	if typed.Name != "policy" || typed.Version != "2.0.0" || typed.Doc.Summary != "Caps" ||

@@ -165,7 +165,7 @@ func TestToolArgumentSettersRestrictTheSchema(t *testing.T) {
 	})
 	shape.Handle(func(*ToolContext, ShapeArgs) (Unit, error) { return Unit{}, nil })
 	if _, ok := r.discover(d); !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
 	}
 	e, _ := r.get("shaper")
 	built, _ := d.buildTool(e)
@@ -207,7 +207,7 @@ func TestAToolArgumentRestrictionThatCannotApplyFailsTheDefinition(t *testing.T)
 	tool.Command[ShapeArgs, Unit]("shape", func(a *ShapeArgs, s *ToolCommandSpec) {
 		s.Positional(&a.Size).Regex("^[0-9]+$")
 	})
-	if _, ok := r.discover(d); ok || !containsDefErr(d.errs, "restriction regex does not apply to a number") {
-		t.Fatalf("errors: %s", allDefErrors(d.errs))
+	if _, ok := r.discover(d); ok || !containsDefErr(d.Errs, "restriction regex does not apply to a number") {
+		t.Fatalf("errors: %s", allDefErrors(d.Errs))
 	}
 }

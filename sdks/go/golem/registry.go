@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 
@@ -23,27 +24,13 @@ import (
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-// fieldInfo is one exported struct field, in declaration order. Declaration
-// order is the wire order: value trees encode records positionally.
-type fieldInfo struct {
-	name  string
-	index int
-	typ   reflect.Type
-	codec *codec
-	// autoInjected marks a Principal field: the host fills it from the
-	// invocation, so it has no codec and no value on the wire.
-	autoInjected bool
-	// restrict is what the field's golem tag declared.
-	restrict *restriction
-}
-
 type methodEntry struct {
 	name      string
 	desc      string
-	inFields  []fieldInfo
+	inFields  []engine.Field
 	endpoints []Endpoint      // HTTP routes, if any
 	readOnly  *readOnlyConfig // non-nil => read-only method with a cache policy
-	outCodec  *codec          // nil => unit output
+	outCodec  *engine.Codec   // nil => unit output
 	outType   reflect.Type    // nil => unit output
 	// invoke is the erased dispatcher produced by Implement. Calling it is a
 	// direct func-value call: no reflection is used to reach the handler.
@@ -62,7 +49,7 @@ type agentEntry struct {
 	snapshot SnapshotPolicy // snapshot cadence
 	configs  []configDecl   // declared config keys + secrets
 	idType   reflect.Type
-	idFields []fieldInfo
+	idFields []engine.Field
 	newState func(idVal reflect.Value, agentID string, principal Principal) any
 	methods  map[string]*methodEntry
 	order    []string
@@ -94,44 +81,6 @@ type instance struct {
 // per-worker runtime state, so it stays a standalone package var.
 var active *instance
 
-// structFields returns the exported fields of a struct type in declaration
-// order. Non-structs (e.g. Unit) yield no fields.
-func (d *definitions) structFields(t reflect.Type) []fieldInfo {
-	var out []fieldInfo
-	if t == nil || t.Kind() != reflect.Struct {
-		return out
-	}
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if f.PkgPath != "" { // unexported
-			continue
-		}
-		if f.Type == principalType {
-			out = append(out, fieldInfo{name: lowerFirst(f.Name), index: i, typ: f.Type, autoInjected: true})
-			continue
-		}
-		fi := fieldInfo{
-			name:  lowerFirst(f.Name),
-			index: i,
-			typ:   f.Type,
-			codec: d.compile(f.Type),
-		}
-		if tag, ok := f.Tag.Lookup("golem"); ok {
-			r, err := parseRestrictionTag(tag)
-			if err == nil {
-				err = d.checkRestriction(fi.codec, r)
-			}
-			if err != nil {
-				fi.codec = restrictionFailed(fi.codec, fmt.Sprintf("%s.%s: %v", t, f.Name, err))
-			} else {
-				fi.restrict = r
-			}
-		}
-		out = append(out, fi)
-	}
-	return out
-}
-
 // paramsTypeProblem explains why t cannot carry a method's parameters, or
 // returns "". The parameters are t's exported fields, so t must be a struct,
 // and one with fields that are all unexported — a stream, an option, or any
@@ -145,17 +94,6 @@ func paramsTypeProblem(t reflect.Type) string {
 		return fmt.Sprintf("%s; %s has none, so wrap it in a struct field", want, t)
 	}
 	return ""
-}
-
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	b := []byte(s)
-	if b[0] >= 'A' && b[0] <= 'Z' {
-		b[0] += 'a' - 'A'
-	}
-	return string(b)
 }
 
 // DefineAgent declares a config-less agent and returns its state-free
@@ -191,23 +129,23 @@ func DefineConfiguredAgent[Id any, Cfg any](spec Spec) *AgentDefinition[Id, Cfg]
 func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinition[Id, Cfg] {
 	idType := reflect.TypeFor[Id]()
 	if spec.Name == "" {
-		d.recordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
+		d.RecordErr("", "", "DefineAgent requires a non-empty Spec.Name (Id type %s)", idType)
 		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
 	if existing, dup := d.agents[spec.Name]; dup {
 		if existing.remote {
 			// Package-level var init order across packages is unspecified, so this
 			// clash can surface from either side; both say the same thing.
-			d.recordErr(spec.Name, "", "%s is also declared as an agent client by this component; call it with its own definition rather than a client definition", spec.Name)
+			d.RecordErr(spec.Name, "", "%s is also declared as an agent client by this component; call it with its own definition rather than a client definition", spec.Name)
 		} else {
-			d.recordErr(spec.Name, "", "agent type already defined")
+			d.RecordErr(spec.Name, "", "agent type already defined")
 		}
 		return &AgentDefinition[Id, Cfg]{name: spec.Name}
 	}
 	if idType.Kind() != reflect.Struct {
 		// Record but still register (with no id fields) so a later Implement attaches
 		// rather than cascading into "unknown agent" errors.
-		d.recordErr(spec.Name, "", "Id must be a struct, got %s", idType)
+		d.RecordErr(spec.Name, "", "Id must be a struct, got %s", idType)
 	}
 	e := &agentEntry{
 		name:     spec.Name,
@@ -217,7 +155,7 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 		mount:    spec.HTTP,
 		snapshot: spec.Snapshot,
 		idType:   idType,
-		idFields: d.structFields(idType),
+		idFields: d.StructFields(idType),
 		methods:  map[string]*methodEntry{},
 		// newState and the methods are attached by Implement; newState stays nil
 		// until then (an agent defined but never implemented fails at initialize).
@@ -230,7 +168,7 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 	// The Id type identifies the target agent for typed calls (Get), so two agents
 	// cannot share one — the second would silently shadow the first.
 	if existing, ok := d.idToAgent[idType]; ok && existing != spec.Name {
-		d.recordErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
+		d.RecordErr(spec.Name, "", "Id type %s is already used by agent %q; each agent needs a distinct Id type", idType, existing)
 	} else {
 		d.idToAgent[idType] = spec.Name
 	}
@@ -353,16 +291,16 @@ func implementInto[Id any, S any, Cfg any](
 ) *AgentImpl[Id, S, Cfg] {
 	e := d.agents[def.name]
 	if e == nil {
-		d.recordErr(def.name, "", "Implement: unknown agent %q (was DefineAgent called?)", def.name)
+		d.RecordErr(def.name, "", "Implement: unknown agent %q (was DefineAgent called?)", def.name)
 		return &AgentImpl[Id, S, Cfg]{d: d}
 	}
 	if initNil {
 		// Recorded, not fatal: init is only called from a successful initialize,
 		// gated on this agent having no definition errors.
-		d.recordErr(def.name, "", "Implement requires a non-nil init function")
+		d.RecordErr(def.name, "", "Implement requires a non-nil init function")
 	}
 	if e.newState != nil {
-		d.recordErr(def.name, "", "agent already implemented")
+		d.RecordErr(def.name, "", "agent already implemented")
 		return &AgentImpl[Id, S, Cfg]{d: d, e: e}
 	}
 	e.newState = newState
@@ -379,32 +317,32 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	h func(*Context[S], In) Out,
 ) {
 	if m.name == "" {
-		d.recordErr(e.name, "", "DefineMethod requires a non-empty method name")
+		d.RecordErr(e.name, "", "DefineMethod requires a non-empty method name")
 		return
 	}
 	if h == nil {
-		d.recordErr(e.name, m.name, "Handle requires a non-nil handler")
+		d.RecordErr(e.name, m.name, "Handle requires a non-nil handler")
 		return
 	}
 	if m.descCount > 1 {
-		d.recordErr(e.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
+		d.RecordErr(e.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
 	}
 	if m.readOnlyCount > 1 {
-		d.recordErr(e.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
+		d.RecordErr(e.name, m.name, "method %q: ReadOnly set %d times (a method is read-only once)", m.name, m.readOnlyCount)
 	}
 	if m.cacheCount > 1 {
-		d.recordErr(e.name, m.name, "method %q: ReadOnly accepts at most one cache policy, got %d", m.name, m.cacheCount)
+		d.RecordErr(e.name, m.name, "method %q: ReadOnly accepts at most one cache policy, got %d", m.name, m.cacheCount)
 	}
 	if m.readOnly != nil {
 		if m.readOnly.policy.kind == cacheTTL && m.readOnly.policy.ttl <= 0 {
-			d.recordErr(e.name, m.name, "method %q: CacheFor requires a positive ttl, got %v (use NoCache to disable caching)", m.name, m.readOnly.policy.ttl)
+			d.RecordErr(e.name, m.name, "method %q: CacheFor requires a positive ttl, got %v (use NoCache to disable caching)", m.name, m.readOnly.policy.ttl)
 		}
 		if e.mode == common.AgentModeEphemeral {
-			d.recordErr(e.name, m.name, "method %q: ReadOnly is only valid on a Durable agent (an ephemeral agent has no shared state to cache)", m.name)
+			d.RecordErr(e.name, m.name, "method %q: ReadOnly is only valid on a Durable agent (an ephemeral agent has no shared state to cache)", m.name)
 		}
 	}
 	if _, dup := e.methods[m.name]; dup {
-		d.recordErr(e.name, m.name, "method already implemented")
+		d.RecordErr(e.name, m.name, "method already implemented")
 		return
 	}
 
@@ -412,11 +350,11 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	inType := reflect.TypeFor[In]()
 	outType := reflect.TypeFor[Out]()
 	if problem := paramsTypeProblem(inType); problem != "" {
-		d.recordErr(e.name, m.name, "method %q: %s", m.name, problem)
+		d.RecordErr(e.name, m.name, "method %q: %s", m.name, problem)
 	}
-	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.structFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
+	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.StructFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
 	if outType != reflect.TypeFor[Unit]() {
-		me.outCodec = d.compile(outType)
+		me.outCodec = d.Compile(outType)
 		me.outType = outType
 	}
 
@@ -447,7 +385,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		// &result, not result: reflect.ValueOf unwraps an interface to the
 		// concrete type it holds, which would lose the declared type of a
 		// variant-typed output.
-		encoded := encodeWith(me.outCodec, reflect.ValueOf(&result).Elem())
+		encoded := engine.EncodeWith(me.outCodec, reflect.ValueOf(&result).Elem())
 		return &encoded, nil
 	}
 

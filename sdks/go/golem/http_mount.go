@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 	"sort"
@@ -308,10 +309,10 @@ func bindableKind(k reflect.Kind) bool {
 // definition error rather than panicking; the compiled records are still
 // returned so a well-formed part of a partly-broken component still publishes
 // (discovery gates on the errors, so nothing invalid actually deploys).
-func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[string][]common.HttpEndpointDetails, []definitionError) {
-	var errs []definitionError
+func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[string][]common.HttpEndpointDetails, []engine.DefError) {
+	var errs []engine.DefError
 	rec := func(method, format string, args ...any) {
-		errs = append(errs, definitionError{agent: e.name, method: method, detail: fmt.Sprintf(format, args...)})
+		errs = append(errs, engine.DefError{Agent: e.name, Method: method, Detail: fmt.Sprintf(format, args...)})
 	}
 
 	if e.mount == nil {
@@ -346,8 +347,8 @@ func buildHTTP(e *agentEntry) (witTypes.Option[common.HttpMountDetails], map[str
 		}
 	}
 	for _, f := range userFields(e.idFields) {
-		if !mountVars[f.name] {
-			rec("", "HTTP mount path does not bind Id field %q; every constructor field must appear as a {var}", f.name)
+		if !mountVars[f.Name] {
+			rec("", "HTTP mount path does not bind Id field %q; every constructor field must appear as a {var}", f.Name)
 		}
 	}
 
@@ -611,26 +612,26 @@ func verbName(m common.HttpMethod) string {
 
 // userFields are the fields a caller supplies; principalFields are the ones
 // the host fills.
-func userFields(fs []fieldInfo) []fieldInfo {
-	return slices.DeleteFunc(slices.Clone(fs), func(f fieldInfo) bool { return f.autoInjected })
+func userFields(fs []engine.Field) []engine.Field {
+	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return f.AutoInjected })
 }
 
-func principalFields(fs []fieldInfo) []fieldInfo {
-	return slices.DeleteFunc(slices.Clone(fs), func(f fieldInfo) bool { return !f.autoInjected })
+func principalFields(fs []engine.Field) []engine.Field {
+	return slices.DeleteFunc(slices.Clone(fs), func(f engine.Field) bool { return !f.AutoInjected })
 }
 
-func fieldNameSet(fs []fieldInfo) map[string]bool {
+func fieldNameSet(fs []engine.Field) map[string]bool {
 	m := make(map[string]bool, len(fs))
 	for _, f := range fs {
-		m[f.name] = true
+		m[f.Name] = true
 	}
 	return m
 }
 
-func fieldKindMap(fs []fieldInfo) map[string]reflect.Kind {
+func fieldKindMap(fs []engine.Field) map[string]reflect.Kind {
 	m := make(map[string]reflect.Kind, len(fs))
 	for _, f := range fs {
-		m[f.name] = f.typ.Kind()
+		m[f.Name] = f.Typ.Kind()
 	}
 	return m
 }

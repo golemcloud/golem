@@ -16,6 +16,7 @@ package golem
 
 import (
 	"errors"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 	"time"
@@ -48,10 +49,10 @@ func TestAQuotaTokenMovesWhenSent(t *testing.T) {
 		sender.handle()
 	}()
 
-	c := defs.compile(reflect.TypeFor[QuotaToken]())
-	g := graphBuilder{d: defs}
-	root := g.node(c)
-	if body := g.build().TypeNodes[root].Body; body.Tag() != types.SchemaTypeBodyQuotaTokenType || body.QuotaTokenType().ResourceName.IsSome() {
+	c := defs.Compile(reflect.TypeFor[QuotaToken]())
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(c)
+	if body := g.Build().TypeNodes[root].Body; body.Tag() != types.SchemaTypeBodyQuotaTokenType || body.QuotaTokenType().ResourceName.IsSome() {
 		t.Errorf("a token is typed as tag %d", body.Tag())
 	}
 }

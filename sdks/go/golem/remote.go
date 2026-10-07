@@ -97,19 +97,19 @@ func defineFullAgentClientInto[Id any, Cfg any](d *definitions, name string, spe
 	idType := reflect.TypeFor[Id]()
 	a := &FullAgentClient[Id, Cfg]{name: name, mode: spec.Mode}
 	if name == "" {
-		d.recordErr("", "", "DefineFullAgentClient requires a non-empty name (Id type %s)", idType)
+		d.RecordErr("", "", "DefineFullAgentClient requires a non-empty name (Id type %s)", idType)
 		return a
 	}
 	if existing, dup := d.agents[name]; dup {
 		if existing.remote {
-			d.recordErr(name, "", "agent client already defined")
+			d.RecordErr(name, "", "agent client already defined")
 		} else {
-			d.recordErr(name, "", "%s is defined by this component; call it with its own definition rather than a client definition", name)
+			d.RecordErr(name, "", "%s is defined by this component; call it with its own definition rather than a client definition", name)
 		}
 		return a
 	}
 	if idType.Kind() != reflect.Struct {
-		d.recordErr(name, "", "Id must be a struct, got %s", idType)
+		d.RecordErr(name, "", "Id must be a struct, got %s", idType)
 	}
 	// Registered in d.agents so Get can resolve the id fields and config
 	// overrides, but deliberately NOT in d.order: that list is what discover()
@@ -122,7 +122,7 @@ func defineFullAgentClientInto[Id any, Cfg any](d *definitions, name string, spe
 		remote:   true,
 		mode:     spec.Mode.toWit(),
 		idType:   idType,
-		idFields: d.structFields(idType),
+		idFields: d.StructFields(idType),
 		methods:  map[string]*methodEntry{},
 	}
 	d.agents[name] = e

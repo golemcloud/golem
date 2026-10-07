@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
 	"slices"
@@ -291,7 +292,7 @@ func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.
 	l, ok := ce.resolve()
 	if !ok || ce.node.body != ce {
 		return types.TypedSchemaValue{}, nil, fmt.Errorf("golem: tool %s command %s is not well-defined:\n%s",
-			e.name, ce.label(), allDefErrors(e.d.errs))
+			e.name, ce.label(), allDefErrors(e.d.Errs))
 	}
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
@@ -321,8 +322,8 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 		return reflect.Value{}, ce.callError(target, ToolCallInvalidResult, "the command returned no result")
 	}
 	tree := res.Some().Value
-	dec := decoder{nodes: tree.ValueNodes}
-	if err := ce.node.entry.d.compile(ce.outType).decode(&dec, out, tree.Root); err != nil {
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
 		return reflect.Value{}, ce.callError(target, ToolCallInvalidResult, "%v", err)
 	}
 	return out, nil

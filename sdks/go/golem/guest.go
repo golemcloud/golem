@@ -20,6 +20,7 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	guestExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_agent_guest"
 	loadExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_load_snapshot"
 	saveExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_api_save_snapshot"
@@ -49,17 +50,17 @@ type PanicError struct {
 
 // Internal reports whether the panic came from SDK machinery (marshaling)
 // rather than from the agent's handler — i.e. whether it is our bug. An
-// [encodeError] is the agent supplying an unencodable value, so it is not
+// [engine.EncodeError] is the agent supplying an unencodable value, so it is not
 // internal even though it surfaces in the encode stage.
 func (e *PanicError) Internal() bool {
-	if _, ok := e.Value.(*encodeError); ok {
+	if _, ok := e.Value.(*engine.EncodeError); ok {
 		return false
 	}
 	return e.Stage != stageHandler
 }
 
 func (e *PanicError) Error() string {
-	if ee, ok := e.Value.(*encodeError); ok {
+	if ee, ok := e.Value.(*engine.EncodeError); ok {
 		return fmt.Sprintf("agent method %q returned a value that cannot be encoded: %s", e.Method, ee.Error())
 	}
 	if e.Internal() {
@@ -69,7 +70,7 @@ func (e *PanicError) Error() string {
 }
 
 // Unwrap exposes the recovered value when it is itself an error, so a wrapped
-// cause (e.g. a RemoteCallError from a nested call, or an encodeError) stays
+// cause (e.g. a RemoteCallError from a nested call, or an engine.EncodeError) stays
 // reachable via errors.As/Is.
 func (e *PanicError) Unwrap() error {
 	if err, ok := e.Value.(error); ok {
@@ -77,14 +78,6 @@ func (e *PanicError) Unwrap() error {
 	}
 	return nil
 }
-
-// encodeError marks an encode-stage panic caused by the agent supplying a value
-// the wire cannot carry — a nil or unregistered variant case, an out-of-range
-// enum value, or a Secret used as a parameter/return. It is the agent's mistake,
-// so it is reported as an agent error rather than an INTERNAL SDK error.
-type encodeError struct{ msg string }
-
-func (e *encodeError) Error() string { return e.msg }
 
 // decodeError marks failures that really are the caller's bad input, so they can
 // be reported as invalid-input rather than a generic failure.

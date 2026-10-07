@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"time"
 
@@ -152,7 +153,7 @@ func (m MethodDef[Id, In, Out]) encodeInput(in In) (tree types.SchemaValueTree, 
 	if problem := paramsTypeProblem(inType); problem != "" {
 		return tree, fmt.Errorf("golem: %s: %s", m.name, problem)
 	}
-	return encodeParams(defs.structFields(inType), reflect.ValueOf(&in).Elem()), nil
+	return encodeParams(defs.StructFields(inType), reflect.ValueOf(&in).Elem()), nil
 }
 
 // decodeOutput decodes a remote result through the LOCAL descriptor's Out codec.
@@ -172,8 +173,8 @@ func decodeOutput[Out any](target, method string, out witTypes.Option[types.Sche
 	}
 	tree := out.Some()
 	dst := reflect.New(outType).Elem()
-	dec := decoder{nodes: tree.ValueNodes}
-	if err := defs.compile(outType).decode(&dec, dst, tree.Root); err != nil {
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := defs.Compile(outType).Decode(&dec, dst, tree.Root); err != nil {
 		return zero, &RemoteCallError{
 			Target: target, Method: method, Kind: RemoteProtocol,
 			Message: "remote returned an undecodable value: " + err.Error(),
@@ -301,7 +302,7 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 // the caller a stream endpoint — including when the only stream is in the
 // output. Await the call instead.
 func (m MethodDef[Id, In, Out]) refuseStreams(form string) {
-	if defs.carriesStream(reflect.TypeFor[In]()) || defs.carriesStream(reflect.TypeFor[Out]()) {
+	if defs.CarriesStream(reflect.TypeFor[In]()) || defs.CarriesStream(reflect.TypeFor[Out]()) {
 		panic(fmt.Errorf(
 			"golem: %s: %s cannot carry a stream; await the call with Call or CallAsync instead",
 			m.name, form))

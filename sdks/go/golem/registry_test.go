@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 )
@@ -42,7 +43,7 @@ func TestBindAdapters(t *testing.T) {
 }
 
 func TestStructFieldsAndLowerFirst(t *testing.T) {
-	if fs := defs.structFields(reflect.TypeFor[int]()); len(fs) != 0 {
+	if fs := defs.StructFields(reflect.TypeFor[int]()); len(fs) != 0 {
 		t.Fatalf("non-struct should yield no fields, got %d", len(fs))
 	}
 	type withUnexported struct {
@@ -50,11 +51,11 @@ func TestStructFieldsAndLowerFirst(t *testing.T) {
 		unexported int //nolint:unused // present to exercise the skip path
 	}
 	_ = withUnexported{}.unexported
-	fs := defs.structFields(reflect.TypeFor[withUnexported]())
-	if len(fs) != 1 || fs[0].name != "exported" {
+	fs := defs.StructFields(reflect.TypeFor[withUnexported]())
+	if len(fs) != 1 || fs[0].Name != "exported" {
 		t.Fatalf("fields = %+v", fs)
 	}
-	if lowerFirst("") != "" {
+	if engine.LowerFirst("") != "" {
 		t.Fatal("lowerFirst(\"\") should be empty")
 	}
 }

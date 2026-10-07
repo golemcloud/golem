@@ -15,11 +15,11 @@
 package golem
 
 import (
-	"encoding/binary"
 	"fmt"
 	"reflect"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
@@ -31,19 +31,9 @@ type UUID = values.UUID
 // ParseUUID reads the 8-4-4-4-12 hexadecimal form of a UUID.
 func ParseUUID(s string) (UUID, error) { return values.ParseUUID(s) }
 
-func uuidFromWit(w types.Uuid) UUID {
-	var u UUID
-	binary.BigEndian.PutUint64(u[0:8], w.HighBits)
-	binary.BigEndian.PutUint64(u[8:16], w.LowBits)
-	return u
-}
+func uuidFromWit(w types.Uuid) UUID { return engine.UUIDFromWit(w) }
 
-func uuidToWit(u UUID) types.Uuid {
-	return types.Uuid{
-		HighBits: binary.BigEndian.Uint64(u[0:8]),
-		LowBits:  binary.BigEndian.Uint64(u[8:16]),
-	}
-}
+func uuidToWit(u UUID) types.Uuid { return engine.UUIDToWit(u) }
 
 // ParsedAgentID is the typed decomposition of an agent id string: the agent
 // type name, the constructor parameters decoded back into the Id type, and the
@@ -89,7 +79,7 @@ func decodeAgentIDParams[Id any](value types.SchemaValueTree) (Id, error) {
 		return zero, fmt.Errorf("id type %s must be a struct", idType)
 	}
 	idVal := reflect.New(idType).Elem()
-	if err := decodeParams(value, defs.structFields(idType), idVal, nil); err != nil {
+	if err := decodeParams(value, defs.StructFields(idType), idVal, nil); err != nil {
 		return zero, err
 	}
 	return idVal.Interface().(Id), nil

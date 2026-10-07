@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 
@@ -78,7 +79,7 @@ type configDecl struct {
 	source   common.AgentConfigSource
 	path     []string
 	typ      reflect.Type
-	restrict *restriction
+	restrict *engine.Restriction
 }
 
 // NoConfig is the empty config type used by an agent that declares no config. It
@@ -99,18 +100,18 @@ func configKind(source common.AgentConfigSource) string {
 func recordConfigOn(d *definitions, e *agentEntry, agentName string, source common.AgentConfigSource, path []string, typ reflect.Type) {
 	kind := configKind(source)
 	if len(path) == 0 {
-		d.recordErr(agentName, "", "%s: declared with an empty path", kind)
+		d.RecordErr(agentName, "", "%s: declared with an empty path", kind)
 		return
 	}
 	for _, seg := range path {
 		if seg == "" {
-			d.recordErr(agentName, "", "%s %v: path has an empty segment", kind, path)
+			d.RecordErr(agentName, "", "%s %v: path has an empty segment", kind, path)
 			return
 		}
 	}
 	for _, cd := range e.configs {
 		if pathsEqual(cd.path, path) {
-			d.recordErr(agentName, "", "config path %v declared more than once", path)
+			d.RecordErr(agentName, "", "config path %v declared more than once", path)
 			return
 		}
 	}
@@ -156,7 +157,7 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 			if !f.IsExported() {
 				continue
 			}
-			path := append(clonePath(prefix), lowerFirst(f.Name))
+			path := append(clonePath(prefix), engine.LowerFirst(f.Name))
 			index := append(append([]int(nil), idx...), i)
 			switch {
 			case isSecretType(f.Type):
@@ -177,7 +178,7 @@ func configLeaves(cfgType reflect.Type) ([]configLeaf, error) {
 func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgType reflect.Type) {
 	leaves, err := configLeaves(cfgType)
 	if err != nil {
-		d.recordErr(agentName, "", "config: %v", err)
+		d.RecordErr(agentName, "", "config: %v", err)
 		return
 	}
 	for _, lf := range leaves {
@@ -185,12 +186,12 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 		if lf.tag == "" || len(e.configs) == 0 || !pathsEqual(e.configs[len(e.configs)-1].path, lf.path) {
 			continue
 		}
-		r, err := parseRestrictionTag(lf.tag)
+		r, err := engine.ParseRestrictionTag(lf.tag)
 		if err == nil {
-			err = d.checkRestriction(d.compile(lf.typ), r)
+			err = d.CheckRestriction(d.Compile(lf.typ), r)
 		}
 		if err != nil {
-			d.recordErr(agentName, "", "config %v: %v", lf.path, err)
+			d.RecordErr(agentName, "", "config %v: %v", lf.path, err)
 			continue
 		}
 		e.configs[len(e.configs)-1].restrict = r
@@ -287,14 +288,14 @@ func readConfigLeaf(d *definitions, lf configLeaf) (reflect.Value, error) {
 	if lf.source == common.AgentConfigSourceSecret {
 		return readSecretLeaf(lf)
 	}
-	res := host.GetConfigValue(lf.path, d.graphForType(lf.typ))
+	res := host.GetConfigValue(lf.path, d.GraphForType(lf.typ))
 	if res.IsErr() {
 		return reflect.Value{}, configValueErrorToGo(lf.path, res.Err())
 	}
 	tree := res.Ok()
 	dst := reflect.New(lf.typ).Elem()
-	dec := decoder{nodes: tree.ValueNodes}
-	if err := d.compile(lf.typ).decode(&dec, dst, tree.Root); err != nil {
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := d.Compile(lf.typ).Decode(&dec, dst, tree.Root); err != nil {
 		return reflect.Value{}, fmt.Errorf("golem/config %v: %w", lf.path, err)
 	}
 	return dst, nil
@@ -315,7 +316,7 @@ func readSecretLeaf(lf configLeaf) (reflect.Value, error) {
 // value type into the shared graph g (so ValueType is an index into the agent's
 // schema). An uncompilable type lands in g.invalids and is attributed by
 // discover, exactly like a method parameter.
-func (d *definitions) buildConfigDecls(g *graphBuilder, cds []configDecl) []common.AgentConfigDeclaration {
+func (d *definitions) buildConfigDecls(g *engine.GraphBuilder, cds []configDecl) []common.AgentConfigDeclaration {
 	if len(cds) == 0 {
 		return nil
 	}
@@ -324,20 +325,10 @@ func (d *definitions) buildConfigDecls(g *graphBuilder, cds []configDecl) []comm
 		out = append(out, common.AgentConfigDeclaration{
 			Source:    cd.source,
 			Path:      cd.path,
-			ValueType: g.restrictedNode(d.compile(cd.typ), cd.restrict),
+			ValueType: g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
 		})
 	}
 	return out
-}
-
-// graphForType builds a standalone schema graph whose root is typ — the shape
-// get-config-value and reveal expect for "expected".
-func (d *definitions) graphForType(typ reflect.Type) types.SchemaGraph {
-	g := graphBuilder{d: d}
-	root := g.node(d.compile(typ))
-	graph := g.build()
-	graph.Root = root
-	return graph
 }
 
 // decodeConfigValue decodes a config value tree into T through T's codec. Pure.
@@ -345,8 +336,8 @@ func decodeConfigValue[T any](d *definitions, path []string, tree types.SchemaVa
 	var zero T
 	typ := reflect.TypeFor[T]()
 	dst := reflect.New(typ).Elem()
-	dec := decoder{nodes: tree.ValueNodes}
-	if err := d.compile(typ).decode(&dec, dst, tree.Root); err != nil {
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if err := d.Compile(typ).Decode(&dec, dst, tree.Root); err != nil {
 		return zero, fmt.Errorf("golem/config %v: %w", path, err)
 	}
 	return dst.Interface().(T), nil
@@ -542,8 +533,8 @@ func encodeReflectValue(d *definitions, v reflect.Value) (tv types.TypedSchemaVa
 	}()
 	typ := v.Type()
 	return types.TypedSchemaValue{
-		Graph: d.graphForType(typ),
-		Value: encodeWith(d.compile(typ), v),
+		Graph: d.GraphForType(typ),
+		Value: engine.EncodeWith(d.Compile(typ), v),
 	}, nil
 }
 

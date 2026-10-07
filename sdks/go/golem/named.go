@@ -38,21 +38,6 @@ func NameType[T any](id string) struct{} {
 
 // nameTypeInto is the instance-scoped implementation behind NameType.
 func nameTypeInto[T any](d *definitions, id string) struct{} {
-	t := reflect.TypeFor[T]()
-	if id == "" {
-		d.recordErr("", "", "NameType[%s] requires a non-empty type-id", t)
-		return struct{}{}
-	}
-	if existing, dup := d.pins[t]; dup && existing != id {
-		d.recordErr("", "", "type %s already pinned to type-id %q", t, existing)
-		return struct{}{}
-	}
-	for other, existing := range d.pins {
-		if existing == id && other != t {
-			d.recordErr("", "", "type-id %q already pinned to %s", id, other)
-			return struct{}{}
-		}
-	}
-	d.pins[t] = id
+	d.PinTypeID(reflect.TypeFor[T](), id)
 	return struct{}{}
 }

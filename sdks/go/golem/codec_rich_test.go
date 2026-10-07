@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 
@@ -53,9 +54,9 @@ func TestRichScalarsLowerToTheirOwnWitTypes(t *testing.T) {
 		{"Tuple2", reflect.TypeFor[Tuple2[string, int64]](), types.SchemaTypeBodyTupleType},
 		{"Perms", reflect.TypeFor[Perms](), types.SchemaTypeBodyFlagsType},
 	} {
-		g := graphBuilder{d: defs}
-		root := g.node(defs.compile(tc.rt))
-		if got := g.build().TypeNodes[root].Body.Tag(); got != tc.want {
+		g := engine.GraphBuilder{E: defs.Engine}
+		root := g.Node(defs.Compile(tc.rt))
+		if got := g.Build().TypeNodes[root].Body.Tag(); got != tc.want {
 			t.Errorf("%s lowered to tag %d, want %d", tc.name, got, tc.want)
 		}
 	}
@@ -86,9 +87,9 @@ func TestQuantityDefaultsToItsBaseUnit(t *testing.T) {
 // TestQuantitySpecComesFromTheUnitMarker — the constraints live on the type, not
 // the value, so two quantities with different markers are different types.
 func TestQuantitySpecComesFromTheUnitMarker(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Quantity[Weight]]()))
-	spec := g.build().TypeNodes[root].Body.QuantityType()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Quantity[Weight]]()))
+	spec := g.Build().TypeNodes[root].Body.QuantityType()
 	if spec.BaseUnit != "kg" {
 		t.Errorf("base unit %q, want %q", spec.BaseUnit, "kg")
 	}
@@ -109,9 +110,9 @@ func TestTupleRoundTripsPositionally(t *testing.T) {
 // TestTupleIsNotARecord — the two are distinguishable on the wire: a tuple's
 // elements are positional and carry no names.
 func TestTupleIsNotARecord(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Tuple2[string, int64]]()))
-	graph := g.build()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Tuple2[string, int64]]()))
+	graph := g.Build()
 	elems := graph.TypeNodes[root].Body.TupleType()
 	if len(elems) != 2 {
 		t.Fatalf("tuple has %d elements, want 2", len(elems))
@@ -133,9 +134,9 @@ func TestFlagsRoundTrip(t *testing.T) {
 // TestFlagsCarryTheirNames — the names come from the fields, lower-cased in
 // declaration order, which is also the wire order of the bool vector.
 func TestFlagsCarryTheirNames(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Perms]()))
-	names := g.build().TypeNodes[root].Body.FlagsType()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Perms]()))
+	names := g.Build().TypeNodes[root].Body.FlagsType()
 	if !reflect.DeepEqual(names, []string{"read", "write", "admin"}) {
 		t.Errorf("flag names %v, want [read write admin]", names)
 	}

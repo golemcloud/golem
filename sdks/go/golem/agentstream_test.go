@@ -16,6 +16,7 @@ package golem
 
 import (
 	"errors"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 
@@ -206,11 +207,11 @@ func TestAgentStreamForwardingUnreadDoesNotPump(t *testing.T) {
 // TestAgentStreamDecodeErrorIsNotEOF — a malformed item must be distinguishable
 // from the end of the stream, or a consumer silently truncates.
 func TestAgentStreamDecodeErrorIsNotEOF(t *testing.T) {
-	var b valBuilder
-	root := b.push(types.MakeSchemaValueNodeStringValue("not an int"))
+	var b engine.ValBuilder
+	root := b.Push(types.MakeSchemaValueNodeStringValue("not an int"))
 	f := &fakeStream{
 		dropped: true,
-		items:   []types.SchemaValueTree{{ValueNodes: b.nodes, Root: root}},
+		items:   []types.SchemaValueTree{{ValueNodes: b.Nodes, Root: root}},
 	}
 	s := AgentStream[int64]{st: &streamState{src: f.source()}, codec: defaultStreamCodec[int64]()}
 
@@ -226,9 +227,9 @@ func TestAgentStreamDecodeErrorIsNotEOF(t *testing.T) {
 // TestStreamSchemaIsAlwaysTyped — an untyped stream cannot supply an item
 // codec, and Go has no way to spell one.
 func TestStreamSchemaIsAlwaysTyped(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[AgentStream[string]]()))
-	body := g.build().TypeNodes[root].Body
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[AgentStream[string]]()))
+	body := g.Build().TypeNodes[root].Body
 	if body.Tag() != types.SchemaTypeBodyStreamType {
 		t.Fatalf("AgentStream lowered to tag %d, want stream-type", body.Tag())
 	}
@@ -236,7 +237,7 @@ func TestStreamSchemaIsAlwaysTyped(t *testing.T) {
 	if item.IsNone() {
 		t.Fatal("the stream carries no item type")
 	}
-	if tag := g.build().TypeNodes[item.Some()].Body.Tag(); tag != types.SchemaTypeBodyStringType {
+	if tag := g.Build().TypeNodes[item.Some()].Body.Tag(); tag != types.SchemaTypeBodyStringType {
 		t.Errorf("item type tag %d, want string", tag)
 	}
 }
@@ -263,7 +264,7 @@ func TestCarriesStreamFindsNestedStreams(t *testing.T) {
 		{"a recursive type holding one", reflect.TypeFor[streamTree](), true},
 	} {
 		d := newDefinitions()
-		if got := d.carriesStream(tc.rt); got != tc.want {
+		if got := d.CarriesStream(tc.rt); got != tc.want {
 			t.Errorf("%s: carriesStream=%v, want %v", tc.name, got, tc.want)
 		}
 	}

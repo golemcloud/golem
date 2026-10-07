@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -55,32 +56,32 @@ func (s AgentStream[T]) streamTake() (treeSource, error) {
 func (s AgentStream[T]) streamAdopt(src treeSource) { s.st.src = src }
 
 // compileStream lowers AgentStream[T] to the WIT stream type.
-func compileStream(c *codec, inner *codec) {
-	c.body = func(g *graphBuilder) types.SchemaTypeBody {
+func compileStream(c *engine.Codec, inner *engine.Codec) {
+	c.Body = func(g *engine.GraphBuilder) types.SchemaTypeBody {
 		// Always typed: Go has no way to spell an untyped stream, and an
 		// untyped one could not supply an item codec anyway.
-		return streamTypeBody(g.node(inner))
+		return streamTypeBody(g.Node(inner))
 	}
 
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+	c.Encode = func(b *engine.ValBuilder, v reflect.Value) int32 {
 		src, err := v.Interface().(streamish).streamTake()
 		if err != nil {
-			panic(&encodeError{err.Error()})
+			panic(&engine.EncodeError{Msg: err.Error()})
 		}
 		node, ok := streamNodeFrom(src)
 		if !ok {
-			panic(&encodeError{"a stream can only be transferred from inside a component"})
+			panic(&engine.EncodeError{Msg: "a stream can only be transferred from inside a component"})
 		}
-		return b.push(node)
+		return b.Push(node)
 	}
 
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
+	c.Decode = func(d *engine.Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
 		if err != nil {
 			return err
 		}
 		if n.Tag() != types.SchemaValueNodeStreamValue {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		// The endpoint is taken now but not read: forwarding a stream that was
 		// never read must stay a pure move, with no items pumped through here.
@@ -88,7 +89,7 @@ func compileStream(c *codec, inner *codec) {
 		if !ok {
 			return fmt.Errorf("golem: a stream can only be received inside a component")
 		}
-		fresh := reflect.New(c.typ)
+		fresh := reflect.New(c.Typ)
 		fresh.Interface().(streamReceiver).streamReceive(src)
 		dst.Set(fresh.Elem())
 		return nil

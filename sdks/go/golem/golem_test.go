@@ -1,6 +1,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"strings"
 	"testing"
 
@@ -214,7 +215,7 @@ func TestPanicErrorAttribution(t *testing.T) {
 
 	// An encode-stage panic caused by the agent returning an unencodable value is
 	// the agent's mistake, not an SDK bug — even though it occurs in encode.
-	userSide := &PanicError{Method: "m", Stage: stageEncode, Value: &encodeError{"not a registered case"}}
+	userSide := &PanicError{Method: "m", Stage: stageEncode, Value: &engine.EncodeError{Msg: "not a registered case"}}
 	if userSide.Internal() {
 		t.Fatal("an unencodable agent value is not an SDK bug")
 	}

@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 	"time"
@@ -54,9 +55,9 @@ var _ = DefineVariant[Event](
 // The payload each case publishes is its field's schema, so the distinctions a
 // defined type would erase survive: datetime, text, option, a nested variant.
 func TestAWrappedCasePublishesItsFieldsSchema(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Event]()))
-	graph := g.build()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Event]()))
+	graph := g.Build()
 
 	want := map[string]uint8{
 		"at":    types.SchemaTypeBodyDatetimeType,
@@ -145,9 +146,9 @@ var _ = DefineUnion[Handle](
 )
 
 func TestAWrappedBranchPublishesAndRoundTripsItsBody(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Handle]()))
-	graph := g.build()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Handle]()))
+	graph := g.Build()
 	for _, b := range graph.TypeNodes[root].Body.UnionType().Branches {
 		if tag := resolveBody(graph, b.Body).Tag(); tag != types.SchemaTypeBodyTextType {
 			t.Fatalf("branch %q publishes tag %d, want text", b.Tag, tag)

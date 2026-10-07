@@ -15,162 +15,31 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
-	"sort"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// The agent type carries ONE schema graph: a flat pool of type nodes, with
-// constructor and method schemas referring to it by index. Schemas are derived
-// from the Go types by reflection — this is what removes the need for a code
-// generation step or an explicit schema DSL.
-
-type graphBuilder struct {
-	nodes []types.SchemaTypeNode
-	// seen deduplicates by Go type, so a type used by several methods yields one
-	// node. Sharing is legal: a consumer tracks cycles along the current path
-	// only, so the same node reached twice by sibling paths is fine.
-	seen map[reflect.Type]int32
-	// refs maps a recursive type to its ref-type node, and defs holds the named
-	// definitions those nodes point at.
-	refs map[reflect.Type]int32
-	defs []types.SchemaTypeDef
-	// invalids collects the types this graph references that could not be
-	// compiled (see [codec.invalid]), so buildAgentType can attribute them to
-	// the agent being built.
-	invalids map[reflect.Type]string
-	// d is the definition set this graph is derived for; refNode reads its pins
-	// to resolve type-ids.
-	d *definitions
-}
-
-// node returns the index of c's type node, adding it if absent.
-//
-// The index is reserved and recorded *before* the body is built, because
-// building it may recurse back into this same type. That reservation is what
-// makes recursive types (a record reachable from its own fields) produce a
-// finite graph instead of overflowing the stack.
-func (g *graphBuilder) node(c *codec) int32 {
-	if c.invalid != "" {
-		if g.invalids == nil {
-			g.invalids = map[reflect.Type]string{}
-		}
-		g.invalids[c.typ] = c.invalid
-	}
-	if c.recursive {
-		return g.refNode(c)
-	}
-	if g.seen == nil {
-		g.seen = map[reflect.Type]int32{}
-	}
-	if idx, ok := g.seen[c.typ]; ok {
-		return idx
-	}
-	idx := int32(len(g.nodes))
-	g.nodes = append(g.nodes, types.SchemaTypeNode{})
-	g.seen[c.typ] = idx
-
-	// Sequenced deliberately: c.body may append nodes and reallocate g.nodes,
-	// so the destination must be indexed only after it returns.
-	body := c.body(g)
-	g.nodes[idx].Body = body
-	if c.metadata != nil {
-		g.nodes[idx].Metadata = *c.metadata
-	}
-	return idx
-}
-
-// refNode emits a recursive type as a named def plus the ref-type node that
-// points at it. The ref node is registered before the body is built, so when the
-// body reaches this type again it resolves to the ref instead of recursing —
-// which is what keeps the flat node list acyclic.
-func (g *graphBuilder) refNode(c *codec) int32 {
-	if g.refs == nil {
-		g.refs = map[reflect.Type]int32{}
-	}
-	if idx, ok := g.refs[c.typ]; ok {
-		return idx
-	}
-
-	defIdx := int32(len(g.defs))
-	g.defs = append(g.defs, types.SchemaTypeDef{
-		// Resolved here, at schema-build time (get-definition) — not at compile
-		// time — so a NameType pin registered during package init is honored
-		// regardless of whether the type's codec compiled first.
-		Id:   g.d.typeID(c.typ),
-		Name: witTypes.Some(c.typ.String()),
-	})
-
-	refIdx := int32(len(g.nodes))
-	g.nodes = append(g.nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyRefType(defIdx)})
-	g.refs[c.typ] = refIdx
-
-	bodyIdx := int32(len(g.nodes))
-	g.nodes = append(g.nodes, types.SchemaTypeNode{})
-	body := c.body(g)
-	g.nodes[bodyIdx].Body = body
-	g.defs[defIdx].Body = bodyIdx
-
-	return refIdx
-}
-
-// sortDefs orders defs by id and rewrites the ref-type nodes accordingly, so a
-// given set of Go types always produces a byte-identical graph.
-func (g *graphBuilder) sortDefs() {
-	if len(g.defs) < 2 {
-		return
-	}
-	order := make([]int, len(g.defs))
-	for i := range order {
-		order[i] = i
-	}
-	sort.Slice(order, func(a, b int) bool { return g.defs[order[a]].Id < g.defs[order[b]].Id })
-
-	remap := make([]int32, len(g.defs))
-	sorted := make([]types.SchemaTypeDef, len(g.defs))
-	for newIdx, oldIdx := range order {
-		sorted[newIdx] = g.defs[oldIdx]
-		remap[oldIdx] = int32(newIdx)
-	}
-	g.defs = sorted
-
-	for i := range g.nodes {
-		if g.nodes[i].Body.Tag() == types.SchemaTypeBodyRefType {
-			g.nodes[i].Body = types.MakeSchemaTypeBodyRefType(remap[g.nodes[i].Body.RefType()])
-		}
-	}
-}
-
-func (g *graphBuilder) build() types.SchemaGraph {
-	// schema.root is a structurally required placeholder, not the semantic root:
-	// the meaningful roots are the per-parameter and per-output indices.
-	if len(g.nodes) == 0 {
-		g.nodes = append(g.nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyBoolType()})
-	}
-	g.sortDefs()
-	return types.SchemaGraph{TypeNodes: g.nodes, Defs: g.defs, Root: 0}
-}
-
 // namedFields turns a parameter list into WIT named-fields, adding each
 // parameter's type to the shared graph.
-func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
+func namedFields(g *engine.GraphBuilder, fs []engine.Field) []common.NamedField {
 	out := make([]common.NamedField, 0, len(fs))
 	for _, f := range fs {
-		if f.autoInjected {
+		if f.AutoInjected {
 			out = append(out, common.NamedField{
-				Name:   f.name,
+				Name:   f.Name,
 				Source: common.MakeFieldSourceAutoInjected(common.AutoInjectedKindPrincipal),
-				Schema: g.node(principalSlotCodec),
+				Schema: g.Node(principalSlotCodec),
 			})
 			continue
 		}
 		out = append(out, common.NamedField{
-			Name:   f.name,
+			Name:   f.Name,
 			Source: common.MakeFieldSourceUserSupplied(),
-			Schema: g.restrictedNode(f.codec, f.restrict),
+			Schema: g.RestrictedNode(f.Codec, f.Restrict),
 		})
 	}
 	return out
@@ -181,9 +50,9 @@ func namedFields(g *graphBuilder, fs []fieldInfo) []common.NamedField {
 // it apart from a misplaced Principal's codec.
 type principalSlot struct{}
 
-var principalSlotCodec = &codec{
-	typ: reflect.TypeFor[principalSlot](),
-	body: func(*graphBuilder) types.SchemaTypeBody {
+var principalSlotCodec = &engine.Codec{
+	Typ: reflect.TypeFor[principalSlot](),
+	Body: func(*engine.GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyRecordType([]types.NamedFieldType{})
 	},
 }
@@ -193,7 +62,7 @@ var principalSlotCodec = &codec{
 // referenced by this agent that could not be compiled, keyed by type — empty for
 // a well-formed agent; finalize turns them into attributed definition errors.
 func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[reflect.Type]string) {
-	g := graphBuilder{d: d}
+	g := engine.GraphBuilder{E: d.Engine}
 
 	ctorFields := namedFields(&g, e.idFields)
 	methods := make([]common.AgentMethod, 0, len(e.order))
@@ -202,7 +71,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		in := namedFields(&g, m.inFields)
 		out := common.MakeOutputSchemaUnit()
 		if m.outCodec != nil {
-			out = common.MakeOutputSchemaSingle(g.node(m.outCodec))
+			out = common.MakeOutputSchemaSingle(g.Node(m.outCodec))
 		}
 		readOnly := witTypes.None[common.ReadOnlyConfig]()
 		if m.readOnly != nil {
@@ -230,7 +99,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Kind:           e.kind(),
 		Description:    e.desc,
 		SourceLanguage: "go",
-		Schema:         g.build(),
+		Schema:         g.Build(),
 		Constructor: common.AgentConstructor{
 			Name:        witTypes.None[string](),
 			Description: e.desc,
@@ -243,7 +112,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Snapshotting: e.snapshot.toWit(),
 		Config:       configDecls,
 	}
-	return at, g.invalids
+	return at, g.Invalids
 }
 
 // kind is the agent type kind an entry publishes.
@@ -252,70 +121,4 @@ func (e *agentEntry) kind() common.AgentTypeKind {
 		return common.AgentTypeKindHttpRouter
 	}
 	return common.AgentTypeKindRegular
-}
-
-// carriesStream reports whether a stream is reachable anywhere in t's schema,
-// through named definitions and recursive types alike: an exact walk of the
-// graph t publishes, so no cycle can hide one.
-func (d *definitions) carriesStream(t reflect.Type) bool {
-	g := graphBuilder{d: d}
-	root := g.node(d.compile(t))
-	graph := g.build()
-	seen := map[int32]bool{}
-	var walk func(idx int32) bool
-	walk = func(idx int32) bool {
-		if idx < 0 || int(idx) >= len(graph.TypeNodes) || seen[idx] {
-			return false
-		}
-		seen[idx] = true
-		body := graph.TypeNodes[idx].Body
-		some := func(o witTypes.Option[int32]) bool { return o.IsSome() && walk(o.Some()) }
-		switch body.Tag() {
-		case types.SchemaTypeBodyStreamType:
-			return true
-		case types.SchemaTypeBodyRefType:
-			def := body.RefType()
-			return int(def) < len(graph.Defs) && walk(graph.Defs[def].Body)
-		case types.SchemaTypeBodyRecordType:
-			for _, f := range body.RecordType() {
-				if walk(f.Body) {
-					return true
-				}
-			}
-		case types.SchemaTypeBodyVariantType:
-			for _, c := range body.VariantType() {
-				if some(c.Payload) {
-					return true
-				}
-			}
-		case types.SchemaTypeBodyTupleType:
-			for _, e := range body.TupleType() {
-				if walk(e) {
-					return true
-				}
-			}
-		case types.SchemaTypeBodyListType:
-			return walk(body.ListType())
-		case types.SchemaTypeBodyFixedListType:
-			return walk(body.FixedListType().Element)
-		case types.SchemaTypeBodyMapType:
-			return walk(body.MapType().Key) || walk(body.MapType().Value)
-		case types.SchemaTypeBodyOptionType:
-			return walk(body.OptionType())
-		case types.SchemaTypeBodyResultType:
-			return some(body.ResultType().Ok) || some(body.ResultType().Err)
-		case types.SchemaTypeBodyUnionType:
-			for _, b := range body.UnionType().Branches {
-				if walk(b.Body) {
-					return true
-				}
-			}
-		case types.SchemaTypeBodySecretType:
-			return walk(body.SecretType().Inner)
-		case types.SchemaTypeBodyFutureType:
-			return some(body.FutureType())
-		}
-		return false
-	}
-	return walk(root)
 }

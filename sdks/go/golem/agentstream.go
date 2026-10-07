@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"iter"
 	"reflect"
 
@@ -331,22 +332,22 @@ func (w *AgentStreamWriter[T]) Close() error {
 
 // defaultStreamCodec converts items through the SDK's own codec for T.
 func defaultStreamCodec[T any]() streamCodec[T] {
-	c := defs.compile(reflect.TypeFor[T]())
+	c := defs.Compile(reflect.TypeFor[T]())
 	return streamCodec[T]{
 		encode: func(v T) (types.SchemaValueTree, error) {
-			if c.invalid != "" {
-				return types.SchemaValueTree{}, errors.New(c.invalid)
+			if c.Invalid != "" {
+				return types.SchemaValueTree{}, errors.New(c.Invalid)
 			}
-			return encodeWith(c, reflect.ValueOf(&v).Elem()), nil
+			return engine.EncodeWith(c, reflect.ValueOf(&v).Elem()), nil
 		},
 		decode: func(tree types.SchemaValueTree) (T, error) {
 			var out T
-			if c.invalid != "" {
-				return out, errors.New(c.invalid)
+			if c.Invalid != "" {
+				return out, errors.New(c.Invalid)
 			}
-			d := decoder{nodes: tree.ValueNodes}
+			d := engine.Decoder{Nodes: tree.ValueNodes}
 			slot := reflect.ValueOf(&out).Elem()
-			if err := c.decode(&d, slot, tree.Root); err != nil {
+			if err := c.Decode(&d, slot, tree.Root); err != nil {
 				return out, err
 			}
 			return out, nil

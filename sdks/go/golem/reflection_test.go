@@ -131,7 +131,7 @@ func TestInputPacksTheInvocationRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	var in GreetIn
-	fields := newDefinitions().structFields(reflect.TypeFor[GreetIn]())
+	fields := newDefinitions().StructFields(reflect.TypeFor[GreetIn]())
 	if err := decodeParams(tree, fields, reflect.ValueOf(&in).Elem(), nil); err != nil {
 		t.Fatalf("the packed tree is not readable by the target: %v", err)
 	}
@@ -358,7 +358,7 @@ func toolSnapshotOf(t *testing.T) ReflectedTool {
 
 	tools, ok := r.discover(d)
 	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
 	}
 	return newReflectedTool("files", tools[0])
 }

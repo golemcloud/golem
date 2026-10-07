@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"strings"
 	"testing"
 
@@ -23,12 +24,12 @@ import (
 
 func TestDefinitionErrorMessageIsAttributed(t *testing.T) {
 	cases := []struct {
-		err  definitionError
+		err  engine.DefError
 		want string
 	}{
-		{definitionError{detail: "bad type-id"}, "golem: bad type-id"},
-		{definitionError{agent: "Counter", detail: "Id must be a struct"}, `golem: agent "Counter": Id must be a struct`},
-		{definitionError{agent: "Counter", method: "add", detail: "route var {x} unknown"}, `golem: agent "Counter" method "add": route var {x} unknown`},
+		{engine.DefError{Detail: "bad type-id"}, "golem: bad type-id"},
+		{engine.DefError{Agent: "Counter", Detail: "Id must be a struct"}, `golem: agent "Counter": Id must be a struct`},
+		{engine.DefError{Agent: "Counter", Method: "add", Detail: "route var {x} unknown"}, `golem: agent "Counter" method "add": route var {x} unknown`},
 	}
 	for _, c := range cases {
 		if got := c.err.Error(); got != c.want {
@@ -39,11 +40,11 @@ func TestDefinitionErrorMessageIsAttributed(t *testing.T) {
 
 func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		d.recordErr("", "", "global problem")          // affects every agent
-		d.recordErr("Counter", "", "counter problem")  // only Counter
-		d.recordErr("Ledger", "add", "ledger problem") // only Ledger
+		d.RecordErr("", "", "global problem")          // affects every agent
+		d.RecordErr("Counter", "", "counter problem")  // only Counter
+		d.RecordErr("Ledger", "add", "ledger problem") // only Ledger
 
-		got := agentDefErrors(d.errs, "Counter")
+		got := agentDefErrors(d.Errs, "Counter")
 		if !strings.Contains(got, "global problem") || !strings.Contains(got, "counter problem") {
 			t.Errorf("Counter errors missing global or own: %q", got)
 		}
@@ -52,7 +53,7 @@ func TestAgentDefErrorsFiltersByAgentAndGlobal(t *testing.T) {
 		}
 
 		// An agent with no errors of its own still inherits global ones.
-		if got := agentDefErrors(d.errs, "Unrelated"); !strings.Contains(got, "global problem") || strings.Contains(got, "counter problem") {
+		if got := agentDefErrors(d.Errs, "Unrelated"); !strings.Contains(got, "global problem") || strings.Contains(got, "counter problem") {
 			t.Errorf("Unrelated agent errors = %q", got)
 		}
 	})
@@ -84,9 +85,9 @@ func TestDefinitionErrorsIsCleanForAValidComponent(t *testing.T) {
 
 func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
 	withDefs(t, func(d *definitions) {
-		d.recordErr("Counter", "", "first")
-		d.recordErr("Ledger", "add", "second")
-		got := allDefErrors(d.errs)
+		d.RecordErr("Counter", "", "first")
+		d.RecordErr("Ledger", "add", "second")
+		got := allDefErrors(d.Errs)
 		if !strings.Contains(got, "2 agent definition error(s)") {
 			t.Errorf("missing count: %q", got)
 		}
@@ -135,10 +136,10 @@ func TestValidAgentFinalizesAndPublishesItsMount(t *testing.T) {
 // cleanly — isolation is inherent now that registration is instance-based (no
 // shared global to leak between tests).
 func TestSeparateDefinitionsDoNotLeak(t *testing.T) {
-	register := func() []definitionError {
+	register := func() []engine.DefError {
 		type Id struct{ Name string }
 		type St struct{}
-		var errs []definitionError
+		var errs []engine.DefError
 		withDefs(t, func(d *definitions) {
 			def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Solo"})
 			impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)

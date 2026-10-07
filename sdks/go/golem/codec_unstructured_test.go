@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"slices"
 	"strings"
@@ -70,9 +71,9 @@ func TestUnstructuredValuesRoundTrip(t *testing.T) {
 // The shapes are the cross-SDK conventions: a role-marked variant of inline
 // and url, and a role-marked list of a variant.
 func TestUnstructuredValuesPublishTheirRoles(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Content]()))
-	graph := g.build()
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Content]()))
+	graph := g.Build()
 	fields := graph.TypeNodes[root].Body.RecordType()
 	node := func(i int) types.SchemaTypeNode { return graph.TypeNodes[fields[i].Body] }
 
@@ -105,8 +106,8 @@ func TestUnstructuredValuesPublishTheirRoles(t *testing.T) {
 }
 
 func TestAMultimodalListNeedsARegisteredVariant(t *testing.T) {
-	c := defs.compile(reflect.TypeFor[MultimodalOf[string]]())
-	if !strings.Contains(c.invalid, "not a registered variant") {
-		t.Fatalf("invalid = %q", c.invalid)
+	c := defs.Compile(reflect.TypeFor[MultimodalOf[string]]())
+	if !strings.Contains(c.Invalid, "not a registered variant") {
+		t.Fatalf("invalid = %q", c.Invalid)
 	}
 }

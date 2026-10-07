@@ -253,7 +253,7 @@ func newVcs(t *testing.T) (*vcsTool, *toolRegistry, *definitions) {
 	r, d := newToolRegistry(), newDefinitions()
 	v := declareVcs(r, d)
 	if _, ok := r.discover(d); !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
 	}
 	return v, r, d
 }
@@ -611,7 +611,7 @@ func TestOutputsFollowTheirDeclarations(t *testing.T) {
 	plain := tool.Command[EchoArgs, Unit]("quiet", func(a *EchoArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
 	_ = plain.Handle(func(*ToolContext, EchoArgs) (Unit, error) { return Unit{}, nil })
 	if _, ok := r.discover(d); !ok {
-		t.Fatalf("discovery failed: %s", allDefErrors(d.errs))
+		t.Fatalf("discovery failed: %s", allDefErrors(d.Errs))
 	}
 	e, _ := r.get("echo")
 	input := encodeArgs(t, echo.ce, func(a *EchoArgs) { a.Text = "hi" })
@@ -832,10 +832,10 @@ func TestToolDeclarationErrors(t *testing.T) {
 			r, d := newToolRegistry(), newDefinitions()
 			tool := defineToolInto[Tst](r, d, "t", ToolSpec{}, false)
 			tc.declare(tool)
-			if _, ok := r.discover(d); ok && len(d.errs) == 0 {
+			if _, ok := r.discover(d); ok && len(d.Errs) == 0 {
 				t.Fatalf("no definition error, want %q", tc.want)
 			}
-			if msg := allDefErrors(d.errs); !strings.Contains(msg, tc.want) {
+			if msg := allDefErrors(d.Errs); !strings.Contains(msg, tc.want) {
 				t.Errorf("errors:\n%s\nwant one containing %q", msg, tc.want)
 			}
 		})
@@ -850,10 +850,10 @@ func TestRemoteToolsAreDeclaredForCallingOnly(t *testing.T) {
 		t.Errorf("a remote tool was exported: %d tools", len(tools))
 	}
 	if _, ok := d.buildTool(remote.entry); !ok {
-		t.Errorf("a remote tool without handlers is not well-defined: %s", allDefErrors(d.errs))
+		t.Errorf("a remote tool without handlers is not well-defined: %s", allDefErrors(d.Errs))
 	}
 	_ = cmd.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
-	if msg := allDefErrors(d.errs); !strings.Contains(msg, "belongs to a remote tool") {
+	if msg := allDefErrors(d.Errs); !strings.Contains(msg, "belongs to a remote tool") {
 		t.Errorf("handling a remote command was accepted: %s", msg)
 	}
 }

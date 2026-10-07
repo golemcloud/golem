@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"time"
 
@@ -109,26 +110,26 @@ func (t QuotaToken) quotaToken() QuotaToken { return t }
 
 // compileQuotaToken lowers QuotaToken to the WIT quota-token type. Encoding
 // moves the token; decoding adopts the received one.
-func compileQuotaToken(c *codec) {
-	c.body = func(*graphBuilder) types.SchemaTypeBody {
+func compileQuotaToken(c *engine.Codec) {
+	c.Body = func(*engine.GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyQuotaTokenType(types.QuotaTokenSpec{ResourceName: witTypes.None[string]()})
 	}
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+	c.Encode = func(b *engine.ValBuilder, v reflect.Value) int32 {
 		t := v.Interface().(QuotaToken)
 		if t.st == nil || t.st.h == nil {
-			panic(&encodeError{ErrQuotaTokenMoved.Error()})
+			panic(&engine.EncodeError{Msg: ErrQuotaTokenMoved.Error()})
 		}
 		h := t.st.h
 		t.st.h = nil
-		return b.push(types.MakeSchemaValueNodeQuotaTokenHandle(h))
+		return b.Push(types.MakeSchemaValueNodeQuotaTokenHandle(h))
 	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
+	c.Decode = func(d *engine.Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
 		if err != nil {
 			return err
 		}
 		if n.Tag() != types.SchemaValueNodeQuotaTokenHandle {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		dst.Set(reflect.ValueOf(QuotaToken{st: &quotaTokenState{h: n.QuotaTokenHandle()}}))
 		return nil

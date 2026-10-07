@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
 	"slices"
@@ -85,7 +86,7 @@ type toolEntry struct {
 }
 
 func (e *toolEntry) fail(format string, args ...any) {
-	e.d.recordErr("", "", "tool %s: %s", e.name, fmt.Sprintf(format, args...))
+	e.d.RecordErr("", "", "tool %s: %s", e.name, fmt.Sprintf(format, args...))
 }
 
 func (e *toolEntry) changed() { e.built = nil }
@@ -204,9 +205,9 @@ func defineToolInto[T any](r *toolRegistry, d *definitions, name string, spec To
 	t := &ToolDefinition[T]{ToolGroup: &ToolGroup[T]{node: e.root}, entry: e}
 	switch {
 	case name == "":
-		d.recordErr("", "", "DefineTool requires a name")
+		d.RecordErr("", "", "DefineTool requires a name")
 	case r.byName[name] != nil || r.remote[name] != nil:
-		d.recordErr("", "", "tool already defined: %s", name)
+		d.RecordErr("", "", "tool already defined: %s", name)
 	case remote:
 		r.remote[name] = e
 	default:
@@ -413,8 +414,8 @@ type boundArg struct {
 	// field types the field as the canonical input record carries it, and
 	// value types what the metadata declares: the element of a list, the
 	// inner type of an optional field.
-	field  *codec
-	value  *codec
+	field  *engine.Codec
+	value  *engine.Codec
 	global bool
 }
 
@@ -451,20 +452,20 @@ func (d *definitions) boundArgOf(b *argBinding, prefix []int) (boundArg, error) 
 	a := boundArg{
 		b:     b,
 		path:  append(slices.Clone(prefix), b.path...),
-		field: d.compile(b.field.Type),
-		value: d.compile(b.value),
+		field: d.Compile(b.field.Type),
+		value: d.Compile(b.value),
 	}
-	if a.field.invalid != "" {
-		return a, fmt.Errorf("%s is %s, which cannot be represented: %s", b.name, b.field.Type, a.field.invalid)
+	if a.field.Invalid != "" {
+		return a, fmt.Errorf("%s is %s, which cannot be represented: %s", b.name, b.field.Type, a.field.Invalid)
 	}
-	if a.value.invalid != "" {
-		return a, fmt.Errorf("%s is %s, which cannot be represented: %s", b.name, b.value, a.value.invalid)
+	if a.value.Invalid != "" {
+		return a, fmt.Errorf("%s is %s, which cannot be represented: %s", b.name, b.value, a.value.Invalid)
 	}
 	if b.restrictErr != nil {
 		return a, fmt.Errorf("%s: %w", b.name, b.restrictErr)
 	}
 	if b.restrict != nil {
-		if err := d.checkRestriction(a.value, b.restrict); err != nil {
+		if err := d.CheckRestriction(a.value, b.restrict); err != nil {
 			return a, fmt.Errorf("%s: %w", b.name, err)
 		}
 	}
@@ -697,9 +698,9 @@ func (ce *commandEntry) buildConstraints(l *commandLayout, fail func(string, ...
 		}
 		v, c := r.value, a.value
 		if a.b.kind == argMap {
-			c = d.compile(a.b.value.Elem())
+			c = d.Compile(a.b.value.Elem())
 		}
-		if v.Type() != c.typ && a.b.optional && v.Type() == a.b.field.Type {
+		if v.Type() != c.Typ && a.b.optional && v.Type() == a.b.field.Type {
 			inner, some, _ := values.OptionGet(v.Interface())
 			if !some {
 				fail("a constraint compares %s with None; refer to it as present instead", a.b.name)
@@ -707,11 +708,11 @@ func (ce *commandEntry) buildConstraints(l *commandLayout, fail func(string, ...
 			}
 			v = inner
 		}
-		if v.Type() != c.typ {
-			fail("a constraint compares %s, of %s, with a %s value", a.b.name, c.typ, v.Type())
+		if v.Type() != c.Typ {
+			fail("a constraint compares %s, of %s, with a %s value", a.b.name, c.Typ, v.Type())
 			return toolCommon.MakeRefPresent(a.b.name)
 		}
-		return toolCommon.MakeRefValueIs(toolCommon.ValueIsRef{Name: a.b.name, Value: encodeWith(c, v)})
+		return toolCommon.MakeRefValueIs(toolCommon.ValueIsRef{Name: a.b.name, Value: engine.EncodeWith(c, v)})
 	}
 	refs := func(in []refDecl) []toolCommon.Ref {
 		out := make([]toolCommon.Ref, 0, len(in))
@@ -794,7 +795,7 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 	if e.built != nil {
 		return *e.built, e.builtOK
 	}
-	g := graphBuilder{d: d}
+	g := engine.GraphBuilder{E: d.Engine}
 	ok := true
 	var nodes []toolCommon.CommandNode
 	var walk func(n *toolNode) int32
@@ -837,7 +838,7 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 	}
 	walk(e.root)
 
-	for typ, why := range g.invalids {
+	for typ, why := range g.Invalids {
 		e.fail("references %s, which cannot be represented: %s", typ, why)
 		ok = false
 	}
@@ -845,7 +846,7 @@ func (d *definitions) buildTool(e *toolEntry) (toolCommon.Tool, bool) {
 		Version:            e.spec.Version,
 		RequiresFilesystem: e.spec.RequiresFilesystem,
 		Commands:           toolCommon.CommandTree{Nodes: nodes},
-		Schema:             g.build(),
+		Schema:             g.Build(),
 	}
 	e.built, e.builtOK = &tool, ok
 	return tool, ok
@@ -869,17 +870,17 @@ func defaultOf(a boundArg) witTypes.Option[types.SchemaValueTree] {
 	if !a.b.def.IsValid() {
 		return witTypes.None[types.SchemaValueTree]()
 	}
-	return witTypes.Some(encodeWith(a.value, a.b.def))
+	return witTypes.Some(engine.EncodeWith(a.value, a.b.def))
 }
 
-func optionSpecOf(g *graphBuilder, a boundArg) toolCommon.OptionSpec {
+func optionSpecOf(g *engine.GraphBuilder, a boundArg) toolCommon.OptionSpec {
 	b := a.b
 	var shape toolCommon.OptionShape
 	required := false
 	switch b.kind {
 	case argList:
 		shape = toolCommon.MakeOptionShapeRepeatableList(toolCommon.RepeatableListShape{
-			Repetition: b.repetition, ItemType: g.restrictedNode(a.value, b.restrict),
+			Repetition: b.repetition, ItemType: g.RestrictedNode(a.value, b.restrict),
 		})
 	case argMap:
 		policy := toolCommon.DuplicateKeyPolicyReject
@@ -887,13 +888,13 @@ func optionSpecOf(g *graphBuilder, a boundArg) toolCommon.OptionSpec {
 			policy = toolCommon.DuplicateKeyPolicyLastWins
 		}
 		shape = toolCommon.MakeOptionShapeRepeatableMap(toolCommon.RepeatableMapShape{
-			Repetition: b.repetition, MapType: g.restrictedNode(a.value, b.restrict), DuplicateKeyPolicy: policy,
+			Repetition: b.repetition, MapType: g.RestrictedNode(a.value, b.restrict), DuplicateKeyPolicy: policy,
 		})
 	default:
 		if b.valueOptional {
-			shape = toolCommon.MakeOptionShapeOptionalScalar(g.restrictedNode(a.value, b.restrict))
+			shape = toolCommon.MakeOptionShapeOptionalScalar(g.RestrictedNode(a.value, b.restrict))
 		} else {
-			shape = toolCommon.MakeOptionShapeScalar(g.restrictedNode(a.value, b.restrict))
+			shape = toolCommon.MakeOptionShapeScalar(g.RestrictedNode(a.value, b.restrict))
 		}
 		required = !b.optional && !b.def.IsValid()
 	}
@@ -930,7 +931,7 @@ func flagSpecOf(a boundArg) toolCommon.FlagSpec {
 	}
 }
 
-func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *commandLayout) toolCommon.CommandBody {
+func (d *definitions) buildCommandBody(g *engine.GraphBuilder, ce *commandEntry, l *commandLayout) toolCommon.CommandBody {
 	body := toolCommon.CommandBody{
 		Positionals: toolCommon.Positionals{Tail: witTypes.None[toolCommon.TailPositional]()},
 		Constraints: l.constraints,
@@ -951,7 +952,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 				Name:         b.name,
 				Doc:          b.doc.toWit(),
 				ValueName:    someIfSet(b.valueName),
-				Type:         g.restrictedNode(a.value, b.restrict),
+				Type:         g.RestrictedNode(a.value, b.restrict),
 				Default:      defaultOf(a),
 				Required:     !b.optional && !b.def.IsValid(),
 				AcceptsStdio: b.acceptsStdio,
@@ -965,7 +966,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 				Name:         b.name,
 				Doc:          b.doc.toWit(),
 				ValueName:    someIfSet(b.valueName),
-				ItemType:     g.restrictedNode(a.value, b.restrict),
+				ItemType:     g.RestrictedNode(a.value, b.restrict),
 				Min:          b.min,
 				Max:          max,
 				Separator:    someIfSet(b.separator),
@@ -993,7 +994,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 	}
 	if ce.outType != reflect.TypeFor[Unit]() {
 		body.Result = witTypes.Some(toolCommon.ResultSpec{
-			Type:             g.node(d.compile(ce.outType)),
+			Type:             g.Node(d.Compile(ce.outType)),
 			Doc:              toolDoc{summary: st.resultDoc}.toWit(),
 			Formatters:       l.formatters,
 			DefaultFormatter: l.defaultFmt,
@@ -1002,7 +1003,7 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 	for _, info := range st.raises {
 		payload := witTypes.None[int32]()
 		if info.payload != nil {
-			payload = witTypes.Some(g.node(d.compile(info.payload)))
+			payload = witTypes.Some(g.Node(d.Compile(info.payload)))
 		}
 		body.Errors = append(body.Errors, toolCommon.ErrorCase{
 			Name:     info.name,
@@ -1020,14 +1021,14 @@ func (d *definitions) buildCommandBody(g *graphBuilder, ce *commandEntry, l *com
 
 // decode fills an argument struct from a canonical input record.
 func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) error {
-	dec := decoder{nodes: tree.ValueNodes}
-	if len(dec.nodes) == 0 {
+	dec := engine.Decoder{Nodes: tree.ValueNodes}
+	if len(dec.Nodes) == 0 {
 		if len(l.fields) == 0 {
 			return nil
 		}
 		return fmt.Errorf("empty value tree but %d argument(s) expected", len(l.fields))
 	}
-	root, err := dec.node(tree.Root)
+	root, err := dec.Node(tree.Root)
 	if err != nil {
 		return err
 	}
@@ -1039,7 +1040,7 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 		return fmt.Errorf("input record has %d field(s), want %d", len(idxs), len(l.fields))
 	}
 	for i, a := range l.fields {
-		if err := a.field.decode(&dec, dst.FieldByIndex(a.path), idxs[i]); err != nil {
+		if err := a.field.Decode(&dec, dst.FieldByIndex(a.path), idxs[i]); err != nil {
 			return fmt.Errorf("argument %q: %w", a.b.name, err)
 		}
 	}
@@ -1050,23 +1051,23 @@ func (l *commandLayout) decode(tree types.SchemaValueTree, dst reflect.Value) er
 // with a graph rooted at the record's type, which is what the host checks the
 // input against.
 func (l *commandLayout) encode(d *definitions, args reflect.Value) types.TypedSchemaValue {
-	g := graphBuilder{d: d}
+	g := engine.GraphBuilder{E: d.Engine}
 	fields := make([]types.NamedFieldType, 0, len(l.fields))
 	for _, a := range l.fields {
-		fields = append(fields, types.NamedFieldType{Name: a.b.name, Body: g.restrictedNode(a.field, a.b.restrict)})
+		fields = append(fields, types.NamedFieldType{Name: a.b.name, Body: g.RestrictedNode(a.field, a.b.restrict)})
 	}
-	g.nodes = append(g.nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyRecordType(fields)})
-	root := int32(len(g.nodes) - 1)
-	graph := g.build()
+	g.Nodes = append(g.Nodes, types.SchemaTypeNode{Body: types.MakeSchemaTypeBodyRecordType(fields)})
+	root := int32(len(g.Nodes) - 1)
+	graph := g.Build()
 	graph.Root = root
 
-	var b valBuilder
+	var b engine.ValBuilder
 	idxs := make([]int32, 0, len(l.fields))
 	for _, a := range l.fields {
-		idxs = append(idxs, a.field.encode(&b, args.FieldByIndex(a.path)))
+		idxs = append(idxs, a.field.Encode(&b, args.FieldByIndex(a.path)))
 	}
-	valueRoot := b.push(types.MakeSchemaValueNodeRecordValue(idxs))
-	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.nodes, Root: valueRoot}}
+	valueRoot := b.Push(types.MakeSchemaValueNodeRecordValue(idxs))
+	return types.TypedSchemaValue{Graph: graph, Value: types.SchemaValueTree{ValueNodes: b.Nodes, Root: valueRoot}}
 }
 
 // invokeCommand runs one command: resolve it, decode the arguments, call the
@@ -1170,12 +1171,12 @@ func (d *definitions) encodeResult(ce *commandEntry, out reflect.Value) toolComm
 		Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
 	}
 	if ce.outType != reflect.TypeFor[Unit]() {
-		c := d.compile(ce.outType)
-		g := graphBuilder{d: d}
-		root := g.node(c)
-		graph := g.build()
+		c := d.Compile(ce.outType)
+		g := engine.GraphBuilder{E: d.Engine}
+		root := g.Node(c)
+		graph := g.Build()
 		graph.Root = root
-		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, out)})
+		res.Result = witTypes.Some(types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, out)})
 	}
 	return res
 }
@@ -1279,12 +1280,12 @@ func (d *definitions) declaredToolError(ce *commandEntry, raised *RaisedToolErro
 		Value: types.SchemaValueTree{ValueNodes: []types.SchemaValueNode{types.MakeSchemaValueNodeTupleValue(nil)}},
 	}
 	if raised.info.payload != nil {
-		c := d.compile(raised.info.payload)
-		g := graphBuilder{d: d}
-		root := g.node(c)
-		graph := g.build()
+		c := d.Compile(raised.info.payload)
+		g := engine.GraphBuilder{E: d.Engine}
+		root := g.Node(c)
+		graph := g.Build()
 		graph.Root = root
-		payload = types.TypedSchemaValue{Graph: graph, Value: encodeWith(c, raised.payload)}
+		payload = types.TypedSchemaValue{Graph: graph, Value: engine.EncodeWith(c, raised.payload)}
 	}
 	return types.MakeToolErrorCustomError(types.CustomToolError{Name: raised.info.name, Payload: payload})
 }

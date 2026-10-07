@@ -17,6 +17,7 @@ package golem
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -60,26 +61,26 @@ func (c PolymorphicPermissionCard) polymorphic() bool               { return tru
 
 // compilePermissionCard lowers a card type to the WIT permission-card type.
 // Encoding moves the card; decoding adopts the received one.
-func compilePermissionCard(c *codec, polymorphic bool) {
-	c.body = func(*graphBuilder) types.SchemaTypeBody {
+func compilePermissionCard(c *engine.Codec, polymorphic bool) {
+	c.Body = func(*engine.GraphBuilder) types.SchemaTypeBody {
 		return types.MakeSchemaTypeBodyPermissionCardType(types.PermissionCardSpec{Polymorphic: polymorphic})
 	}
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+	c.Encode = func(b *engine.ValBuilder, v reflect.Value) int32 {
 		st := v.Interface().(cardish).cardState()
 		if st == nil || st.h == nil {
-			panic(&encodeError{ErrPermissionCardMoved.Error()})
+			panic(&engine.EncodeError{Msg: ErrPermissionCardMoved.Error()})
 		}
 		h := st.h
 		st.h = nil
-		return b.push(types.MakeSchemaValueNodePermissionCardHandle(h))
+		return b.Push(types.MakeSchemaValueNodePermissionCardHandle(h))
 	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
+	c.Decode = func(d *engine.Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
 		if err != nil {
 			return err
 		}
 		if n.Tag() != types.SchemaValueNodePermissionCardHandle {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		st := &permissionCardState{h: n.PermissionCardHandle()}
 		if polymorphic {

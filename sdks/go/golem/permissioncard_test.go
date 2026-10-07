@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 
@@ -45,9 +46,9 @@ func TestPermissionCardsMoveWhenSent(t *testing.T) {
 		reflect.TypeFor[PermissionCard]():            false,
 		reflect.TypeFor[PolymorphicPermissionCard](): true,
 	} {
-		g := graphBuilder{d: defs}
-		root := g.node(defs.compile(typ))
-		body := g.build().TypeNodes[root].Body
+		g := engine.GraphBuilder{E: defs.Engine}
+		root := g.Node(defs.Compile(typ))
+		body := g.Build().TypeNodes[root].Body
 		if body.Tag() != types.SchemaTypeBodyPermissionCardType || body.PermissionCardType().Polymorphic != want {
 			t.Errorf("%s is typed as tag %d", typ, body.Tag())
 		}

@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 
@@ -52,9 +53,9 @@ func TestUnionRoundTrips(t *testing.T) {
 // receiver need not re-run the discriminator, and the rules travel with the
 // type so one still can.
 func TestUnionCarriesBranchTagsAndRules(t *testing.T) {
-	g := graphBuilder{d: defs}
-	root := g.node(defs.compile(reflect.TypeFor[Shape]()))
-	body := g.build().TypeNodes[root].Body
+	g := engine.GraphBuilder{E: defs.Engine}
+	root := g.Node(defs.Compile(reflect.TypeFor[Shape]()))
+	body := g.Build().TypeNodes[root].Body
 	if body.Tag() != types.SchemaTypeBodyUnionType {
 		t.Fatalf("Shape lowered to tag %d, want union-type", body.Tag())
 	}

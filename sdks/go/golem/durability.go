@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
@@ -195,8 +196,8 @@ func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) O
 // fail-loud durability surface.
 func encodeDurableValue(v reflect.Value) types.TypedSchemaValue {
 	return types.TypedSchemaValue{
-		Graph: defs.graphForType(v.Type()),
-		Value: encodeWith(defs.compile(v.Type()), v),
+		Graph: defs.GraphForType(v.Type()),
+		Value: engine.EncodeWith(defs.Compile(v.Type()), v),
 	}
 }
 
@@ -205,8 +206,8 @@ func encodeDurableValue(v reflect.Value) types.TypedSchemaValue {
 func decodeDurableValue[Out any](name string, tv types.TypedSchemaValue) Out {
 	typ := reflect.TypeFor[Out]()
 	dst := reflect.New(typ).Elem()
-	dec := decoder{nodes: tv.Value.ValueNodes}
-	if err := defs.compile(typ).decode(&dec, dst, tv.Value.Root); err != nil {
+	dec := engine.Decoder{Nodes: tv.Value.ValueNodes}
+	if err := defs.Compile(typ).Decode(&dec, dst, tv.Value.Root); err != nil {
 		panic(fmt.Errorf("golem: durable %s: decoding replayed response: %w", name, err))
 	}
 	return dst.Interface().(Out)

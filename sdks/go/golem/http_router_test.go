@@ -17,6 +17,7 @@ package golem
 import (
 	"context"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"net/http"
 	"reflect"
@@ -26,7 +27,7 @@ import (
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
-func discoverOne(t *testing.T, d *definitions, name string) (common.AgentType, []definitionError) {
+func discoverOne(t *testing.T, d *definitions, name string) (common.AgentType, []engine.DefError) {
 	t.Helper()
 	types, errs := d.discover()
 	for _, at := range types {
@@ -102,8 +103,8 @@ func TestTheEnvelopeTypesHaveTheHostsFieldNames(t *testing.T) {
 	d := newDefinitions()
 	names := func(v any) string {
 		var out []string
-		for _, f := range d.structFields(reflect.TypeOf(v)) {
-			out = append(out, f.name)
+		for _, f := range d.StructFields(reflect.TypeOf(v)) {
+			out = append(out, f.Name)
 		}
 		return strings.Join(out, ",")
 	}

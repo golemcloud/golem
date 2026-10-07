@@ -16,6 +16,7 @@ package golem
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
 	"slices"
@@ -98,7 +99,7 @@ type argBinding struct {
 	optional bool
 	// restrict narrows the values the argument accepts; restrictErr is a
 	// setter's mistake, reported when the tool is defined.
-	restrict    *restriction
+	restrict    *engine.Restriction
 	restrictErr error
 
 	doc           toolDoc
@@ -216,7 +217,7 @@ func (s *specState) bind(p any, kind argKind, value reflect.Type) *argBinding {
 	// A golem tag restricts the argument as it does a record field; setters
 	// called on the binding afterwards add to it.
 	if tag, ok := field.Tag.Lookup("golem"); ok {
-		b.restrict, b.restrictErr = parseRestrictionTag(tag)
+		b.restrict, b.restrictErr = engine.ParseRestrictionTag(tag)
 	}
 	s.bindings = append(s.bindings, b)
 	return b

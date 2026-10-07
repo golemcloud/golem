@@ -143,11 +143,11 @@ type (
 func defineRouterInto[Cfg any](d *definitions, spec RouterSpec) *HTTPRouter[Cfg] {
 	r := &HTTPRouter[Cfg]{name: spec.Name, d: d}
 	if spec.Name == "" {
-		d.recordErr("", "", "DefineHTTPRouter requires a non-empty RouterSpec.Name")
+		d.RecordErr("", "", "DefineHTTPRouter requires a non-empty RouterSpec.Name")
 		return r
 	}
 	if _, dup := d.agents[spec.Name]; dup {
-		d.recordErr(spec.Name, "", "agent type already defined")
+		d.RecordErr(spec.Name, "", "agent type already defined")
 		r.d = nil
 		return r
 	}
@@ -190,7 +190,7 @@ func (r *HTTPRouter[Cfg]) entry() *agentEntry {
 func (r *HTTPRouter[Cfg]) Handle(h http.Handler) Registered {
 	if h == nil {
 		if e := r.entry(); e != nil {
-			r.d.recordErr(e.name, routerHandleMethod, "Handle requires a non-nil http.Handler")
+			r.d.RecordErr(e.name, routerHandleMethod, "Handle requires a non-nil http.Handler")
 		}
 		return Registered{}
 	}
@@ -208,11 +208,11 @@ func (r *HTTPRouter[Cfg]) HandleRaw(h func(ctx context.Context, req HTTPRequest)
 		return Registered{}
 	}
 	if h == nil {
-		r.d.recordErr(e.name, routerHandleMethod, "HandleRaw requires a non-nil handler")
+		r.d.RecordErr(e.name, routerHandleMethod, "HandleRaw requires a non-nil handler")
 		return Registered{}
 	}
 	if _, dup := e.methods[routerHandleMethod]; dup {
-		r.d.recordErr(e.name, routerHandleMethod, "the router already has a handler")
+		r.d.RecordErr(e.name, routerHandleMethod, "the router already has a handler")
 		return Registered{}
 	}
 	m := MethodDef[routerID, routerHandleIn, HTTPResponse]{name: routerHandleMethod, desc: "Handles an HTTP request"}
@@ -232,11 +232,11 @@ func (r *HTTPRouter[Cfg]) OpenAPI(provide func(ctx context.Context) string) Regi
 		return Registered{}
 	}
 	if provide == nil {
-		r.d.recordErr(e.name, routerOpenAPIMethod, "OpenAPI requires a non-nil provider")
+		r.d.RecordErr(e.name, routerOpenAPIMethod, "OpenAPI requires a non-nil provider")
 		return Registered{}
 	}
 	if e.router.openAPI {
-		r.d.recordErr(e.name, routerOpenAPIMethod, "the router already has an OpenAPI provider")
+		r.d.RecordErr(e.name, routerOpenAPIMethod, "the router already has an OpenAPI provider")
 		return Registered{}
 	}
 	e.router.openAPI = true

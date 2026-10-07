@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"testing"
 
@@ -29,15 +30,15 @@ type streamedEvents struct {
 // streamMethod is a method taking a byte stream "uploads" and a plain "label",
 // returning out.
 func streamMethod(out reflect.Type, eps ...Endpoint) *methodEntry {
-	m := method("events", []fieldInfo{
-		{name: "uploads", typ: reflect.TypeFor[AgentStream[byte]]()},
-		{name: "label", typ: reflect.TypeFor[string]()},
+	m := method("events", []engine.Field{
+		{Name: "uploads", Typ: reflect.TypeFor[AgentStream[byte]]()},
+		{Name: "label", Typ: reflect.TypeFor[string]()},
 	}, eps...)
 	m.outType = out
 	return m
 }
 
-func compileStreams(t *testing.T, out reflect.Type, route StreamRoute) (common.DurableStreamRouteOptions, []definitionError) {
+func compileStreams(t *testing.T, out reflect.Type, route StreamRoute) (common.DurableStreamRouteOptions, []engine.DefError) {
 	t.Helper()
 	e := agent("Media", &Mount{Path: "/media"}, nil,
 		streamMethod(out, POST("/events", DurableStreams(route))))

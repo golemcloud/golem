@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package engine
 
 import (
 	"fmt"
@@ -27,21 +27,21 @@ import (
 // Decoding checks the tag first: the generated accessors panic on mismatch, and
 // malformed input must produce an error, not a panic.
 func scalar(
-	c *codec,
+	c *Codec,
 	body types.SchemaTypeBody,
 	tag uint8,
-	enc func(*valBuilder, reflect.Value) int32,
+	enc func(*ValBuilder, reflect.Value) int32,
 	set func(reflect.Value, types.SchemaValueNode),
 ) {
-	c.body = func(*graphBuilder) types.SchemaTypeBody { return body }
-	c.encode = enc
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
+	c.Body = func(*GraphBuilder) types.SchemaTypeBody { return body }
+	c.Encode = enc
+	c.Decode = func(d *Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
 		if err != nil {
 			return err
 		}
 		if n.Tag() != tag {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		set(dst, n)
 		return nil
@@ -76,31 +76,31 @@ func pointerOps(t reflect.Type) optionOps {
 	}
 }
 
-func compileOption(c *codec, inner *codec, ops optionOps) {
-	c.body = func(g *graphBuilder) types.SchemaTypeBody {
-		return types.MakeSchemaTypeBodyOptionType(g.node(inner))
+func compileOption(c *Codec, inner *Codec, ops optionOps) {
+	c.Body = func(g *GraphBuilder) types.SchemaTypeBody {
+		return types.MakeSchemaTypeBodyOptionType(g.Node(inner))
 	}
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
+	c.Encode = func(b *ValBuilder, v reflect.Value) int32 {
 		if in, some := ops.get(v); some {
-			idx := inner.encode(b, in)
-			return b.push(types.MakeSchemaValueNodeOptionValue(witTypes.Some(idx)))
+			idx := inner.Encode(b, in)
+			return b.Push(types.MakeSchemaValueNodeOptionValue(witTypes.Some(idx)))
 		}
-		return b.push(types.MakeSchemaValueNodeOptionValue(witTypes.None[int32]()))
+		return b.Push(types.MakeSchemaValueNodeOptionValue(witTypes.None[int32]()))
 	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
+	c.Decode = func(d *Decoder, dst reflect.Value, idx int32) error {
+		n, err := d.Node(idx)
 		if err != nil {
 			return err
 		}
 		if n.Tag() != types.SchemaValueNodeOptionValue {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
+			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.Typ)
 		}
 		opt := n.OptionValue()
 		if opt.IsNone() {
 			ops.setNone(dst)
 			return nil
 		}
-		return inner.decode(d, ops.setSome(dst), opt.Some())
+		return inner.Decode(d, ops.setSome(dst), opt.Some())
 	}
 }
 
@@ -119,39 +119,5 @@ func optionValueOps() optionOps {
 			elem, _ := values.OptionSetSome(dst.Addr().Interface())
 			return elem
 		},
-	}
-}
-
-func compileSecret(c *codec, inner *codec) {
-	// Schema side only: emit the secret(inner) type node. This is what the config
-	// graph and the config-metadata declaration need. inner is compiled so the
-	// node references the revealed type.
-	c.body = func(g *graphBuilder) types.SchemaTypeBody {
-		return types.MakeSchemaTypeBodySecretType(types.SecretSpec{
-			Inner:    g.node(inner),
-			Category: witTypes.None[string](),
-		})
-	}
-	// An invocation carries a secret as a handle, never as plaintext: sending
-	// one hands a handle on, and a received one is revealed through the host.
-	c.encode = func(b *valBuilder, v reflect.Value) int32 {
-		h, err := v.Interface().(secretTaker).secretTake()
-		if err != nil {
-			panic(&encodeError{err.Error()})
-		}
-		return b.push(types.MakeSchemaValueNodeSecretValue(h))
-	}
-	c.decode = func(d *decoder, dst reflect.Value, idx int32) error {
-		n, err := d.node(idx)
-		if err != nil {
-			return err
-		}
-		if n.Tag() != types.SchemaValueNodeSecretValue {
-			return fmt.Errorf("cannot decode value node (tag %d) into %s", n.Tag(), c.typ)
-		}
-		fresh := reflect.New(c.typ)
-		fresh.Interface().(secretAdopter).secretAdopt(n.SecretValue())
-		dst.Set(fresh.Elem())
-		return nil
 	}
 }
