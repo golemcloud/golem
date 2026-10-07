@@ -15,7 +15,7 @@
 use crate::durable_host::concurrent::{
     DropEvent, LiveCallPermit, cancel_dropped_durable_input_access, finish_prepared_access_to_live,
 };
-use crate::durable_host::durability::{ClassifiedHostError, HostFailureKind};
+use crate::durable_host::durability::{ClassifiedHostError, DurabilityHost, HostFailureKind};
 use crate::durable_host::durable_stream::{
     AttachedStreamSegmentSource, CommittedProducerStreamEvent, CommittedProducerStreamEventPayload,
     ConsumerAttachmentStatus, DurableCatchUpReader, DurableStreamStore, NestedStreamWrite,
@@ -38,7 +38,7 @@ use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
-use crate::worker::suspension::{ExternalActivity, RuntimeSource};
+use crate::worker::suspension::{ExternalActivity, RuntimeSource, RuntimeStore};
 use crate::workerctx::WorkerCtx;
 use futures::future::{BoxFuture, try_join_all};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
@@ -73,7 +73,7 @@ use golem_common::model::oplog::payload::OplogPayload;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
 use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::any::{Any, TypeId};
@@ -81,12 +81,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use wasmtime::component::{
-    Accessor, AccessorTask, Destination, HasSelf, StreamProducer, StreamResult,
+    Accessor, AccessorTask, Destination, HasSelf, RuntimeActivityId, StreamProducer, StreamResult,
 };
 use wasmtime::{AsContextMut, StoreContextMut};
 
@@ -5313,6 +5313,7 @@ impl StreamSession {
             .is_none_or(|binding| matches!(binding.source, StreamRecordReference::Foreign(_)));
         let reader = if self.producer.owns_handle_identity(&handle) {
             DurableStreamReader::Owned {
+                source_wait_can_suspend: self.producer.source_wait_can_suspend(&handle).await?,
                 reader: Box::new(
                     self.producer
                         .catch_up(handle.clone(), after)
@@ -5898,6 +5899,7 @@ fn validate_forwarded_durable_input_schemas(
 
 enum DurableStreamReader {
     Owned {
+        source_wait_can_suspend: bool,
         reader: Box<DurableCatchUpReader>,
         source: Arc<DurableStreamStore>,
         handle: Box<DurableStreamHandle>,
@@ -5908,6 +5910,16 @@ enum DurableStreamReader {
 }
 
 impl DurableStreamReader {
+    fn source_wait_can_suspend(&self) -> bool {
+        match self {
+            Self::Owned {
+                source_wait_can_suspend,
+                ..
+            } => *source_wait_can_suspend,
+            Self::Attached(_) => true,
+        }
+    }
+
     fn journal_lag_sample_deadline(&mut self) -> &mut Instant {
         match self {
             Self::Owned {
@@ -6073,16 +6085,87 @@ struct DurableInputRead {
     queued_events: VecDeque<CommittedProducerStreamEvent>,
 }
 
-type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, SessionError>>;
+#[derive(Debug)]
+enum DurableReceiveError {
+    Session(SessionError),
+    Interrupt(InterruptKind),
+}
+
+impl From<SessionError> for DurableReceiveError {
+    fn from(error: SessionError) -> Self {
+        Self::Session(error)
+    }
+}
+
+impl From<InterruptKind> for DurableReceiveError {
+    fn from(kind: InterruptKind) -> Self {
+        Self::Interrupt(kind)
+    }
+}
+
+impl From<String> for DurableReceiveError {
+    fn from(error: String) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+impl From<&str> for DurableReceiveError {
+    fn from(error: &str) -> Self {
+        Self::Session(error.into())
+    }
+}
+
+type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, DurableReceiveError>>;
 
 struct ReceiveGuard {
     _live_call: LiveCallPermit,
+}
+
+struct DurableReadWait {
+    runtime: Arc<RuntimeStore>,
+    activity: Arc<OnceLock<RuntimeActivityId>>,
+    grace: Duration,
+    recheck: Duration,
+    interrupt: BoxFuture<'static, InterruptKind>,
+}
+
+impl DurableReadWait {
+    async fn wait<F: Future + Send>(self, future: F) -> Result<F::Output, InterruptKind>
+    where
+        F::Output: Send,
+    {
+        let mut source = Some(Box::pin(future));
+        let mut interrupt = Some(self.interrupt);
+        let mut classified: Option<BoxFuture<'_, Result<F::Output, InterruptKind>>> = None;
+        std::future::poll_fn(|cx| {
+            // The initial synchronous producer poll precedes transfer admission. Bind on a
+            // subsequent poll, without restarting the read or its logical grace period.
+            if classified.is_none()
+                && let Some(activity) = self.activity.get()
+                && let Some(wait) = self.runtime.rpc_wait(*activity, self.grace, self.recheck)
+            {
+                let source = source.take().unwrap();
+                classified = Some(Box::pin(
+                    wait.wait_result(source, interrupt.take().unwrap()),
+                ));
+            }
+            match classified.as_mut() {
+                Some(wait) => wait.as_mut().poll(cx),
+                None => match interrupt.as_mut().unwrap().as_mut().poll(cx) {
+                    Poll::Ready(kind) => Poll::Ready(Err(kind)),
+                    Poll::Pending => source.as_mut().unwrap().as_mut().poll(cx).map(Ok),
+                },
+            }
+        })
+        .await
+    }
 }
 
 /// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
 pub struct DurableInputProducer {
     input: DurableInputEndpoint,
     pending: Option<DurableReceiveFuture>,
+    pending_activity: Option<Arc<OnceLock<RuntimeActivityId>>>,
     live_admission: Option<oneshot::Receiver<Result<(), WorkerExecutorError>>>,
     pending_drop: Option<BoxFuture<'static, Result<(), SessionError>>>,
     finished: bool,
@@ -6345,6 +6428,7 @@ impl DurableInputProducer {
         Self {
             input: endpoint,
             pending: None,
+            pending_activity: None,
             live_admission: None,
             pending_drop: None,
             finished: false,
@@ -6367,15 +6451,19 @@ impl DurableInputProducer {
 
     #[cfg(test)]
     fn begin_receive(&mut self) {
-        self.pending = Some(self.input.receive(None));
+        self.pending = Some(self.input.receive(None, None));
     }
 
     fn finish_receive(
         &mut self,
-        result: Result<DurableInputRead, SessionError>,
+        result: Result<DurableInputRead, DurableReceiveError>,
     ) -> anyhow::Result<DurableInputEvent> {
         self.pending = None;
-        let mut read = result.map_err(SessionError::into_trap)?;
+        self.pending_activity = None;
+        let mut read = result.map_err(|error| match error {
+            DurableReceiveError::Session(error) => error.into_trap(),
+            DurableReceiveError::Interrupt(kind) => anyhow::Error::new(kind),
+        })?;
         self.input.complete_receive(&mut read);
         let event = read.event.ok_or_else(|| {
             anyhow::anyhow!("durable input stream source closed without a terminal event")
@@ -6456,7 +6544,7 @@ impl DurableInputProducer {
                 #[cfg(test)]
                 None
             };
-            self.pending = Some(self.input.receive(guard));
+            self.pending = Some(self.input.receive(guard, None));
         }
         let result = std::future::poll_fn(|cx| {
             self.pending
@@ -6476,6 +6564,7 @@ impl DurableInputProducer {
     pub(crate) fn abort_for_teardown(&mut self) {
         self.finished = true;
         self.pending = None;
+        self.pending_activity = None;
         self.input.reader = None;
     }
 }
@@ -6485,7 +6574,11 @@ impl DurableInputEndpoint {
         self.journal.is_empty() && self.reader.is_none() && !self.source_terminal
     }
 
-    fn receive(&mut self, guard: Option<ReceiveGuard>) -> DurableReceiveFuture {
+    fn receive(
+        &mut self,
+        guard: Option<ReceiveGuard>,
+        suspension: Option<DurableReadWait>,
+    ) -> DurableReceiveFuture {
         let opens_source = self.opens_source();
         let mut reader = self.reader.take();
         let queued_event = self.journal.pop_front();
@@ -6520,7 +6613,12 @@ impl DurableInputEndpoint {
                         record_source_journal_lag(reader.as_mut(), source_after, true).await;
                     }
                     let result = match reader.as_mut() {
-                        Some(reader) => reader.next().await,
+                        Some(reader) => match suspension {
+                            Some(wait) if reader.source_wait_can_suspend() => {
+                                wait.wait(reader.next()).await?
+                            }
+                            _ => reader.next().await,
+                        },
                         None => Ok(None),
                     };
                     result.map_err(SessionError::from)?
@@ -6807,6 +6905,7 @@ impl DurableInputProducer {
             if !self.dropping {
                 self.dropping = true;
                 self.pending = None;
+                self.pending_activity = None;
                 let role = match self.input.role.direction() {
                     SessionStreamRole::Input => StreamCancelRole::InputConsumer,
                     SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
@@ -6898,9 +6997,30 @@ impl DurableInputProducer {
                     .state
                     .live_host_call_counter(),
             );
-            self.pending = Some(self.input.receive(Some(ReceiveGuard {
-                _live_call: live_call,
-            })));
+            let ctx = store.data().durable_ctx();
+            let suspension = ctx.runtime_suspension.as_ref().map(|runtime| {
+                let activity = Arc::new(OnceLock::new());
+                self.pending_activity = Some(activity.clone());
+                DurableReadWait {
+                    runtime: runtime.clone(),
+                    activity,
+                    grace: ctx.state.config.suspend.wait_suspend_grace,
+                    recheck: ctx.state.config.suspend.rpc_resume_after,
+                    interrupt: ctx.create_interrupt_signal(),
+                }
+            });
+            self.pending = Some(self.input.receive(
+                Some(ReceiveGuard {
+                    _live_call: live_call,
+                }),
+                suspension,
+            ));
+        }
+        if let Some(binding) = &self.pending_activity
+            && let Some(activity) = store.runtime_activity()
+            && let Err(activity) = binding.set(activity)
+        {
+            assert_eq!(binding.get(), Some(&activity));
         }
         let receive_result = match self.pending.as_mut().unwrap().as_mut().poll(cx) {
             Poll::Pending => return Poll::Pending,

@@ -715,8 +715,11 @@ RPC waits veto automatic suspension; raw sync RPC does not automatically suspend
 Owned async RPC activities become eligible after their grace period; the owner rechecks while
 other work vetoes. Owned timers (including the narrow P2 timer-only poll/block dispatcher) and
 promises provide deadline/activation evidence. This is not general P2 readiness adaptation.
-Passive stream source waits can be accounted for against a blocked owning Store; active
-journaling, publication and settlement are not passive waits. Root/result return alone is not idle.
+Durable source reads bind to their exact runtime transfer activity and retain the read future.
+Only an established source wait can be passive: locally registered external inline input and
+its descendants veto suspension; agent-hosted input, invocation output and attached downstream
+waits can qualify with a durable timed recheck. Active journaling, publication and settlement
+are not passive waits. Root/result return alone is not idle.
 `RuntimeStore::drive` persists the earliest timed wake, then revalidates the same activity revision
 and eligibility before committing timestamped suspension. Activity changes invalidate stale
 evidence. Existing interrupt/retirement precedence and discard/replay reconstruction remain

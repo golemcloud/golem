@@ -339,10 +339,10 @@ x509-certificate = "0.23.1"
 zstd = "0.13"
 
 [patch.crates-io]
-wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", rev = "b0db5fedc9cdfc4b72238e7d5b08e875abcb56a0" }
-wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", rev = "b0db5fedc9cdfc4b72238e7d5b08e875abcb56a0" }
-wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", rev = "b0db5fedc9cdfc4b72238e7d5b08e875abcb56a0" }
-wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", rev = "b0db5fedc9cdfc4b72238e7d5b08e875abcb56a0" }
+wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", rev = "4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf" }
+wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", rev = "4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf" }
+wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", rev = "4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf" }
+wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", rev = "4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf" }
 
 [profile.dev]
 panic = "abort"

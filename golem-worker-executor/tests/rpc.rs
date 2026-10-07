@@ -9077,6 +9077,155 @@ async fn callee_recovery_continues_output_after_committed_item(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
+async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for independent_output in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: Some(Arc::new(|config| {
+                    config.suspend.wait_suspend_grace = Duration::from_millis(100);
+                    config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+                    config.suspend.rpc_resume_after = Duration::from_secs(2);
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let name = format!("durable-read-{independent_output}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let target_id = agent_id!("StreamingRpcTarget", name);
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let target = executor
+            .start_agent(&component.id, target_id.clone())
+            .await?;
+        wait_for_agent_initialization(&executor, &caller).await?;
+        wait_for_agent_initialization(&executor, &target).await?;
+        let (gate_owner, gate_method) = if independent_output {
+            (&target_id, "create_output_gate")
+        } else {
+            (&caller_id, "create_input_gate")
+        };
+        let gate = executor
+            .invoke_and_await_agent(&component, gate_owner, gate_method, data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let (method, input) = if independent_output {
+            (
+                "fork_drop_inherited_output",
+                data_value!(gate.clone(), caller.agent_id.clone(), false),
+            )
+        } else {
+            (
+                "recover_input_after_caller_crash",
+                data_value!(gate.clone()),
+            )
+        };
+        let invocation = executor.invoke_and_await_agent(&component, &caller_id, method, input);
+        tokio::pin!(invocation);
+        let consumer = if independent_output { &caller } else { &target };
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            established = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let history = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+                    let rpc_start = history.iter().find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" => Some(entry.oplog_index),
+                        _ => None,
+                    });
+                    let rpc_ended = rpc_start.is_some_and(|start| history.iter().any(|entry|
+                        matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)));
+                    let consumed = input_consumer_history(&executor.get_oplog(consumer, OplogIndex::INITIAL).await?)?;
+                    if rpc_ended && consumed.iter().any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_))) {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { established??; }
+        }
+        let mut observed_unloaded = [false; 2];
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            parked = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    for (index, owner) in [&caller, &target].into_iter().enumerate() {
+                        if executor.get_worker_metadata(owner).await?.status == AgentStatus::Suspended
+                            && !executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, owner)).await
+                        {
+                            observed_unloaded[index] = true;
+                        }
+                    }
+                    if observed_unloaded == [true, true] { return Ok::<(), anyhow::Error>(()); }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { parked??; }
+        }
+        // A promise wakes its waiter, not an arbitrary remote stream consumer. The consumer
+        // must independently reconstruct from its persisted recheck before the gate is released.
+        let loads = executor.instance_load_count(consumer);
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            resumed = tokio::time::timeout(Duration::from_secs(15), async {
+                while executor.instance_load_count(consumer) <= loads {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { resumed?; }
+        }
+        executor.complete_promise(&gate, Vec::new()).await?;
+        let result = tokio::time::timeout(Duration::from_secs(30), invocation).await??;
+        if independent_output {
+            assert_eq!(result.into_typed::<Vec<u64>>()?, vec![1, 1]);
+        } else {
+            assert_eq!(result.into_typed::<Vec<u32>>()?, vec![10, 20, 30]);
+        }
+        let history =
+            input_consumer_history(&executor.get_oplog(consumer, OplogIndex::INITIAL).await?)?;
+        let expected_items = if independent_output { 2 } else { 3 };
+        assert_eq!(history.len(), expected_items + 1);
+        for (ordinal, record) in history.iter().enumerate() {
+            match record {
+                StreamSessionRecord::ConsumerItemValue(item) => {
+                    assert_eq!(item.consumer_read_ordinal, ordinal as u64);
+                    assert!(ordinal < expected_items);
+                }
+                StreamSessionRecord::ConsumerTerminal(terminal) => {
+                    assert_eq!(terminal.consumer_read_ordinal, expected_items as u64);
+                    assert_eq!(ordinal, expected_items);
+                    assert_eq!(
+                        terminal.terminal,
+                        golem_common::model::durable_stream::StreamConsumerTerminal::End(
+                            golem_common::model::durable_stream::StreamEndResult::Ok,
+                        ),
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+        let follow_up = executor
+            .invoke_and_await_agent(&component, &caller_id, "call_stream_free", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(follow_up, if independent_output { 2 } else { 1 });
+    }
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
 async fn durable_agent_live_await_streaming_is_allowed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
