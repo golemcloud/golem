@@ -831,6 +831,15 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 let owned_agent_id = self.owned_agent_id.clone();
                 async move { hook.before_filesystem_cleanup(&owned_agent_id).await }.boxed()
             });
+            // An automatic update that restarts the agent in place selects its record when this
+            // generation ends; the newest record counts only once its upload confirmed it.
+            if matches!(final_decision, Some(RetryDecision::Immediate)) {
+                self.parent
+                    .confirm_filesystem_snapshot_before_an_update(
+                        self.filesystem_snapshot_slot.generation(),
+                    )
+                    .await;
+            }
             self.end_snapshot_generation();
             let unloading = Self::unload_running_agent(
                 agent,

@@ -6088,3 +6088,111 @@ async fn generated_histories_with_automatic_updates_give_the_tree_and_the_result
     );
     Ok(())
 }
+
+/// Whether the oplog of `agent` holds a strategy entry after its last admission of an automatic
+/// update within `limit`.
+async fn strategy_within(
+    agent: &Agent,
+    executor: &TestWorkerExecutor,
+    admissions: usize,
+    limit: Duration,
+) -> bool {
+    eventually(limit, || async {
+        let pending = executor
+            .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+            .await?
+            .into_iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+            .count();
+        Ok((pending > admissions).then_some(()))
+    })
+    .await
+    .is_ok()
+}
+
+#[test]
+#[timeout("4m")]
+async fn an_automatic_update_of_a_loaded_agent_waits_for_the_upload_of_the_newest_record_and_selects_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+        let executor =
+            start_snapshotting(deps, &context, &store, Duration::from_secs(30), None).await?;
+        let agent = Agent::start(
+            &executor,
+            &context,
+            initial_file_system,
+            "assisted-loaded",
+            &[],
+        )
+        .await?;
+        agent
+            .apply_and_confirm(&executor, write("before.txt"))
+            .await?;
+        let held = store.hold_next_save();
+        agent.apply_all(&executor, &[write("after.txt")]).await?;
+        let uploading = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
+        let uploading_index = agent.newest_record(&executor).await?;
+        let first = agent.new_revision(&executor).await?;
+
+        // The agent stays loaded: the update restarts it in place.
+        executor
+            .auto_update_worker(&agent.worker_id, first.revision, false)
+            .await?;
+        let chosen_while_held = strategy_within(&agent, &executor, 1, Duration::from_secs(3)).await;
+        held.release();
+        executor
+            .wait_for_component_revision(&agent.worker_id, first.revision, Duration::from_secs(60))
+            .await?;
+        let updated = agent.on(&first);
+        let first_selection = updated.assisted_selection(&executor).await?;
+
+        // Without an upload in flight, the next update does not wait.
+        let (_, latest) = updated
+            .apply_and_confirm(&executor, write("latest.txt"))
+            .await?;
+        let latest_index = updated.newest_record(&executor).await?;
+        let second = updated.new_revision(&executor).await?;
+        let (waited, took) = timed(async {
+            executor
+                .auto_update_worker(&updated.worker_id, second.revision, false)
+                .await?;
+            executor
+                .wait_for_component_revision(
+                    &updated.worker_id,
+                    second.revision,
+                    Duration::from_secs(60),
+                )
+                .await
+        })
+        .await;
+        waited?;
+        let second_selection = updated.on(&second).assisted_selection(&executor).await?;
+        let tree = updated.on(&second).describe(&executor).await?;
+
+        assert!(
+            !chosen_while_held,
+            "the update chose its strategy while the upload of the newest record was held"
+        );
+        assert_eq!(first_selection, Some((uploading_index, Some(uploading))));
+        assert_eq!(second_selection, Some((latest_index, Some(latest))));
+        assert!(
+            took < Duration::from_secs(10),
+            "the second update took {took:?}"
+        );
+        assert_eq!(
+            tree,
+            [
+                written("after.txt"),
+                written("before.txt"),
+                written("latest.txt")
+            ]
+        );
+        Ok(())
+    })
+    .await
+}

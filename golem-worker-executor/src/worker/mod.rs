@@ -5741,6 +5741,46 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         debug!(?outcome, "Confirmed a filesystem snapshot before a start");
     }
 
+    /// Waits, before a loaded agent ends the generation with `mark` to start the automatic update
+    /// at the head of its queue, for the upload of the newest record that the update selects once
+    /// confirmed, as a start of an unloaded agent does before it takes its permits. The upload
+    /// confirms its record as the generation that took it. When the store holds the whole
+    /// snapshot, the generation with `mark` confirms it too, which changes nothing when the upload
+    /// already did. The wait ends at `confirmation_wait` or at a terminal interrupt, and nothing
+    /// waits when no update is at the head or no upload is in flight for its record.
+    pub(crate) async fn confirm_filesystem_snapshot_before_an_update(
+        self: &Arc<Self>,
+        mark: Option<crate::services::agent_filesystem::TreeMark>,
+    ) {
+        let status = self.last_known_status.load_full();
+        let selection = self.selection_in_memory(&status);
+        let (Some(name), Some(mark)) = (
+            snapshot_selection::upload_before_an_automatic_update(&status, &selection).cloned(),
+            mark,
+        ) else {
+            return;
+        };
+        let agent_snapshots = crate::filesystem_snapshot::AgentSnapshots::agent(
+            &self.owned_agent_id,
+            self.initial_worker_metadata.fingerprint,
+        );
+        if self
+            .agent_filesystem_snapshots()
+            .prepare_start(&agent_snapshots, &name, self.terminal_interrupt())
+            .await
+            != agent_filesystem_snapshots::StartCheck::Stored
+        {
+            return;
+        }
+        let outcome = self
+            .confirm_as(name, filesystem_snapshots::Confirmer::Running(mark))
+            .await;
+        debug!(
+            ?outcome,
+            "Confirmed a filesystem snapshot before an automatic update"
+        );
+    }
+
     /// The baselines of a start now: the periodic record that it selects under the exclusions of
     /// this incarnation in memory, and the index of the authoritative baseline of the status.
     pub(crate) fn start_baselines_now(&self) -> filesystem_snapshots::StartBaselines {

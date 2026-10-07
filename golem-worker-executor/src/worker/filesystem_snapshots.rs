@@ -89,6 +89,11 @@ impl SnapshotSlot {
         self.lock().take();
     }
 
+    /// The mark of the baseline of the generation that runs, while one runs.
+    pub(crate) fn generation(&self) -> Option<TreeMark> {
+        self.lock().as_ref().map(|slot| slot.generation)
+    }
+
     /// Whether a capture with `mark` is of the generation that runs.
     pub(crate) fn owns(&self, mark: TreeMark) -> bool {
         self.lock()

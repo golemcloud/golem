@@ -199,6 +199,26 @@ pub(crate) fn active_head(status: &AgentStatusRecord) -> Option<&PendingUpdateRe
         .find(|update| stale_assisted_head(status, update).is_none())
 }
 
+/// Whether the head of the update queue of `status` is an automatic update without a strategy
+/// entry.
+pub(crate) fn has_unselected_automatic_head(status: &AgentStatusRecord) -> bool {
+    matches!(Head::of(status), Head::UnselectedAutomatic(_))
+}
+
+/// The filesystem snapshot whose upload a loaded agent waits for before it ends its generation
+/// to start the automatic update at the head of its queue: the candidate of `selection`, while
+/// that head has no strategy entry. A start of an unloaded agent waits for the same upload
+/// before it takes its permits.
+pub(crate) fn upload_before_an_automatic_update<'a>(
+    status: &AgentStatusRecord,
+    selection: &'a StartSelection,
+) -> Option<&'a FilesystemSnapshotName> {
+    selection
+        .candidate
+        .as_ref()
+        .filter(|_| has_unselected_automatic_head(status))
+}
+
 /// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
 /// `selected`, or a plain automatic update, which replays the whole history on the target.
 fn strategy(
@@ -1299,6 +1319,43 @@ mod tests {
                 StartSelection::of(&confirmed, &none, true).candidate,
             ],
             [Some(name), None, None]
+        );
+    }
+
+    #[test]
+    fn a_loaded_agent_waits_for_the_upload_of_the_newest_record_only_before_an_unselected_automatic_update()
+     {
+        let name = FilesystemSnapshotName::periodic();
+        let with_head = |record: &AgentStatusRecord, head: PendingUpdateRef| {
+            let mut status = record.clone();
+            status.pending_updates.push_back(head);
+            status
+        };
+        let unconfirmed = status(Some(name.clone()), false, None);
+        let confirmed = status(Some(name.clone()), true, None);
+        let strategy = PendingUpdateRef {
+            oplog_index: OplogIndex::from_u64(13),
+            ..unselected(12, 4)
+        };
+        let cases = [
+            with_head(&unconfirmed, unselected(12, 4)),
+            unconfirmed.clone(),
+            with_head(&unconfirmed, strategy),
+            with_head(&confirmed, unselected(12, 4)),
+            with_head(&unconfirmed, unselected(12, 0)),
+        ];
+        let none = SnapshotExclusions::default();
+
+        assert_eq!(
+            cases.each_ref().map(|status| {
+                upload_before_an_automatic_update(status, &StartSelection::of(status, &none, true))
+                    .cloned()
+            }),
+            [Some(name), None, None, None, None]
+        );
+        assert_eq!(
+            cases.each_ref().map(has_unselected_automatic_head),
+            [true, false, false, true, true]
         );
     }
 
