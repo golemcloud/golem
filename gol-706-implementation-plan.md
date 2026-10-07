@@ -52,8 +52,9 @@ passes do not confer completion on the reduced implementation.
 Current position: M0–M4 complete under the approved RPC contract; M5 active. The user
 requested a published draft checkpoint before continuing the investigation. Runtime
 changes are committed in [the companion draft PR](https://github.com/golemcloud/wasmtime/pull/9)
-and the root manifest/lock pin that exact published revision. Golem draft publication
-is in progress; this does not close M5/M6 verification. Golem baseline is
+and the root manifest/lock pin that exact published revision. The Golem checkpoint is
+published in [draft PR #4062](https://github.com/golemcloud/golem/pull/4062);
+this does not close M5/M6 verification. Golem baseline is
 [`accae0e4`](https://github.com/golemcloud/golem/commit/accae0e435b5097cd1d7940a5c1f568bde8a055a).
 Prototype recovery files are in `tmp/gol706-reduction-20261005/`. Ignored binaries
 and WASMs may be stale; they are not baseline evidence.
@@ -191,7 +192,7 @@ No artifact under tmp may be required for a clean checkout to build or pass test
 - [ ] Original report resolved or explicitly split by user; final-source acceptance
       and broader checks pass; Oracle and bug-finder gates closed (M5).
 - [ ] Clean-checkout reproducibility, docs and local commits ready (M6).
-- [ ] Authorized draft publication complete; merge/release remain unauthorized.
+- [x] Authorized draft publication complete; merge/release remain unauthorized.
 
 At every implementation checkpoint, including sub-checkpoints within a milestone,
 obtain both Oracle and bug-finder review. Record source/fork revisions, commands,
@@ -265,7 +266,9 @@ scoped corrections/reruns are in progress. M6 documentation is drafted, not appr
 #### Draft publication requested during verification
 
 The user explicitly authorized committing all current changes and pushing draft PRs,
-then continuing the existing investigation. The runtime commit is
+then continuing the existing investigation. The Golem checkpoint is
+[`c3c207ee`](https://github.com/golemcloud/golem/commit/c3c207eed)
+on `gol706-owner-suspension`, published as draft PR #4062. The runtime commit is
 [`b0db5fed`](https://github.com/golemcloud/wasmtime/commit/b0db5fedc9cdfc4b72238e7d5b08e875abcb56a0)
 on `gol706-suspension-observation`, targeting `golem-wasmtime-v46.0.1-p3` in draft
 PR #9. Root Cargo metadata resolves all four Wasmtime patches to this published pin
