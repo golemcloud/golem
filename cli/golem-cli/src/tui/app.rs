@@ -1374,8 +1374,7 @@ impl TuiApp {
                 self.active_workspace = workspace;
             }
             Some(RegionKind::DevSessionStatus(view)) => {
-                self.restore_default_mode();
-                self.open_dev_workspace(view);
+                self.toggle_dev_session_status(view);
             }
             Some(RegionKind::DevViewTitle(view)) => {
                 self.active_workspace = Workspace::Dev;
@@ -2177,6 +2176,14 @@ impl TuiApp {
         self.active_workspace = Workspace::Dev;
         self.layout.set_dev_visible(panel, true);
         self.dev_focus = panel;
+    }
+
+    fn toggle_dev_session_status(&mut self, view: DevView) {
+        let hide_focused_view = self.dev_panel_focused(view);
+        self.restore_default_mode();
+        if !hide_focused_view || !self.toggle_dev_view(view) {
+            self.open_dev_workspace(view);
+        }
     }
 
     fn open_ops_workspace(&mut self, event_tx: Option<&TuiEventSender>) {
@@ -3317,12 +3324,13 @@ impl TuiApp {
         values: CommandFormValues,
         event_tx: Option<&TuiEventSender>,
     ) {
-        let take_input = self.dev_panel_focused(DevView::BuildDeploy);
         self.command_options = values.command_options();
         if self.command_is_running() {
             self.append_local_command_line("command already running");
             return;
         }
+        self.open_dev_workspace(DevView::BuildDeploy);
+        let take_input = self.dev_panel_focused(DevView::BuildDeploy);
         self.archive_current_command();
         if self.dev_context_unavailable() {
             self.command_run = Some(CommandRun::new(
@@ -3836,6 +3844,7 @@ impl TuiApp {
                     .insert(self.selected_target.context.short_label(), remembered);
                 self.mode.replace(InteractionMode::Normal);
                 if *restart && self.server.run.is_running() {
+                    self.open_dev_workspace(DevView::Server);
                     self.pending_server_restart = Some(values);
                     self.stop_server();
                 } else {
@@ -3852,6 +3861,7 @@ impl TuiApp {
                     .insert(self.selected_target.context.short_label(), remembered);
                 self.mode.replace(InteractionMode::Normal);
                 if *restart && self.repl.is_running() {
+                    self.open_dev_workspace(DevView::Repl);
                     self.pending_repl_restart = Some(values);
                     self.stop_repl();
                 } else {
@@ -3866,6 +3876,8 @@ impl TuiApp {
         values: ServerFormValues,
         event_tx: Option<&TuiEventSender>,
     ) {
+        self.open_dev_workspace(DevView::Server);
+        self.mode.replace(InteractionMode::Normal);
         if self.local_server_unavailable() {
             self.server
                 .run
@@ -4076,6 +4088,7 @@ impl TuiApp {
         values: ReplFormValues,
         event_tx: Option<&TuiEventSender>,
     ) {
+        self.open_dev_workspace(DevView::Repl);
         let take_input = self.dev_panel_focused(DevView::Repl);
         if self.dev_context_unavailable() {
             self.repl.run.last_error = Some("selected context is ops-only".to_string());
@@ -11509,17 +11522,22 @@ mod tests {
     }
 
     #[test]
-    fn footer_session_status_click_shows_and_focuses_without_promoting() {
+    fn footer_session_status_click_reveals_then_toggles_server_and_repl() {
         let mut app = test_app();
         app.dev_primary = DevView::BuildDeploy;
         app.dev_focus = DevView::BuildDeploy;
         app.layout.dev_visible = [true, false, false];
         app.server.run.status = ServerStatus::Running;
+        app.repl.run.status = ReplStatus::Running;
         render_app_text_at(&app, 120, 32);
-        let status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Server));
+        let server_status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Server));
 
         app.handle_mouse(
-            mouse(MouseEventKind::Down(MouseButton::Left), status.x, status.y),
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                server_status.x,
+                server_status.y,
+            ),
             None,
         );
 
@@ -11528,6 +11546,49 @@ mod tests {
         assert_eq!(app.dev_focus, DevView::Server);
         assert!(app.dev_view_visible(DevView::Server));
         assert_eq!(app.mode, InteractionMode::Normal);
+
+        render_app_text_at(&app, 120, 32);
+        let server_status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Server));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                server_status.x,
+                server_status.y,
+            ),
+            None,
+        );
+
+        assert!(!app.dev_view_visible(DevView::Server));
+        assert_eq!(app.dev_focus, DevView::BuildDeploy);
+
+        render_app_text_at(&app, 120, 32);
+        let repl_status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Repl));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                repl_status.x,
+                repl_status.y,
+            ),
+            None,
+        );
+
+        assert_eq!(app.dev_primary, DevView::BuildDeploy);
+        assert_eq!(app.dev_focus, DevView::Repl);
+        assert!(app.dev_view_visible(DevView::Repl));
+
+        render_app_text_at(&app, 120, 32);
+        let repl_status = snapshot_region(&app, RegionKind::DevSessionStatus(DevView::Repl));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                repl_status.x,
+                repl_status.y,
+            ),
+            None,
+        );
+
+        assert!(!app.dev_view_visible(DevView::Repl));
+        assert_eq!(app.dev_focus, DevView::BuildDeploy);
     }
 
     #[test]
@@ -14181,7 +14242,8 @@ mod tests {
             app.command_run.as_ref().map(|run| run.spinner_frame),
             Some(1)
         );
-        assert_eq!(app.active_workspace, Workspace::Ops);
+        assert_eq!(app.active_workspace, Workspace::Dev);
+        assert_eq!(app.dev_focus, DevView::BuildDeploy);
     }
 
     #[test]
@@ -14305,21 +14367,20 @@ mod tests {
     }
 
     #[test]
-    fn server_launch_stays_tui_owned_until_input_is_explicitly_entered() {
+    fn server_launch_reveals_its_view_but_stays_tui_owned() {
         let mut app = test_app();
         app.start_server_with_values(ServerFormValues::new("unused"), None);
 
+        assert_eq!(app.active_workspace, Workspace::Dev);
+        assert_eq!(app.dev_focus, DevView::Server);
+        assert!(app.dev_view_visible(DevView::Server));
         assert_eq!(app.mode, InteractionMode::Normal);
         assert_eq!(app.server.run.status, ServerStatus::Starting);
 
         app.server.run.mark_spawned();
         assert_eq!(app.server.run.status, ServerStatus::Running);
-        let hidden_frame = render_app_text_at(&app, 120, 30);
-        assert!(hidden_frame.contains("Server ● running"), "{hidden_frame}");
-        assert!(!hidden_frame.contains("enter CLI input"), "{hidden_frame}");
-
-        app.open_dev_workspace(DevView::Server);
         let frame = render_app_text_at(&app, 120, 30);
+        assert!(frame.contains("Server ● running"), "{frame}");
         assert!(frame.contains("enter CLI input"), "{frame}");
         assert!(frame.contains("TUI · enter → CLI"), "{frame}");
     }
@@ -14631,32 +14692,44 @@ mod tests {
     }
 
     #[test]
-    fn hidden_dev_execution_keeps_workspace_layout_and_tui_input() {
+    fn dev_execution_reveals_and_focuses_its_owning_view() {
         let mut command = test_app();
+        command.dev_primary = DevView::Repl;
+        command.dev_focus = DevView::Repl;
+        command.layout.dev_visible = [false, false, true];
         let command_primary = command.dev_primary;
-        let command_focus = command.dev_focus;
-        let command_visible = command.layout.dev_visible;
         command.start_command(CommandKind::Build, None);
-        assert_eq!(command.active_workspace, Workspace::Ops);
-        assert_eq!(command.layout.dev_visible, command_visible);
+        assert_eq!(command.active_workspace, Workspace::Dev);
         assert_eq!(command.dev_primary, command_primary);
-        assert_eq!(command.dev_focus, command_focus);
-        assert_eq!(command.mode, InteractionMode::Normal);
+        assert_eq!(command.dev_focus, DevView::BuildDeploy);
+        assert!(command.dev_view_visible(DevView::BuildDeploy));
+        assert_eq!(command.mode, InteractionMode::TerminalInput);
+
+        let mut server = test_app();
+        server.dev_primary = DevView::BuildDeploy;
+        server.dev_focus = DevView::BuildDeploy;
+        server.layout.dev_visible = [true, false, false];
+        server.start_server_with_values(ServerFormValues::new("unused"), None);
+        assert_eq!(server.active_workspace, Workspace::Dev);
+        assert_eq!(server.dev_primary, DevView::BuildDeploy);
+        assert_eq!(server.dev_focus, DevView::Server);
+        assert!(server.dev_view_visible(DevView::Server));
+        assert_eq!(server.mode, InteractionMode::Normal);
 
         let mut repl = test_app();
-        let repl_primary = repl.dev_primary;
-        let repl_focus = repl.dev_focus;
-        let repl_visible = repl.layout.dev_visible;
+        repl.dev_primary = DevView::BuildDeploy;
+        repl.dev_focus = DevView::BuildDeploy;
+        repl.layout.dev_visible = [true, false, false];
         repl.start_repl_with_values(ReplFormValues::default(), None);
-        assert_eq!(repl.active_workspace, Workspace::Ops);
-        assert_eq!(repl.layout.dev_visible, repl_visible);
-        assert_eq!(repl.dev_primary, repl_primary);
-        assert_eq!(repl.dev_focus, repl_focus);
-        assert_eq!(repl.mode, InteractionMode::Normal);
+        assert_eq!(repl.active_workspace, Workspace::Dev);
+        assert_eq!(repl.dev_primary, DevView::BuildDeploy);
+        assert_eq!(repl.dev_focus, DevView::Repl);
+        assert!(repl.dev_view_visible(DevView::Repl));
+        assert_eq!(repl.mode, InteractionMode::TerminalInput);
     }
 
     #[test]
-    fn focused_visible_nested_cli_may_take_input_without_rearranging() {
+    fn visible_nested_cli_launches_take_input_without_promoting() {
         let mut command = test_app();
         command.active_workspace = Workspace::Dev;
         command.dev_primary = DevView::BuildDeploy;

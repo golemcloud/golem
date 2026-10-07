@@ -88,6 +88,9 @@ TUI interactions have passed visual and terminal review.
   Its workspace row publishes named Server and REPL lifecycle state in Dev and
   Ops inside one `─( … )─` cluster when width permits; the selector always has
   priority.
+- Clicking a Server or REPL status shows and focuses its pane. Clicking the
+  same visible, focused status again hides that pane without stopping its
+  session; the final visible Dev pane cannot be hidden.
 - Tab and shift+tab move pane focus only.
 - Enter opens a selected resource subject. Esc closes a transient mode first,
   then unwinds one breadcrumb level.
@@ -188,12 +191,12 @@ session.
 - Each launch uses an immutable context, the application root as working
   directory, and a fresh terminal. The PTY receives the actual pane content
   size rather than the outer terminal size.
-- Launching a command never changes workspace, pane visibility, primary view,
-  or focus. A newly launched finite command or REPL owns input only when its
-  pane was already visible and focused. Hidden launches and Server starts keep
-  TUI input ownership. Every pane labels the owner as CLI or TUI. While CLI
-  owns input, every key, including tab and ctrl+c, reaches the PTY except
-  ctrl+x.
+- Launching Build & Deploy, Server, or REPL switches to Dev and reveals and
+  focuses its owning view without promoting it or hiding another visible view.
+  Finite commands and REPL then give input to their visible focused PTY. Server
+  remains TUI-owned after launch so an unexpected prompt cannot capture shell
+  navigation. Every pane labels the owner as CLI or TUI. While CLI owns input,
+  every key, including tab and ctrl+c, reaches the PTY except ctrl+x.
 - ctrl+x returns input to persistent TUI control. Enter or a click in the
   running terminal pane returns input to the CLI. A second ctrl+x from TUI
   control opens the visible leader menu.

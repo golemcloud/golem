@@ -14,6 +14,10 @@
   one footer status decorator, and made Layout hints specific to Dev or Ops.
 - Restored TUI keyboard ownership when workspace tabs are clicked and removed
   repeated ctrl+x handoff instructions from nested-terminal status summaries.
+- Made Server and REPL footer statuses toggle their already visible, focused
+  panes while retaining the final-visible-pane guard.
+- Made Build & Deploy, Server, and REPL launches reveal and focus their owning
+  Dev view without promoting it; Server retains TUI input ownership.
 
 Validation:
 
@@ -34,10 +38,10 @@ Validation:
 - Reused the downstream pane title row as the complete draggable divider for
   bottom layouts. Clicking without movement focuses the pane; dragging resizes
   it, and the former duplicate heavy horizontal grip is gone.
-- Kept command and session lifecycle independent from workspace layout. A
-  launch no longer switches workspace, visibility, main view, or focus, and a
-  finite command or REPL receives CLI input only when its pane was already
-  visible and focused. Server always starts under TUI input ownership.
+- Kept command and session lifecycle independent from primary-view promotion
+  and sibling visibility. Launch reveals and focuses its owning view; finite
+  commands and REPL receive CLI input, while Server starts under TUI input
+  ownership.
 - Aligned Server and REPL lifecycle actions to their actual states: Start when
   stopped or failed, Stop and Restart while starting or running, and Force Stop
   after a five-second stopping grace period. Server clean remains a reviewed

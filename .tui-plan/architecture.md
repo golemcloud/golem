@@ -156,7 +156,9 @@ finite Jobs:
 
 Persistent sessions publish named compact status in the footer workspace row
 and remain addressable from the palette. Clicking Server or REPL status shows
-and focuses its Dev view without promoting it or handing input to the child.
+and focuses its Dev view without promoting it or handing input to the child; a
+second click while that view is visible and focused routes through the shared
+Dev-view toggle and hides it when another Dev view can remain.
 Sessions are stopped according to context-switch and quit policies, not because
 their pane becomes hidden.
 Pointer workspace navigation first restores TUI keyboard ownership, so a stale
@@ -168,11 +170,11 @@ or clients, retain their cache semantics, and never parse human or ANSI output.
 If a TUI freshness rule conflicts with an existing cache, change the shared
 cache contract with focused tests instead of bypassing it in the renderer.
 
-Finite command and REPL launches give keyboard ownership to the PTY only when
-their owning view was already visible and focused. Hidden launches and Server
-launches remain TUI-owned until Enter or a pointer click in the visible owning
-pane explicitly hands input to the child. Launching never changes workspace,
-pane visibility, primary view, or focus. Each PTY has one TerminalScreen with
+Every Dev launch switches to Dev and reveals and focuses its owning view without
+promoting it or hiding another visible view. Finite command and REPL launches
+then give keyboard ownership to the focused PTY. Server launches remain
+TUI-owned until Enter or a pointer click in the visible owning pane explicitly
+hands input to the child. Each PTY has one TerminalScreen with
 2,000 lines of scrollback and is resized to
 the exact visible terminal rectangle from LayoutSnapshot after every layout
 change, not only outer-terminal resize. A finite Job keeps its terminal

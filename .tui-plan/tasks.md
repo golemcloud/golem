@@ -261,9 +261,9 @@ Planning prerequisite: Dev view-content gate. Complete.
 - [x] Make direct Dev navigation show and focus its target without replacing
   the current primary or hiding visible panes; expose independent stable view
   toggles and focused-view promotion while keeping at least one view visible.
-- [x] Keep process lifecycle independent from layout and input ownership:
-  launching never switches workspace, visibility, primary, or focus, and only
-  an already visible focused finite-command or REPL pane receives CLI input.
+- [x] Reveal and focus the owning Dev view when Build & Deploy, Server, or REPL
+  launches without promoting or hiding another pane. Finite commands and REPL
+  receive CLI input; Server remains TUI-owned.
 - [x] Align Server and REPL lifecycle actions with state-specific Start, Stop,
   Restart, and delayed Force Stop commands, and keep Server clean as a reviewed
   launch option rather than a separate lifecycle verb.

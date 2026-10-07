@@ -329,10 +329,11 @@ column; it must not wrap one action across multiple visual records.
 
 The persistent footer names concrete scoped actions rather than a generic More
 leader entry. It also carries one `─( Server … · REPL … )─` session-status
-cluster in both workspaces. A status item uses the full state at normal widths and a semantic
-glyph at compact widths; clicking it shows and focuses the owning Dev view but
-does not promote it, start it, or transfer terminal input. At narrow widths the
-footer keeps whole actions in priority order
+cluster in both workspaces. A status item uses the full state at normal widths
+and a semantic glyph at compact widths. Clicking it shows and focuses the
+owning Dev view; clicking the same visible, focused item again hides the pane
+when another Dev view remains. Neither action promotes, starts, stops, or
+transfers terminal input. At narrow widths the footer keeps whole actions in priority order
 and exposes `ctrl+p Commands` when lower-priority actions do not fit. A fallback
 belongs only to the row that owns that action; contextual overflow uses a
 neutral ellipsis and must not duplicate a global shortcut in another row.
@@ -572,11 +573,11 @@ escape, control keys, leader commands, and explicit accept/cancel keys should
 interrupt text entry.
 
 All nested terminals use the same explicit ownership model and display the
-current owner. Launching a command or session never changes workspace, pane
-visibility, primary view, or focus. A finite command or REPL receives CLI input
-on launch only when its owning pane is already visible and focused. A hidden or
-unfocused launch remains in TUI control. Server always starts in TUI control so
-an unexpected server prompt cannot capture shell navigation. ctrl+x returns to
+current owner. Launching a command or session switches to Dev and reveals and
+focuses its owning view without promoting it or hiding another view. A finite
+command or REPL receives CLI input in that focused pane. Server always starts
+in TUI control so an unexpected server prompt cannot capture shell navigation.
+ctrl+x returns to
 persistent TUI control; Enter or clicking a running focused pane gives input to
 the CLI. While the CLI owns input, every other key, including tab and ctrl+c,
 reaches the PTY. The terminal summary reports `input CLI` or `input TUI` but
