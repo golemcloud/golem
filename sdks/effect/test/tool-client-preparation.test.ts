@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { Context, Effect, Exit, Fiber, Schema, SchemaGetter, SchemaIssue } from "effect"
 import { client, toolDefinition, type ToolTransport } from "../src/Tool.js"
 import type { UnsupportedSchemaError } from "../src/WitCodec.js"
+import * as ToolSchema from "../src/Schema.js"
 
 const preparation = vi.hoisted(() => ({
   schemas: [] as Schema.Top[],
@@ -78,6 +79,60 @@ describe("tool client codec preparation", () => {
     expect(preparation.schemas).toHaveLength(5)
     await Effect.runPromise(client(def, { transport })({ value: "ok" }))
     expect(preparation.schemas).toHaveLength(7)
+  })
+
+  it("caches preparation but keeps result ownership pending through each stdout completion", async () => {
+    const schema = ToolSchema.Secret(Schema.String)
+    const graph = Effect.runSync(realCompile(schema)).schemaGraph
+    const disposals: ReturnType<typeof vi.fn>[] = []
+    const remote = client(
+      toolDefinition("owned-results").body((body) => body.returns(schema).output()),
+      {
+        transport: {
+          start: () => {
+            const dispose = vi.fn()
+            disposals.push(dispose)
+            return Effect.succeed({
+              result: Effect.succeed({
+                result: {
+                  graph,
+                  value: {
+                    root: 0,
+                    valueNodes: [
+                      { tag: "secret-value", val: { [Symbol.dispose]: dispose } } as never,
+                    ],
+                  },
+                },
+              }),
+              stdout: (async function* () {})(),
+              cancel: Effect.void,
+            })
+          },
+        },
+      },
+    )
+    for (const reject of [false, true, false, true]) {
+      const completion = gate()
+      const result = Effect.runPromiseExit(
+        remote(
+          {},
+          {
+            stdout: () =>
+              Effect.andThen(
+                completion.effect,
+                reject ? Effect.fail("stdout failed") : Effect.void,
+              ),
+          },
+        ),
+      )
+      await completion.entered
+      expect(disposals.at(-1)).not.toHaveBeenCalled()
+      completion.release()
+      expect(Exit.isFailure(await result)).toBe(reject)
+      expect(disposals.at(-1)).toHaveBeenCalledTimes(reject ? 1 : 0)
+    }
+    expect(preparation.schemas).toHaveLength(2)
+    expect(disposals.map((dispose) => dispose.mock.calls.length)).toEqual([0, 1, 0, 1])
   })
 
   it("shares concurrent first preparations for success and declared-error calls", async () => {

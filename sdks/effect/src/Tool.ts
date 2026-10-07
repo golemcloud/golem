@@ -15,7 +15,7 @@ import {
   type ToolDefinition,
   registerToolClientFactory,
 } from "./internal/tool/model.js"
-import { compile, type CompiledWitCodec } from "./WitCodec.js"
+import { compile } from "./WitCodec.js"
 import { withCapabilityTransaction } from "./internal/schema-model/capabilityTransaction.js"
 import { schemaValueFromWit } from "./internal/schema-model/wit.js"
 import { abandonGuestQuotaTokenWireHandle } from "./internal/schema-model/quotaTokenHandle.js"
@@ -178,8 +178,12 @@ export const liveToolStart = (
 
 const cachedCompile = <S extends Schema.Top>(schema: S) =>
   Effect.runSync(
-    Effect.cachedWithTTL(compile(schema), (exit) =>
-      Exit.hasInterrupts(exit) ? Duration.zero : Duration.infinity,
+    Effect.cachedWithTTL(
+      Effect.map(compile(schema), (compiled) => ({
+        ...compiled,
+        decodeModel: Schema.decodeEffect(compiled.codec),
+      })),
+      (exit) => (Exit.hasInterrupts(exit) ? Duration.zero : Duration.infinity),
     ),
   )
 
@@ -219,10 +223,7 @@ export function client<D extends ToolDefinition<any, any>>(
   return clientCompiled(definition.name, commands, options)
 }
 
-type ClientWireCodec = Pick<
-  CompiledWitCodec<any>,
-  "schemaGraph" | "encodeAsync" | "decode" | "codec"
->
+type ClientWireCodec = Effect.Success<ReturnType<typeof cachedCompile<any>>>
 
 interface CompiledToolCommand {
   readonly path: readonly string[]
@@ -455,9 +456,9 @@ function clientCompiled(
                     const model = yield* Effect.try(() =>
                       schemaValueFromWit(result.result!.value, transaction),
                     ).pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
-                    const decoded = yield* Schema.decodeEffect(output.codec)(model).pipe(
-                      Effect.mapError((cause) => new ToolClientError("result", cause)),
-                    )
+                    const decoded = yield* output
+                      .decodeModel(model)
+                      .pipe(Effect.mapError((cause) => new ToolClientError("result", cause)))
                     yield* consumeSucceeded
                     return decoded
                   }),
