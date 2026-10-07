@@ -5746,9 +5746,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// update selects once confirmed. `None` when no unselected automatic update is at the head or
     /// its record is confirmed.
     pub(crate) fn upload_before_an_update(&self) -> Option<FilesystemSnapshotName> {
-        let status = self.last_known_status.load_full();
-        let selection = self.selection_in_memory(&status);
-        snapshot_selection::upload_before_an_automatic_update(&status, &selection).cloned()
+        snapshot_selection::upload_before_an_automatic_update(
+            &self.last_known_status.load(),
+            self.filesystem_snapshots_enabled(),
+            || {
+                self.snapshot_exclusions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            },
+        )
     }
 
     /// Waits, before a loaded agent ends the generation with `mark` to start the automatic update

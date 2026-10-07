@@ -199,24 +199,32 @@ pub(crate) fn active_head(status: &AgentStatusRecord) -> Option<&PendingUpdateRe
         .find(|update| stale_assisted_head(status, update).is_none())
 }
 
-/// Whether the head of the update queue of `status` is an automatic update without a strategy
-/// entry.
-fn has_unselected_automatic_head(status: &AgentStatusRecord) -> bool {
-    matches!(Head::of(status), Head::UnselectedAutomatic(_))
-}
-
 /// The filesystem snapshot whose upload a loaded agent waits for before it ends its generation
-/// to start the automatic update at the head of its queue: the candidate of `selection`, while
-/// that head has no strategy entry. A start of an unloaded agent waits for the same upload
-/// before it takes its permits.
-pub(crate) fn upload_before_an_automatic_update<'a>(
+/// to start the automatic update at the head of its queue: the candidate of a start of `status`
+/// under the exclusions that `exclusions` gives, while that head has no strategy entry. A start
+/// of an unloaded agent waits for the same upload before it takes its permits. `enabled` tells
+/// whether this executor keeps filesystem snapshots. The call reads the exclusions only when the
+/// head has no strategy entry and the last automatic snapshot record is not confirmed.
+pub(crate) fn upload_before_an_automatic_update<Exclusions>(
     status: &AgentStatusRecord,
-    selection: &'a StartSelection,
-) -> Option<&'a FilesystemSnapshotName> {
-    selection
-        .candidate
+    enabled: bool,
+    exclusions: impl FnOnce() -> Exclusions,
+) -> Option<FilesystemSnapshotName>
+where
+    Exclusions: std::ops::Deref<Target = SnapshotExclusions>,
+{
+    let Head::UnselectedAutomatic(_) = Head::of(status) else {
+        return None;
+    };
+    let name = status
+        .last_automatic_snapshot
         .as_ref()
-        .filter(|_| has_unselected_automatic_head(status))
+        .and_then(|last| match &last.files {
+            SnapshotFiles::Unconfirmed(name) => Some(name),
+            SnapshotFiles::Unnamed | SnapshotFiles::Confirmed(_) => None,
+        })?;
+    selects_the_last_record_once_confirmed(status, exclusions().filter(status, enabled, true))
+        .then(|| name.clone())
 }
 
 /// The strategy entry of the unselected automatic update `head`: a snapshot-assisted update from
@@ -1345,18 +1353,24 @@ mod tests {
             with_head(&unconfirmed, unselected(12, 0)),
         ];
         let none = SnapshotExclusions::default();
+        let reads = std::cell::Cell::new(0);
 
         assert_eq!(
             cases.each_ref().map(|status| {
-                upload_before_an_automatic_update(status, &StartSelection::of(status, &none, true))
-                    .cloned()
+                upload_before_an_automatic_update(status, true, || {
+                    reads.set(reads.get() + 1);
+                    &none
+                })
             }),
             [Some(name), None, None, None, None]
         );
         assert_eq!(
-            cases.each_ref().map(has_unselected_automatic_head),
-            [true, false, false, true, true]
+            cases
+                .each_ref()
+                .map(|status| StartSelection::of(status, &none, true).candidate.is_some()),
+            [true, true, false, false, false]
         );
+        assert_eq!(reads.get(), 2);
     }
 
     fn unselected(admission: u64, target: u64) -> PendingUpdateRef {
