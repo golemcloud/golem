@@ -453,6 +453,11 @@ impl RouteMatch {
                     return Err("Router handler and provider must be distinct methods".into());
                 }
                 FileMapping::validate_list(&router.static_bindings)?;
+                golem_common::schema::agent::http::validate_file_response_headers(
+                    &router.file_response_headers,
+                    !router.static_bindings.is_empty(),
+                )
+                .map_err(|error| error.to_string())?;
                 let mut paths = BTreeSet::new();
                 for entry in &router.file_index {
                     let path = entry
@@ -474,6 +479,11 @@ impl RouteMatch {
             RouteBehaviour::AgentFilesystem(filesystem) => {
                 filesystem.constructor_input.validate()?;
                 FileMapping::validate_list(&filesystem.filesystem_bindings)?;
+                golem_common::schema::agent::http::validate_file_response_headers(
+                    &filesystem.file_response_headers,
+                    !filesystem.filesystem_bindings.is_empty(),
+                )
+                .map_err(|error| error.to_string())?;
                 let captures = path
                     .iter()
                     .filter(|segment| matches!(segment, PathSegment::Variable { .. }))

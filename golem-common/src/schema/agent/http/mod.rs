@@ -15,7 +15,8 @@
 use super::{AgentMethodSchema, AgentTypeKind, AgentTypeSchema, FieldSource};
 use crate::base_model::agent::http_files::valid_decoded_segment;
 use crate::base_model::agent::{
-    AgentMode, FileMapping, HttpMethod, HttpMountDetails, PathSegment, Snapshotting,
+    AgentMode, FileMapping, FileResponseHeader, HttpMethod, HttpMountDetails, PathSegment,
+    Snapshotting,
 };
 use crate::schema::validation::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaType};
@@ -152,7 +153,10 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
         FileMapping::validate_list(&mount.filesystem_bindings)
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
-        validate_file_response_headers(mount)?;
+        validate_file_response_headers(
+            &mount.file_response_headers,
+            !mount.static_bindings.is_empty() || !mount.filesystem_bindings.is_empty(),
+        )?;
     }
     match agent.kind {
         AgentTypeKind::HttpRouter => validate_router(agent),
@@ -183,17 +187,15 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
     }
 }
 
-fn validate_file_response_headers(
-    mount: &HttpMountDetails,
+pub fn validate_file_response_headers(
+    headers: &[FileResponseHeader],
+    has_file_bindings: bool,
 ) -> Result<(), HttpAgentValidationError> {
-    if !mount.file_response_headers.is_empty()
-        && mount.static_bindings.is_empty()
-        && mount.filesystem_bindings.is_empty()
-    {
+    if !headers.is_empty() && !has_file_bindings {
         return Err(HttpAgentValidationError::FileResponseHeadersWithoutBindings);
     }
     let mut names = HashSet::new();
-    for header in &mount.file_response_headers {
+    for header in headers {
         let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|_| {
             HttpAgentValidationError::InvalidFileResponseHeader(header.name.clone())
         })?;
