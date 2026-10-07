@@ -4,6 +4,7 @@ custom_request_port = 9006
 environment = "local"
 mcp_port = 9007
 port = 9005
+runtime_metrics_sampling_interval = "5s"
 workspace = "release"
 
 [agent_resolution_cache]

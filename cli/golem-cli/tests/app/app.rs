@@ -43,6 +43,47 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
 
+#[test]
+#[timeout("2m")]
+async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("runtime-metrics-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    ctx.start_server().await;
+
+    let metrics_url = format!("http://localhost:{}/metrics", ctx.router_port());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let metrics = reqwest::get(&metrics_url)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if metrics.lines().any(|line| {
+            line.strip_prefix("tokio_workers_count ")
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some_and(|value| value > 0.0)
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "local server metrics did not contain tokio_workers_count"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        !fs::read_to_string(server_log)
+            .unwrap()
+            .contains("Failed to install tokio runtime metrics recorder")
+    );
+}
+
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
 /// command help go to stderr with exit code 2.
 #[test]
