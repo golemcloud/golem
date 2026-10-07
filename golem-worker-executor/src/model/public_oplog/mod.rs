@@ -1195,6 +1195,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 details,
                 snapshot_assisted_details,
                 update_attempt_index,
+                snapshot_fault: _,
             } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
                 timestamp,
                 target_revision,
@@ -1206,7 +1207,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         source_component_revision: details.source_component_revision,
                         source_revision_start_index: details.source_revision_start_index,
                         snapshot_index: details.snapshot_index,
-                        ineligibility_reason: details.ineligibility_reason,
                     }
                 }),
             })),

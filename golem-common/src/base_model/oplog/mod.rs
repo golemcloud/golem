@@ -393,6 +393,7 @@ oplog_entry! {
             details: Option<String>,
             snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
+            snapshot_fault: Option<SnapshotFault>,
         }
         public {
             target_revision: ComponentRevision,

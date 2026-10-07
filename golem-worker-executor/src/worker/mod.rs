@@ -109,8 +109,8 @@ use crate::worker::invocation_loop::{
 };
 use crate::worker::snapshot_selection::{SnapshotExclusions, StartSelection};
 use crate::worker::status::{
-    calculate_last_known_status_with_checkpoint, calculate_revert_validation_regions,
-    fold_invocation_result_entries, update_status_with_new_entries,
+    calculate_last_known_status_with_checkpoint, fold_invocation_result_entries,
+    revert_validation_regions, update_status_with_new_entries,
 };
 use crate::workerctx::{WorkerCtx, WorkerCtxExecutable, WorkerFilesystemContext};
 use futures::{
@@ -163,8 +163,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, AuthoritativeSnapshotKind,
     IdempotencyKey, OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
-    RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, SnapshotAssistedUpdateSelection,
-    Timestamp, TimestampedAgentInvocation,
+    RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -5734,7 +5733,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             automatic: self.read_exclusions(|exclusions| {
                 snapshot_selection::selected_automatic_snapshot(&status, exclusions, enabled)
             }),
-            manual_update: status.last_manual_update_snapshot_index,
+            manual_update: manual_update_baseline_index(&status),
         }
     }
 
@@ -9214,7 +9213,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 ))
             })?;
 
-            let validation_regions = calculate_revert_validation_regions(&entries, &dropped_region);
+            let validation_regions = revert_validation_regions(&entries, &dropped_region);
 
             if validation_regions.is_in_deleted_region(last_oplog_index) {
                 return Err(WorkerExecutorError::invalid_request(format!(
@@ -9387,24 +9386,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?
         };
 
-        if let Some(snapshot) = status.authoritative_snapshot {
+        if let Some(snapshot) = &status.authoritative_snapshot {
             self.preflight_snapshot_update_payload(snapshot.index)
                 .await?;
         }
         let pending_snapshot_index =
-            pending_update.and_then(|pending_update| match pending_update.kind {
+            pending_update.and_then(|pending_update| match &pending_update.kind {
                 PendingUpdateKind::SnapshotBased { .. } => Some(pending_update.oplog_index),
-                PendingUpdateKind::SnapshotAssistedAutomatic {
-                    selection: SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. },
-                    ..
-                } if snapshot_assisted_head_failure(status, pending_update).is_none() => {
-                    Some(snapshot_index)
+                PendingUpdateKind::SnapshotAssistedAutomatic(selection)
+                    if snapshot_assisted_head_failure(status, pending_update).is_none() =>
+                {
+                    Some(selection.snapshot.index)
                 }
-                PendingUpdateKind::Automatic
-                | PendingUpdateKind::SnapshotAssistedAutomatic { .. } => None,
+                PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic(_) => {
+                    None
+                }
             });
         if let Some(snapshot_index) = pending_snapshot_index
-            && Some(snapshot_index) != status.authoritative_snapshot.map(|snapshot| snapshot.index)
+            && Some(snapshot_index)
+                != status
+                    .authoritative_snapshot
+                    .as_ref()
+                    .map(|snapshot| snapshot.index)
         {
             self.preflight_snapshot_update_payload(snapshot_index)
                 .await?;
@@ -11602,7 +11605,7 @@ impl RunningWorker {
             matches!(pending.description, UpdateDescription::SnapshotBased { .. })
         }) {
             Some(pending) => Some((pending.clone(), true)),
-            None => match status.last_manual_update_snapshot_index {
+            None => match manual_update_baseline_index(status) {
                 Some(index) => match parent.oplog.read(index).await {
                     OplogEntry::PendingUpdate {
                         timestamp,
@@ -11720,6 +11723,7 @@ impl RunningWorker {
                         Some(message.into()),
                         None,
                         update_attempt_index,
+                        None,
                     ))
                     .await
                 {
@@ -11825,6 +11829,7 @@ impl RunningWorker {
                         Some(details),
                         failed_snapshot_assisted_update_details(pending_update_ref),
                         Some(pending_update_ref.admission_index),
+                        None,
                     ))
                     .await
                     .map_err(WorkerExecutorError::from)?;
@@ -11883,6 +11888,7 @@ impl RunningWorker {
                                 Some(details),
                                 failed_snapshot_assisted_update_details(pending_update_ref),
                                 Some(pending_update_ref.admission_index),
+                                None,
                             ))
                             .await
                             .map_err(WorkerExecutorError::from)?;
@@ -11924,6 +11930,7 @@ impl RunningWorker {
                                 pending_update_ref
                                     .as_ref()
                                     .map(|pending| pending.admission_index),
+                                None,
                             ))
                             .await
                             .map_err(WorkerExecutorError::from)?;
@@ -11981,13 +11988,15 @@ impl RunningWorker {
         let mut last_snapshot_index = worker_metadata
             .last_known_status
             .authoritative_snapshot
+            .as_ref()
             .map(|snapshot| snapshot.index);
         let mut last_snapshot_source = worker_metadata
             .last_known_status
             .authoritative_snapshot
+            .as_ref()
             .map(|snapshot| match snapshot.kind {
                 AuthoritativeSnapshotKind::ManualUpdate => SnapshotSource::ManualUpdate,
-                AuthoritativeSnapshotKind::SnapshotAssistedAutomatic => {
+                AuthoritativeSnapshotKind::SnapshotAssistedAutomatic { .. } => {
                     SnapshotSource::SnapshotAssistedAutomatic
                 }
             });
@@ -12350,6 +12359,7 @@ impl RunningWorker {
                                 .pending_updates
                                 .front()
                                 .map(|pending| pending.admission_index),
+                                None,
                         ))
                         .await
                         .map_err(WorkerExecutorError::from)?;
@@ -13053,14 +13063,11 @@ fn snapshot_assisted_head_failure(
     status: &AgentStatusRecord,
     pending_update: &PendingUpdateRef,
 ) -> Option<String> {
-    let PendingUpdateKind::SnapshotAssistedAutomatic {
-        source_component_revision,
-        source_revision_start_index,
-        selection,
-    } = pending_update.kind
-    else {
+    let PendingUpdateKind::SnapshotAssistedAutomatic(selection) = &pending_update.kind else {
         return None;
     };
+    let source_component_revision = selection.snapshot.component_revision;
+    let source_revision_start_index = selection.source_revision_start_index;
 
     if status.component_revision != source_component_revision
         || status.component_revision_start_index != source_revision_start_index
@@ -13078,38 +13085,31 @@ fn snapshot_assisted_head_failure(
         ));
     }
 
-    match selection {
-        SnapshotAssistedUpdateSelection::Selected { .. } => None,
-        SnapshotAssistedUpdateSelection::Ineligible(reason) => Some(format!(
-            "Snapshot-assisted automatic update has no eligible source snapshot: {reason:?}"
-        )),
-    }
+    None
 }
 
 fn failed_snapshot_assisted_update_details(
     pending_update: &PendingUpdateRef,
 ) -> Option<FailedSnapshotAssistedUpdateDetails> {
-    let PendingUpdateKind::SnapshotAssistedAutomatic {
-        source_component_revision,
-        source_revision_start_index,
-        selection,
-    } = pending_update.kind
-    else {
+    let PendingUpdateKind::SnapshotAssistedAutomatic(selection) = &pending_update.kind else {
         return None;
-    };
-    let (snapshot_index, ineligibility_reason) = match selection {
-        SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. } => {
-            (Some(snapshot_index), None)
-        }
-        SnapshotAssistedUpdateSelection::Ineligible(reason) => (None, Some(format!("{reason:?}"))),
     };
     Some(FailedSnapshotAssistedUpdateDetails {
         pending_update_index: pending_update.oplog_index,
-        source_component_revision,
-        source_revision_start_index,
-        snapshot_index,
-        ineligibility_reason,
+        source_component_revision: selection.snapshot.component_revision,
+        source_revision_start_index: selection.source_revision_start_index,
+        snapshot_index: selection.snapshot.index,
     })
+}
+
+/// The index of the `PendingUpdate` entry of the manual update whose snapshot is the
+/// authoritative baseline of `status`, if the baseline is a manual update.
+fn manual_update_baseline_index(status: &AgentStatusRecord) -> Option<OplogIndex> {
+    status
+        .authoritative_snapshot
+        .as_ref()
+        .filter(|snapshot| snapshot.kind == AuthoritativeSnapshotKind::ManualUpdate)
+        .map(|snapshot| snapshot.index)
 }
 
 fn assisted_instantiation_failure_target(
@@ -13120,11 +13120,8 @@ fn assisted_instantiation_failure_target(
         return None;
     }
     pending_update.and_then(|update| {
-        matches!(
-            update.kind,
-            PendingUpdateKind::SnapshotAssistedAutomatic { .. }
-        )
-        .then_some(update.target_revision)
+        matches!(update.kind, PendingUpdateKind::SnapshotAssistedAutomatic(_))
+            .then_some(update.target_revision)
     })
 }
 
@@ -13132,6 +13129,7 @@ fn assisted_instantiation_failure_target(
 mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
+    use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
     use std::path::Path;
     use test_r::test;
 
@@ -13191,30 +13189,28 @@ mod tests {
         source_revision: ComponentRevision,
         source_revision_start_index: OplogIndex,
         target_revision: ComponentRevision,
-        selection: SnapshotAssistedUpdateSelection,
     ) -> PendingUpdateRef {
         PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(10),
             admission_index: OplogIndex::from_u64(10),
             target_revision,
-            kind: PendingUpdateKind::SnapshotAssistedAutomatic {
-                source_component_revision: source_revision,
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index,
-                selection,
-            },
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: source_revision,
+                    filesystem_snapshot: None,
+                },
+            })),
         }
     }
 
     #[test]
-    fn snapshot_assisted_head_validation_rejects_ineligible_stale_aba_and_downgrade() {
+    fn snapshot_assisted_head_validation_rejects_stale_aba_and_downgrade() {
         let source_revision = ComponentRevision::new(2).unwrap();
         let source_revision_start_index = OplogIndex::from_u64(4);
         let target_revision = ComponentRevision::new(3).unwrap();
-        let selected = SnapshotAssistedUpdateSelection::Selected {
-            snapshot_index: OplogIndex::from_u64(7),
-            snapshot_revision: source_revision,
-        };
         let mut status = AgentStatusRecord {
             component_revision: source_revision,
             component_revision_start_index: source_revision_start_index,
@@ -13225,25 +13221,13 @@ mod tests {
             source_revision,
             source_revision_start_index,
             target_revision,
-            selected,
         );
         assert_eq!(snapshot_assisted_head_failure(&status, &valid), None);
-
-        let no_snapshot = assisted_pending(
-            source_revision,
-            source_revision_start_index,
-            target_revision,
-            SnapshotAssistedUpdateSelection::Ineligible(
-                golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
-            ),
-        );
-        assert!(snapshot_assisted_head_failure(&status, &no_snapshot).is_some());
 
         let downgrade = assisted_pending(
             source_revision,
             source_revision_start_index,
             ComponentRevision::new(1).unwrap(),
-            selected,
         );
         assert!(snapshot_assisted_head_failure(&status, &downgrade).is_some());
 
@@ -13288,11 +13272,8 @@ mod tests {
         };
         status.pending_updates.push_back(assisted_pending(
             source_revision,
-            source_revision_start_index,
+            source_revision_start_index.next(),
             rejected_target,
-            SnapshotAssistedUpdateSelection::Ineligible(
-                golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
-            ),
         ));
 
         assert_eq!(startup_component_charge_revision(&status), source_revision);
@@ -13321,10 +13302,6 @@ mod tests {
             source_revision,
             source_revision_start_index,
             target_revision,
-            SnapshotAssistedUpdateSelection::Selected {
-                snapshot_index: OplogIndex::from_u64(7),
-                snapshot_revision: source_revision,
-            },
         ));
 
         assert_eq!(
@@ -13760,25 +13737,15 @@ mod tests {
         }
     }
 
-    fn assisted_kind(selection: SnapshotAssistedUpdateSelection) -> PendingUpdateKind {
-        PendingUpdateKind::SnapshotAssistedAutomatic {
-            source_component_revision: ComponentRevision::new(2).unwrap(),
+    fn assisted_kind(filesystem_snapshot: Option<FilesystemSnapshotName>) -> PendingUpdateKind {
+        PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
             source_revision_start_index: OplogIndex::from_u64(4),
-            selection,
-        }
-    }
-
-    fn selected() -> SnapshotAssistedUpdateSelection {
-        SnapshotAssistedUpdateSelection::Selected {
-            snapshot_index: OplogIndex::from_u64(7),
-            snapshot_revision: ComponentRevision::new(2).unwrap(),
-        }
-    }
-
-    fn ineligible() -> SnapshotAssistedUpdateSelection {
-        SnapshotAssistedUpdateSelection::Ineligible(
-            golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
-        )
+            snapshot: UsableAutomaticSnapshot {
+                index: OplogIndex::from_u64(7),
+                component_revision: ComponentRevision::new(2).unwrap(),
+                filesystem_snapshot,
+            },
+        }))
     }
 
     /// Characterizes which queue head still needs its strategy entry: only an automatic
@@ -13794,8 +13761,12 @@ mod tests {
                 is_unselected_automatic_update(&head(PendingUpdateKind::Automatic, 12, 10)),
                 is_unselected_automatic_update(&head(snapshot_based(), 10, 10)),
                 is_unselected_automatic_update(&head(snapshot_based(), 12, 10)),
-                is_unselected_automatic_update(&head(assisted_kind(selected()), 12, 10)),
-                is_unselected_automatic_update(&head(assisted_kind(ineligible()), 12, 10)),
+                is_unselected_automatic_update(&head(assisted_kind(None), 12, 10)),
+                is_unselected_automatic_update(&head(
+                    assisted_kind(Some(FilesystemSnapshotName::periodic())),
+                    12,
+                    10
+                )),
             ],
             [true, false, false, false, false, false]
         );
@@ -13804,12 +13775,11 @@ mod tests {
     /// Characterizes the failure details of today for every queue head kind.
     #[test]
     fn failed_snapshot_assisted_update_details_for_every_head_kind() {
-        let details = |selection| FailedSnapshotAssistedUpdateDetails {
+        let details = FailedSnapshotAssistedUpdateDetails {
             pending_update_index: OplogIndex::from_u64(12),
             source_component_revision: ComponentRevision::new(2).unwrap(),
             source_revision_start_index: OplogIndex::from_u64(4),
-            snapshot_index: selection,
-            ineligibility_reason: None,
+            snapshot_index: OplogIndex::from_u64(7),
         };
         assert_eq!(
             failed_snapshot_assisted_update_details(&head(PendingUpdateKind::Automatic, 12, 10)),
@@ -13826,15 +13796,16 @@ mod tests {
             None
         );
         assert_eq!(
-            failed_snapshot_assisted_update_details(&head(assisted_kind(selected()), 12, 10)),
-            Some(details(Some(OplogIndex::from_u64(7))))
+            failed_snapshot_assisted_update_details(&head(assisted_kind(None), 12, 10)),
+            Some(details.clone())
         );
         assert_eq!(
-            failed_snapshot_assisted_update_details(&head(assisted_kind(ineligible()), 12, 10)),
-            Some(FailedSnapshotAssistedUpdateDetails {
-                ineligibility_reason: Some("NoSnapshotSinceSourceRevisionStart".to_string()),
-                ..details(None)
-            })
+            failed_snapshot_assisted_update_details(&head(
+                assisted_kind(Some(FilesystemSnapshotName::periodic())),
+                12,
+                10
+            )),
+            Some(details)
         );
     }
 
@@ -13864,8 +13835,7 @@ mod tests {
             None
         );
         assert!(
-            snapshot_assisted_head_failure(&status, &head(assisted_kind(selected()), 12, 10))
-                .is_some()
+            snapshot_assisted_head_failure(&status, &head(assisted_kind(None), 12, 10)).is_some()
         );
     }
 
@@ -13887,8 +13857,12 @@ mod tests {
                 10,
                 10,
             ),
-            head(assisted_kind(selected()), 12, 10),
-            head(assisted_kind(ineligible()), 12, 10),
+            head(assisted_kind(None), 12, 10),
+            head(
+                assisted_kind(Some(FilesystemSnapshotName::periodic())),
+                12,
+                10,
+            ),
         ];
         let target = Some(ComponentRevision::new(3).unwrap());
 

@@ -1369,8 +1369,7 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             pending_update_index: OplogIndex::from_u64(5),
             source_component_revision: ComponentRevision::new(1).unwrap(),
             source_revision_start_index: OplogIndex::INITIAL,
-            snapshot_index: Some(OplogIndex::from_u64(3)),
-            ineligibility_reason: None,
+            snapshot_index: OplogIndex::from_u64(3),
         }),
     });
     let serialized = entry.to_json_string();

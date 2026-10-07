@@ -3,25 +3,29 @@ use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorker
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::AgentInvocationPayload;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, OplogEntry, OplogErrorKind, OplogPayload, QueuedCardEvent,
-    UpdateDescription,
 };
-use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
+use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
+    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AssistedSelection,
     AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
     ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
     OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
     PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
     RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
-use golem_common::serialization::{deserialize, try_deserialize};
+use golem_common::serialization::try_deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+
+pub(crate) mod regions;
+pub(crate) mod update_queue;
+
+pub(crate) use regions::{RegionFold, deleted_regions, fold_regions, revert_validation_regions};
+use update_queue::{UpdateStep, manual_update_target_revision_of};
 
 /// One immutable projection boundary, shared by region discovery and every baseline attempt.
 pub(super) struct StatusOplogReader<'a> {
@@ -358,7 +362,7 @@ where
             return Ok(None);
         }
         let next = async {
-            let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), &entries);
+            let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
             hydrate_stream_session_payloads(
                 this,
                 owned_agent_id,
@@ -415,19 +419,16 @@ where
     let Some(region_entries) = read_region_entries(reader, start, chunk_size).await else {
         return Ok(None);
     };
-    let deleted_regions =
-        calculate_deleted_regions(baseline.deleted_regions.clone(), &region_entries);
-    let skipped_regions = calculate_skipped_regions(
-        baseline.skipped_regions.clone(),
-        &deleted_regions,
-        &region_entries,
-    );
+    let mut regions = fold_regions(&baseline, &region_entries);
 
-    if baseline_is_invalidated(&baseline, &deleted_regions, &skipped_regions) {
+    if baseline_is_invalidated(&baseline, &regions.deleted, &regions.skipped) {
         return Ok(None);
     }
-    baseline.deleted_regions = deleted_regions;
-    baseline.skipped_regions = skipped_regions;
+    baseline.deleted_regions = regions.deleted.clone();
+    baseline.skipped_regions = regions.skipped.clone();
+    // The queue after the whole range belongs to the status after the last chunk. A status
+    // between two chunks keeps the pending updates of the baseline; nothing reads them.
+    let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_pending());
 
     let mut first = start;
     while first <= last_oplog_index {
@@ -447,15 +448,18 @@ where
         hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
-        let deleted_regions = baseline.deleted_regions.clone();
-        let skipped_regions = baseline.skipped_regions.clone();
+        let pending_updates = if finalize_oplog_processor_checkpoints {
+            final_pending_updates.take().unwrap_or_default()
+        } else {
+            std::mem::take(&mut baseline.pending_updates)
+        };
         baseline = update_status_with_precomputed_regions(
             agent_mode,
             baseline,
             entries,
             &this.config().retry,
-            deleted_regions,
-            skipped_regions,
+            &regions,
+            pending_updates,
             finalize_oplog_processor_checkpoints,
         )?;
         first = baseline.oplog_idx.next();
@@ -496,7 +500,7 @@ async fn hydrate_initial_pending_evidence(
     baseline: &mut AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Result<(), String> {
-    let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), entries);
+    let deleted = deleted_regions(baseline.deleted_regions.clone(), entries);
     for (attached_idx, entry) in entries {
         if deleted.is_in_deleted_region(*attached_idx) {
             continue;
@@ -590,32 +594,26 @@ fn update_status_with_new_entries_internal(
     validate_baseline: bool,
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<Option<AgentStatusRecord>, String> {
-    let deleted_regions =
-        calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
-
-    let skipped_regions = calculate_skipped_regions(
-        last_known.skipped_regions.clone(),
-        &deleted_regions,
-        &new_entries,
-    );
+    let mut regions = fold_regions(&last_known, &new_entries);
 
     // If the last known status is from a deleted region based on the latest deleted region status,
     // we cannot fold the new status from the new entries only, and need to recalculate the whole status
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &deleted_regions, &skipped_regions)
+    if validate_baseline && baseline_is_invalidated(&last_known, &regions.deleted, &regions.skipped)
     {
         return Ok(None);
     }
 
+    let pending_updates = std::mem::take(&mut regions.queue).into_pending();
     Ok(Some(update_status_with_precomputed_regions(
         agent_mode,
         last_known,
         new_entries,
         default_retry_policy,
-        deleted_regions,
-        skipped_regions,
+        &regions,
+        pending_updates,
         finalize_oplog_processor_checkpoints,
     )?))
 }
@@ -664,15 +662,22 @@ fn baseline_is_invalidated(
             || has_uncovered_prefix(&baseline_without_overrides, &new_without_overrides))
 }
 
+/// The status after `new_entries`, with the regions and the update steps of `regions`, which a
+/// region fold gave for a range that holds `new_entries`. `pending_updates` are the pending
+/// updates of the status after `new_entries`; the caller takes them from the queue of the region
+/// fold. The queue of `regions` is not read.
 fn update_status_with_precomputed_regions(
     agent_mode: AgentMode,
     last_known: AgentStatusRecord,
     new_entries: BTreeMap<OplogIndex, OplogEntry>,
     default_retry_policy: &RetryConfig,
-    deleted_regions: DeletedRegions,
-    skipped_regions: DeletedRegions,
+    regions: &RegionFold,
+    pending_updates: VecDeque<PendingUpdateRef>,
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<AgentStatusRecord, String> {
+    let deleted_regions = &regions.deleted;
+    let skipped_regions = &regions.skipped;
+    let steps = &regions.steps;
     let active_plugins = last_known.active_plugins.clone();
     let mut atomic_rollback = last_known.atomic_rollback;
     for (index, entry) in &new_entries {
@@ -690,29 +695,25 @@ fn update_status_with_precomputed_regions(
             last_known.current_retry_state,
             last_known.overridden_retry_config,
             default_retry_policy,
-            &skipped_regions,
-            &deleted_regions,
+            skipped_regions,
+            deleted_regions,
             &new_entries,
         );
 
-    let initial_pending_invocations = last_known.pending_invocations.clone();
-    let pending_invocations = calculate_pending_invocations(
-        last_known.pending_invocations,
-        &last_known.pending_updates,
-        &new_entries,
-    );
+    let pending_invocations =
+        calculate_pending_invocations(last_known.pending_invocations, steps, &new_entries);
     let pending_card_events =
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
         calculate_received_card_transfers(last_known.received_card_transfers, &new_entries);
     let durable_stream_sessions = calculate_durable_stream_sessions(
         last_known.durable_stream_sessions,
-        &deleted_regions,
+        deleted_regions,
         &new_entries,
     )?;
     let export_fork_admissions = calculate_export_fork_admissions(
         last_known.export_fork_admissions,
-        &deleted_regions,
+        deleted_regions,
         &new_entries,
     )?;
     let mut pending_durable_stream_cancellations = last_known.pending_durable_stream_cancellations;
@@ -753,66 +754,58 @@ fn update_status_with_precomputed_regions(
             )
         });
     let UpdateFields {
-        pending_updates,
         failed_updates,
         successful_updates,
         component_revision,
         component_size,
         component_revision_for_replay,
         component_revision_start_index,
-        last_manual_update_snapshot_index,
         authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,
-        manual_update_admissions: _,
     } = calculate_update_fields(
         UpdateFields {
-            pending_updates: last_known.pending_updates,
             failed_updates: last_known.failed_updates,
             successful_updates: last_known.successful_updates,
             component_revision: last_known.component_revision,
             component_size: last_known.component_size,
             component_revision_for_replay: last_known.component_revision_for_replay,
             component_revision_start_index: last_known.component_revision_start_index,
-            last_manual_update_snapshot_index: last_known.last_manual_update_snapshot_index,
             authoritative_snapshot: last_known.authoritative_snapshot,
             last_automatic_snapshot: last_known.last_automatic_snapshot,
             previous_usable_automatic_snapshot: last_known.previous_usable_automatic_snapshot,
-            manual_update_admissions: initial_pending_invocations
-                .into_iter()
-                .filter(PendingInvocationRef::is_manual_update)
-                .collect(),
         },
-        &deleted_regions,
+        deleted_regions,
+        steps,
         &new_entries,
-    );
+    )?;
 
     let (invocation_results, current_idempotency_key, cancelled_idempotency_key) =
         calculate_invocation_results(
             last_known.invocation_results,
             last_known.current_idempotency_key,
             last_known.cancelled_idempotency_key,
-            &deleted_regions,
+            deleted_regions,
             &new_entries,
         );
 
     let total_linear_memory_size = calculate_total_linear_memory_size(
         last_known.total_linear_memory_size,
-        &skipped_regions,
+        skipped_regions,
         &new_entries,
     );
 
     let owned_resources =
-        collect_resources(last_known.owned_resources, &skipped_regions, &new_entries);
+        collect_resources(last_known.owned_resources, skipped_regions, &new_entries);
 
-    let active_plugins = calculate_active_plugins(active_plugins, &deleted_regions, &new_entries);
+    let active_plugins = calculate_active_plugins(active_plugins, deleted_regions, &new_entries);
 
     let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
 
     let oplog_processor_checkpoints = calculate_oplog_processor_checkpoints(
         last_known.oplog_processor_checkpoints,
         &active_plugins,
-        &deleted_regions,
+        deleted_regions,
         &new_entries,
         finalize_oplog_processor_checkpoints,
     );
@@ -828,7 +821,7 @@ fn update_status_with_precomputed_regions(
         overridden_retry_config,
         pending_invocations,
         pending_card_events,
-        skipped_regions,
+        skipped_regions: skipped_regions.clone(),
         atomic_rollback,
         pending_updates,
         failed_updates,
@@ -848,11 +841,10 @@ fn update_status_with_precomputed_regions(
         active_plugins,
         oplog_processor_checkpoints,
         revoked_cards,
-        deleted_regions,
+        deleted_regions: deleted_regions.clone(),
         component_revision_for_replay,
         component_revision_start_index,
         current_retry_state,
-        last_manual_update_snapshot_index,
         authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,
@@ -1119,12 +1111,7 @@ pub(crate) async fn skipped_regions_at(
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024)
         .await
         .ok_or("Missing fork source history")?;
-    let deleted = calculate_deleted_regions(DeletedRegions::default(), &entries);
-    Ok(calculate_skipped_regions(
-        DeletedRegions::default(),
-        &deleted,
-        &entries,
-    ))
+    Ok(fold_regions(&AgentStatusRecord::default(), &entries).skipped)
 }
 
 async fn read_region_entries(
@@ -1143,303 +1130,80 @@ async fn read_region_entries(
                 entry,
                 OplogEntry::Jump { .. }
                     | OplogEntry::Revert { .. }
-                    | OplogEntry::PendingUpdate {
-                        description: UpdateDescription::SnapshotBased { .. },
-                        ..
-                    }
+                    | OplogEntry::PendingUpdate { .. }
                     | OplogEntry::SuccessfulUpdate { .. }
                     | OplogEntry::FailedUpdate { .. }
+            ) || matches!(
+                entry,
+                OplogEntry::PendingAgentInvocation { payload, .. }
+                    if manual_update_target_revision_of(payload).is_some()
             )
         }));
     }
     Some(regions)
 }
 
-fn calculate_deleted_regions(
-    initial_deleted: DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> DeletedRegions {
-    let mut deleted_builder = DeletedRegionsBuilder::from_regions(initial_deleted.into_regions());
-    for entry in entries.values() {
-        if let OplogEntry::Revert { dropped_region, .. } = entry {
-            deleted_builder.add(dropped_region.clone());
-        }
-    }
-    deleted_builder.build()
-}
-
-fn calculate_skipped_regions(
-    initial_skipped: DeletedRegions,
-    deleted_regions: &DeletedRegions,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> DeletedRegions {
-    calculate_skipped_regions_with_deleted_regions(initial_skipped, deleted_regions, None, entries)
-}
-
-fn calculate_skipped_regions_with_deleted_regions(
-    initial_skipped: DeletedRegions,
-    deleted_regions: &DeletedRegions,
-    ignored_snapshot_update_region: Option<&OplogRegion>,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> DeletedRegions {
-    let mut skipped_without_override = initial_skipped.clone();
-    if skipped_without_override.is_overridden() {
-        skipped_without_override.drop_override();
-    }
-
-    let mut skipped_override = initial_skipped.get_override();
-
-    let mut skipped_builder =
-        DeletedRegionsBuilder::from_regions(skipped_without_override.into_regions());
-    for (idx, entry) in entries {
-        // Skipping deleted regions (by revert) from constructing the skipped regions
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        if ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
-            && matches!(
-                entry,
-                OplogEntry::PendingUpdate {
-                    description: UpdateDescription::SnapshotBased { .. },
-                    ..
-                }
-            )
-        {
-            continue;
-        }
-
-        match entry {
-            OplogEntry::Jump { jump, .. } => {
-                skipped_builder.add(jump.clone());
-            }
-            OplogEntry::Revert { dropped_region, .. } => {
-                skipped_builder.add(dropped_region.clone());
-            }
-            OplogEntry::PendingUpdate {
-                description: UpdateDescription::SnapshotBased { .. },
-                ..
-            } => {
-                skipped_override = Some(
-                    DeletedRegionsBuilder::from_regions(vec![OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=*idx,
-                    )])
-                    .build(),
-                )
-            }
-            OplogEntry::SuccessfulUpdate {
-                snapshot_assisted_details,
-                ..
-            } => {
-                if let Some(ovrd) = skipped_override {
-                    for region in ovrd.into_regions() {
-                        skipped_builder.add(region);
-                    }
-                    skipped_override = None;
-                }
-                if let Some(details) = snapshot_assisted_details
-                    && !ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
-                {
-                    skipped_builder.add(OplogRegion::from_index_range(
-                        OplogIndex::INITIAL.next()..=details.snapshot_index,
-                    ));
-                }
-            }
-            OplogEntry::FailedUpdate { .. } => {
-                skipped_override = None;
-            }
-            _ => {}
-        }
-    }
-
-    for deleted_region in deleted_regions.regions() {
-        skipped_builder.add(deleted_region.clone());
-    }
-
-    let mut new_skipped = skipped_builder.build();
-    if let Some(ovrd) = skipped_override {
-        new_skipped.set_override(ovrd);
-    }
-
-    new_skipped
-}
-
-/// Reconstructs the skipped regions that remain relevant while validating a prospective revert.
-/// Crossed snapshot-update baselines no longer hide the cut, while genuine jumps and existing
-/// reverts remain protected even when their marker entries will be dropped by the new revert.
-pub(crate) fn calculate_revert_validation_regions(
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-    dropped_region: &OplogRegion,
-) -> DeletedRegions {
-    let existing_deleted = calculate_deleted_regions(DeletedRegions::new(), entries);
-
-    calculate_skipped_regions_with_deleted_regions(
-        DeletedRegions::new(),
-        &existing_deleted,
-        Some(dropped_region),
-        entries,
-    )
-}
-
-/// Determines whether a pending agent invocation payload is a manual update and, if so, returns
-/// its target revision.
+/// The pending invocations after `entries`. The update entries act through their `steps`: a
+/// manual update invocation leaves the list when a `PendingUpdate` pairs it, when a
+/// `FailedUpdate` ends it, or when an entry in a deleted region consumes it, so a revert does not
+/// make it run again.
 ///
-/// Manual update payloads are tiny and always stored inline, so this never needs to download an
-/// external payload: an `External` payload is by definition not a manual update.
-fn manual_update_target_revision_of(
-    payload: &OplogPayload<AgentInvocationPayload>,
-) -> Option<ComponentRevision> {
-    fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
-        match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
-            _ => None,
-        }
-    }
-
-    match payload {
-        OplogPayload::Inline(p) => target_revision(p),
-        OplogPayload::SerializedInline {
-            cached: Some(v), ..
-        } => target_revision(v),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            deserialize::<AgentInvocationPayload>(bytes)
-                .map_err(|e| {
-                    tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
-                    e
-                })
-                .ok()
-                .as_ref()
-                .and_then(target_revision)
-        }
-        OplogPayload::External {
-            cached: Some(v), ..
-        } => target_revision(v),
-        OplogPayload::External { .. } => None,
-    }
-}
-
+/// Skipped regions do not matter here: they represent jumps and updates, and anything that happens
+/// in them is part of the history (for example a new pending invocation arrives during an earlier
+/// iteration of a retried transaction). In a deleted region, an incoming invocation that has not
+/// been processed yet stays pending, and an invocation that was attempted there leaves the list.
+///
+/// The list keeps a lightweight reference to the originating oplog entry; the full invocation
+/// payload stays in the oplog and is hydrated on demand by the paths that execute the invocation.
 fn calculate_pending_invocations(
     initial: Vec<PendingInvocationRef>,
-    initial_pending_updates: &VecDeque<PendingUpdateRef>,
+    steps: &BTreeMap<OplogIndex, UpdateStep>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<PendingInvocationRef> {
-    let mut result = initial;
-    let mut pending_update_attempts: VecDeque<_> = initial_pending_updates
+    entries
         .iter()
-        .map(|update| (update.target_revision, update.admission_index))
-        .collect();
-    for (oplog_idx, entry) in entries {
-        // Here we are handling two categories of oplog entries:
-        // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
-        // - "output" entries removing items from pending queues when they got processed (AgentInvocationStarted, SuccessfulUpdate, FailedUpdate)
-        //
-        // Skipped regions does not matter for us - they are representing jumps and updates, and anything that happens in these regions
-        // is part of the history and we take it into accout (for example a new pending invocation comes in the previous iteration of a retried
-        // transaction, etc).
-        //
-        // Deleted regions are created by reverting some oplog entries; Even then, we still want to take both the input and output
-        // entries into account in deleted regions in the following way:
-        // - Incoming pending invocation or update that has not been processed yet is NOT affected by revert - they remain pending
-        // - If a pending invocation or update was attempted (no matter if succeeded or not) in the reverted region, we remove it from
-        //   the pending queue, so the revert will not make them retried.
-        //
-        // We only store a lightweight reference to the originating oplog entry; the full invocation
-        // payload (input parameters, snapshot data, oplog entry batches, ...) stays in the oplog and
-        // is hydrated on demand by the paths that actually execute the invocation.
-
-        match entry {
-            OplogEntry::PendingAgentInvocation {
-                timestamp,
-                idempotency_key,
-                payload,
-                ..
-            } => {
-                // A manual update is the only invocation variant without a semantic idempotency
-                // key, so we capture its target revision and drop the (freshly generated, unused)
-                // idempotency key for it.
-                let manual_update_target_revision = manual_update_target_revision_of(payload);
-                let idempotency_key = if manual_update_target_revision.is_some() {
-                    None
-                } else {
-                    Some(idempotency_key.clone())
-                };
-                result.push(PendingInvocationRef {
-                    timestamp: *timestamp,
-                    oplog_index: *oplog_idx,
-                    idempotency_key,
-                    manual_update_target_revision,
-                });
-            }
-            OplogEntry::AgentInvocationStarted {
-                idempotency_key, ..
-            } => {
-                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
-            }
-            OplogEntry::PendingUpdate {
-                description,
-                update_attempt_index,
-                ..
-            } => {
-                let target_revision = *description.target_revision();
-                let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
-                let refines_automatic_admission = update_attempt_index.is_some()
-                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
-                    && pending_update_attempts.front().is_some_and(
-                        |(pending_target, pending_admission)| {
-                            *pending_target == target_revision
-                                && *pending_admission == admission_index
-                        },
-                    );
-                if !refines_automatic_admission {
-                    pending_update_attempts.push_back((target_revision, admission_index));
-                }
-                if matches!(description, UpdateDescription::SnapshotBased { .. })
-                    && let Some(position) = result
-                        .iter()
-                        .position(|invocation| invocation.oplog_index == admission_index)
-                {
-                    result.remove(position);
-                }
-            }
-            OplogEntry::FailedUpdate {
-                target_revision,
-                update_attempt_index,
-                ..
-            } => {
-                if update_attempt_index.is_some_and(|attempt_index| {
-                    pending_update_attempts
-                        .front()
-                        .is_some_and(|(_, pending_index)| *pending_index == attempt_index)
-                }) || (update_attempt_index.is_none()
-                    && pending_update_attempts
-                        .front()
-                        .is_some_and(|(pending_target, _)| pending_target == target_revision))
-                {
-                    pending_update_attempts.pop_front();
-                } else if let Some(position) = result.iter().position(|invocation| {
-                    update_attempt_index
-                        .is_some_and(|attempt_index| invocation.oplog_index == attempt_index)
-                }) {
-                    result.remove(position);
-                }
-            }
-            OplogEntry::SuccessfulUpdate {
-                target_revision, ..
-            } if pending_update_attempts
-                .front()
-                .is_some_and(|(pending_target, _)| pending_target == target_revision) =>
+        .fold(initial, |mut result, (oplog_idx, entry)| {
+            if let Some(index) = steps
+                .get(oplog_idx)
+                .and_then(UpdateStep::consumed_admission)
             {
-                pending_update_attempts.pop_front();
+                result.retain(|invocation| invocation.oplog_index != index);
             }
-            OplogEntry::CancelPendingInvocation {
-                idempotency_key, ..
-            } => {
-                result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
+            match entry {
+                OplogEntry::PendingAgentInvocation {
+                    timestamp,
+                    idempotency_key,
+                    payload,
+                    ..
+                } => {
+                    // A manual update is the only invocation variant without a semantic
+                    // idempotency key, so we capture its target revision and drop the (freshly
+                    // generated, unused) idempotency key for it.
+                    let manual_update_target_revision = manual_update_target_revision_of(payload);
+                    let idempotency_key = if manual_update_target_revision.is_some() {
+                        None
+                    } else {
+                        Some(idempotency_key.clone())
+                    };
+                    result.push(PendingInvocationRef {
+                        timestamp: *timestamp,
+                        oplog_index: *oplog_idx,
+                        idempotency_key,
+                        manual_update_target_revision,
+                    });
+                }
+                OplogEntry::AgentInvocationStarted {
+                    idempotency_key, ..
+                }
+                | OplogEntry::CancelPendingInvocation {
+                    idempotency_key, ..
+                } => {
+                    result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    }
-    result
+            result
+        })
 }
 
 pub(crate) fn calculate_pending_card_events(
@@ -1679,161 +1443,86 @@ fn calculate_export_fork_admissions(
 /// The fields of the status that the component updates and the automatic snapshot entries decide.
 #[derive(Debug)]
 struct UpdateFields {
-    pending_updates: VecDeque<PendingUpdateRef>,
     failed_updates: Vec<FailedUpdateRecord>,
     successful_updates: Vec<SuccessfulUpdateRecord>,
     component_revision: ComponentRevision,
     component_size: u64,
     component_revision_for_replay: ComponentRevision,
     component_revision_start_index: OplogIndex,
-    last_manual_update_snapshot_index: Option<OplogIndex>,
     authoritative_snapshot: Option<AuthoritativeSnapshot>,
     last_automatic_snapshot: Option<AutomaticSnapshot>,
     previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
-    /// The manual update admissions (`PendingAgentInvocation` entries of a manual update) that
-    /// no `PendingUpdate` entry has taken yet. A `FailedUpdate` entry with their index as its
-    /// attempt index ends them.
-    manual_update_admissions: VecDeque<PendingInvocationRef>,
 }
 
 impl UpdateFields {
-    /// The manual update admissions after `entry` at `oplog_idx`. Entries in a deleted region
-    /// count here too: an admission and the `PendingUpdate` that takes it can be on different
-    /// sides of a revert.
-    fn after_admission(mut self, oplog_idx: OplogIndex, entry: &OplogEntry, deleted: bool) -> Self {
-        match entry {
-            OplogEntry::PendingAgentInvocation {
-                timestamp, payload, ..
-            } => {
-                if let Some(target_revision) = manual_update_target_revision_of(payload) {
-                    self.manual_update_admissions
-                        .push_back(PendingInvocationRef {
-                            timestamp: *timestamp,
-                            oplog_index: oplog_idx,
-                            idempotency_key: None,
-                            manual_update_target_revision: Some(target_revision),
-                        });
-                }
-            }
-            OplogEntry::PendingUpdate {
-                update_attempt_index: Some(update_attempt_index),
-                ..
-            } => self.remove_manual_update_admission(*update_attempt_index),
-            OplogEntry::FailedUpdate {
-                update_attempt_index: Some(update_attempt_index),
-                ..
-            } if deleted => self.remove_manual_update_admission(*update_attempt_index),
-            _ => {}
-        }
-        self
-    }
-
-    fn remove_manual_update_admission(&mut self, admission_index: OplogIndex) {
-        if let Some(position) = self
-            .manual_update_admissions
-            .iter()
-            .position(|invocation| invocation.oplog_index == admission_index)
-        {
-            self.manual_update_admissions.remove(position);
-        }
-    }
-
-    /// The fields after the entry `entry` at `oplog_idx`, which is outside the deleted regions.
-    ///
-    /// A `PendingUpdate` with an attempt index that names the automatic update at the front of
-    /// the queue is the strategy entry of that update: it refines the front instead of adding
-    /// an update. A `FailedUpdate` ends the front update when its attempt index names it (or,
-    /// without an attempt index, when its target revision matches), else the manual update
-    /// admission that its attempt index names. A `SuccessfulUpdate` ends the front update.
-    fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
-        match entry {
-            OplogEntry::Create { parameters, .. } => {
+    /// The fields after the entry `entry` at `oplog_idx`, which is outside the deleted regions,
+    /// with the update `step` that the update queue gave for it. The outcome of an update reads
+    /// the update that the queue paired with it, never the details of the entry, so the baseline
+    /// that a success promotes is the one that the paired update selected. An outcome whose step
+    /// is not an outcome step is an error: the region fold did not run over this entry.
+    fn after(
+        mut self,
+        oplog_idx: OplogIndex,
+        entry: &OplogEntry,
+        step: &UpdateStep,
+    ) -> Result<Self, String> {
+        let missing_step = || {
+            format!("the region fold gave no outcome step for the update outcome at {oplog_idx}")
+        };
+        match (entry, step) {
+            (OplogEntry::Create { parameters, .. }, _) => {
                 self.component_revision = parameters.component_revision;
                 self.component_revision_for_replay = parameters.component_revision;
                 self.component_revision_start_index = oplog_idx;
                 self.component_size = parameters.component_size;
             }
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                update_attempt_index,
-            } => {
-                let kind = PendingUpdateKind::of(description);
-                let admission_index = update_attempt_index.unwrap_or(oplog_idx);
-                let target_revision = *description.target_revision();
-                let snapshot_based = matches!(description, UpdateDescription::SnapshotBased { .. });
-                let refines_automatic_admission = update_attempt_index.is_some()
-                    && !snapshot_based
-                    && self.pending_updates.front().is_some_and(|pending| {
-                        pending.admission_index == admission_index
-                            && pending.target_revision == target_revision
-                            && pending.oplog_index == pending.admission_index
-                            && pending.kind == PendingUpdateKind::Automatic
-                    });
-                if refines_automatic_admission {
-                    if let Some(pending) = self.pending_updates.front_mut() {
-                        pending.oplog_index = oplog_idx;
-                        pending.kind = kind;
-                    }
-                } else if update_attempt_index.is_none() || snapshot_based {
-                    self.pending_updates.push_back(PendingUpdateRef {
-                        timestamp: *timestamp,
-                        oplog_index: oplog_idx,
-                        admission_index,
-                        target_revision,
-                        kind,
-                    });
-                }
-            }
-            OplogEntry::FailedUpdate {
-                timestamp,
-                target_revision,
-                details,
-                snapshot_assisted_details,
-                update_attempt_index,
-            } => {
-                let matches_pending = self.pending_updates.front().is_some_and(|pending| {
-                    update_attempt_index
-                        .is_some_and(|attempt_index| pending.admission_index == attempt_index)
-                        || (update_attempt_index.is_none()
-                            && pending.target_revision == *target_revision)
-                });
-                let applied_update = if matches_pending {
-                    self.pending_updates.pop_front()
-                } else {
-                    update_attempt_index
-                        .and_then(|attempt_index| {
-                            self.manual_update_admissions
-                                .iter()
-                                .position(|invocation| invocation.oplog_index == attempt_index)
-                        })
-                        .and_then(|position| self.manual_update_admissions.remove(position))
-                        .map(|invocation| PendingUpdateRef {
-                            timestamp: invocation.timestamp,
-                            oplog_index: invocation.oplog_index,
-                            admission_index: invocation.oplog_index,
-                            target_revision: *target_revision,
-                            kind: PendingUpdateKind::SnapshotBased {
-                                filesystem_snapshot: None,
-                            },
-                        })
+            (
+                OplogEntry::FailedUpdate {
+                    timestamp,
+                    target_revision,
+                    details,
+                    snapshot_assisted_details,
+                    snapshot_fault,
+                    ..
+                },
+                step,
+            ) => {
+                let pending_update = match step {
+                    UpdateStep::FailedQueued(applied) => applied.clone(),
+                    UpdateStep::FailedAdmission(admission) => Some(PendingUpdateRef {
+                        timestamp: admission.timestamp,
+                        oplog_index: admission.index,
+                        admission_index: admission.index,
+                        target_revision: *target_revision,
+                        kind: PendingUpdateKind::SnapshotBased {
+                            filesystem_snapshot: None,
+                        },
+                    }),
+                    _ => return Err(missing_step()),
                 };
                 self.failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     details: details.clone(),
-                    pending_update: applied_update,
+                    pending_update,
                     snapshot_assisted_details: snapshot_assisted_details.clone(),
+                    snapshot_fault: *snapshot_fault,
                 });
             }
-            OplogEntry::SuccessfulUpdate {
-                timestamp,
-                target_revision,
-                new_component_size,
-                snapshot_assisted_details,
-                ..
-            } => {
-                let applied_update = self.pending_updates.pop_front();
+            (
+                OplogEntry::SuccessfulUpdate {
+                    timestamp,
+                    target_revision,
+                    new_component_size,
+                    snapshot_assisted_details,
+                    ..
+                },
+                step,
+            ) => {
+                let applied_update = match step {
+                    UpdateStep::Succeeded(applied) => applied.clone(),
+                    _ => return Err(missing_step()),
+                };
                 self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
@@ -1851,31 +1540,46 @@ impl UpdateFields {
                 self.last_automatic_snapshot = None;
                 self.previous_usable_automatic_snapshot = None;
 
-                if let Some(details) = snapshot_assisted_details {
-                    self.component_revision_for_replay = details.source_component_revision;
-                    self.authoritative_snapshot = Some(AuthoritativeSnapshot {
-                        index: details.snapshot_index,
-                        kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
-                    });
-                } else if let Some(PendingUpdateRef {
-                    kind: PendingUpdateKind::SnapshotBased { .. },
-                    oplog_index: applied_update_oplog_index,
-                    ..
-                }) = applied_update
-                {
-                    self.component_revision_for_replay = *target_revision;
-                    self.last_manual_update_snapshot_index = Some(applied_update_oplog_index);
-                    self.authoritative_snapshot = Some(AuthoritativeSnapshot {
-                        index: applied_update_oplog_index,
-                        kind: AuthoritativeSnapshotKind::ManualUpdate,
-                    });
+                match applied_update {
+                    Some(PendingUpdateRef {
+                        kind: PendingUpdateKind::SnapshotBased { .. },
+                        oplog_index,
+                        ..
+                    }) => {
+                        self.component_revision_for_replay = *target_revision;
+                        self.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                            index: oplog_index,
+                            kind: AuthoritativeSnapshotKind::ManualUpdate,
+                        });
+                    }
+                    Some(PendingUpdateRef {
+                        kind: PendingUpdateKind::SnapshotAssistedAutomatic(selection),
+                        ..
+                    }) => {
+                        let AssistedSelection { snapshot, .. } = *selection;
+                        self.component_revision_for_replay = snapshot.component_revision;
+                        self.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                            index: snapshot.index,
+                            kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                                filesystem_snapshot: snapshot.filesystem_snapshot,
+                            },
+                        });
+                    }
+                    Some(PendingUpdateRef {
+                        kind: PendingUpdateKind::Automatic,
+                        ..
+                    })
+                    | None => {}
                 }
             }
-            OplogEntry::Snapshot {
-                timestamp,
-                filesystem_snapshot,
-                ..
-            } => {
+            (
+                OplogEntry::Snapshot {
+                    timestamp,
+                    filesystem_snapshot,
+                    ..
+                },
+                _,
+            ) => {
                 // A usable candidate becomes the fallback, also when the new record reuses its
                 // filesystem snapshot name: each record has its own application snapshot, which
                 // can fail to load on its own.
@@ -1893,10 +1597,13 @@ impl UpdateFields {
                     files: SnapshotFiles::named(filesystem_snapshot.clone()),
                 });
             }
-            OplogEntry::SnapshotConfirmed {
-                filesystem_snapshot,
-                ..
-            } => {
+            (
+                OplogEntry::SnapshotConfirmed {
+                    filesystem_snapshot,
+                    ..
+                },
+                _,
+            ) => {
                 self.last_automatic_snapshot =
                     self.last_automatic_snapshot
                         .take()
@@ -1907,27 +1614,28 @@ impl UpdateFields {
             }
             _ => {}
         }
-        self
+        Ok(self)
     }
 }
 
-/// Gives `fields` after each entry of `entries`. Entries in a deleted region change only the
-/// manual update admissions.
+/// Gives `fields` after each entry of `entries` outside the deleted regions, with the update
+/// steps of the region fold. An entry without a step has the step [`UpdateStep::Unchanged`].
 fn calculate_update_fields(
     fields: UpdateFields,
     deleted_regions: &DeletedRegions,
+    steps: &BTreeMap<OplogIndex, UpdateStep>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> UpdateFields {
-    entries.iter().fold(fields, |fields, (oplog_idx, entry)| {
-        // Entries in deleted regions (by revert) are skipped, except for the admissions.
-        let deleted = deleted_regions.is_in_deleted_region(*oplog_idx);
-        let fields = fields.after_admission(*oplog_idx, entry, deleted);
-        if deleted {
-            fields
-        } else {
-            fields.after(*oplog_idx, entry)
-        }
-    })
+) -> Result<UpdateFields, String> {
+    entries
+        .iter()
+        .filter(|(oplog_idx, _)| !deleted_regions.is_in_deleted_region(**oplog_idx))
+        .try_fold(fields, |fields, (oplog_idx, entry)| {
+            fields.after(
+                *oplog_idx,
+                entry,
+                steps.get(oplog_idx).unwrap_or(&UpdateStep::Unchanged),
+            )
+        })
 }
 
 fn calculate_invocation_results(

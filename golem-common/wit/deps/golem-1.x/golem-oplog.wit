@@ -544,8 +544,7 @@ interface oplog {
         pending-update-index: oplog-index,
         source-component-revision: component-revision,
         source-revision-start-index: oplog-index,
-        snapshot-index: option<oplog-index>,
-        ineligibility-reason: option<string>,
+        snapshot-index: oplog-index,
     }
 
     record grow-memory-parameters {
@@ -848,7 +847,9 @@ interface oplog {
         source-component-revision: component-revision,
         source-revision-start-index: oplog-index,
         snapshot-index: oplog-index,
-        snapshot-revision: component-revision
+        snapshot-revision: component-revision,
+        /// The filesystem snapshot of the selected record, if it has one
+        filesystem-snapshot: option<string>,
     }
 
     record raw-snapshot-based-update {

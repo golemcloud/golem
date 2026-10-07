@@ -451,6 +451,8 @@ pub enum UpdateDescription {
         source_revision_start_index: OplogIndex,
         snapshot_index: OplogIndex,
         snapshot_revision: ComponentRevision,
+        /// The filesystem snapshot of the selected record. `None` when the record has no name.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     },
 
     /// Custom update by loading a given snapshot on the new version
@@ -503,8 +505,17 @@ pub struct FailedSnapshotAssistedUpdateDetails {
     pub pending_update_index: OplogIndex,
     pub source_component_revision: ComponentRevision,
     pub source_revision_start_index: OplogIndex,
-    pub snapshot_index: Option<OplogIndex>,
-    pub ineligibility_reason: Option<String>,
+    pub snapshot_index: OplogIndex,
+}
+
+/// Whether a failed update is about the record that the update selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotFault {
+    /// The store lost the filesystem snapshot of the selected record.
+    Unavailable,
+    /// The target could not load the selected record, or the history after it diverged.
+    Incompatible,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

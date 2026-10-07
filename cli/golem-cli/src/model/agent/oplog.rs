@@ -506,15 +506,10 @@ impl TextOutput for PublicOplogEntry {
                         "{pad}revision start:    {}",
                         format_id(&details.source_revision_start_index)
                     ));
-                    if let Some(snapshot_index) = details.snapshot_index {
-                        logln(format!(
-                            "{pad}snapshot index:   {}",
-                            format_id(&snapshot_index)
-                        ));
-                    }
-                    if let Some(reason) = &details.ineligibility_reason {
-                        logln(format!("{pad}ineligible:        {reason}"));
-                    }
+                    logln(format!(
+                        "{pad}snapshot index:   {}",
+                        format_id(&details.snapshot_index)
+                    ));
                 }
             }
             PublicOplogEntry::GrowMemory(params) => {

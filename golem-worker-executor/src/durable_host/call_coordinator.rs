@@ -1612,6 +1612,7 @@ where
             Some(details.clone()),
             snapshot_assisted_details,
             None,
+            None,
         ))
         .await?;
     tracing::warn!(

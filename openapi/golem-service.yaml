@@ -18520,12 +18520,11 @@ components:
         snapshotIndex:
           type: integer
           format: uint64
-        ineligibilityReason:
-          type: string
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -21743,11 +21742,16 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        ineligibilityReason:
+        filesystemSnapshot:
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
           type: string
       required:
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object

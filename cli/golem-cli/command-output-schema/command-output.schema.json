@@ -5142,13 +5142,13 @@
     },
     "SnapshotAssistedUpdateMetadata": {
       "type": "object",
-      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "ineligibilityReason"],
+      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "filesystemSnapshot"],
       "properties": {
         "sourceComponentRevision": { "type": "integer", "minimum": 0 },
         "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 },
-        "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 },
-        "snapshotRevision": { "type": ["integer", "null"], "minimum": 0 },
-        "ineligibilityReason": { "type": ["string", "null"] }
+        "snapshotIndex": { "type": "integer", "minimum": 0 },
+        "snapshotRevision": { "type": "integer", "minimum": 0 },
+        "filesystemSnapshot": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
@@ -5854,8 +5854,8 @@
     },
     "PublicFailedSnapshotAssistedUpdateDetails": {
       "type": "object",
-      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex"],
-      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 }, "ineligibilityReason": { "type": ["string", "null"] } },
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },

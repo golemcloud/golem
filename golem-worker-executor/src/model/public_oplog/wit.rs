@@ -774,8 +774,7 @@ impl TryFrom<PublicOplogEntry> for oplog::PublicOplogEntry {
                         pending_update_index: details.pending_update_index.into(),
                         source_component_revision: details.source_component_revision.into(),
                         source_revision_start_index: details.source_revision_start_index.into(),
-                        snapshot_index: details.snapshot_index.map(Into::into),
-                        ineligibility_reason: details.ineligibility_reason,
+                        snapshot_index: details.snapshot_index.into(),
                     }
                 }),
             }),
@@ -1472,6 +1471,10 @@ impl TryFrom<oplog::RawUpdateDescription> for golem_common::model::oplog::Update
                         update.snapshot_revision,
                     )
                     .map_err(|e| e.to_string())?,
+                    filesystem_snapshot: update
+                        .filesystem_snapshot
+                        .map(|name| name.parse())
+                        .transpose()?,
                 })
             }
             oplog::RawUpdateDescription::SnapshotBased(sbu) => Ok(Self::SnapshotBased {
@@ -1786,11 +1789,12 @@ impl TryFrom<oplog::OplogEntry> for golem_common::model::oplog::OplogEntry {
                             source_component_revision: golem_common::model::component::ComponentRevision::try_from(details.source_component_revision)
                                 .map_err(|e| e.to_string())?,
                             source_revision_start_index: golem_common::model::oplog::OplogIndex::from_u64(details.source_revision_start_index),
-                            snapshot_index: details.snapshot_index.map(golem_common::model::oplog::OplogIndex::from_u64),
-                            ineligibility_reason: details.ineligibility_reason,
+                            snapshot_index: golem_common::model::oplog::OplogIndex::from_u64(details.snapshot_index),
                         })
                     })
                     .transpose()?,
+                // The WIT record of a failed update has no snapshot fault.
+                snapshot_fault: None,
             }),
             oplog::OplogEntry::GrowMemory(params) => Ok(Self::GrowMemory {
                 timestamp: timestamp_from_datetime(params.timestamp),
@@ -2303,6 +2307,7 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
                 source_revision_start_index,
                 snapshot_index,
                 snapshot_revision,
+                filesystem_snapshot,
             } => Ok(Self::SnapshotAssistedAutomatic(
                 oplog::RawSnapshotAssistedAutomaticUpdate {
                     target_revision: target_revision.into(),
@@ -2310,6 +2315,7 @@ impl TryFrom<golem_common::model::oplog::UpdateDescription> for oplog::RawUpdate
                     source_revision_start_index: source_revision_start_index.into(),
                     snapshot_index: snapshot_index.into(),
                     snapshot_revision: snapshot_revision.into(),
+                    filesystem_snapshot: filesystem_snapshot.map(String::from),
                 },
             )),
             UpdateDescription::SnapshotBased {
@@ -2605,6 +2611,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                 details,
                 snapshot_assisted_details,
                 update_attempt_index,
+                snapshot_fault: _,
             } => Ok(Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
                 target_revision: target_revision.into(),
@@ -2615,8 +2622,7 @@ impl TryFrom<golem_common::model::oplog::OplogEntry> for oplog::OplogEntry {
                         pending_update_index: details.pending_update_index.into(),
                         source_component_revision: details.source_component_revision.into(),
                         source_revision_start_index: details.source_revision_start_index.into(),
-                        snapshot_index: details.snapshot_index.map(Into::into),
-                        ineligibility_reason: details.ineligibility_reason,
+                        snapshot_index: details.snapshot_index.into(),
                     }
                 }),
             })),

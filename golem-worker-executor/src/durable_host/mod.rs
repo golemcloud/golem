@@ -4654,8 +4654,7 @@ fn failed_snapshot_assisted_update_details(
         pending_update_index: details.pending_update_index,
         source_component_revision: details.source_component_revision,
         source_revision_start_index: details.source_revision_start_index,
-        snapshot_index: Some(details.snapshot_index),
-        ineligibility_reason: None,
+        snapshot_index: details.snapshot_index,
     }
 }
 
@@ -6026,6 +6025,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             details.clone(),
             snapshot_assisted_details,
             update_attempt_index,
+            None,
         );
         let worker = self.public_state.worker();
         worker.add_and_commit_oplog(entry).await?;
@@ -6792,8 +6792,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                                             .oplog_index,
                                                         source_component_revision,
                                                         source_revision_start_index,
-                                                        snapshot_index: Some(snapshot_index),
-                                                        ineligibility_reason: None,
+                                                        snapshot_index,
                                                     }),
                                                     None,
                                                 )
@@ -7687,8 +7686,7 @@ mod tests {
             failed.source_revision_start_index,
             details.source_revision_start_index
         );
-        assert_eq!(failed.snapshot_index, Some(details.snapshot_index));
-        assert_eq!(failed.ineligibility_reason, None);
+        assert_eq!(failed.snapshot_index, details.snapshot_index);
     }
 
     use test_r::test;

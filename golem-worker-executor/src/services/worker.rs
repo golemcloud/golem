@@ -182,8 +182,7 @@ fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
         component_revision_for_replay: status.component_revision_for_replay,
         component_revision_start_index: status.component_revision_start_index,
         current_retry_state: status.current_retry_state.clone(),
-        last_manual_update_snapshot_index: status.last_manual_update_snapshot_index,
-        authoritative_snapshot: status.authoritative_snapshot,
+        authoritative_snapshot: status.authoritative_snapshot.clone(),
         last_automatic_snapshot: status.last_automatic_snapshot.clone(),
         previous_usable_automatic_snapshot: status.previous_usable_automatic_snapshot.clone(),
         agent_mode: status.agent_mode,
@@ -3374,6 +3373,7 @@ mod tests {
             details: Some("boom".to_string()),
             pending_update: None,
             snapshot_assisted_details: None,
+            snapshot_fault: Some(golem_common::model::oplog::SnapshotFault::Unavailable),
         });
         status.successful_updates.push(SuccessfulUpdateRecord {
             timestamp: Timestamp::from(1_700_000_001_000u64),
@@ -3382,6 +3382,31 @@ mod tests {
             filesystem_snapshot: Some(golem_common::model::oplog::FilesystemSnapshotName::update()),
             pending_update: None,
             snapshot_assisted_details: None,
+        });
+        let assisted_name = golem_common::model::oplog::FilesystemSnapshotName::periodic();
+        status
+            .pending_updates
+            .push_back(golem_common::model::PendingUpdateRef {
+                timestamp: Timestamp::from(1_700_000_002_000u64),
+                oplog_index: OplogIndex::from_u64(9),
+                admission_index: OplogIndex::from_u64(8),
+                target_revision: ComponentRevision::new(4).unwrap(),
+                kind: golem_common::model::PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(
+                    golem_common::model::AssistedSelection {
+                        source_revision_start_index: OplogIndex::from_u64(6),
+                        snapshot: golem_common::model::UsableAutomaticSnapshot {
+                            index: OplogIndex::from_u64(7),
+                            component_revision: ComponentRevision::new(3).unwrap(),
+                            filesystem_snapshot: Some(assisted_name.clone()),
+                        },
+                    },
+                )),
+            });
+        status.authoritative_snapshot = Some(golem_common::model::AuthoritativeSnapshot {
+            index: OplogIndex::from_u64(5),
+            kind: golem_common::model::AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
+                filesystem_snapshot: Some(assisted_name),
+            },
         });
         status
     }

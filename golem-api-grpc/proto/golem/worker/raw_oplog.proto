@@ -135,6 +135,7 @@ message RawSnapshotAssistedAutomaticUpdate {
   uint64 source_revision_start_index = 3;
   uint64 snapshot_index = 4;
   uint64 snapshot_revision = 5;
+  optional string filesystem_snapshot = 6;
 }
 
 message RawSnapshotBasedUpdate {
@@ -325,14 +326,22 @@ message RawFailedUpdateParameters {
   optional string details = 2;
   optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
   optional uint64 update_attempt_index = 4;
+  optional RawSnapshotFault snapshot_fault = 5;
+}
+
+// Whether a failed update is about the record that the update selected.
+enum RawSnapshotFault {
+  // The store lost the filesystem snapshot of the selected record.
+  RAW_SNAPSHOT_FAULT_UNAVAILABLE = 0;
+  // The target could not load the selected record, or the history after it diverged.
+  RAW_SNAPSHOT_FAULT_INCOMPATIBLE = 1;
 }
 
 message RawFailedSnapshotAssistedUpdateDetails {
   uint64 pending_update_index = 1;
   uint64 source_component_revision = 2;
   uint64 source_revision_start_index = 3;
-  optional uint64 snapshot_index = 4;
-  optional string ineligibility_reason = 5;
+  uint64 snapshot_index = 4;
 }
 
 message RawGrowMemoryParameters {

@@ -1522,17 +1522,14 @@ pub struct AgentStatusRecord {
     pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
-    /// Index of the last manual update snapshot index. Agent will call load_snapshot
-    /// on this payload before starting replay.
-    pub last_manual_update_snapshot_index: Option<OplogIndex>,
     /// Mandatory recovery snapshot established by a successful update. Agent will call
     /// load_snapshot on this payload before starting replay.
     pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
-    /// The last automatic snapshot entry. Its index is after `last_manual_update_snapshot_index`.
+    /// The last automatic snapshot entry. Its index is after the index of `authoritative_snapshot`.
     /// A start that selects it calls load_snapshot on its payload before it starts the replay. If
     /// the load_snapshot fails, the start rejects this entry and tries
-    /// `previous_usable_automatic_snapshot`, then the last manual update snapshot, then a full
-    /// replay.
+    /// `previous_usable_automatic_snapshot`, then `authoritative_snapshot`, and a full replay only
+    /// when there is no authoritative snapshot.
     pub last_automatic_snapshot: Option<AutomaticSnapshot>,
     /// The newest automatic snapshot entry before the last one that was usable when the entry
     /// after it came: an entry with a confirmed filesystem snapshot, or an entry without a
@@ -1583,7 +1580,6 @@ impl Default for AgentStatusRecord {
             component_revision_for_replay: ComponentRevision::INITIAL,
             component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
-            last_manual_update_snapshot_index: None,
             authoritative_snapshot: None,
             last_automatic_snapshot: None,
             previous_usable_automatic_snapshot: None,
@@ -2211,6 +2207,9 @@ pub struct FailedUpdateRecord {
     pub details: Option<String>,
     pub pending_update: Option<PendingUpdateRef>,
     pub snapshot_assisted_details: Option<oplog::FailedSnapshotAssistedUpdateDetails>,
+    /// Whether the failure is about the record that the update selected. `None` for any other
+    /// failure.
+    pub snapshot_fault: Option<oplog::SnapshotFault>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2229,18 +2228,23 @@ pub struct SuccessfulUpdateRecord {
     pub snapshot_assisted_details: Option<oplog::SnapshotAssistedUpdateDetails>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct AuthoritativeSnapshot {
+    /// The `PendingUpdate` entry of a manual update, or the `Snapshot` entry of the record that a
+    /// snapshot-assisted automatic update selected.
     pub index: OplogIndex,
     pub kind: AuthoritativeSnapshotKind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum AuthoritativeSnapshotKind {
     ManualUpdate,
-    SnapshotAssistedAutomatic,
+    SnapshotAssistedAutomatic {
+        /// The filesystem snapshot of the selected record, or `None` when it has no name.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2889,11 +2893,7 @@ pub struct PendingCardEventRef {
 #[desert(evolution())]
 pub enum PendingUpdateKind {
     Automatic,
-    SnapshotAssistedAutomatic {
-        source_component_revision: ComponentRevision,
-        source_revision_start_index: OplogIndex,
-        selection: SnapshotAssistedUpdateSelection,
-    },
+    SnapshotAssistedAutomatic(Box<AssistedSelection>),
     SnapshotBased {
         /// The filesystem snapshot that the executor captured with the application snapshot.
         /// `None` means that the executor made no filesystem capture.
@@ -2901,12 +2901,28 @@ pub enum PendingUpdateKind {
     },
 }
 
+/// The record that a snapshot-assisted automatic update selected, and the source that it was
+/// selected from.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AssistedSelection {
+    /// The index of the entry that started the source revision (`Create` or the last
+    /// `SuccessfulUpdate`) when the record was selected.
+    pub source_revision_start_index: OplogIndex,
+    /// The selected record. Its `component_revision` is the source revision.
+    pub snapshot: UsableAutomaticSnapshot,
+}
+
 impl PendingUpdateKind {
-    /// The filesystem snapshot of a snapshot-based update, when it has one. A snapshot-assisted
-    /// automatic update names none.
+    /// The filesystem snapshot of the update, when it has one: the capture of a snapshot-based
+    /// update, or the filesystem snapshot of the record that a snapshot-assisted automatic update
+    /// selected.
     pub fn filesystem_snapshot(&self) -> Option<&FilesystemSnapshotName> {
         match self {
-            Self::Automatic | Self::SnapshotAssistedAutomatic { .. } => None,
+            Self::Automatic => None,
+            Self::SnapshotAssistedAutomatic(selection) => {
+                selection.snapshot.filesystem_snapshot.as_ref()
+            }
             Self::SnapshotBased {
                 filesystem_snapshot,
             } => filesystem_snapshot.as_ref(),
@@ -2918,19 +2934,19 @@ impl PendingUpdateKind {
         match description {
             oplog::UpdateDescription::Automatic { .. } => Self::Automatic,
             oplog::UpdateDescription::SnapshotAssistedAutomatic {
-                source_component_revision,
                 source_revision_start_index,
                 snapshot_index,
                 snapshot_revision,
+                filesystem_snapshot,
                 ..
-            } => Self::SnapshotAssistedAutomatic {
-                source_component_revision: *source_component_revision,
+            } => Self::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index: *source_revision_start_index,
-                selection: SnapshotAssistedUpdateSelection::Selected {
-                    snapshot_index: *snapshot_index,
-                    snapshot_revision: *snapshot_revision,
+                snapshot: UsableAutomaticSnapshot {
+                    index: *snapshot_index,
+                    component_revision: *snapshot_revision,
+                    filesystem_snapshot: filesystem_snapshot.clone(),
                 },
-            },
+            })),
             oplog::UpdateDescription::SnapshotBased {
                 filesystem_snapshot,
                 ..
@@ -2939,30 +2955,6 @@ impl PendingUpdateKind {
             },
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub enum SnapshotAssistedUpdateIneligibilityReason {
-    NoSnapshotSinceSourceRevisionStart,
-    SnapshotExcluded {
-        snapshot_index: OplogIndex,
-        exclusion_through: OplogIndex,
-    },
-    SnapshotFromDifferentRevision {
-        snapshot_index: OplogIndex,
-        snapshot_revision: ComponentRevision,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
-#[desert(evolution())]
-pub enum SnapshotAssistedUpdateSelection {
-    Selected {
-        snapshot_index: OplogIndex,
-        snapshot_revision: ComponentRevision,
-    },
-    Ineligible(SnapshotAssistedUpdateIneligibilityReason),
 }
 
 /// A lightweight reference to a pending update whose full description is stored in the oplog.

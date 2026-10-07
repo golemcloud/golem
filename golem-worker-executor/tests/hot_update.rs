@@ -690,7 +690,7 @@ async fn snapshot_assisted_update_skips_pre_snapshot_history_and_replays_in_flig
         .snapshot_assisted_details
         .as_ref()
         .expect("assisted success must expose snapshot provenance");
-    assert_eq!(details.snapshot_index, Some(snapshot_index));
+    assert_eq!(details.snapshot_index, snapshot_index);
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_eq!(
@@ -877,11 +877,7 @@ async fn assert_automatic_update_rejects_agent_mode_change(
     assert_eq!(metadata.last_error, None);
     if expect_snapshot {
         assert!(
-            failure
-                .snapshot_assisted_details
-                .as_ref()
-                .and_then(|details| details.snapshot_index)
-                .is_some(),
+            failure.snapshot_assisted_details.as_ref().is_some(),
             "snapshot-assisted mode rejection must preserve selected snapshot provenance"
         );
     } else {
@@ -998,7 +994,7 @@ async fn snapshot_assisted_replay_mismatch_fails_once_and_preserves_source(
         .snapshot_assisted_details
         .as_ref()
         .expect("suffix replay failure must expose attempted provenance");
-    assert_eq!(details.snapshot_index, Some(snapshot_index));
+    assert_eq!(details.snapshot_index, snapshot_index);
 
     let source = executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
@@ -1104,7 +1100,7 @@ async fn assert_snapshot_assisted_suffix_failure(
         failed
             .snapshot_assisted_details
             .as_ref()
-            .and_then(|details| details.snapshot_index),
+            .map(|details| details.snapshot_index),
         Some(snapshot_index)
     );
 
@@ -2629,7 +2625,7 @@ async fn automatic_update_does_not_fallback_after_selected_snapshot_is_rejected(
         .auto_update_worker(&worker_id, revision_four.revision, false)
         .await?;
     let failed = wait_for_update_counts(&executor, &worker_id, (0, 1, 1)).await?;
-    let assisted_failure = failed
+    failed
         .updates
         .iter()
         .find_map(|record| match record {
@@ -2641,7 +2637,6 @@ async fn automatic_update_does_not_fallback_after_selected_snapshot_is_rejected(
             _ => None,
         })
         .expect("selected snapshot rejection must record assisted failure provenance");
-    assert!(assisted_failure.ineligibility_reason.is_none());
 
     let loaded_snapshot_revision = executor
         .invoke_and_await_agent(

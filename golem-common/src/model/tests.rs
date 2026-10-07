@@ -1677,3 +1677,8 @@ fn only_the_named_filesystem_snapshot_of_an_automatic_snapshot_is_confirmed() {
         ]
     );
 }
+
+#[test]
+fn a_pending_update_kind_keeps_the_assisted_selection_behind_one_box() {
+    assert_eq!(std::mem::size_of::<crate::model::PendingUpdateKind>(), 24);
+}

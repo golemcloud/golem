@@ -6260,6 +6260,7 @@ components:
       - pendingUpdateIndex
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
       properties:
         pendingUpdateIndex:
           type: integer
@@ -6273,8 +6274,6 @@ components:
         snapshotIndex:
           type: integer
           format: uint64
-        ineligibilityReason:
-          type: string
     PublicInvocationWalletPin:
       type: object
       title: PublicInvocationWalletPin
@@ -9482,6 +9481,8 @@ components:
       required:
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
       properties:
         sourceComponentRevision:
           type: integer
@@ -9495,8 +9496,11 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        ineligibilityReason:
+        filesystemSnapshot:
           type: string
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters

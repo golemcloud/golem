@@ -55,6 +55,7 @@ use crate::services::{
 };
 use crate::services::{HasAgentFilesystemSnapshots, HasRdbmsService, HasWorkerForkService, rdbms};
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
+use crate::worker::status::update_queue::{UpdateQueue, UpdateStep};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::FutureExt;
@@ -63,7 +64,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::component::ComponentRevision;
 use golem_common::base_model::oplog::QueuedCardEvent;
-use golem_common::base_model::regions::{DeletedRegions, DeletedRegionsBuilder};
+use golem_common::base_model::regions::DeletedRegionsBuilder;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::card::{AgentCardHolder, CardHolder};
@@ -71,9 +72,10 @@ use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
-    UpdateDescription,
 };
-use golem_common::model::{AgentFingerprint, AgentMetadata, PendingUpdateKind, Timestamp};
+use golem_common::model::{
+    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
+};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -886,12 +888,17 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             }
         }
 
-        // For pending updates, we need to respect deleted regions (see calculate_update_fields).
+        // The update queue pairs the update entries as the status fold does: entries in a
+        // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
-        for oplog_index in fork_update_indices(oplog_range, &deleted_regions) {
+        for oplog_index in oplog_range {
             let entry = read_source(oplog_index).await;
-            updates = updates.after(oplog_index, &entry);
+            updates = updates.after(
+                oplog_index,
+                &entry,
+                deleted_regions.is_in_deleted_region(oplog_index),
+            );
         }
         let (pending_updates, baseline) = updates.into_parts();
 
@@ -950,6 +957,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     details: Some("cancelled by fork".to_string()),
                     snapshot_assisted_details: None,
                     update_attempt_index: Some(update_attempt_index),
+                    snapshot_fault: None,
                 })
                 .await?;
         }
@@ -1297,94 +1305,36 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
     }
 }
 
-/// The indices of `range` that the update fold of a fork reads: the indices outside the regions
-/// of `deleted`, in order.
-pub(crate) fn fork_update_indices(
-    range: OplogIndexRange,
-    deleted: &DeletedRegions,
-) -> impl Iterator<Item = OplogIndex> + '_ {
-    range.filter(|index| !deleted.is_in_deleted_region(*index))
-}
-
-/// The updates of the copied prefix of a fork, in the order of the oplog and outside the deleted
-/// regions: the pending updates that no outcome follows, which the fork cancels, and the
-/// filesystem snapshot name of the manual-update baseline of the target.
+/// The updates of the copied prefix of a fork: the pending updates that no outcome follows,
+/// which the fork cancels, and the filesystem snapshot name of the manual-update baseline of the
+/// target. The update entries are paired by the update queue of the status fold.
 #[derive(Debug, Default)]
 pub(crate) struct ForkUpdates {
-    /// The pending updates without an outcome: the target revision, the admission index and
-    /// the kind.
-    pending: Vec<(ComponentRevision, OplogIndex, PendingUpdateKind)>,
+    queue: UpdateQueue,
     baseline: Option<FilesystemSnapshotName>,
 }
 
 impl ForkUpdates {
-    /// The updates after `entry` at `oplog_index`. A `PendingUpdate` whose attempt index names
-    /// the automatic update at the front is its strategy entry and adds no update. A
-    /// `SuccessfulUpdate` ends the front update; a successful snapshot-based update makes its
+    /// The updates after `entry` at `oplog_index`. `deleted` tells whether the entry is in a
+    /// deleted region of the copied prefix. A successful snapshot-based update makes its
     /// filesystem snapshot the baseline, also when it has none, and a successful automatic update
-    /// keeps the baseline. A `FailedUpdate` ends the update that its attempt index names, at any
-    /// position, or without an attempt index the front update when the target revision matches.
-    pub(crate) fn after(mut self, oplog_index: OplogIndex, entry: &OplogEntry) -> Self {
-        match entry {
-            OplogEntry::PendingUpdate {
-                description,
-                update_attempt_index,
+    /// keeps the baseline.
+    pub(crate) fn after(self, oplog_index: OplogIndex, entry: &OplogEntry, deleted: bool) -> Self {
+        let (queue, step) = self.queue.after(oplog_index, entry, deleted);
+        let baseline = match step {
+            UpdateStep::Succeeded(Some(PendingUpdateRef {
+                kind:
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot,
+                    },
                 ..
-            } => {
-                let target_revision = *description.target_revision();
-                let admission_index = update_attempt_index.unwrap_or(oplog_index);
-                let refines_automatic_admission = update_attempt_index.is_some()
-                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
-                    && self.pending.first().is_some_and(
-                        |(pending_target, pending_admission, _)| {
-                            *pending_target == target_revision
-                                && *pending_admission == admission_index
-                        },
-                    );
-                if refines_automatic_admission {
-                    if let Some((_, _, kind)) = self.pending.first_mut() {
-                        *kind = PendingUpdateKind::of(description);
-                    }
-                } else {
-                    self.pending.push((
-                        target_revision,
-                        admission_index,
-                        PendingUpdateKind::of(description),
-                    ));
-                }
-            }
-            OplogEntry::SuccessfulUpdate { .. } if !self.pending.is_empty() => {
-                let (_, _, kind) = self.pending.remove(0);
-                if matches!(kind, PendingUpdateKind::SnapshotBased { .. }) {
-                    self.baseline = kind.filesystem_snapshot().cloned();
-                }
-            }
-            OplogEntry::FailedUpdate {
-                target_revision,
-                update_attempt_index,
-                ..
-            } => {
-                let position = match update_attempt_index {
-                    Some(attempt_index) => self
-                        .pending
-                        .iter()
-                        .position(|(_, index, _)| index == attempt_index),
-                    None => self
-                        .pending
-                        .first()
-                        .is_some_and(|(pending_target, _, _)| pending_target == target_revision)
-                        .then_some(0),
-                };
-                if let Some(position) = position {
-                    self.pending.remove(position);
-                }
-            }
-            _ => {}
-        }
-        self
+            })) => filesystem_snapshot,
+            _ => self.baseline,
+        };
+        Self { queue, baseline }
     }
 
-    /// The pending updates that the fork cancels, in the order of the oplog, each as its target
+    /// The pending updates that the fork cancels, in the order of the queue, each as its target
     /// revision and admission index, and the name of the baseline.
     pub(crate) fn into_parts(
         self,
@@ -1393,9 +1343,10 @@ impl ForkUpdates {
         Option<FilesystemSnapshotName>,
     ) {
         (
-            self.pending
+            self.queue
+                .into_pending()
                 .into_iter()
-                .map(|(revision, admission_index, _)| (revision, admission_index))
+                .map(|update| (update.target_revision, update.admission_index))
                 .collect(),
             self.baseline,
         )
@@ -1409,7 +1360,7 @@ mod tests {
     use golem_common::model::card::{CardId, InvocationWalletPin, WalletVersionToken};
     use golem_common::model::component::ComponentId;
     use golem_common::model::invocation_context::TraceId;
-    use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::oplog::{OplogPayload, UpdateDescription};
     use golem_common::model::{AgentInvocationPayload, IdempotencyKey};
     use golem_common::schema::SchemaValue;
     use test_r::test;
@@ -1507,10 +1458,18 @@ mod tests {
             .after(
                 automatic_admission,
                 &OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None),
+                false,
             )
             .after(
                 OplogIndex::from_u64(4),
-                &OplogEntry::failed_update(target_revision, None, None, Some(manual_admission)),
+                &OplogEntry::failed_update(
+                    target_revision,
+                    None,
+                    None,
+                    Some(manual_admission),
+                    None,
+                ),
+                false,
             )
             .into_parts();
 

@@ -329,12 +329,11 @@ fn component_revision_for_replay(
             status
                 .pending_updates
                 .front()
-                .and_then(|update| match update.kind {
+                .and_then(|update| match &update.kind {
                     PendingUpdateKind::SnapshotBased { .. } => Some(update.target_revision),
-                    PendingUpdateKind::SnapshotAssistedAutomatic {
-                        source_component_revision,
-                        ..
-                    } => Some(source_component_revision),
+                    PendingUpdateKind::SnapshotAssistedAutomatic(selection) => {
+                        Some(selection.snapshot.component_revision)
+                    }
                     PendingUpdateKind::Automatic => None,
                 })
                 .unwrap_or(status.component_revision_for_replay)

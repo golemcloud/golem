@@ -524,8 +524,7 @@ declare module 'golem:api/oplog@1.5.0' {
     pendingUpdateIndex: OplogIndex;
     sourceComponentRevision: ComponentRevision;
     sourceRevisionStartIndex: OplogIndex;
-    snapshotIndex?: OplogIndex;
-    ineligibilityReason?: string;
+    snapshotIndex: OplogIndex;
   };
   export type FailedUpdateParameters = {
     timestamp: Datetime;
@@ -928,6 +927,8 @@ declare module 'golem:api/oplog@1.5.0' {
     sourceRevisionStartIndex: OplogIndex;
     snapshotIndex: OplogIndex;
     snapshotRevision: ComponentRevision;
+    /** The filesystem snapshot of the selected record, if it has one */
+    filesystemSnapshot?: string;
   };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;
