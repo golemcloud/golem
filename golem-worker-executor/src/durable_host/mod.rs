@@ -6322,8 +6322,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             != SnapshotReplayPurpose::None
                                             && !store.as_context().data().durable_ctx().is_live() =>
                                     {
-                                        // Speculative reconstruction failures must not append an
-                                        // authoritative invocation Error for already recorded work.
+                                        // Speculative reconstruction failures, after a snapshot or
+                                        // in the replay for a pending automatic update, must not
+                                        // append an authoritative invocation Error for already
+                                        // recorded work: the start decides what the failure means.
                                         // The failure of the replay says whether it diverged.
                                         diverged = snapshot_divergence;
                                         match trap_type {
@@ -6339,7 +6341,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                                 worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
                                                 Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
                                             }
-                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
+                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during a speculative replay")),
                                         }
                                     }
                                     Some(trap_type) => {
@@ -7431,7 +7433,7 @@ fn payload_download_failure(
                 details: error,
             })
         }
-        SnapshotReplayPurpose::None => {
+        SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {
             SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error))
         }
     }
@@ -11185,7 +11187,8 @@ impl PrivateDurableWorkerState {
             (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
-        let snapshot_replay_purpose = baseline_role.purpose();
+        let snapshot_replay_purpose =
+            baseline_role.purpose(pending_update.as_ref().map(|update| &update.reference));
         let completion_marker_recorder =
             concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         Ok(Self {

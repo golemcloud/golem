@@ -73,15 +73,24 @@ pub(crate) enum BaselineRole {
 }
 
 impl BaselineRole {
-    /// What a load of the application snapshot of this baseline is for.
-    pub(crate) fn purpose(&self) -> SnapshotReplayPurpose {
-        match self {
-            Self::Periodic(_) => SnapshotReplayPurpose::PeriodicRecovery,
-            Self::AssistedPending(_) => SnapshotReplayPurpose::AssistedUpdate,
-            Self::ManualPending(_)
-            | Self::ManualPromoted
-            | Self::AssistedPromoted
-            | Self::InitialFiles => SnapshotReplayPurpose::None,
+    /// What the replay of a start from this baseline is for, with `head` at the head of the
+    /// queue. A pending plain automatic update replays the history after a promoted baseline or
+    /// the whole history, and that replay is for the update.
+    pub(crate) fn purpose(&self, head: Option<&PendingUpdateRef>) -> SnapshotReplayPurpose {
+        match (self, head.map(|head| &head.kind)) {
+            (Self::Periodic(_), _) => SnapshotReplayPurpose::PeriodicRecovery,
+            (Self::AssistedPending(_), _) => SnapshotReplayPurpose::AssistedUpdate,
+            (
+                Self::ManualPromoted | Self::AssistedPromoted | Self::InitialFiles,
+                Some(PendingUpdateKind::Automatic),
+            ) => SnapshotReplayPurpose::AutomaticUpdate,
+            (
+                Self::ManualPending(_)
+                | Self::ManualPromoted
+                | Self::AssistedPromoted
+                | Self::InitialFiles,
+                _,
+            ) => SnapshotReplayPurpose::None,
         }
     }
 }
@@ -2250,15 +2259,22 @@ mod tests {
     }
 
     #[test]
-    fn the_replay_purpose_of_each_baseline() {
+    fn the_replay_purpose_of_each_baseline_and_head() {
+        let automatic = automatic_head();
+        let manual = manual_head();
         assert_eq!(
             [
-                BaselineRole::Periodic(OplogIndex::from_u64(10)).purpose(),
-                BaselineRole::AssistedPending(Box::new(assisted_head())).purpose(),
-                BaselineRole::AssistedPromoted.purpose(),
-                BaselineRole::ManualPending(Box::new(manual_head())).purpose(),
-                BaselineRole::ManualPromoted.purpose(),
-                BaselineRole::InitialFiles.purpose(),
+                BaselineRole::Periodic(OplogIndex::from_u64(10)).purpose(None),
+                BaselineRole::AssistedPending(Box::new(assisted_head()))
+                    .purpose(Some(&assisted_head())),
+                BaselineRole::AssistedPromoted.purpose(None),
+                BaselineRole::ManualPending(Box::new(manual_head())).purpose(Some(&manual)),
+                BaselineRole::ManualPromoted.purpose(None),
+                BaselineRole::InitialFiles.purpose(None),
+                BaselineRole::InitialFiles.purpose(Some(&automatic)),
+                BaselineRole::AssistedPromoted.purpose(Some(&automatic)),
+                BaselineRole::ManualPromoted.purpose(Some(&automatic)),
+                BaselineRole::ManualPromoted.purpose(Some(&manual)),
             ],
             [
                 SnapshotReplayPurpose::PeriodicRecovery,
@@ -2266,6 +2282,10 @@ mod tests {
                 SnapshotReplayPurpose::None,
                 SnapshotReplayPurpose::None,
                 SnapshotReplayPurpose::None,
+                SnapshotReplayPurpose::None,
+                SnapshotReplayPurpose::AutomaticUpdate,
+                SnapshotReplayPurpose::AutomaticUpdate,
+                SnapshotReplayPurpose::AutomaticUpdate,
                 SnapshotReplayPurpose::None,
             ]
         );

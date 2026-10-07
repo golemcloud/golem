@@ -72,11 +72,19 @@ pub enum SnapshotSource {
     SnapshotAssistedAutomatic,
 }
 
+/// What the replay of a start is for. A replay with any purpose but `None` is speculative: a
+/// failure of a recorded invocation during it writes no invocation error, and the start decides
+/// what the failure means.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SnapshotReplayPurpose {
     None,
+    /// The replay after a periodic record.
     PeriodicRecovery,
+    /// The replay after the record that a pending snapshot-assisted update selected.
     AssistedUpdate,
+    /// The replay of the history for a pending automatic update without a selected record, from
+    /// the authoritative baseline or from the start.
+    AutomaticUpdate,
 }
 
 /// The pending update at the head of the queue of an agent, with its description read from its

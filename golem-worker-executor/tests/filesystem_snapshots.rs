@@ -5301,7 +5301,19 @@ async fn an_assisted_update_waits_for_the_upload_of_the_newest_record_and_select
             .auto_update_worker(&agent.worker_id, target.revision, false)
             .await?;
         executor.resume(&agent.worker_id, false).await?;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // While the upload of the newest record is held, the start waits for it before it
+        // chooses the strategy: a start that did not wait would write a strategy of the
+        // previous record now.
+        let strategy_while_held = eventually(Duration::from_secs(3), || async {
+            let strategies = executor
+                .get_oplog(&agent.worker_id, OplogIndex::INITIAL)
+                .await?
+                .into_iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+                .count();
+            Ok((strategies > 1).then_some(()))
+        })
+        .await;
         held.release();
         executor
             .wait_for_component_revision(&agent.worker_id, target.revision, Duration::from_secs(60))
@@ -5317,6 +5329,10 @@ async fn an_assisted_update_waits_for_the_upload_of_the_newest_record_and_select
             .iter()
             .map(|entry| format!("{} {}", entry.oplog_index, entry_kind(&entry.entry)))
             .collect::<Vec<_>>();
+        assert!(
+            strategy_while_held.is_err(),
+            "the start chose a strategy while the upload of the newest record was held: {kinds:?}"
+        );
         assert_eq!(
             selection,
             Some((unconfirmed_index, Some(unconfirmed.clone()))),
@@ -5688,6 +5704,7 @@ async fn an_executor_shutdown_while_an_assisted_update_restores_its_record_write
 
         let restarted =
             start_with_overrides(deps, &context, snapshotting_with_checkpoints(&store)).await?;
+        let checkpoint = restarted.status_checkpoint(&agent.worker_id).await?;
         restarted.remove_cached_status(&agent.worker_id).await?;
         restarted.resume(&agent.worker_id, false).await?;
         restarted
@@ -5699,6 +5716,15 @@ async fn an_executor_shutdown_while_an_assisted_update_restores_its_record_write
         let tree = updated.describe(&restarted).await?;
         held.release();
 
+        // The start folds the status from a checkpoint that covers the selected record, and the
+        // entries after it, the strategy among them.
+        assert!(
+            checkpoint
+                .as_ref()
+                .is_some_and(|checkpoint| checkpoint.oplog_idx >= selected_index),
+            "{:?}",
+            checkpoint.map(|checkpoint| checkpoint.oplog_idx)
+        );
         assert_eq!(restoring, selected);
         assert_eq!(selection, Some((selected_index, Some(selected))));
         assert_eq!(outcomes, [format!("updated to {:?}", target.revision)]);
@@ -5778,14 +5804,17 @@ async fn a_failed_store_call_while_a_start_restores_the_record_of_an_update_retr
                         }
                     }
                 })
-                .await
-                .with_context(|| {
-                    format!(
-                        "restores {:?}, updates {:?}",
-                        store.restored_names(),
-                        futures::executor::block_on(agent.update_results(executor)).ok()
-                    )
-                })?;
+                .await;
+                let tree = match tree {
+                    Ok(tree) => tree,
+                    Err(error) => {
+                        let updates = agent.update_results(executor).await.ok();
+                        return Err(error.context(format!(
+                            "restores {:?}, updates {updates:?}",
+                            store.restored_names()
+                        )));
+                    }
+                };
                 let restored = store.restored_names().split_off(restores);
                 let outcomes = agent.update_results(executor).await?;
                 anyhow::Ok((baseline, tree, restored, outcomes))

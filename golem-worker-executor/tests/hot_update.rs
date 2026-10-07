@@ -186,6 +186,17 @@ impl AgentFiles {
         matches!(self, Self::Snapshotted(_))
     }
 
+    /// Holds the next save of a filesystem snapshot when the executor keeps filesystem
+    /// snapshots, so the snapshot record of that save is not usable until the release.
+    fn hold_next_save(
+        &self,
+    ) -> Option<golem_worker_executor::filesystem_snapshot_testing::HeldSave> {
+        match self {
+            Self::Untouched => None,
+            Self::Snapshotted(store) => Some(store.hold_next_save()),
+        }
+    }
+
     /// The overrides of an executor with the snapshot policy `policy`.
     fn overrides(&self, policy: SnapshotPolicy) -> TestExecutorOverrides {
         TestExecutorOverrides {
@@ -1293,6 +1304,12 @@ async fn assert_snapshot_assisted_suffix_failure(
     let snapshot_index = files
         .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
         .await?;
+    // The record after the tail write and the diverging call stays unusable while its save is
+    // held, so the update selects the record before them and replays both.
+    let held = files.hold_next_save();
+    files
+        .write(&executor, &component, &agent_id, "/tail.txt")
+        .await?;
 
     let (function, input, expected_cause) = match failure {
         SnapshotAssistedSuffixFailure::HostCallDivergence => {
@@ -1358,12 +1375,15 @@ async fn assert_snapshot_assisted_suffix_failure(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
     );
+    if let Some(held) = held {
+        held.release();
+    }
     files
         .assert_files(
             &executor,
             &component,
             &agent_id,
-            &["/before.txt", "/before-2.txt"],
+            &["/before.txt", "/before-2.txt", "/tail.txt"],
         )
         .await?;
     http_server.abort();
@@ -1848,8 +1868,11 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     executor
         .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
         .await?;
-    files
+    let snapshot_index = files
         .selected_record(&executor, &worker_id, OplogIndex::INITIAL, "stable_value")
+        .await?;
+    files
+        .write(&executor, &component, &agent_id, "/tail.txt")
         .await?;
 
     let mut control = http_server.f1_control(901).await;
@@ -1895,9 +1918,18 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     executor
         .wait_for_component_revision(&worker_id, assisted.revision, Duration::from_secs(30))
         .await?;
+    let first_update = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(update_counts(&first_update), (0, 1, 0));
     assert_eq!(
-        update_counts(&executor.get_worker_metadata(&worker_id).await?),
-        (0, 1, 0)
+        first_update.updates.iter().find_map(|record| match record {
+            UpdateRecord::SuccessfulUpdate(update) => update
+                .snapshot_assisted_details
+                .as_ref()
+                .map(|details| details.snapshot_index),
+            _ => None,
+        }),
+        Some(snapshot_index),
+        "the update after the restart restores the record before the tail"
     );
     executor
         .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(30))
@@ -1957,7 +1989,7 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
             &executor,
             &component,
             &agent_id,
-            &["/before.txt", "/before-2.txt"],
+            &["/before.txt", "/before-2.txt", "/tail.txt"],
         )
         .await?;
     http_server.abort();
@@ -5174,7 +5206,6 @@ async fn an_automatic_update_after_a_file_write_without_filesystem_snapshots_rep
 
 #[test]
 #[timeout("120s")]
-#[ignore = "a host call divergence in the full replay of an automatic update writes an invocation error entry before the failed update, so the source agent fails at its next start"]
 async fn a_host_call_divergence_of_an_automatic_update_after_a_file_write_without_filesystem_snapshots_fails_the_full_replay_and_keeps_the_source(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
