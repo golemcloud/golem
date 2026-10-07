@@ -14,7 +14,7 @@
 
 //! Go guest tool client generator.
 //!
-//! A generated tool client declares the tool with `golem.DefineToolClient`,
+//! A generated tool client declares the tool with `tool.DefineToolClient`,
 //! under an identity type of its own, and each command with the same field-bound spec a Go tool is written with,
 //! mirroring the published metadata. The guest SDK then builds the canonical
 //! input record, invokes through tool RPC and decodes the result exactly as for
@@ -30,7 +30,7 @@ use super::go::{
 };
 use super::go_writer::GoWriter;
 use super::restriction;
-use super::{GOLEM_PKG, GoBridgeGenerator, case_idents};
+use super::{GOLEM_PKG, GoBridgeGenerator, TOOL_PKG, case_idents};
 use crate::bridge_gen::tool_bridge_client_directory_name;
 use crate::bridge_gen::tool_common::{command_path, idx_to_usize, synthetic_agent_type};
 use crate::fs;
@@ -128,7 +128,7 @@ impl GoToolBridgeGenerator {
 
     fn client_file(&self) -> anyhow::Result<String> {
         let mut writer = GoWriter::new();
-        writer.import(GOLEM_PKG);
+        writer.import(TOOL_PKG);
 
         let root = self.node(0)?;
         let summary = root.doc.summary.trim();
@@ -149,7 +149,7 @@ impl GoToolBridgeGenerator {
         writer.line(format!("type {marker} struct{{}}"));
         writer.blank();
         writer.line(format!(
-            "var {TOOL_VAR} = golem.DefineToolClient[{marker}]({})",
+            "var {TOOL_VAR} = tool.DefineToolClient[{marker}]({})",
             go_string(&self.tool_name)
         ));
         writer.blank();
@@ -236,7 +236,7 @@ impl GoToolBridgeGenerator {
         ));
         write_struct(name, &[], &fields, false, writer);
         writer.line(format!(
-            "var _ = {}.Globals[{name}](func(g *{name}, s *golem.ToolGlobalsSpec) {{",
+            "var _ = {}.Globals[{name}](func(g *{name}, s *tool.GlobalsSpec) {{",
             self.parent_expr(index)
         ));
         writer.indent();
@@ -290,10 +290,10 @@ impl GoToolBridgeGenerator {
 
         let result = match &body.result {
             Some(result) => self.inner.render(&result.type_, writer)?,
-            None => "golem.Unit".to_string(),
+            None => unit(writer),
         };
         let args_type = if embedded.is_empty() && fields.is_empty() {
-            "golem.Unit".to_string()
+            unit(writer)
         } else {
             writer.doc(&format!(
                 "{args} holds the arguments of {}.",
@@ -345,7 +345,7 @@ impl GoToolBridgeGenerator {
             ));
         } else {
             writer.line(format!(
-                "var {var} = {owner}.{constructor}[{args_type}, {result}]({name_arg}func(a *{args_type}, s *golem.ToolCommandSpec) {{"
+                "var {var} = {owner}.{constructor}[{args_type}, {result}]({name_arg}func(a *{args_type}, s *tool.CommandSpec) {{"
             ));
             writer.indent();
             for field in &fields {
@@ -509,7 +509,7 @@ impl GoToolBridgeGenerator {
     fn write_error(&self, error: &ErrorVar, writer: &mut GoWriter) -> anyhow::Result<()> {
         let payload = match &error.payload {
             Some(payload) => self.inner.render(payload, writer)?,
-            None => "golem.Unit".to_string(),
+            None => unit(writer),
         };
         writer.doc(&if error.summary.is_empty() {
             format!(
@@ -526,11 +526,11 @@ impl GoToolBridgeGenerator {
             )
         });
         let kind = match error.kind {
-            ErrorKind::UsageError => "golem.UsageError",
-            ErrorKind::RuntimeError => "golem.RuntimeError",
+            ErrorKind::UsageError => "tool.UsageError",
+            ErrorKind::RuntimeError => "tool.RuntimeError",
         };
         writer.line(format!(
-            "var {} = golem.DefineToolError[{payload}]({TOOL_VAR}, {}, golem.ToolErrorSpec{{Kind: {kind}, ExitCode: {}}})",
+            "var {} = tool.DefineToolError[{payload}]({TOOL_VAR}, {}, tool.ErrorSpec{{Kind: {kind}, ExitCode: {}}})",
             error.ident,
             go_string(&error.name),
             error.exit_code
@@ -752,4 +752,11 @@ mod tests {
             assert_eq!(go_kebab(input), expected, "{input}");
         }
     }
+}
+
+/// The SDK's unit type, which a command without arguments or a result, and an
+/// error without a payload, is declared with.
+fn unit(writer: &mut GoWriter) -> String {
+    writer.import(GOLEM_PKG);
+    "golem.Unit".to_string()
 }

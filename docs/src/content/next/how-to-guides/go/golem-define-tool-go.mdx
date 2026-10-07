@@ -7,13 +7,16 @@ A **tool** is a CLI-shaped callable unit: a command tree whose commands take arg
 ```go
 package greeter
 
-import "github.com/golemcloud/golem/sdks/go/golem"
+import (
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
+)
 
 // Greeter is the tool's identity type: its commands, errors and middleware
 // carry it, so one tool's command cannot be used where another's is expected.
 type Greeter struct{}
 
-var Tool = golem.DefineTool[Greeter]("greeter", golem.ToolSpec{
+var Tool = tool.DefineTool[Greeter]("greeter", tool.Spec{
 	Version: "1.0.0",
 	Summary: "Greets people",
 })
@@ -21,8 +24,8 @@ var Tool = golem.DefineTool[Greeter]("greeter", golem.ToolSpec{
 // A declared failure: part of the command's contract, with a typed payload.
 type NotFound struct{ Name string }
 
-var ErrNotFound = golem.DefineToolError[NotFound](Tool, "not-found", golem.ToolErrorSpec{
-	Kind: golem.UsageError, ExitCode: 2, Summary: "no such person",
+var ErrNotFound = tool.DefineToolError[NotFound](Tool, "not-found", tool.ErrorSpec{
+	Kind: tool.UsageError, ExitCode: 2, Summary: "no such person",
 })
 
 type GreetArgs struct {
@@ -32,7 +35,7 @@ type GreetArgs struct {
 	Title golem.Option[string]
 }
 
-var Greet = Tool.Command[GreetArgs, string]("greet", func(a *GreetArgs, s *golem.ToolCommandSpec) {
+var Greet = Tool.Command[GreetArgs, string]("greet", func(a *GreetArgs, s *tool.CommandSpec) {
 	s.Doc("Greet someone")
 	s.Positional(&a.Name).ValueName("NAME").Doc("who to greet")
 	s.Flag(&a.Loud).Short('l')
@@ -56,7 +59,7 @@ The wire name is the field name in kebab case (`Times` → `times`, `GitDir` →
 | `io.Reader` | `Stdin` | The command's standard input; `.Optional()`, `.Mime(…)` |
 | `golem.Principal` | — | Filled by the host with who invoked the command |
 
-A tool that cannot work without a filesystem binding says so with `ToolSpec{RequiresFilesystem: true}`; that declares the need, it does not grant access.
+A tool that cannot work without a filesystem binding says so with `tool.Spec{RequiresFilesystem: true}`; that declares the need, it does not grant access.
 
 Every exported field must be bound, or be the principal; a mistake — an unbound field, a field bound twice, a pointer into another struct — is a definition error, reported by `golem.DefinitionErrors()` and at deploy.
 
@@ -65,7 +68,7 @@ Other command settings: `s.Description`, `s.Example`, `s.Aliases`, `s.ResultDoc`
 ## Implementation
 
 ```go
-var _ = Greet.Handle(func(ctx *golem.ToolContext, a GreetArgs) (string, error) {
+var _ = Greet.Handle(func(ctx *tool.Context, a GreetArgs) (string, error) {
 	if a.Name == "nobody" {
 		return "", ErrNotFound.New(NotFound{Name: a.Name})
 	}
@@ -80,7 +83,7 @@ var _ = Greet.Handle(func(ctx *golem.ToolContext, a GreetArgs) (string, error) {
 Handlers can live in an `impl` package; blank-import it from `main.go`, the same as an agent's. A component can export tools without defining any agent.
 
 - Return a declared case with `ErrX.New(payload)` (`golem.Unit` for none). Returning a case the command did not list in `s.Raises` fails as an invalid result, and so does any other error or a panic.
-- Reject the call itself with `golem.InvalidInput(format, args...)` or `golem.ConstraintViolation(format, args...)`; the caller sees a `*golem.ToolCallError` of that kind.
+- Reject the call itself with `tool.InvalidInput(format, args...)` or `tool.ConstraintViolation(format, args...)`; the caller sees a `*tool.CallError` of that kind.
 - Use `golem.Unit` as the result type for a command that returns nothing.
 
 ## Command Tree and Globals
@@ -89,7 +92,7 @@ Handlers can live in an `impl` package; blank-import it from `main.go`, the same
 type StockGlobals struct{ Warehouse string }
 
 var Stock = Tool.Group("stock").Doc("Query stock levels").
-	Globals[StockGlobals](func(g *StockGlobals, s *golem.ToolGlobalsSpec) {
+	Globals[StockGlobals](func(g *StockGlobals, s *tool.GlobalsSpec) {
 		s.Option(&g.Warehouse).Short('w').Default("main")
 	})
 
@@ -100,7 +103,7 @@ type ShowArgs struct {
 	YAML    bool
 }
 
-var Show = Stock.Command[ShowArgs, string]("show", func(a *ShowArgs, s *golem.ToolCommandSpec) {
+var Show = Stock.Command[ShowArgs, string]("show", func(a *ShowArgs, s *tool.CommandSpec) {
 	s.Aliases("get")
 	item := s.Positional(&a.Item)
 	json, yaml := s.Flag(&a.JSON), s.Flag(&a.YAML)
@@ -125,7 +128,7 @@ type ResizeArgs struct {
 	Tags   []golem.Text
 }
 
-var Resize = Tool.Command[ResizeArgs, string]("resize", func(a *ResizeArgs, s *golem.ToolCommandSpec) {
+var Resize = Tool.Command[ResizeArgs, string]("resize", func(a *ResizeArgs, s *tool.CommandSpec) {
 	s.Positional(&a.Width).Range(1, 4096).Unit("px")
 	s.Option(&a.Format) // restricted by its tag
 	s.List(&a.Tags).MaxLength(20)
@@ -136,18 +139,18 @@ The setters are `Range(min, max)`, `MinValue`, `MaxValue` and `Unit` for numbers
 
 ## Stdin, Stdout and Stderr
 
-A command that writes standard output, standard error or both is declared with `OutputCommand`, and its spec declares which; its handler gets a `*golem.ToolOutputContext`:
+A command that writes standard output, standard error or both is declared with `OutputCommand`, and its spec declares which; its handler gets a `*tool.OutputContext`:
 
 ```go
 type UpperArgs struct{ In io.Reader }
 
-var Upper = Tool.OutputCommand[UpperArgs, golem.Unit]("upper", func(a *UpperArgs, s *golem.ToolCommandSpec) {
+var Upper = Tool.OutputCommand[UpperArgs, golem.Unit]("upper", func(a *UpperArgs, s *tool.CommandSpec) {
 	s.Stdin(&a.In).Mime("text/plain")
 	s.Stdout().Mime("text/plain").Required()
 	s.Stderr().Doc("skipped lines")
 })
 
-var _ = Upper.Handle(func(ctx *golem.ToolOutputContext, a UpperArgs) (golem.Unit, error) {
+var _ = Upper.Handle(func(ctx *tool.OutputContext, a UpperArgs) (golem.Unit, error) {
 	scanner := bufio.NewScanner(a.In)
 	for scanner.Scan() {
 		if scanner.Text() == "" {
@@ -163,8 +166,8 @@ var _ = Upper.Handle(func(ctx *golem.ToolOutputContext, a UpperArgs) (golem.Unit
 ```
 
 - `s.Stdout()` and `s.Stderr()` return the stream's spec: `.Doc`, `.Mime`, and `.Required()`. An output is optional unless required: a caller may leave it out, and then what the handler writes to it is discarded (`ctx.Stderr().Attached()` tells). A call without a required one is refused before the handler runs.
-- Each output is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(golem.StreamFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
-- A producer failure on stdin surfaces as a `*golem.StreamError`, never as `io.EOF`.
+- Each output is finished when the handler succeeds and failed when it returns an error or panics; `ctx.Stdout().Fail(tool.OutputFailed("reason"))` ends one with a specific cause. Writing to an output the command does not declare is an error.
+- A producer failure on stdin surfaces as a `*tool.OutputError`, never as `io.EOF`.
 
 ## Deploy
 

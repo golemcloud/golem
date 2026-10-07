@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"strings"
 	"testing"
@@ -33,9 +35,9 @@ type AuditParams struct {
 	Deny    bool
 }
 
-func mustTypedValue[T any](t *testing.T, v T) TypedValue {
+func mustTypedValue[T any](t *testing.T, v T) golem.TypedValue {
 	t.Helper()
-	tv, err := EncodeTypedValue(v)
+	tv, err := golem.EncodeTypedValue(v)
 	if err != nil {
 		t.Fatalf("EncodeTypedValue: %v", err)
 	}
@@ -47,18 +49,18 @@ func mustTypedValue[T any](t *testing.T, v T) TypedValue {
 func localUnderlying(d *definitions, e *toolEntry) underlyingLayer {
 	return underlyingLayer{start: func(path []string, input types.TypedSchemaValue, stdin io.Reader) (toolCall, error) {
 		n := e.root.find(path)
-		var streams ToolStreams
+		var streams Streams
 		if n != nil && n.body != nil {
 			streams = n.body.streams()
 		}
-		return localCall(d, e, path, input, stdin, streams, AnonymousPrincipal{}), nil
+		return localCall(d, e, path, input, stdin, streams, golem.AnonymousPrincipal{}), nil
 	}}
 }
 
 type middlewareRun struct {
 	path   []string
 	input  types.TypedSchemaValue
-	params TypedValue
+	params golem.TypedValue
 	stdin  string
 	under  underlyingLayer
 	// stderr receives the middleware's standard error; without it the caller
@@ -93,7 +95,7 @@ func runMiddlewareFor(t *testing.T, r *toolRegistry, d *definitions, name string
 		stdin:       stdin,
 		stdout:      newToolOutput("stdout", sink),
 		stderr:      newToolOutput("stderr", stderr),
-		principal:   AnonymousPrincipal{},
+		principal:   golem.AnonymousPrincipal{},
 		under:       run.under,
 	}
 	return d.runMiddleware(e, inv), sink
@@ -104,7 +106,7 @@ func resultJSON(t *testing.T, res witTypes.Result[toolCommon.InvocationResult, t
 	if res.IsErr() {
 		t.Fatalf("invocation failed: %+v", res.Err())
 	}
-	out, err := TypedValue{wit: res.Ok().Result.Some()}.JSON()
+	out, err := typedValue(res.Ok().Result.Some()).JSON()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,12 +115,12 @@ func resultJSON(t *testing.T, res witTypes.Result[toolCommon.InvocationResult, t
 
 func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 	v, r, d := newVcs(t)
-	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{Version: "1.0.0"})
-	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+	policy := v.tool.Middleware[PolicyParams]("policy", MiddlewareSpec{Version: "1.0.0"})
+	_ = policy.Handle(v.commit, func(ctx *MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 		if a.Message == ctx.Parameters().Block {
 			return CommitResult{}, errors.New("blocked by policy")
 		}
-		if _, ok := ctx.Principal().(AnonymousPrincipal); !ok {
+		if _, ok := ctx.Principal().(golem.AnonymousPrincipal); !ok {
 			return CommitResult{}, errors.New("lost the principal")
 		}
 		a.Message += " (audited)"
@@ -155,8 +157,8 @@ func TestTransparentMiddlewareInterceptsAHandledCommand(t *testing.T) {
 
 func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 	v, r, d := newVcs(t)
-	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{})
-	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+	policy := v.tool.Middleware[PolicyParams]("policy", MiddlewareSpec{})
+	_ = policy.Handle(v.commit, func(ctx *MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 		return policy.Underlying(ctx, v.commit).Forward(a)
 	})
 	e, _ := r.get("vcs")
@@ -188,12 +190,12 @@ func TestTransparentMiddlewarePassesUnhandledCommandsThrough(t *testing.T) {
 func TestOutputMiddlewareForwardsAndRewritesOutput(t *testing.T) {
 	v, r, d := newVcs(t)
 	e, _ := r.get("vcs")
-	quiet := v.tool.Middleware[Unit]("forward", ToolMiddlewareSpec{})
-	_ = quiet.HandleOutput(v.push, func(ctx *ToolMiddlewareOutputContext[Unit], a PushArgs) (int32, error) {
+	quiet := v.tool.Middleware[golem.Unit]("forward", MiddlewareSpec{})
+	_ = quiet.HandleOutput(v.push, func(ctx *MiddlewareOutputContext[golem.Unit], a PushArgs) (int32, error) {
 		return quiet.UnderlyingOutput(ctx, v.push).Forward(a)
 	})
-	prefix := v.tool.Middleware[Unit]("prefix", ToolMiddlewareSpec{})
-	_ = prefix.HandleOutput(v.push, func(ctx *ToolMiddlewareOutputContext[Unit], a PushArgs) (int32, error) {
+	prefix := v.tool.Middleware[golem.Unit]("prefix", MiddlewareSpec{})
+	_ = prefix.HandleOutput(v.push, func(ctx *MiddlewareOutputContext[golem.Unit], a PushArgs) (int32, error) {
 		inv, err := prefix.UnderlyingOutput(ctx, v.push).Start(a)
 		if err != nil {
 			return 0, err
@@ -212,7 +214,7 @@ func TestOutputMiddlewareForwardsAndRewritesOutput(t *testing.T) {
 	for name, want := range map[string]string{"forward": "HELLO", "prefix": "> HELLO"} {
 		stderr := &fakeSink{}
 		res, sink := runMiddlewareFor(t, r, d, name, middlewareRun{
-			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, Unit{}), stdin: "hello",
+			path: []string{"remote", "push"}, input: input, params: mustTypedValue(t, golem.Unit{}), stdin: "hello",
 			under: localUnderlying(d, e), stderr: stderr,
 		})
 		if res.IsErr() {
@@ -234,10 +236,10 @@ type SaveArgs struct{ Text string }
 
 func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 	v, r, d := newVcs(t)
-	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{Version: "2.0.0"}, true)
-	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
-	adapter := v2.Adapter[Unit]("vcs2-on-vcs", v.tool, ToolMiddlewareSpec{})
-	_ = adapter.Handle(save, func(ctx *ToolMiddlewareContext[Unit], a SaveArgs) (string, error) {
+	v2 := defineToolInto[V2](r, d, "vcs2", Spec{Version: "2.0.0"}, true)
+	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *CommandSpec) { s.Positional(&a.Text) })
+	adapter := v2.Adapter[golem.Unit]("vcs2-on-vcs", v.tool, MiddlewareSpec{})
+	_ = adapter.Handle(save, func(ctx *MiddlewareContext[golem.Unit], a SaveArgs) (string, error) {
 		res, err := adapter.Underlying(ctx, v.commit).Call(func(b *CommitArgs) {
 			b.Message = a.Text
 			b.Paths = []string{"all"}
@@ -247,7 +249,7 @@ func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 	e, _ := r.get("vcs")
 	input := encodeArgs(t, save.ce, func(a *SaveArgs) { a.Text = "snapshot" })
 	res, _ := runMiddlewareFor(t, r, d, "vcs2-on-vcs", middlewareRun{
-		path: []string{"save"}, input: input, params: mustTypedValue(t, Unit{}), under: localUnderlying(d, e),
+		path: []string{"save"}, input: input, params: mustTypedValue(t, golem.Unit{}), under: localUnderlying(d, e),
 	})
 	if out := resultJSON(t, res); out != "vcs commit: snapshot" {
 		t.Errorf("result %v", out)
@@ -256,7 +258,7 @@ func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 	m, _ := r.getMiddleware("vcs2-on-vcs")
 	built, ok := d.buildToolMiddleware(m)
 	if !ok {
-		t.Fatalf("metadata: %s", allDefErrors(d.Errs))
+		t.Fatalf("metadata: %s", engine.AllErrors(d.Errs))
 	}
 	scope := built.Scope.Monomorphic()
 	if scope.Presented.Version != "2.0.0" || scope.Expected.IsNone() || scope.Expected.Some().Version != "1.2.0" {
@@ -266,11 +268,11 @@ func TestAdapterPresentsOneToolOverAnother(t *testing.T) {
 
 func TestAdapterMustHandleEveryCommand(t *testing.T) {
 	v, r, d := newVcs(t)
-	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{}, true)
-	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
-	v2.Command[SaveArgs, string]("load", func(a *SaveArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
-	adapter := v2.Adapter[Unit]("partial", v.tool, ToolMiddlewareSpec{})
-	_ = adapter.Handle(save, func(*ToolMiddlewareContext[Unit], SaveArgs) (string, error) { return "", nil })
+	v2 := defineToolInto[V2](r, d, "vcs2", Spec{}, true)
+	save := v2.Command[SaveArgs, string]("save", func(a *SaveArgs, s *CommandSpec) { s.Positional(&a.Text) })
+	v2.Command[SaveArgs, string]("load", func(a *SaveArgs, s *CommandSpec) { s.Positional(&a.Text) })
+	adapter := v2.Adapter[golem.Unit]("partial", v.tool, MiddlewareSpec{})
+	_ = adapter.Handle(save, func(*MiddlewareContext[golem.Unit], SaveArgs) (string, error) { return "", nil })
 	r.discoverMiddlewares(d)
 	mustDefErr(t, d, "does not handle its command load")
 }
@@ -278,11 +280,11 @@ func TestAdapterMustHandleEveryCommand(t *testing.T) {
 func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 	v, r, d := newVcs(t)
 	var seen []string
-	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
-	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", MiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 		seen = append(seen, ctx.Parameters().Channel+":"+ctx.ToolName()+":"+strings.Join(ctx.CommandPath(), " "))
 		if ctx.Parameters().Deny {
-			return None[TypedValue](), errors.New("denied by audit policy")
+			return golem.None[golem.TypedValue](), errors.New("denied by audit policy")
 		}
 		return ctx.Next(ctx.Input())
 	})
@@ -326,17 +328,17 @@ func TestUniversalMiddlewareWrapsAnyTool(t *testing.T) {
 
 func TestMiddlewareMetadata(t *testing.T) {
 	v, r, d := newVcs(t)
-	policy := v.tool.Middleware[PolicyParams]("policy", ToolMiddlewareSpec{Version: "2.0.0", Summary: "Caps", Aliases: []string{"p"}})
-	_ = policy.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+	policy := v.tool.Middleware[PolicyParams]("policy", MiddlewareSpec{Version: "2.0.0", Summary: "Caps", Aliases: []string{"p"}})
+	_ = policy.Handle(v.commit, func(ctx *MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 		return policy.Underlying(ctx, v.commit).Forward(a)
 	})
-	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
-	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", MiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 		return ctx.Next(ctx.Input())
 	})
 	found, ok := r.discoverMiddlewares(d)
 	if !ok || len(found) != 2 {
-		t.Fatalf("discovery: %v %s", ok, allDefErrors(d.Errs))
+		t.Fatalf("discovery: %v %s", ok, engine.AllErrors(d.Errs))
 	}
 	typed, universal := found[0], found[1]
 	if typed.Name != "policy" || typed.Version != "2.0.0" || typed.Doc.Summary != "Caps" ||
@@ -357,37 +359,37 @@ type Twin struct{}
 func TestMiddlewareDeclarationErrors(t *testing.T) {
 	t.Run("universal without a handler", func(t *testing.T) {
 		r, d := newToolRegistry(), newDefinitions()
-		defineUniversalToolMiddlewareInto[Unit](r, d, "bare", ToolMiddlewareSpec{})
+		defineUniversalToolMiddlewareInto[golem.Unit](r, d, "bare", MiddlewareSpec{})
 		r.discoverMiddlewares(d)
 		mustDefErr(t, d, "has no handler")
 	})
 	t.Run("typed without a handler", func(t *testing.T) {
 		v, r, d := newVcs(t)
-		v.tool.Middleware[Unit]("idle", ToolMiddlewareSpec{})
+		v.tool.Middleware[golem.Unit]("idle", MiddlewareSpec{})
 		r.discoverMiddlewares(d)
 		mustDefErr(t, d, "handles no command")
 	})
 	t.Run("duplicate", func(t *testing.T) {
 		r, d := newToolRegistry(), newDefinitions()
-		defineUniversalToolMiddlewareInto[Unit](r, d, "dup", ToolMiddlewareSpec{})
-		defineUniversalToolMiddlewareInto[Unit](r, d, "dup", ToolMiddlewareSpec{})
+		defineUniversalToolMiddlewareInto[golem.Unit](r, d, "dup", MiddlewareSpec{})
+		defineUniversalToolMiddlewareInto[golem.Unit](r, d, "dup", MiddlewareSpec{})
 		mustDefErr(t, d, "already defined")
 	})
 	t.Run("a command handled twice", func(t *testing.T) {
 		v, _, d := newVcs(t)
-		m := v.tool.Middleware[Unit]("twice", ToolMiddlewareSpec{})
-		h := func(*ToolMiddlewareContext[Unit], CommitArgs) (CommitResult, error) { return CommitResult{}, nil }
+		m := v.tool.Middleware[golem.Unit]("twice", MiddlewareSpec{})
+		h := func(*MiddlewareContext[golem.Unit], CommitArgs) (CommitResult, error) { return CommitResult{}, nil }
 		_ = m.Handle(v.commit, h)
 		_ = m.Handle(v.commit, h)
 		mustDefErr(t, d, "handles command commit twice")
 	})
 	t.Run("a command of another tool sharing the identity type", func(t *testing.T) {
 		_, r, d := newVcs(t)
-		a := defineToolInto[Twin](r, d, "a", ToolSpec{}, true)
-		b := defineToolInto[Twin](r, d, "b", ToolSpec{}, true)
-		cmdB := b.Command[SaveArgs, string]("save", func(x *SaveArgs, s *ToolCommandSpec) { s.Positional(&x.Text) })
-		m := a.Middleware[Unit]("mixed", ToolMiddlewareSpec{})
-		_ = m.Handle(cmdB, func(*ToolMiddlewareContext[Unit], SaveArgs) (string, error) { return "", nil })
+		a := defineToolInto[Twin](r, d, "a", Spec{}, true)
+		b := defineToolInto[Twin](r, d, "b", Spec{}, true)
+		cmdB := b.Command[SaveArgs, string]("save", func(x *SaveArgs, s *CommandSpec) { s.Positional(&x.Text) })
+		m := a.Middleware[golem.Unit]("mixed", MiddlewareSpec{})
+		_ = m.Handle(cmdB, func(*MiddlewareContext[golem.Unit], SaveArgs) (string, error) { return "", nil })
 		mustDefErr(t, d, "which it does not present")
 	})
 }
@@ -397,14 +399,14 @@ func TestMiddlewareDeclarationErrors(t *testing.T) {
 // included, and one the caller did not take is drained.
 func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 	_, r, d := newVcs(t)
-	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", ToolMiddlewareSpec{})
-	_ = audit.Handle(func(ctx *UniversalToolMiddlewareContext[AuditParams]) (Option[TypedValue], error) {
+	audit := defineUniversalToolMiddlewareInto[AuditParams](r, d, "audit", MiddlewareSpec{})
+	_ = audit.Handle(func(ctx *UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 		return ctx.Next(ctx.Input())
 	})
 	e, _ := r.getMiddleware("audit")
 	under := underlyingLayer{start: func([]string, types.TypedSchemaValue, io.Reader) (toolCall, error) {
 		return toolCall{
-			stderr: &byteReader{src: &fakeSource{items: []streamItem{chunk("warn"), failure(StreamResourceExhausted())}}},
+			stderr: &byteReader{src: &fakeSource{items: []streamItem{chunk("warn"), failure(OutputResourceExhausted())}}},
 			wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 				return witTypes.None[types.TypedSchemaValue](), nil
 			},
@@ -418,7 +420,7 @@ func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 			stdin:      &byteReader{absent: absentStdin},
 			stdout:     newToolOutput("stdout", nil),
 			stderr:     newToolOutput("stderr", stderr),
-			principal:  AnonymousPrincipal{},
+			principal:  golem.AnonymousPrincipal{},
 			under:      under,
 		})
 	}
@@ -427,7 +429,7 @@ func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 	if res := run(sink); res.IsErr() {
 		t.Fatalf("passing stderr through failed: %+v", res.Err())
 	}
-	if string(sink.written) != "warn" || sink.failed == nil || sink.failed.String() != StreamResourceExhausted().String() {
+	if string(sink.written) != "warn" || sink.failed == nil || sink.failed.String() != OutputResourceExhausted().String() {
 		t.Errorf("stderr %q failed with %v", sink.written, sink.failed)
 	}
 	if res := run(nil); res.IsErr() {
@@ -440,13 +442,13 @@ func TestUniversalMiddlewarePassesOutputsThrough(t *testing.T) {
 // failing the call.
 func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
 	v, r, d := newVcs(t)
-	v2 := defineToolInto[V2](r, d, "vcs2", ToolSpec{Version: "2.0.0"}, true)
-	send := v2.OutputCommand[SaveArgs, int32]("send", func(a *SaveArgs, s *ToolCommandSpec) {
+	v2 := defineToolInto[V2](r, d, "vcs2", Spec{Version: "2.0.0"}, true)
+	send := v2.OutputCommand[SaveArgs, int32]("send", func(a *SaveArgs, s *CommandSpec) {
 		s.Positional(&a.Text)
 		s.Stdout()
 	})
-	adapter := v2.Adapter[Unit]("send-on-push", v.tool, ToolMiddlewareSpec{})
-	_ = adapter.HandleOutput(send, func(ctx *ToolMiddlewareOutputContext[Unit], a SaveArgs) (int32, error) {
+	adapter := v2.Adapter[golem.Unit]("send-on-push", v.tool, MiddlewareSpec{})
+	_ = adapter.HandleOutput(send, func(ctx *MiddlewareOutputContext[golem.Unit], a SaveArgs) (int32, error) {
 		inv, err := adapter.UnderlyingOutput(ctx, v.push).Call(func(b *PushArgs) {
 			b.Name = "origin"
 			b.In = strings.NewReader(a.Text)
@@ -459,7 +461,7 @@ func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
 	e, _ := r.get("vcs")
 	input := encodeArgs(t, send.ce, func(a *SaveArgs) { a.Text = "abc" })
 	res, sink := runMiddlewareFor(t, r, d, "send-on-push", middlewareRun{
-		path: []string{"send"}, input: input, params: mustTypedValue(t, Unit{}), under: localUnderlying(d, e),
+		path: []string{"send"}, input: input, params: mustTypedValue(t, golem.Unit{}), under: localUnderlying(d, e),
 	})
 	if res.IsErr() {
 		t.Fatalf("the adapted call failed: %+v", res.Err())
@@ -474,8 +476,8 @@ func TestAdapterDropsAnOutputItsCommandDoesNotDeclare(t *testing.T) {
 // tool-level kind is mapped as the other SDKs map it.
 func TestMiddlewareRejectsAndPassesOnFailures(t *testing.T) {
 	v, r, d := newVcs(t)
-	guard := v.tool.Middleware[PolicyParams]("guard", ToolMiddlewareSpec{Version: "1.0.0"})
-	_ = guard.Handle(v.commit, func(ctx *ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+	guard := v.tool.Middleware[PolicyParams]("guard", MiddlewareSpec{Version: "1.0.0"})
+	_ = guard.Handle(v.commit, func(ctx *MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 		switch a.Message {
 		case "":
 			return CommitResult{}, InvalidInput("a commit needs a message")

@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"strings"
 	"testing"
@@ -34,30 +36,30 @@ type LookupArgs struct{ Name string }
 // payload and one carrying none.
 type Lookup struct{}
 
-func declareLookup(r *toolRegistry, d *definitions) (*ToolCommand[Lookup, LookupArgs, string], *ToolErrorCase[NotFoundPayload, Lookup]) {
-	def := defineToolInto[Lookup](r, d, "lookup", ToolSpec{Version: "1.0.0"}, false)
-	notFound := DefineToolError[NotFoundPayload](def, "not-found", ToolErrorSpec{
+func declareLookup(r *toolRegistry, d *definitions) (*Command[Lookup, LookupArgs, string], *ErrorCase[NotFoundPayload, Lookup]) {
+	def := defineToolInto[Lookup](r, d, "lookup", Spec{Version: "1.0.0"}, false)
+	notFound := DefineToolError[NotFoundPayload](def, "not-found", ErrorSpec{
 		Kind: UsageError, ExitCode: 2, Summary: "no such name",
 	})
-	offline := DefineToolError[Unit](def, "offline", ToolErrorSpec{
+	offline := DefineToolError[golem.Unit](def, "offline", ErrorSpec{
 		Kind: RuntimeError, ExitCode: 69, Summary: "the directory is unreachable",
 	})
-	unlisted := DefineToolError[Unit](def, "unlisted", ToolErrorSpec{Kind: RuntimeError})
+	unlisted := DefineToolError[golem.Unit](def, "unlisted", ErrorSpec{Kind: RuntimeError})
 
-	cmd := def.Body[LookupArgs, string](func(a *LookupArgs, s *ToolCommandSpec) {
+	cmd := def.Body[LookupArgs, string](func(a *LookupArgs, s *CommandSpec) {
 		s.Positional(&a.Name)
 		s.Raises(notFound, offline)
 	})
-	_ = cmd.Handle(func(_ *ToolContext, in LookupArgs) (string, error) {
+	_ = cmd.Handle(func(_ *Context, in LookupArgs) (string, error) {
 		switch in.Name {
 		case "missing":
 			return "", notFound.New(NotFoundPayload(in))
 		case "offline":
-			return "", offline.New(Unit{})
+			return "", offline.New(golem.Unit{})
 		case "unlisted":
-			return "", unlisted.New(Unit{})
+			return "", unlisted.New(golem.Unit{})
 		case "raised-by-panic":
-			panic(offline.New(Unit{}))
+			panic(offline.New(golem.Unit{}))
 		case "boom":
 			panic("something went wrong")
 		}
@@ -74,7 +76,7 @@ func buildToolFor(t *testing.T, declare func(r *toolRegistry, d *definitions)) (
 	declare(r, d)
 	tools, ok := r.discover(d)
 	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
 	}
 	if len(tools) != 1 {
 		t.Fatalf("discovered %d tools, want 1", len(tools))
@@ -87,7 +89,7 @@ func encodeArgs[A any](t *testing.T, ce *commandEntry, fill func(*A)) types.Type
 	t.Helper()
 	l, ok := ce.resolve()
 	if !ok {
-		t.Fatalf("command %s is not well-defined: %s", ce.label(), allDefErrors(ce.node.entry.d.Errs))
+		t.Fatalf("command %s is not well-defined: %s", ce.label(), engine.AllErrors(ce.node.entry.d.Errs))
 	}
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
@@ -153,7 +155,7 @@ func TestDeclaredErrorTravelsAsCustomErrorWithItsPayload(t *testing.T) {
 	if custom.Name != "not-found" {
 		t.Errorf("error name %q, want not-found", custom.Name)
 	}
-	payload, perr := TypedValue{wit: custom.Payload}.JSON()
+	payload, perr := typedValue(custom.Payload).JSON()
 	if perr != nil {
 		t.Fatalf("payload is not readable: %v", perr)
 	}
@@ -251,7 +253,7 @@ func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
 		t.Fatalf("invoke failed: %+v", got.Err())
 	}
 	typed := got.Ok().Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
+	out, err := typedValue(typed).JSON()
 	if err != nil || out != "found ada" {
 		t.Errorf("result %v (%v), want found ada", out, err)
 	}
@@ -259,45 +261,23 @@ func TestSuccessStillWorksAlongsideDeclaredErrors(t *testing.T) {
 
 func TestDuplicateErrorCaseIsADefinitionError(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto[Lookup](r, d, "dupe", ToolSpec{}, false)
-	DefineToolError[Unit](def, "same", ToolErrorSpec{})
-	DefineToolError[Unit](def, "same", ToolErrorSpec{})
+	def := defineToolInto[Lookup](r, d, "dupe", Spec{}, false)
+	DefineToolError[golem.Unit](def, "same", ErrorSpec{})
+	DefineToolError[golem.Unit](def, "same", ErrorSpec{})
 	mustDefErr(t, d, "error case already declared")
 }
 
-// TestReflectedCommandErrorsAreDescribed — a caller reading a tool learns its
-// declared failures in the SDK's own terms, payload type included.
-func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
+// TestUniversalContextCarriesTheToolMetadata — a universal middleware reads the
+// wrapped tool's metadata through reflection.ToolOf.
+func TestUniversalContextCarriesTheToolMetadata(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
 	declareLookup(r, d)
 	tools, ok := r.discover(d)
 	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
 	}
-	tool := newReflectedTool("lookup", tools[0])
-	errs := tool.Root().Errors()
-	if len(errs) != 2 {
-		t.Fatalf("errors = %+v, want not-found and offline", errs)
-	}
-	byName := map[string]ReflectedError{}
-	for _, e := range errs {
-		byName[e.Name] = e
-	}
-	notFound, offline := byName["not-found"], byName["offline"]
-	if notFound.Kind != UsageError || notFound.ExitCode != 2 || notFound.Summary != "no such name" {
-		t.Errorf("not-found = %+v", notFound)
-	}
-	if ref, has := notFound.Payload.Get(); !has {
-		t.Error("not-found lost its payload type")
-	} else if _, err := ref.PackJSON(map[string]any{"name": "x"}); err != nil {
-		t.Errorf("the payload type does not accept its own shape: %v", err)
-	}
-	if offline.Kind != RuntimeError || offline.ExitCode != 69 || offline.Payload.IsSome() {
-		t.Errorf("offline = %+v", offline)
-	}
-
-	ctx := &UniversalToolMiddlewareContext[Unit]{inv: &middlewareInvocation{toolName: "lookup", tool: tools[0]}}
-	if md := ctx.ToolMetadata(); md.Name() != "lookup" || md.Version() != "1.0.0" {
-		t.Errorf("ToolMetadata = %q %q", md.Name(), md.Version())
+	ctx := &UniversalMiddlewareContext[golem.Unit]{inv: &middlewareInvocation{toolName: "lookup", tool: tools[0]}}
+	if md := ctx.Metadata(); md.name != "lookup" || md.wit.Version != "1.0.0" {
+		t.Errorf("Metadata = %q %q", md.name, md.wit.Version)
 	}
 }

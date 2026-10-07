@@ -15,6 +15,7 @@
 package golem
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
 	"strings"
 	"testing"
@@ -35,7 +36,7 @@ func TestRemoteAgentIsNotPublished(t *testing.T) {
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
-			t.Fatalf("declaring a remote agent produced definition errors: %s", allDefErrors(errs))
+			t.Fatalf("declaring a remote agent produced definition errors: %s", engine.AllErrors(errs))
 		}
 		if len(types) != 0 {
 			t.Fatalf("a remote agent was published as %d agent type(s); it belongs to another component", len(types))
@@ -61,7 +62,7 @@ func TestRemoteAgentDoesNotDisturbALocalOne(t *testing.T) {
 
 		types, errs := d.discover()
 		if len(errs) != 0 {
-			t.Fatalf("definition errors: %s", allDefErrors(errs))
+			t.Fatalf("definition errors: %s", engine.AllErrors(errs))
 		}
 		if len(types) != 1 || types[0].TypeName != "Local" {
 			t.Fatalf("published %d agent type(s), want only Local", len(types))

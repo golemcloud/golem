@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 	mwExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_tool_middleware_guest"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
 	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
+	"io"
 )
 
-// Tools.
-//
-// A component always exports golem:tool/guest, whether or not it declares any
-// tools, because the interface is part of the world rather than something a
-// component opts into. A component with no tools therefore answers
-// discover-tools with an empty list, and reports an unknown name from get-tool
-// and invoke — which is what a host probing for tools expects, rather than a
-// trap.
+// The exports. The golem package answers them for a component that never
+// imports this package; importing it installs the registry below in their
+// place.
 
 // tools holds the registered tool definitions, keyed by the tool's name (its
 // root command name). It is filled at registration time, before the component
@@ -100,6 +99,38 @@ func (r *toolRegistry) get(name string) (*toolEntry, bool) {
 }
 
 func init() {
+	link.DiscoverTools = func() {
+		toolDefs.discover(defs)
+		toolDefs.discoverMiddlewares(defs)
+	}
+	link.StartToolCall = func(
+		name string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams any, dynamic bool,
+		finish func(witTypes.Option[types.TypedSchemaValue]) (any, error),
+	) (any, error) {
+		call, err := startToolCall(name, path, input, stdin, streams.(Streams))
+		if err != nil {
+			return nil, err
+		}
+		done := func(c toolCall) (any, error) {
+			res, rpcErr := c.wait()
+			if rpcErr != nil {
+				return nil, toolCallErrorFromWit(name, path, *rpcErr)
+			}
+			return finish(res)
+		}
+		if dynamic {
+			return newInvocation(call, func(c toolCall) (golem.Option[golem.TypedValue], error) {
+				out, err := done(c)
+				if err != nil {
+					return golem.None[golem.TypedValue](), err
+				}
+				return out.(golem.Option[golem.TypedValue]), nil
+			}), nil
+		}
+		return newInvocation(call, done), nil
+	}
+	link.ToolMetadata = func(m any) (string, toolCommon.Tool) { return m.(Metadata).name, m.(Metadata).wit }
+
 	toolExports.Exports.DiscoverTools = func() witTypes.Result[[]toolCommon.Tool, types.ToolError] {
 		tools, ok := toolDefs.discover(defs)
 		if !ok {
@@ -174,7 +205,7 @@ func init() {
 		return defs.invokeMiddleware(middlewareName, &middlewareInvocation{
 			toolName:    toolName,
 			tool:        toolMetadata,
-			parameters:  TypedValue{wit: parameters},
+			parameters:  typedValue(parameters),
 			commandPath: commandPath,
 			input:       input,
 			stdin:       newToolStdin(toolExports.Stdin(stdin)),
@@ -186,35 +217,35 @@ func init() {
 	}
 }
 
-// ToolContext is the per-invocation context handed to a command handler. The
+// Context is the per-invocation context handed to a command handler. The
 // arguments, standard input and principal arrive in the argument struct; the
 // context says which command is running.
-type ToolContext struct {
+type Context struct {
 	tool string
 	path []string
 }
 
 // Tool returns the name of the tool being invoked.
-func (c *ToolContext) Tool() string { return c.tool }
+func (c *Context) Tool() string { return c.tool }
 
 // CommandPath returns the path of the command being invoked, from the tool's
 // root; empty means the root command's own body.
-func (c *ToolContext) CommandPath() []string { return append([]string(nil), c.path...) }
+func (c *Context) CommandPath() []string { return append([]string(nil), c.path...) }
 
-// ToolOutputContext is the context handed to a command declared with
+// OutputContext is the context handed to a command declared with
 // OutputCommand, which also carries its outputs.
-type ToolOutputContext struct {
-	ToolContext
-	stdout, stderr *ToolOutput
+type OutputContext struct {
+	Context
+	stdout, stderr *Output
 }
 
 // Stdout returns the command's standard output. The stream is finished when
 // the handler succeeds and failed when it returns an error or panics.
-func (c *ToolOutputContext) Stdout() *ToolOutput { return c.stdout }
+func (c *OutputContext) Stdout() *Output { return c.stdout }
 
 // Stderr returns the command's standard error, finished and failed like
 // Stdout. Bytes on it do not mean the command failed.
-func (c *ToolOutputContext) Stderr() *ToolOutput { return c.stderr }
+func (c *OutputContext) Stderr() *Output { return c.stderr }
 
 // toolDefinitionError reports a broken tool declaration. The WIT has no variant
 // for "this component's own metadata is wrong"; invalid-result is the closest,
@@ -222,5 +253,5 @@ func (c *ToolOutputContext) Stderr() *ToolOutput { return c.stderr }
 // do: its name field is the tool's own declared error case, and a definition
 // failure is not one of those.
 func toolDefinitionError(d *definitions) types.ToolError {
-	return types.MakeToolErrorInvalidResult("tool definition errors:\n" + allDefErrors(d.Errs))
+	return types.MakeToolErrorInvalidResult("tool definition errors:\n" + engine.AllErrors(d.Errs))
 }

@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"reflect"
@@ -42,77 +43,77 @@ import (
 // A command declared with OutputCommand returns a [ToolInvocation] instead,
 // whose standard output and standard error are read while the command runs.
 
-// ToolCallErrorKind classifies a failed tool call.
-type ToolCallErrorKind uint8
+// CallErrorKind classifies a failed tool call.
+type CallErrorKind uint8
 
 const (
-	// ToolCallInvalidInput means the arguments were rejected, by the SDK before
+	// CallInvalidInput means the arguments were rejected, by the SDK before
 	// sending them or by the tool.
-	ToolCallInvalidInput ToolCallErrorKind = iota
-	// ToolCallConstraintViolation means the arguments broke one of the
+	CallInvalidInput CallErrorKind = iota
+	// CallConstraintViolation means the arguments broke one of the
 	// command's declared constraints.
-	ToolCallConstraintViolation
-	// ToolCallDeclaredError means the tool failed with one of its declared
+	CallConstraintViolation
+	// CallDeclaredError means the tool failed with one of its declared
 	// error cases; match it with the case's Match.
-	ToolCallDeclaredError
-	// ToolCallInvalidResult means the tool failed without a declared case, or
+	CallDeclaredError
+	// CallInvalidResult means the tool failed without a declared case, or
 	// returned a result that does not decode.
-	ToolCallInvalidResult
-	// ToolCallUnknownTool means no tool of that name is reachable.
-	ToolCallUnknownTool
-	// ToolCallUnknownCommand means the tool has no such command.
-	ToolCallUnknownCommand
-	// ToolCallDenied means the caller may not invoke the tool.
-	ToolCallDenied
-	// ToolCallCancelled means the call was cancelled before it completed.
-	ToolCallCancelled
-	// ToolCallResourceExhausted means a quota or limit stopped the call.
-	ToolCallResourceExhausted
-	// ToolCallProtocolError means the runtime and the tool disagreed on the
+	CallInvalidResult
+	// CallUnknownTool means no tool of that name is reachable.
+	CallUnknownTool
+	// CallUnknownCommand means the tool has no such command.
+	CallUnknownCommand
+	// CallDenied means the caller may not invoke the tool.
+	CallDenied
+	// CallCancelled means the call was cancelled before it completed.
+	CallCancelled
+	// CallResourceExhausted means a quota or limit stopped the call.
+	CallResourceExhausted
+	// CallProtocolError means the runtime and the tool disagreed on the
 	// wire.
-	ToolCallProtocolError
-	// ToolCallInternalError means the tool's component failed.
-	ToolCallInternalError
+	CallProtocolError
+	// CallInternalError means the tool's component failed.
+	CallInternalError
 )
 
-func (k ToolCallErrorKind) String() string {
+func (k CallErrorKind) String() string {
 	switch k {
-	case ToolCallInvalidInput:
+	case CallInvalidInput:
 		return "invalid input"
-	case ToolCallConstraintViolation:
+	case CallConstraintViolation:
 		return "constraint violation"
-	case ToolCallDeclaredError:
+	case CallDeclaredError:
 		return "declared error"
-	case ToolCallInvalidResult:
+	case CallInvalidResult:
 		return "invalid result"
-	case ToolCallUnknownTool:
+	case CallUnknownTool:
 		return "unknown tool"
-	case ToolCallUnknownCommand:
+	case CallUnknownCommand:
 		return "unknown command"
-	case ToolCallDenied:
+	case CallDenied:
 		return "denied"
-	case ToolCallCancelled:
+	case CallCancelled:
 		return "cancelled"
-	case ToolCallResourceExhausted:
+	case CallResourceExhausted:
 		return "resource exhausted"
-	case ToolCallProtocolError:
+	case CallProtocolError:
 		return "protocol error"
-	case ToolCallInternalError:
+	case CallInternalError:
 		return "internal error"
 	}
 	return "failed"
 }
 
-// ToolCallError is a failed tool call.
-type ToolCallError struct {
+// CallError is a failed tool call.
+type CallError struct {
 	Tool        string
 	CommandPath []string
-	Kind        ToolCallErrorKind
+	Kind        CallErrorKind
 	// Message is the accompanying detail, empty when there is none.
 	Message string
 	// ErrorName is the declared error case, for [ToolCallDeclaredError].
 	ErrorName string
-	payload   TypedValue
+	payload   golem.TypedValue
 	// wire is the tool's own error, kept so a middleware passing the failure
 	// on returns it unchanged.
 	wire *types.ToolError
@@ -120,22 +121,22 @@ type ToolCallError struct {
 
 // Payload returns a declared error's payload; read it with JSON, or decode it
 // with [DecodeTypedValue]. A typed caller matches the case with its Match.
-func (e *ToolCallError) Payload() TypedValue { return e.payload }
+func (e *CallError) Payload() golem.TypedValue { return e.payload }
 
 // InvalidInput rejects a tool invocation's arguments, from a command handler
-// or a middleware; the caller sees a [ToolCallInvalidInput] failure.
+// or a middleware; the caller sees a [CallInvalidInput] failure.
 func InvalidInput(format string, args ...any) error {
-	return &ToolCallError{Kind: ToolCallInvalidInput, Message: fmt.Sprintf(format, args...)}
+	return &CallError{Kind: CallInvalidInput, Message: fmt.Sprintf(format, args...)}
 }
 
 // ConstraintViolation rejects a tool invocation that breaks a rule of the
 // command or of a middleware's policy; the caller sees a
-// [ToolCallConstraintViolation] failure.
+// [CallConstraintViolation] failure.
 func ConstraintViolation(format string, args ...any) error {
-	return &ToolCallError{Kind: ToolCallConstraintViolation, Message: fmt.Sprintf(format, args...)}
+	return &CallError{Kind: CallConstraintViolation, Message: fmt.Sprintf(format, args...)}
 }
 
-func (e *ToolCallError) Error() string {
+func (e *CallError) Error() string {
 	msg := "golem: " + e.Kind.String()
 	if e.Tool != "" {
 		msg = fmt.Sprintf("golem: tool %s %s: %s", e.Tool, commandLabel(e.CommandPath), e.Kind)
@@ -150,43 +151,43 @@ func (e *ToolCallError) Error() string {
 }
 
 // toolCallErrorFromWit classifies the host's tool RPC failure.
-func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *ToolCallError {
-	out := &ToolCallError{Tool: tool, CommandPath: slices.Clone(path)}
+func toolCallErrorFromWit(tool string, path []string, e types.ToolRpcError) *CallError {
+	out := &CallError{Tool: tool, CommandPath: slices.Clone(path)}
 	switch e.Tag() {
 	case types.ToolRpcErrorProtocolError:
-		out.Kind, out.Message = ToolCallProtocolError, e.ProtocolError()
+		out.Kind, out.Message = CallProtocolError, e.ProtocolError()
 	case types.ToolRpcErrorDenied:
-		out.Kind, out.Message = ToolCallDenied, e.Denied()
+		out.Kind, out.Message = CallDenied, e.Denied()
 	case types.ToolRpcErrorNotFound:
-		out.Kind, out.Message = ToolCallUnknownTool, e.NotFound()
+		out.Kind, out.Message = CallUnknownTool, e.NotFound()
 	case types.ToolRpcErrorRemoteInternalError:
-		out.Kind, out.Message = ToolCallInternalError, e.RemoteInternalError()
+		out.Kind, out.Message = CallInternalError, e.RemoteInternalError()
 	case types.ToolRpcErrorCancelled:
-		out.Kind = ToolCallCancelled
+		out.Kind = CallCancelled
 	case types.ToolRpcErrorResourceExhausted:
-		out.Kind, out.Message = ToolCallResourceExhausted, e.ResourceExhausted()
+		out.Kind, out.Message = CallResourceExhausted, e.ResourceExhausted()
 	case types.ToolRpcErrorRemoteToolError:
 		te := e.RemoteToolError()
 		out.wire = &te
 		switch te.Tag() {
 		case types.ToolErrorInvalidToolName:
-			out.Kind, out.Message = ToolCallUnknownTool, te.InvalidToolName()
+			out.Kind, out.Message = CallUnknownTool, te.InvalidToolName()
 		case types.ToolErrorInvalidCommandPath:
-			out.Kind = ToolCallUnknownCommand
+			out.Kind = CallUnknownCommand
 		case types.ToolErrorInvalidInput:
-			out.Kind, out.Message = ToolCallInvalidInput, te.InvalidInput()
+			out.Kind, out.Message = CallInvalidInput, te.InvalidInput()
 		case types.ToolErrorConstraintViolation:
-			out.Kind, out.Message = ToolCallConstraintViolation, te.ConstraintViolation()
+			out.Kind, out.Message = CallConstraintViolation, te.ConstraintViolation()
 		case types.ToolErrorInvalidResult:
-			out.Kind, out.Message = ToolCallInvalidResult, te.InvalidResult()
+			out.Kind, out.Message = CallInvalidResult, te.InvalidResult()
 		case types.ToolErrorCustomError:
 			ce := te.CustomError()
-			out.Kind, out.ErrorName, out.payload = ToolCallDeclaredError, ce.Name, TypedValue{wit: ce.Payload}
+			out.Kind, out.ErrorName, out.payload = CallDeclaredError, ce.Name, typedValue(ce.Payload)
 		default:
-			out.Kind = ToolCallInvalidResult
+			out.Kind = CallInvalidResult
 		}
 	default:
-		out.Kind = ToolCallInternalError
+		out.Kind = CallInternalError
 	}
 	return out
 }
@@ -206,7 +207,7 @@ var startToolCall = startToolCallHost
 
 // Call runs the command and returns its result. fill sets the arguments on a
 // struct that already holds the declared defaults; it may be nil.
-func (c *ToolCommand[T, A, O]) Call(fill func(*A)) (O, error) {
+func (c *Command[T, A, O]) Call(fill func(*A)) (O, error) {
 	var zero O
 	target := c.ce.targetName(c.target)
 	call, err := c.ce.start(target, fillArgs(fill))
@@ -223,14 +224,14 @@ func (c *ToolCommand[T, A, O]) Call(fill func(*A)) (O, error) {
 
 // On targets the command at the tool registered under the client's name,
 // instead of the definition's own.
-func (c *ToolCommand[T, A, O]) On(client *ToolClient[T]) *ToolCommand[T, A, O] {
-	return &ToolCommand[T, A, O]{ce: c.ce, target: client.name}
+func (c *Command[T, A, O]) On(client *Client[T]) *Command[T, A, O] {
+	return &Command[T, A, O]{ce: c.ce, target: client.name}
 }
 
 // Call starts the command and returns the running invocation, whose outputs
 // are read while the command runs. Every output the command declares is
-// requested. fill is as for [ToolCommand.Call].
-func (c *ToolOutputCommand[T, A, O]) Call(fill func(*A)) (*ToolInvocation[O], error) {
+// requested. fill is as for [Command.Call].
+func (c *OutputCommand[T, A, O]) Call(fill func(*A)) (*Invocation[O], error) {
 	target := c.ce.targetName(c.target)
 	call, err := c.ce.start(target, fillArgs(fill))
 	if err != nil {
@@ -241,8 +242,8 @@ func (c *ToolOutputCommand[T, A, O]) Call(fill func(*A)) (*ToolInvocation[O], er
 
 // On targets the command at the tool registered under the client's name,
 // instead of the definition's own.
-func (c *ToolOutputCommand[T, A, O]) On(client *ToolClient[T]) *ToolOutputCommand[T, A, O] {
-	return &ToolOutputCommand[T, A, O]{ce: c.ce, target: client.name}
+func (c *OutputCommand[T, A, O]) On(client *Client[T]) *OutputCommand[T, A, O] {
+	return &OutputCommand[T, A, O]{ce: c.ce, target: client.name}
 }
 
 func fillArgs[A any](fill func(*A)) func(reflect.Value) {
@@ -261,8 +262,8 @@ func (ce *commandEntry) targetName(override string) string {
 	return ce.node.entry.name
 }
 
-func (ce *commandEntry) callError(target string, kind ToolCallErrorKind, format string, args ...any) *ToolCallError {
-	return &ToolCallError{
+func (ce *commandEntry) callError(target string, kind CallErrorKind, format string, args ...any) *CallError {
+	return &CallError{
 		Tool: target, CommandPath: slices.Clone(ce.node.path),
 		Kind: kind, Message: fmt.Sprintf(format, args...),
 	}
@@ -277,13 +278,13 @@ func (ce *commandEntry) start(target string, fill func(reflect.Value)) (toolCall
 }
 
 // streams are the outputs a call of the command requests: every declared one.
-func (ce *commandEntry) streams() ToolStreams {
+func (ce *commandEntry) streams() Streams {
 	st := ce.spec.settings
-	return ToolStreams{Stdout: st.stdout != nil, Stderr: st.stderr != nil}
+	return Streams{Stdout: st.stdout != nil, Stderr: st.stderr != nil}
 }
 
-// ToolStreams selects the outputs a call requests.
-type ToolStreams struct{ Stdout, Stderr bool }
+// Streams selects the outputs a call requests.
+type Streams struct{ Stdout, Stderr bool }
 
 // prepare builds a call's input: the declared defaults, then fill, rendered
 // as the canonical input record, and the standard input field.
@@ -292,7 +293,7 @@ func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.
 	l, ok := ce.resolve()
 	if !ok || ce.node.body != ce {
 		return types.TypedSchemaValue{}, nil, fmt.Errorf("golem: tool %s command %s is not well-defined:\n%s",
-			e.name, ce.label(), allDefErrors(e.d.Errs))
+			e.name, ce.label(), engine.AllErrors(e.d.Errs))
 	}
 	args := reflect.New(ce.argsType).Elem()
 	args.Set(l.defaults)
@@ -302,7 +303,7 @@ func (ce *commandEntry) prepare(target string, fill func(reflect.Value)) (types.
 	if l.stdin != nil {
 		stdin, _ = args.FieldByIndex(l.stdin.path).Interface().(io.Reader)
 		if stdin == nil && !l.stdin.optional {
-			return types.TypedSchemaValue{}, nil, ce.callError(target, ToolCallInvalidInput, "the command requires standard input")
+			return types.TypedSchemaValue{}, nil, ce.callError(target, CallInvalidInput, "the command requires standard input")
 		}
 	}
 	return l.encode(e.d, args), stdin, nil
@@ -315,21 +316,21 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 		return reflect.Value{}, toolCallErrorFromWit(target, ce.node.path, *rpcErr)
 	}
 	out := reflect.New(ce.outType).Elem()
-	if ce.outType == reflect.TypeFor[Unit]() {
+	if ce.outType == reflect.TypeFor[golem.Unit]() {
 		return out, nil
 	}
 	if res.IsNone() {
-		return reflect.Value{}, ce.callError(target, ToolCallInvalidResult, "the command returned no result")
+		return reflect.Value{}, ce.callError(target, CallInvalidResult, "the command returned no result")
 	}
 	tree := res.Some().Value
 	dec := engine.Decoder{Nodes: tree.ValueNodes}
 	if err := ce.node.entry.d.Compile(ce.outType).Decode(&dec, out, tree.Root); err != nil {
-		return reflect.Value{}, ce.callError(target, ToolCallInvalidResult, "%v", err)
+		return reflect.Value{}, ce.callError(target, CallInvalidResult, "%v", err)
 	}
 	return out, nil
 }
 
-// ToolInvocation is a running call of a command with outputs. Take an output
+// Invocation is a running call of a command with outputs. Take an output
 // with Stdout or Stderr and read it while the command runs, then Wait for the
 // result; or Collect everything.
 //
@@ -340,7 +341,7 @@ func (ce *commandEntry) finish(target string, call toolCall) (reflect.Value, err
 //
 // Beneath a middleware, an output the middleware does not take is passed
 // through to its own output of the same name instead of being discarded.
-type ToolInvocation[O any] struct {
+type Invocation[O any] struct {
 	call   toolCall
 	finish func(toolCall) (O, error)
 	stdout invocationOutput
@@ -377,7 +378,7 @@ func (r errReader) Read([]byte) (int, error) { return 0, r.err }
 
 // commandInvocation is a running call of a declared command, whose result is
 // decoded into the command's result type.
-func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *ToolInvocation[O] {
+func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *Invocation[O] {
 	return newInvocation(call, func(c toolCall) (O, error) {
 		var zero O
 		out, err := ce.finish(target, c)
@@ -389,26 +390,26 @@ func commandInvocation[O any](ce *commandEntry, target string, call toolCall) *T
 	})
 }
 
-func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *ToolInvocation[O] {
-	return &ToolInvocation[O]{
+func newInvocation[O any](call toolCall, finish func(toolCall) (O, error)) *Invocation[O] {
+	return &Invocation[O]{
 		call: call, finish: finish,
 		stdout: invocationOutput{r: call.stdout}, stderr: invocationOutput{r: call.stderr},
 	}
 }
 
 // Stdout takes the command's standard output. It ends with io.EOF when the
-// command finishes it and with a [StreamError] when the command fails it; it
+// command finishes it and with a [OutputError] when the command fails it; it
 // is empty for a command without one, and fails with [ErrOutputDrained] after
 // Wait drained it.
-func (i *ToolInvocation[O]) Stdout() io.Reader { return i.stdout.take() }
+func (i *Invocation[O]) Stdout() io.Reader { return i.stdout.take() }
 
 // Stderr takes the command's standard error, like Stdout. Bytes on it do not
 // mean the command failed.
-func (i *ToolInvocation[O]) Stderr() io.Reader { return i.stderr.take() }
+func (i *Invocation[O]) Stderr() io.Reader { return i.stderr.take() }
 
 // Wait awaits the command's result, draining every output that was not taken
-// meanwhile (see [ToolInvocation]).
-func (i *ToolInvocation[O]) Wait() (O, error) {
+// meanwhile (see [Invocation]).
+func (i *Invocation[O]) Wait() (O, error) {
 	if i.done {
 		return i.out, i.err
 	}
@@ -416,16 +417,16 @@ func (i *ToolInvocation[O]) Wait() (O, error) {
 	var relays []chan error
 	for _, o := range []struct {
 		out *invocationOutput
-		dst func(*middlewareInvocation) *ToolOutput
+		dst func(*middlewareInvocation) *Output
 	}{
-		{&i.stdout, func(m *middlewareInvocation) *ToolOutput { return m.stdout }},
-		{&i.stderr, func(m *middlewareInvocation) *ToolOutput { return m.stderr }},
+		{&i.stdout, func(m *middlewareInvocation) *Output { return m.stdout }},
+		{&i.stderr, func(m *middlewareInvocation) *Output { return m.stderr }},
 	} {
 		if o.out.taken || o.out.drained || o.out.r == nil {
 			continue
 		}
 		o.out.drained = true
-		var dst *ToolOutput
+		var dst *Output
 		if i.passThrough != nil {
 			dst = o.dst(i.passThrough)
 		}
@@ -449,7 +450,7 @@ func (i *ToolInvocation[O]) Wait() (O, error) {
 // dst or the command dst belongs to does not declare it. A failure of the
 // output itself is passed on as dst's terminal; a failure writing dst cancels
 // the call and is returned.
-func passOn(dst *ToolOutput, src *byteReader, cancel func()) error {
+func passOn(dst *Output, src *byteReader, cancel func()) error {
 	if dst == nil || dst.undeclared != "" {
 		_, _ = io.Copy(io.Discard, src)
 		return nil
@@ -464,7 +465,7 @@ func passOn(dst *ToolOutput, src *byteReader, cancel func()) error {
 				return werr
 			}
 		}
-		var se *StreamError
+		var se *OutputError
 		switch {
 		case err == nil:
 		case errors.Is(err, io.EOF):
@@ -473,17 +474,17 @@ func passOn(dst *ToolOutput, src *byteReader, cancel func()) error {
 			dst.fail(se.Failure)
 			return nil
 		default:
-			dst.fail(StreamFailed(err.Error()))
+			dst.fail(OutputFailed(err.Error()))
 			return nil
 		}
 	}
 }
 
 // Cancel asks the runtime to cancel the call.
-func (i *ToolInvocation[O]) Cancel() { i.call.cancel() }
+func (i *Invocation[O]) Cancel() { i.call.cancel() }
 
-// ToolCollected is everything a call produced.
-type ToolCollected[O any] struct {
+// Collected is everything a call produced.
+type Collected[O any] struct {
 	Result O
 	Stdout []byte
 	Stderr []byte
@@ -492,8 +493,8 @@ type ToolCollected[O any] struct {
 // Collect reads every output to its end while awaiting the result. A failed
 // result is reported before a failed standard output, and that before a
 // failed standard error; what was read is returned either way.
-func (i *ToolInvocation[O]) Collect() (ToolCollected[O], error) {
-	var c ToolCollected[O]
+func (i *Invocation[O]) Collect() (Collected[O], error) {
+	var c Collected[O]
 	read := func(r io.Reader, into *[]byte) chan error {
 		done := make(chan error, 1)
 		go func() {

@@ -197,7 +197,7 @@ func init() {
 	guestExports.Exports.DiscoverAgentTypes = func() witTypes.Result[[]common.AgentType, common.AgentError] {
 		types, ds := defs.discover()
 		if len(ds) > 0 {
-			return witTypes.Err[[]common.AgentType](customError(allDefErrors(ds)))
+			return witTypes.Err[[]common.AgentType](customError(engine.AllErrors(ds)))
 		}
 		return witTypes.Ok[[]common.AgentType, common.AgentError](types)
 	}

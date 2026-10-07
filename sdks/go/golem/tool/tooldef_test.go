@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"io"
 	"slices"
 	"strings"
@@ -46,11 +48,11 @@ type CommitArgs struct {
 	Tags    map[string]string
 	Message string
 	Paths   []string
-	Author  Option[string]
+	Author  golem.Option[string]
 	Branch  string
 	Include []string
 	Signoff bool
-	Caller  Principal
+	Caller  golem.Principal
 }
 
 type CommitResult struct {
@@ -72,25 +74,25 @@ type Rejected struct{ Reason string }
 type Vcs struct{}
 
 type vcsTool struct {
-	tool       *ToolDefinition[Vcs]
-	commit     *ToolCommand[Vcs, CommitArgs, CommitResult]
-	push       *ToolOutputCommand[Vcs, PushArgs, int32]
-	errNothing *ToolErrorCase[Unit, Vcs]
-	errReject  *ToolErrorCase[Rejected, Vcs]
+	tool       *Definition[Vcs]
+	commit     *Command[Vcs, CommitArgs, CommitResult]
+	push       *OutputCommand[Vcs, PushArgs, int32]
+	errNothing *ErrorCase[golem.Unit, Vcs]
+	errReject  *ErrorCase[Rejected, Vcs]
 	seen       *CommitArgs
 }
 
 func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 	v := &vcsTool{}
-	v.tool = defineToolInto[Vcs](r, d, "vcs", ToolSpec{Version: "1.2.0", Summary: "A tiny version control tool", RequiresFilesystem: true}, false)
-	v.tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) {
+	v.tool = defineToolInto[Vcs](r, d, "vcs", Spec{Version: "1.2.0", Summary: "A tiny version control tool", RequiresFilesystem: true}, false)
+	v.tool.Globals[VcsGlobals](func(g *VcsGlobals, s *GlobalsSpec) {
 		s.Option(&g.Dir).Short('C').Default(".").Doc("working directory")
 		s.CountFlag(&g.Verbose).Short('v').Max(3)
 	})
-	v.errNothing = DefineToolError[Unit](v.tool, "nothing-to-commit", ToolErrorSpec{Kind: RuntimeError, ExitCode: 1})
-	v.errReject = DefineToolError[Rejected](v.tool, "rejected", ToolErrorSpec{Kind: RuntimeError, ExitCode: 3})
+	v.errNothing = DefineToolError[golem.Unit](v.tool, "nothing-to-commit", ErrorSpec{Kind: RuntimeError, ExitCode: 1})
+	v.errReject = DefineToolError[Rejected](v.tool, "rejected", ErrorSpec{Kind: RuntimeError, ExitCode: 3})
 
-	v.commit = v.tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs, s *ToolCommandSpec) {
+	v.commit = v.tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs, s *CommandSpec) {
 		s.Doc("Record changes")
 		s.Aliases("ci")
 		amend := s.Flag(&a.Amend)
@@ -109,21 +111,21 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 		s.RequiresAny(message, include)
 		s.Implies(amend, author)
 		s.Forbids(branch.ValueIs("release"), amend, s.Present(&a.Verbose))
-		s.Mutex(s.ValueIs(&a.Author, Some("bot")), s.ValueIs(&a.Dir, "/"))
+		s.Mutex(s.ValueIs(&a.Author, golem.Some("bot")), s.ValueIs(&a.Dir, "/"))
 	})
-	_ = v.commit.Handle(func(ctx *ToolContext, a CommitArgs) (CommitResult, error) {
+	_ = v.commit.Handle(func(ctx *Context, a CommitArgs) (CommitResult, error) {
 		v.seen = &a
 		if len(a.Paths) == 0 && !a.Amend {
-			return CommitResult{}, v.errNothing.New(Unit{})
+			return CommitResult{}, v.errNothing.New(golem.Unit{})
 		}
 		return CommitResult{Summary: ctx.Tool() + " " + strings.Join(ctx.CommandPath(), " ") + ": " + a.Message, Files: int32(len(a.Paths))}, nil
 	})
 
 	remote := v.tool.Group("remote").Doc("Manage remotes").Aliases("r")
-	remote.Globals[RemoteGlobals](func(g *RemoteGlobals, s *ToolGlobalsSpec) {
+	remote.Globals[RemoteGlobals](func(g *RemoteGlobals, s *GlobalsSpec) {
 		s.Option(&g.Timeout).Default(30)
 	})
-	v.push = remote.OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *ToolCommandSpec) {
+	v.push = remote.OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *CommandSpec) {
 		s.Positional(&a.Name)
 		s.Flag(&a.Force).Short('f')
 		s.Stdin(&a.In).Optional().Mime("text/plain")
@@ -131,12 +133,12 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 		s.Stderr().Doc("progress")
 		s.Raises(v.errReject)
 	})
-	_ = v.push.Handle(func(ctx *ToolOutputContext, a PushArgs) (int32, error) {
+	_ = v.push.Handle(func(ctx *OutputContext, a PushArgs) (int32, error) {
 		switch a.Name {
 		case "forbidden":
 			return 0, v.errReject.New(Rejected{Reason: "protected remote"})
 		case "undeclared":
-			return 0, v.errNothing.New(Unit{})
+			return 0, v.errNothing.New(golem.Unit{})
 		case "plain":
 			return 0, errors.New("disk full")
 		case "panic":
@@ -185,12 +187,12 @@ func (s *readerSource) WriterDropped() bool { return s.done }
 // loopback routes typed calls to r's dispatcher instead of the host, so a
 // native test runs the whole path: defaults, encoding, the host's canonical
 // record, decoding and the result. It records the calls it sees.
-func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal) *[]types.TypedSchemaValue {
+func loopback(t *testing.T, r *toolRegistry, d *definitions, principal golem.Principal) *[]types.TypedSchemaValue {
 	t.Helper()
 	var calls []types.TypedSchemaValue
 	prev := startToolCall
 	t.Cleanup(func() { startToolCall = prev })
-	startToolCall = func(tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams ToolStreams) (toolCall, error) {
+	startToolCall = func(tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams Streams) (toolCall, error) {
 		calls = append(calls, input)
 		e, ok := r.get(tool)
 		if !ok {
@@ -205,7 +207,7 @@ func loopback(t *testing.T, r *toolRegistry, d *definitions, principal Principal
 // caller, and hands back what the caller sees.
 func localCall(
 	d *definitions, e *toolEntry, path []string, input types.TypedSchemaValue,
-	stdin io.Reader, streams ToolStreams, principal Principal,
+	stdin io.Reader, streams Streams, principal golem.Principal,
 ) toolCall {
 	in := &byteReader{absent: absentStdin}
 	if stdin != nil {
@@ -253,7 +255,7 @@ func newVcs(t *testing.T) (*vcsTool, *toolRegistry, *definitions) {
 	r, d := newToolRegistry(), newDefinitions()
 	v := declareVcs(r, d)
 	if _, ok := r.discover(d); !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
+		t.Fatalf("tool discovery failed: %s", engine.AllErrors(d.Errs))
 	}
 	return v, r, d
 }
@@ -401,7 +403,7 @@ func refNames(refs []toolCommon.Ref) string {
 // travel for what fill leaves alone.
 func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, AgentPrincipal{AgentID: AgentID{AgentID: "caller()"}})
+	loopback(t, r, d, golem.AgentPrincipal{AgentID: golem.AgentID{AgentID: "caller()"}})
 
 	res, err := v.commit.Call(func(a *CommitArgs) {
 		a.Message = "fix the build"
@@ -424,7 +426,7 @@ func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 		!slices.Equal(seen.Include, []string{"x"}) || seen.Author.IsSome() {
 		t.Errorf("arguments did not arrive: %+v", seen)
 	}
-	if p, ok := seen.Caller.(AgentPrincipal); !ok || p.AgentID.AgentID != "caller()" {
+	if p, ok := seen.Caller.(golem.AgentPrincipal); !ok || p.AgentID.AgentID != "caller()" {
 		t.Errorf("principal %+v", seen.Caller)
 	}
 }
@@ -435,7 +437,7 @@ func TestToolCallRoundTripsInCanonicalOrder(t *testing.T) {
 // decodes the same way.
 func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 	v, r, d := newVcs(t)
-	calls := loopback(t, r, d, AnonymousPrincipal{})
+	calls := loopback(t, r, d, golem.AnonymousPrincipal{})
 	if _, err := v.commit.Call(func(a *CommitArgs) { a.Message = "m"; a.Amend = true }); err != nil {
 		t.Fatal(err)
 	}
@@ -449,46 +451,15 @@ func TestToolCallInputIsTheCanonicalRecord(t *testing.T) {
 	if !slices.Equal(sentNames, want) {
 		t.Errorf("sent fields %v, want %v", sentNames, want)
 	}
-
-	e, _ := r.get("vcs")
-	tool, _ := d.buildTool(e)
-	cmd, ok := newReflectedTool("vcs", tool).Command([]string{"commit"})
-	if !ok {
-		t.Fatal("reflection does not find commit")
-	}
-	input, err := cmd.Input()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recordFieldNames(input); !slices.Equal(got, want) {
-		t.Errorf("reflected fields %v, want %v", got, want)
-	}
-
-	packed, err := cmd.pack(map[string]any{
-		"dir": "/src", "verbose": 1, "branch": "dev", "paths": []any{"z"}, "message": "via reflection",
-		"author": "ann", "include": []any{}, "tags": []any{}, "amend": false, "signoff": false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if root := packed.Graph.TypeNodes[packed.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
-		t.Fatal("reflection's input graph root is not a record")
-	}
-	if got := d.invokeCommand(e, []string{"ci"}, packed, nil, hostOutputs{}, nil); got.IsErr() {
-		t.Fatalf("invoke failed: %+v", got.Err())
-	}
-	if s := v.seen; s.Dir != "/src" || s.Branch != "dev" || s.Author.Unwrap() != "ann" || s.Signoff || s.Verbose != 1 {
-		t.Errorf("reflection-packed arguments decoded as %+v", s)
-	}
 }
 
 func TestToolCallReportsDeclaredErrors(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousPrincipal{})
 
 	_, err := v.commit.Call(func(a *CommitArgs) { a.Message = "nothing" })
-	var ce *ToolCallError
-	if !errors.As(err, &ce) || ce.Kind != ToolCallDeclaredError || ce.ErrorName != "nothing-to-commit" {
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Kind != CallDeclaredError || ce.ErrorName != "nothing-to-commit" {
 		t.Fatalf("got %v", err)
 	}
 	if _, ok := v.errNothing.Match(err); !ok {
@@ -513,7 +484,7 @@ func TestToolCallReportsDeclaredErrors(t *testing.T) {
 
 func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousPrincipal{})
 	for name, want := range map[string]string{
 		"undeclared": `undeclared error "nothing-to-commit"`,
 		"plain":      "command remote push failed: disk full",
@@ -524,8 +495,8 @@ func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err = inv.Wait()
-		var ce *ToolCallError
-		if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidResult || !strings.Contains(ce.Message, want) {
+		var ce *CallError
+		if !errors.As(err, &ce) || ce.Kind != CallInvalidResult || !strings.Contains(ce.Message, want) {
 			t.Errorf("%s: got %v, want an invalid result mentioning %q", name, err, want)
 		}
 	}
@@ -533,7 +504,7 @@ func TestToolHandlerFailuresAreInvalidResults(t *testing.T) {
 
 func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousPrincipal{})
 
 	inv, err := v.push.Call(func(a *PushArgs) {
 		a.Name = "origin"
@@ -552,7 +523,7 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 
 	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
 	_, err = io.ReadAll(inv.Stdout())
-	var se *StreamError
+	var se *OutputError
 	if !errors.As(err, &se) || se.Failure.String() != "failed: command remote push panicked: handler gave up" {
 		t.Errorf("stdout of a panicking command ended with %v", err)
 	}
@@ -563,7 +534,7 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 
 func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
 	v, r, d := newVcs(t)
-	loopback(t, r, d, AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousPrincipal{})
 
 	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "origin"; a.In = strings.NewReader("abc") })
 	if err != nil {
@@ -591,27 +562,27 @@ type EchoArgs struct{ Text string }
 
 func TestOutputsFollowTheirDeclarations(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	tool := defineToolInto[Echo](r, d, "echo", ToolSpec{}, false)
+	tool := defineToolInto[Echo](r, d, "echo", Spec{}, false)
 	var attached, undeclared error
-	echo := tool.OutputCommand[EchoArgs, Unit]("say", func(a *EchoArgs, s *ToolCommandSpec) {
+	echo := tool.OutputCommand[EchoArgs, golem.Unit]("say", func(a *EchoArgs, s *CommandSpec) {
 		s.Positional(&a.Text)
 		s.Stdout().Required()
 		s.Stderr()
 	})
-	_ = echo.Handle(func(ctx *ToolOutputContext, a EchoArgs) (Unit, error) {
+	_ = echo.Handle(func(ctx *OutputContext, a EchoArgs) (golem.Unit, error) {
 		if !ctx.Stderr().Attached() {
 			attached = errors.New("stderr not attached")
 		}
 		if _, err := io.WriteString(ctx.Stderr(), "note"); err != nil {
-			return Unit{}, err
+			return golem.Unit{}, err
 		}
 		_, err := io.WriteString(ctx.Stdout(), a.Text)
-		return Unit{}, err
+		return golem.Unit{}, err
 	})
-	plain := tool.Command[EchoArgs, Unit]("quiet", func(a *EchoArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
-	_ = plain.Handle(func(*ToolContext, EchoArgs) (Unit, error) { return Unit{}, nil })
+	plain := tool.Command[EchoArgs, golem.Unit]("quiet", func(a *EchoArgs, s *CommandSpec) { s.Positional(&a.Text) })
+	_ = plain.Handle(func(*Context, EchoArgs) (golem.Unit, error) { return golem.Unit{}, nil })
 	if _, ok := r.discover(d); !ok {
-		t.Fatalf("discovery failed: %s", allDefErrors(d.Errs))
+		t.Fatalf("discovery failed: %s", engine.AllErrors(d.Errs))
 	}
 	e, _ := r.get("echo")
 	input := encodeArgs(t, echo.ce, func(a *EchoArgs) { a.Text = "hi" })
@@ -629,7 +600,7 @@ func TestOutputsFollowTheirDeclarations(t *testing.T) {
 		t.Errorf("a required stdout left out gave %+v", res)
 	}
 
-	ctx := &ToolOutputContext{}
+	ctx := &OutputContext{}
 	ctx.stdout, ctx.stderr, _ = plain.ce.outputsFor(hostOutputs{})
 	if _, undeclared = ctx.Stdout().Write([]byte("x")); undeclared == nil || !strings.Contains(undeclared.Error(), "declares no stdout") {
 		t.Errorf("writing an undeclared stdout gave %v", undeclared)
@@ -642,17 +613,17 @@ type Cat struct{}
 
 func TestRequiredStdinIsRefusedBeforeSending(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	tool := defineToolInto[Cat](r, d, "cat", ToolSpec{}, false)
-	cat := tool.Body[CatArgs, string](func(a *CatArgs, s *ToolCommandSpec) { s.Stdin(&a.In) })
-	_ = cat.Handle(func(_ *ToolContext, a CatArgs) (string, error) {
+	tool := defineToolInto[Cat](r, d, "cat", Spec{}, false)
+	cat := tool.Body[CatArgs, string](func(a *CatArgs, s *CommandSpec) { s.Stdin(&a.In) })
+	_ = cat.Handle(func(_ *Context, a CatArgs) (string, error) {
 		data, err := io.ReadAll(a.In)
 		return string(data), err
 	})
-	calls := loopback(t, r, d, AnonymousPrincipal{})
+	calls := loopback(t, r, d, golem.AnonymousPrincipal{})
 
 	_, err := cat.Call(nil)
-	var ce *ToolCallError
-	if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidInput || len(*calls) != 0 {
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Kind != CallInvalidInput || len(*calls) != 0 {
 		t.Errorf("got %v after %d calls", err, len(*calls))
 	}
 	got, err := cat.Call(func(a *CatArgs) { a.In = strings.NewReader("meow") })
@@ -680,8 +651,8 @@ func TestToolInvocationRejectsUnknownCommandsAndMalformedInput(t *testing.T) {
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidCommandPath {
 		t.Error("a group without a body was invoked")
 	}
-	short, _ := EncodeTypedValue(struct{ Message string }{"m"})
-	res = d.invokeCommand(e, []string{"commit"}, short.wit, nil, none, nil)
+	short, _ := golem.EncodeTypedValue(struct{ Message string }{"m"})
+	res = d.invokeCommand(e, []string{"commit"}, witOf(short), nil, none, nil)
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
 		t.Error("a record with the wrong field count was accepted")
 	}
@@ -696,8 +667,8 @@ type (
 type BadArgs struct {
 	Name   string
 	Other  string
-	Opt    Option[string]
-	Pos    Option[string]
+	Opt    golem.Option[string]
+	Pos    golem.Option[string]
 	Req    string
 	Tail1  []string
 	Tail2  []string
@@ -713,91 +684,91 @@ type EmbedArgs struct {
 
 func TestToolDeclarationErrors(t *testing.T) {
 	cases := map[string]struct {
-		declare func(tool *ToolDefinition[Tst])
+		declare func(tool *Definition[Tst])
 		want    string
 	}{
-		"unbound field": {func(tool *ToolDefinition[Tst]) {
+		"unbound field": {func(tool *Definition[Tst]) {
 			c := tool.Command[SingleArgs, string]("x", nil)
-			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
 		}, "field Name is not bound"},
-		"bound twice": {func(tool *ToolDefinition[Tst]) {
-			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"bound twice": {func(tool *Definition[Tst]) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Positional(&a.Name)
 			})
 		}, "field Name is bound twice"},
-		"foreign pointer": {func(tool *ToolDefinition[Tst]) {
+		"foreign pointer": {func(tool *Definition[Tst]) {
 			var elsewhere string
-			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&elsewhere)
 			})
 		}, "does not address a field"},
-		"optional with default": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
-				s.Option(&a.Opt).Default(Some("x"))
+		"optional with default": {func(tool *Definition[Tst]) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *CommandSpec) {
+				s.Option(&a.Opt).Default(golem.Some("x"))
 			})
-			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, BadArgs) (string, error) { return "", nil })
 		}, "opt is optional (golem.Option) and cannot also have a default"},
-		"required after optional": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
+		"required after optional": {func(tool *Definition[Tst]) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *CommandSpec) {
 				s.Positional(&a.Pos)
 				s.Positional(&a.Req)
 			})
-			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, BadArgs) (string, error) { return "", nil })
 		}, "the required positional req follows the optional positional pos"},
-		"two tails": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *ToolCommandSpec) {
+		"two tails": {func(tool *Definition[Tst]) {
+			c := tool.Command[BadArgs, string]("x", func(a *BadArgs, s *CommandSpec) {
 				s.Tail(&a.Tail1)
 				s.Tail(&a.Tail2)
 			})
-			_ = c.Handle(func(*ToolContext, BadArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, BadArgs) (string, error) { return "", nil })
 		}, "binds 2 tails"},
-		"missing globals embedding": {func(tool *ToolDefinition[Tst]) {
-			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
-			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
-			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
-		}, "must embed golem.VcsGlobals"},
-		"global bound by the command": {func(tool *ToolDefinition[Tst]) {
-			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *ToolGlobalsSpec) { s.Option(&g.Dir) })
-			c := tool.Command[EmbedArgs, string]("x", func(a *EmbedArgs, s *ToolCommandSpec) {
+		"missing globals embedding": {func(tool *Definition[Tst]) {
+			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *GlobalsSpec) { s.Option(&g.Dir) })
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) { s.Option(&a.Name) })
+			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
+		}, "must embed tool.VcsGlobals"},
+		"global bound by the command": {func(tool *Definition[Tst]) {
+			tool.Globals[VcsGlobals](func(g *VcsGlobals, s *GlobalsSpec) { s.Option(&g.Dir) })
+			c := tool.Command[EmbedArgs, string]("x", func(a *EmbedArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Option(&a.Dir)
 			})
-			_ = c.Handle(func(*ToolContext, EmbedArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, EmbedArgs) (string, error) { return "", nil })
 		}, "field Dir belongs to the embedded globals"},
-		"formatters on a unit result": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[SingleArgs, Unit]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"formatters on a unit result": {func(tool *Definition[Tst]) {
+			c := tool.Command[SingleArgs, golem.Unit]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Formatters("json")
 			})
-			_ = c.Handle(func(*ToolContext, SingleArgs) (Unit, error) { return Unit{}, nil })
+			_ = c.Handle(func(*Context, SingleArgs) (golem.Unit, error) { return golem.Unit{}, nil })
 		}, "declares formatters but returns no result"},
-		"undeclared default formatter": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"undeclared default formatter": {func(tool *Definition[Tst]) {
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Formatters("json")
 				s.DefaultFormatter("yaml")
 			})
-			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
 		}, `defaults to the formatter "yaml"`},
-		"an output on a plain command": {func(tool *ToolDefinition[Tst]) {
-			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"an output on a plain command": {func(tool *Definition[Tst]) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Stderr().Mime("text/plain")
 			})
 		}, "Stderr on a command without outputs; declare it with OutputCommand"},
-		"an output command without outputs": {func(tool *ToolDefinition[Tst]) {
-			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
+		"an output command without outputs": {func(tool *Definition[Tst]) {
+			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) { s.Option(&a.Name) })
 		}, "an OutputCommand declares no output"},
-		"an output declared twice": {func(tool *ToolDefinition[Tst]) {
-			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"an output declared twice": {func(tool *Definition[Tst]) {
+			tool.OutputCommand[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Stdout()
 				s.Stdout()
 			})
 		}, "Stdout is called twice"},
-		"value-is on a flag": {func(tool *ToolDefinition[Tst]) {
-			c := tool.Command[CommitArgs, string]("x", func(a *CommitArgs, s *ToolCommandSpec) {
+		"value-is on a flag": {func(tool *Definition[Tst]) {
+			c := tool.Command[CommitArgs, string]("x", func(a *CommitArgs, s *CommandSpec) {
 				s.Option(&a.Message)
 				s.Option(&a.Author)
 				s.Positional(&a.Branch)
@@ -808,34 +779,34 @@ func TestToolDeclarationErrors(t *testing.T) {
 				s.RequiresAll(s.ValueIs(&a.Amend, true))
 				s.Flag(&a.Amend)
 			})
-			_ = c.Handle(func(*ToolContext, CommitArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, CommitArgs) (string, error) { return "", nil })
 		}, "compares the flag amend with a value"},
-		"no handler": {func(tool *ToolDefinition[Tst]) {
-			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) { s.Option(&a.Name) })
+		"no handler": {func(tool *Definition[Tst]) {
+			tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) { s.Option(&a.Name) })
 		}, "command x has no handler"},
-		"duplicate command": {func(tool *ToolDefinition[Tst]) {
+		"duplicate command": {func(tool *Definition[Tst]) {
 			tool.Group("x")
 			tool.Group("x")
 		}, "command already declared: x"},
-		"foreign error case": {func(tool *ToolDefinition[Tst]) {
-			other := defineToolInto[Other](tool.entry.r, tool.entry.d, "other", ToolSpec{}, false)
-			errOther := DefineToolError[Unit](other, "boom", ToolErrorSpec{})
-			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *ToolCommandSpec) {
+		"foreign error case": {func(tool *Definition[Tst]) {
+			other := defineToolInto[Other](tool.entry.r, tool.entry.d, "other", Spec{}, false)
+			errOther := DefineToolError[golem.Unit](other, "boom", ErrorSpec{})
+			c := tool.Command[SingleArgs, string]("x", func(a *SingleArgs, s *CommandSpec) {
 				s.Option(&a.Name)
 				s.Raises(errOther)
 			})
-			_ = c.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
+			_ = c.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
 		}, "raises boom, an error declared on the tool other"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			r, d := newToolRegistry(), newDefinitions()
-			tool := defineToolInto[Tst](r, d, "t", ToolSpec{}, false)
+			tool := defineToolInto[Tst](r, d, "t", Spec{}, false)
 			tc.declare(tool)
 			if _, ok := r.discover(d); ok && len(d.Errs) == 0 {
 				t.Fatalf("no definition error, want %q", tc.want)
 			}
-			if msg := allDefErrors(d.Errs); !strings.Contains(msg, tc.want) {
+			if msg := engine.AllErrors(d.Errs); !strings.Contains(msg, tc.want) {
 				t.Errorf("errors:\n%s\nwant one containing %q", msg, tc.want)
 			}
 		})
@@ -844,16 +815,16 @@ func TestToolDeclarationErrors(t *testing.T) {
 
 func TestRemoteToolsAreDeclaredForCallingOnly(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	remote := defineToolInto[Elsewhere](r, d, "elsewhere", ToolSpec{}, true)
-	cmd := remote.Command[SingleArgs, string]("run", func(a *SingleArgs, s *ToolCommandSpec) { s.Positional(&a.Name) })
+	remote := defineToolInto[Elsewhere](r, d, "elsewhere", Spec{}, true)
+	cmd := remote.Command[SingleArgs, string]("run", func(a *SingleArgs, s *CommandSpec) { s.Positional(&a.Name) })
 	if tools, ok := r.discover(d); !ok || len(tools) != 0 {
 		t.Errorf("a remote tool was exported: %d tools", len(tools))
 	}
 	if _, ok := d.buildTool(remote.entry); !ok {
-		t.Errorf("a remote tool without handlers is not well-defined: %s", allDefErrors(d.Errs))
+		t.Errorf("a remote tool without handlers is not well-defined: %s", engine.AllErrors(d.Errs))
 	}
-	_ = cmd.Handle(func(*ToolContext, SingleArgs) (string, error) { return "", nil })
-	if msg := allDefErrors(d.Errs); !strings.Contains(msg, "belongs to a remote tool") {
+	_ = cmd.Handle(func(*Context, SingleArgs) (string, error) { return "", nil })
+	if msg := engine.AllErrors(d.Errs); !strings.Contains(msg, "belongs to a remote tool") {
 		t.Errorf("handling a remote command was accepted: %s", msg)
 	}
 }
@@ -881,19 +852,19 @@ func TestToolCallOutsideAComponentSaysSo(t *testing.T) {
 // with its kind and message.
 func TestAHandlerRejectsItsInput(t *testing.T) {
 	r, d := newToolRegistry(), newDefinitions()
-	tool := defineToolInto[Echo](r, d, "echo", ToolSpec{}, false)
-	say := tool.Command[EchoArgs, string]("say", func(a *EchoArgs, s *ToolCommandSpec) { s.Positional(&a.Text) })
-	_ = say.Handle(func(_ *ToolContext, a EchoArgs) (string, error) {
+	tool := defineToolInto[Echo](r, d, "echo", Spec{}, false)
+	say := tool.Command[EchoArgs, string]("say", func(a *EchoArgs, s *CommandSpec) { s.Positional(&a.Text) })
+	_ = say.Handle(func(_ *Context, a EchoArgs) (string, error) {
 		if strings.TrimSpace(a.Text) == "" {
 			return "", InvalidInput("nothing to say")
 		}
 		return a.Text, nil
 	})
-	loopback(t, r, d, AnonymousPrincipal{})
+	loopback(t, r, d, golem.AnonymousPrincipal{})
 
 	_, err := say.Call(func(a *EchoArgs) { a.Text = " " })
-	var ce *ToolCallError
-	if !errors.As(err, &ce) || ce.Kind != ToolCallInvalidInput || ce.Message != "nothing to say" {
+	var ce *CallError
+	if !errors.As(err, &ce) || ce.Kind != CallInvalidInput || ce.Message != "nothing to say" {
 		t.Fatalf("a rejected call gave %v", err)
 	}
 	if got := InvalidInput("bad %d", 1).Error(); got != "golem: invalid input: bad 1" {

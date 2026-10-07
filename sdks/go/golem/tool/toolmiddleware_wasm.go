@@ -14,7 +14,7 @@
 
 //go:build wasip1
 
-package golem
+package tool
 
 import (
 	"errors"
@@ -96,8 +96,8 @@ func pumpStream(w *witTypes.StreamWriter[witTypes.Result[[]uint8, streams.ByteSt
 		case errors.Is(err, io.EOF):
 			return
 		case err != nil:
-			failure := StreamFailed(err.Error())
-			var se *StreamError
+			failure := OutputFailed(err.Error())
+			var se *OutputError
 			if errors.As(err, &se) {
 				failure = se.Failure
 			}

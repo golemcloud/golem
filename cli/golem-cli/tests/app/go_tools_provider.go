@@ -10,26 +10,27 @@ import (
 	"strings"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 )
 
 // Vcs is the tool's identity type.
 type Vcs struct{}
 
-var Tool = golem.DefineTool[Vcs]("vcs", golem.ToolSpec{Version: "1.0.0", Summary: "A tiny version control tool"})
+var Tool = tool.DefineTool[Vcs]("vcs", tool.Spec{Version: "1.0.0", Summary: "A tiny version control tool"})
 
 type Globals struct{ Dir string }
 
-var _ = Tool.Globals[Globals](func(g *Globals, s *golem.ToolGlobalsSpec) {
+var _ = Tool.Globals[Globals](func(g *Globals, s *tool.GlobalsSpec) {
 	s.Option(&g.Dir).Short('C').Default(".")
 })
 
-var ErrNothingToCommit = golem.DefineToolError[golem.Unit](Tool, "nothing-to-commit",
-	golem.ToolErrorSpec{Kind: golem.RuntimeError, ExitCode: 1})
+var ErrNothingToCommit = tool.DefineToolError[golem.Unit](Tool, "nothing-to-commit",
+	tool.ErrorSpec{Kind: tool.RuntimeError, ExitCode: 1})
 
 type Rejected struct{ Reason string }
 
-var ErrRejected = golem.DefineToolError[Rejected](Tool, "rejected",
-	golem.ToolErrorSpec{Kind: golem.RuntimeError, ExitCode: 3})
+var ErrRejected = tool.DefineToolError[Rejected](Tool, "rejected",
+	tool.ErrorSpec{Kind: tool.RuntimeError, ExitCode: 3})
 
 type CommitArgs struct {
 	Globals
@@ -46,7 +47,7 @@ type CommitResult struct {
 	Files   int32
 }
 
-var Commit = Tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs, s *golem.ToolCommandSpec) {
+var Commit = Tool.Command[CommitArgs, CommitResult]("commit", func(a *CommitArgs, s *tool.CommandSpec) {
 	s.Doc("Record changes")
 	s.Tail(&a.Paths)
 	s.Option(&a.Message).Short('m')
@@ -62,7 +63,7 @@ type PushArgs struct {
 	In   io.Reader
 }
 
-var Push = Tool.Group("remote").OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *golem.ToolCommandSpec) {
+var Push = Tool.Group("remote").OutputCommand[PushArgs, int32]("push", func(a *PushArgs, s *tool.CommandSpec) {
 	s.Positional(&a.Name)
 	s.Stdin(&a.In).Optional()
 	s.Stdout().Mime("text/plain")
@@ -81,7 +82,7 @@ func describe(p golem.Principal) string {
 	}
 }
 
-var _ = Commit.Handle(func(_ *golem.ToolContext, a CommitArgs) (CommitResult, error) {
+var _ = Commit.Handle(func(_ *tool.Context, a CommitArgs) (CommitResult, error) {
 	if len(a.Paths) == 0 && !a.Amend {
 		return CommitResult{}, ErrNothingToCommit.New(golem.Unit{})
 	}
@@ -92,7 +93,7 @@ var _ = Commit.Handle(func(_ *golem.ToolContext, a CommitArgs) (CommitResult, er
 	}, nil
 })
 
-var _ = Push.Handle(func(ctx *golem.ToolOutputContext, a PushArgs) (int32, error) {
+var _ = Push.Handle(func(ctx *tool.OutputContext, a PushArgs) (int32, error) {
 	if _, err := io.WriteString(ctx.Stderr(), "pushing "+a.Name); err != nil {
 		return 0, err
 	}
@@ -117,21 +118,21 @@ type DelegateArgs struct {
 
 // Delegate hands a permission card back; publishing it checks that the host
 // accepts cards in tool signatures.
-var Delegate = Tool.Command[DelegateArgs, golem.PermissionCard]("delegate", func(a *DelegateArgs, s *golem.ToolCommandSpec) {
+var Delegate = Tool.Command[DelegateArgs, golem.PermissionCard]("delegate", func(a *DelegateArgs, s *tool.CommandSpec) {
 	s.Positional(&a.Card)
 })
 
-var _ = Delegate.Handle(func(_ *golem.ToolContext, a DelegateArgs) (golem.PermissionCard, error) { return a.Card, nil })
+var _ = Delegate.Handle(func(_ *tool.Context, a DelegateArgs) (golem.PermissionCard, error) { return a.Card, nil })
 
 type PolicyParams struct{ ForbidMessage string }
 
 // Policy is a transparent middleware: it checks and rewrites commit, and the
 // tool's other commands pass straight through it.
-var Policy = Tool.Middleware[PolicyParams]("vcs-policy", golem.ToolMiddlewareSpec{Version: "1.0.0"})
+var Policy = Tool.Middleware[PolicyParams]("vcs-policy", tool.MiddlewareSpec{Version: "1.0.0"})
 
-var _ = Policy.Handle(Commit, func(ctx *golem.ToolMiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
+var _ = Policy.Handle(Commit, func(ctx *tool.MiddlewareContext[PolicyParams], a CommitArgs) (CommitResult, error) {
 	if a.Message == ctx.Parameters().ForbidMessage {
-		return CommitResult{}, golem.ConstraintViolation("message %q is forbidden by policy", a.Message)
+		return CommitResult{}, tool.ConstraintViolation("message %q is forbidden by policy", a.Message)
 	}
 	a.Message = "checked:" + a.Message
 	return Policy.Underlying(ctx, Commit).Forward(a)
@@ -141,15 +142,15 @@ type AuditParams struct{ BlockedMessage string }
 
 // Audit is a universal middleware installed for the whole environment: it reads
 // the arguments of any command as JSON.
-var Audit = golem.DefineUniversalToolMiddleware[AuditParams]("vcs-audit", golem.ToolMiddlewareSpec{Version: "1.0.0"})
+var Audit = tool.DefineUniversalToolMiddleware[AuditParams]("vcs-audit", tool.MiddlewareSpec{Version: "1.0.0"})
 
-var _ = Audit.Handle(func(ctx *golem.UniversalToolMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
+var _ = Audit.Handle(func(ctx *tool.UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 	args, err := ctx.Input().JSON()
 	if err != nil {
 		return golem.None[golem.TypedValue](), err
 	}
 	if fields, ok := args.(map[string]any); ok && fields["message"] == ctx.Parameters().BlockedMessage {
-		return golem.None[golem.TypedValue](), golem.ConstraintViolation("blocked by the environment audit")
+		return golem.None[golem.TypedValue](), tool.ConstraintViolation("blocked by the environment audit")
 	}
 	return ctx.Next(ctx.Input())
 })

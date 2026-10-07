@@ -87,7 +87,7 @@ func TestAllDefErrorsReportsEveryProblem(t *testing.T) {
 	withDefs(t, func(d *definitions) {
 		d.RecordErr("Counter", "", "first")
 		d.RecordErr("Ledger", "add", "second")
-		got := allDefErrors(d.Errs)
+		got := engine.AllErrors(d.Errs)
 		if !strings.Contains(got, "2 agent definition error(s)") {
 			t.Errorf("missing count: %q", got)
 		}
@@ -176,7 +176,7 @@ func TestAgentDependenciesArePublished(t *testing.T) {
 
 	found, errs := d.discover()
 	if len(errs) > 0 {
-		t.Fatalf("definition errors: %s", allDefErrors(errs))
+		t.Fatalf("definition errors: %s", engine.AllErrors(errs))
 	}
 	var deps []common.AgentDependency
 	for _, at := range found {

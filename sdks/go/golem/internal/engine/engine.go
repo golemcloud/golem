@@ -22,6 +22,7 @@ package engine
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/golemcloud/golem/sdks/go/core/values"
 )
@@ -101,6 +102,16 @@ func New(principalType reflect.Type, composites ...func(e *Engine, c *Codec, zer
 // "" when the problem is not attributable to one (e.g. a conflicting NameType).
 func (d *Engine) RecordErr(agent, method, format string, args ...any) {
 	d.Errs = append(d.Errs, DefError{Agent: agent, Method: method, Detail: fmt.Sprintf(format, args...)})
+}
+
+// AllErrors formats every collected error as one message, as the wholesale
+// discovery report shows it.
+func AllErrors(errs []DefError) string {
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
+		msgs = append(msgs, "  - "+e.Error())
+	}
+	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(errs), strings.Join(msgs, "\n"))
 }
 
 // EncodeError marks an encode-stage panic caused by the agent supplying a value

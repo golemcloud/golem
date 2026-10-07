@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
@@ -40,34 +40,34 @@ import (
 const absentStdin = "golem: this command was invoked without a stdin stream"
 
 // ErrOutputDrained is what reading a tool call's output fails with when
-// [ToolInvocation.Wait] already drained it, because it was not taken before.
+// [Invocation.Wait] already drained it, because it was not taken before.
 var ErrOutputDrained = errors.New("golem: the output was drained by Wait before it was taken")
 
-// StreamFailure is a recoverable failure carried by a byte stream. Clean end of
+// OutputFailure is a recoverable failure carried by a byte stream. Clean end of
 // input is not a failure: it arrives as io.EOF.
-type StreamFailure struct{ wit streams.ByteStreamFailure }
+type OutputFailure struct{ wit streams.ByteStreamFailure }
 
-// StreamCancelled reports that the transfer was cancelled before completion.
-func StreamCancelled() StreamFailure {
-	return StreamFailure{streams.MakeByteStreamFailureCancelled()}
+// OutputCancelled reports that the transfer was cancelled before completion.
+func OutputCancelled() OutputFailure {
+	return OutputFailure{streams.MakeByteStreamFailureCancelled()}
 }
 
-// StreamAbandoned reports that the producer went away without finishing.
-func StreamAbandoned() StreamFailure {
-	return StreamFailure{streams.MakeByteStreamFailureAbandoned()}
+// OutputAbandoned reports that the producer went away without finishing.
+func OutputAbandoned() OutputFailure {
+	return OutputFailure{streams.MakeByteStreamFailureAbandoned()}
 }
 
-// StreamResourceExhausted reports that a quota or buffer was exceeded.
-func StreamResourceExhausted() StreamFailure {
-	return StreamFailure{streams.MakeByteStreamFailureResourceExhausted()}
+// OutputResourceExhausted reports that a quota or buffer was exceeded.
+func OutputResourceExhausted() OutputFailure {
+	return OutputFailure{streams.MakeByteStreamFailureResourceExhausted()}
 }
 
-// StreamFailed reports a source failure with a human-readable reason.
-func StreamFailed(reason string) StreamFailure {
-	return StreamFailure{streams.MakeByteStreamFailureFailed(reason)}
+// OutputFailed reports a source failure with a human-readable reason.
+func OutputFailed(reason string) OutputFailure {
+	return OutputFailure{streams.MakeByteStreamFailureFailed(reason)}
 }
 
-func (f StreamFailure) String() string {
+func (f OutputFailure) String() string {
 	switch f.wit.Tag() {
 	case streams.ByteStreamFailureCancelled:
 		return "cancelled"
@@ -81,11 +81,11 @@ func (f StreamFailure) String() string {
 	return "unknown stream failure"
 }
 
-// StreamError reports a stream failure that arrived as a value rather than as
+// OutputError reports a stream failure that arrived as a value rather than as
 // the end of the stream. Distinguish it from io.EOF with errors.As.
-type StreamError struct{ Failure StreamFailure }
+type OutputError struct{ Failure OutputFailure }
 
-func (e *StreamError) Error() string { return "golem: stream " + e.Failure.String() }
+func (e *OutputError) Error() string { return "golem: stream " + e.Failure.String() }
 
 // byteStreamSource is the reading half of a tool stdin stream. The WIT reader
 // satisfies it; the narrow interface keeps the end-of-stream and failure
@@ -133,7 +133,7 @@ func (r *byteReader) close() {
 func (r *byteReader) present() bool { return r != nil && r.absent == "" }
 
 // Read fills p from the stream. It returns io.EOF at clean end of input, and a
-// [StreamError] when the producer reports a failure.
+// [OutputError] when the producer reports a failure.
 func (r *byteReader) Read(p []byte) (int, error) {
 	r.consumed = true
 	if r.absent != "" {
@@ -165,7 +165,7 @@ func (r *byteReader) Read(p []byte) (int, error) {
 		item := items[0]
 		if item.Tag() == witTypes.ResultErr {
 			r.done = true
-			return 0, &StreamError{Failure: StreamFailure{item.Err()}}
+			return 0, &OutputError{Failure: OutputFailure{item.Err()}}
 		}
 		chunk := item.Ok()
 		if len(chunk) == 0 {
@@ -179,17 +179,17 @@ func (r *byteReader) Read(p []byte) (int, error) {
 	}
 }
 
-// ToolOutput is a command's standard output or standard error, written as an
+// Output is a command's standard output or standard error, written as an
 // ordinary io.Writer.
 //
 // The stream is finished when the handler returns and failed when it fails or
-// panics, so nothing has to be closed by hand. [ToolOutput.Fail] ends it with a
+// panics, so nothing has to be closed by hand. [Output.Fail] ends it with a
 // specific cause instead; the first terminal wins and later ones are ignored.
 //
 // An optional output the caller did not ask for discards what is written to it;
-// [ToolOutput.Attached] tells the two apart. Writing to an output the command
+// [Output.Attached] tells the two apart. Writing to an output the command
 // does not declare is an error.
-type ToolOutput struct {
+type Output struct {
 	name string
 	// sink is the host's writer, nil when the caller did not attach the stream.
 	sink byteStreamSink
@@ -202,16 +202,16 @@ type ToolOutput struct {
 }
 
 // newToolOutput is a declared output, attached when sink is not nil.
-func newToolOutput(name string, sink byteStreamSink) *ToolOutput {
-	return &ToolOutput{name: name, sink: sink}
+func newToolOutput(name string, sink byteStreamSink) *Output {
+	return &Output{name: name, sink: sink}
 }
 
 // Attached reports whether the caller receives what is written; an optional
 // output the caller did not ask for discards it.
-func (w *ToolOutput) Attached() bool { return w.sink != nil }
+func (w *Output) Attached() bool { return w.sink != nil }
 
 // Write sends bytes to the stream.
-func (w *ToolOutput) Write(p []byte) (int, error) {
+func (w *Output) Write(p []byte) (int, error) {
 	if w.undeclared != "" {
 		return 0, errors.New(w.undeclared)
 	}
@@ -228,7 +228,7 @@ func (w *ToolOutput) Write(p []byte) (int, error) {
 }
 
 // Fail ends the stream with the given cause instead of finishing it cleanly.
-func (w *ToolOutput) Fail(cause StreamFailure) error {
+func (w *Output) Fail(cause OutputFailure) error {
 	if w.undeclared != "" {
 		return errors.New(w.undeclared)
 	}
@@ -247,7 +247,7 @@ func (w *ToolOutput) Fail(cause StreamFailure) error {
 
 // finish selects the clean terminal, unless one was already selected. A
 // stream the host supplied for an undeclared output is finished empty.
-func (w *ToolOutput) finish() error {
+func (w *Output) finish() error {
 	if w.terminal {
 		return nil
 	}
@@ -263,7 +263,7 @@ func (w *ToolOutput) finish() error {
 
 // fail is Fail for the SDK's own use, which also ends a stream the host
 // supplied for an undeclared output.
-func (w *ToolOutput) fail(cause StreamFailure) {
+func (w *Output) fail(cause OutputFailure) {
 	if w.terminal {
 		return
 	}
@@ -285,7 +285,7 @@ func writeError(name string, e streams.StreamWriteError) error {
 		case streams.ByteStreamCloseCauseConsumerCancelled:
 			return fmt.Errorf("golem: the consumer cancelled the %s stream", name)
 		case streams.ByteStreamCloseCauseFailed:
-			return &StreamError{Failure: StreamFailure{cause.Failed()}}
+			return &OutputError{Failure: OutputFailure{cause.Failed()}}
 		}
 	}
 	return fmt.Errorf("golem: %s stream write failed", name)

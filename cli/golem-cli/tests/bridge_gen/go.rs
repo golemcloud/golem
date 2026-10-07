@@ -1147,10 +1147,10 @@ fn go_guest_tool_client_is_gofmt_clean_vets_and_resolves(env: &GoEnv) {
     let client = generated.read("client.go");
     for expected in [
         "type GrepTool struct{}",
-        "var Tool = golem.DefineToolClient[GrepTool](\"grep\")",
-        "var ErrIo = golem.DefineToolError[golem.Unit](Tool, \"io\"",
-        "var ErrRootBadPattern = golem.DefineToolError[string](Tool, \"bad-pattern\"",
-        "var ErrReplaceBadPattern = golem.DefineToolError[uint32](Tool, \"bad-pattern\"",
+        "var Tool = tool.DefineToolClient[GrepTool](\"grep\")",
+        "var ErrIo = tool.DefineToolError[golem.Unit](Tool, \"io\"",
+        "var ErrRootBadPattern = tool.DefineToolError[string](Tool, \"bad-pattern\"",
+        "var ErrReplaceBadPattern = tool.DefineToolError[uint32](Tool, \"bad-pattern\"",
         "var _ = Tool.Globals[RootGlobals](",
         ".Default(ColorModeAuto)",
         "var configGroup = Tool.Group(\"config\")",

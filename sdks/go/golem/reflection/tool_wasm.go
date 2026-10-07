@@ -14,7 +14,7 @@
 
 //go:build wasip1
 
-package golem
+package reflection
 
 import (
 	toolHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_host"
@@ -22,20 +22,20 @@ import (
 
 // DiscoverTools returns a snapshot of every tool the calling agent may reach in
 // its environment.
-func DiscoverTools() []ReflectedTool {
+func DiscoverTools() []Tool {
 	registered := toolHost.GetAllTools()
-	out := make([]ReflectedTool, 0, len(registered))
+	out := make([]Tool, 0, len(registered))
 	for _, r := range registered {
-		out = append(out, newReflectedTool(r.LookupName, r.Definition))
+		out = append(out, newTool(r.LookupName, r.Definition))
 	}
 	return out
 }
 
 // DiscoverTool looks one tool up by its lookup name.
-func DiscoverTool(name string) (ReflectedTool, bool) {
+func DiscoverTool(name string) (Tool, bool) {
 	found := toolHost.GetTool(name)
 	if found.IsNone() {
-		return ReflectedTool{}, false
+		return Tool{}, false
 	}
-	return newReflectedTool(found.Some().LookupName, found.Some().Definition), true
+	return newTool(found.Some().LookupName, found.Some().Definition), true
 }

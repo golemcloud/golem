@@ -14,10 +14,12 @@
 
 //go:build !wasip1
 
-package golem
+package tool
 
-// Off the wasm target there is no deployment to discover.
+import (
+	underlying "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_underlying"
+)
 
-func DiscoverTools() []ReflectedTool { return nil }
-
-func DiscoverTool(string) (ReflectedTool, bool) { return ReflectedTool{}, false }
+// Off the wasm target there is no layer beneath to bind; see
+// toolmiddleware_wasm.go.
+func newUnderlyingLayer(_ *underlying.UnderlyingTool) underlyingLayer { return absentUnderlyingLayer }

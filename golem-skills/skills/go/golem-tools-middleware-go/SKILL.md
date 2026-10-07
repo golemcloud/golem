@@ -17,18 +17,18 @@ import (
 
 	"myapp/tools/inventory"
 
-	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 )
 
 // Static configuration of one installation; its schema is published.
 type Params struct{ MaxAdjust int32 }
 
-var Policy = inventory.Tool.Middleware[Params]("inventory-policy", golem.ToolMiddlewareSpec{
+var Policy = inventory.Tool.Middleware[Params]("inventory-policy", tool.MiddlewareSpec{
 	Version: "1.0.0",
 	Summary: "Caps stock adjustments",
 })
 
-var _ = Policy.Handle(inventory.Adjust, func(ctx *golem.ToolMiddlewareContext[Params], a inventory.AdjustArgs) (int32, error) {
+var _ = Policy.Handle(inventory.Adjust, func(ctx *tool.MiddlewareContext[Params], a inventory.AdjustArgs) (int32, error) {
 	if a.By > ctx.Parameters().MaxAdjust {
 		return 0, errors.New("adjustment too large")
 	}
@@ -37,7 +37,7 @@ var _ = Policy.Handle(inventory.Adjust, func(ctx *golem.ToolMiddlewareContext[Pa
 ```
 
 - `Tool.Middleware` is **transparent**: it presents and wraps the same tool, and every command it does not `Handle` goes straight to the tool.
-- The handler has a tool handler's shape: it returns the command's result, a declared error with `ErrX.New(payload)`, a rejection with `golem.InvalidInput(...)` or `golem.ConstraintViolation(...)`, or any other error to fail the call as an invalid result. Returning an error from the layer beneath passes it on: the tool's own errors unchanged (so `ErrX.Match` still works for the caller), and a denied, cancelled or exhausted call as a constraint violation.
+- The handler has a tool handler's shape: it returns the command's result, a declared error with `ErrX.New(payload)`, a rejection with `tool.InvalidInput(...)` or `tool.ConstraintViolation(...)`, or any other error to fail the call as an invalid result. Returning an error from the layer beneath passes it on: the tool's own errors unchanged (so `ErrX.Match` still works for the caller), and a denied, cancelled or exhausted call as a constraint violation.
 - `Policy.Underlying(ctx, cmd)` reaches a command of the wrapped tool: `Forward(a)` sends complete arguments unchanged, and `Call(fill)` starts from the command's defaults. Passing a command of another tool is a compile error.
 - `ctx.Parameters()`, `ctx.Principal()`, `ctx.ToolName()` and `ctx.CommandPath()` describe the invocation. Standard input travels in the args struct, so forwarding `a` forwards it.
 
@@ -46,7 +46,7 @@ Blank-import the package from `main.go`. Use `golem.Unit` as the parameter type 
 ## Commands With Outputs
 
 ```go
-var _ = Policy.HandleOutput(inventory.Import, func(ctx *golem.ToolMiddlewareOutputContext[Params], a inventory.ImportArgs) (int32, error) {
+var _ = Policy.HandleOutput(inventory.Import, func(ctx *tool.MiddlewareOutputContext[Params], a inventory.ImportArgs) (int32, error) {
 	inv, err := Policy.UnderlyingOutput(ctx, inventory.Import).Start(a)
 	if err != nil {
 		return 0, err
@@ -67,14 +67,14 @@ var _ = Policy.HandleOutput(inventory.Import, func(ctx *golem.ToolMiddlewareOutp
 An adapter presents one tool over another — for example a new version of a tool's interface over the old implementation:
 
 ```go
-var Compat = invv2.Tool.Adapter[golem.Unit]("inventory-v2-on-v1", invv1.Tool, golem.ToolMiddlewareSpec{Version: "1.0.0"})
+var Compat = invv2.Tool.Adapter[golem.Unit]("inventory-v2-on-v1", invv1.Tool, tool.MiddlewareSpec{Version: "1.0.0"})
 
-var _ = Compat.Handle(invv2.Show, func(ctx *golem.ToolMiddlewareContext[golem.Unit], a invv2.ShowArgs) (string, error) {
+var _ = Compat.Handle(invv2.Show, func(ctx *tool.MiddlewareContext[golem.Unit], a invv2.ShowArgs) (string, error) {
 	return Compat.Underlying(ctx, invv1.Get).Call(func(b *invv1.GetArgs) { b.Sku = a.Sku })
 })
 ```
 
-An adapter must handle every command of the tool it presents; a missing one is a definition error. The wrapped tool can be one this component defines, or a tool client (`golem.DefineToolClient`, see `golem-call-tool-go`).
+An adapter must handle every command of the tool it presents; a missing one is a definition error. The wrapped tool can be one this component defines, or a tool client (`tool.DefineToolClient`, see `golem-call-tool-go`).
 
 ## Universal Middleware
 
@@ -86,12 +86,12 @@ type AuditParams struct {
 	Deny    bool
 }
 
-var Audit = golem.DefineUniversalToolMiddleware[AuditParams]("audit", golem.ToolMiddlewareSpec{
+var Audit = tool.DefineUniversalToolMiddleware[AuditParams]("audit", tool.MiddlewareSpec{
 	Version: "1.0.0",
 	Summary: "Records every tool invocation",
 })
 
-var _ = Audit.Handle(func(ctx *golem.UniversalToolMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
+var _ = Audit.Handle(func(ctx *tool.UniversalMiddlewareContext[AuditParams]) (golem.Option[golem.TypedValue], error) {
 	p := ctx.Parameters()
 	slog.Info("tool call", "channel", p.Channel, "tool", ctx.ToolName(), "command", ctx.CommandPath())
 	if p.Deny {
@@ -104,8 +104,8 @@ var _ = Audit.Handle(func(ctx *golem.UniversalToolMiddlewareContext[AuditParams]
 - The result is `golem.None` for a command without one.
 - `ctx.Input().WithJSON(newArgs)` rewrites the arguments before `Next`; read and build values with `v.JSON()`, `golem.DecodeTypedValue[T]` and `golem.EncodeTypedValue`.
 - `ctx.Start(input)` returns the running invocation, for rewriting an output; one not taken passes through to `ctx.Stdout()` / `ctx.Stderr()`.
-- A failure beneath is a `*golem.ToolCallError`; return it to pass it on unchanged.
-- `ctx.ToolMetadata()` describes the wrapped tool (commands, arguments, results and errors), as in `golem-call-tool-go`.
+- A failure beneath is a `*tool.CallError`; return it to pass it on unchanged.
+- `reflection.ToolOf(ctx.Metadata())` describes the wrapped tool (commands, arguments, results and errors), as in `golem-call-tool-go`.
 
 ## Install
 

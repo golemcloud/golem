@@ -12,18 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !wasip1
-
-package golem
+package tool
 
 import (
-	"fmt"
-	"io"
-
-	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"strings"
+	"testing"
 )
 
-// Off the wasm target there is no host to call through; see toolcall_wasm.go.
-func startToolCallHost(tool string, path []string, _ types.TypedSchemaValue, _ io.Reader, _ ToolStreams) (toolCall, error) {
-	return toolCall{}, fmt.Errorf("golem: calling tool %s %s is only available inside a component", tool, commandLabel(path))
+// mustDefErr asserts that a definition error mentioning want was recorded.
+func mustDefErr(t *testing.T, d *definitions, want string) {
+	t.Helper()
+	for _, e := range d.Errs {
+		if strings.Contains(e.Error(), want) {
+			return
+		}
+	}
+	t.Fatalf("expected a definition error mentioning %q; got %v", want, d.Errs)
+}
+
+func containsDefErr(errs []engine.DefError, want string) bool {
+	for _, e := range errs {
+		if strings.Contains(e.Error(), want) {
+			return true
+		}
+	}
+	return false
 }

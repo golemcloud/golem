@@ -19,6 +19,7 @@ import (
 	"fmt"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"reflect"
 	"slices"
 	"strings"
@@ -66,13 +67,15 @@ var defs = newDefinitions()
 
 func init() {
 	link.Engine = defs.Engine
+	link.NewEngine = func() *engine.Engine { return newDefinitions().Engine }
 	link.TypedValue = func(w types.TypedSchemaValue) any { return TypedValue{wit: w} }
 	link.TypedValueWit = func(v any) types.TypedSchemaValue { return v.(TypedValue).wit }
 	link.AgentError = agentErrorToGo
+	link.Principal = func(p common.Principal) any { return principalFromWit(p) }
 	link.LocalAgentTypes = func() ([]common.AgentType, error) {
 		found, errs := defs.discover()
 		if len(errs) > 0 {
-			return found, errors.New(allDefErrors(errs))
+			return found, errors.New(engine.AllErrors(errs))
 		}
 		return found, nil
 	}
@@ -207,16 +210,6 @@ func agentDefErrors(errs []engine.DefError, agent string) string {
 	return strings.Join(msgs, "\n")
 }
 
-// allDefErrors formats every collected error as one message for the wholesale
-// discover-agent-types report.
-func allDefErrors(errs []engine.DefError) string {
-	msgs := make([]string, 0, len(errs))
-	for _, e := range errs {
-		msgs = append(msgs, "  - "+e.Error())
-	}
-	return fmt.Sprintf("component has %d agent definition error(s):\n%s", len(errs), strings.Join(msgs, "\n"))
-}
-
 // DefinitionErrors returns every problem found while building the component's
 // agent and tool definitions (bad specs, unsupported types, invalid HTTP
 // routes, unbound tool arguments, …).
@@ -226,12 +219,20 @@ func allDefErrors(errs []engine.DefError) string {
 func DefinitionErrors() []error {
 	// Tool and middleware problems are found as their metadata is derived,
 	// which records them alongside the agents' own.
-	toolDefs.discover(defs)
-	toolDefs.discoverMiddlewares(defs)
+	if link.DiscoverTools != nil {
+		link.DiscoverTools()
+	}
 	_, ds := defs.discover()
 	out := make([]error, len(ds))
 	for i := range ds {
 		out[i] = ds[i]
 	}
 	return out
+}
+
+func someIfSet(s string) witTypes.Option[string] {
+	if s == "" {
+		return witTypes.None[string]()
+	}
+	return witTypes.Some(s)
 }

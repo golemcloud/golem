@@ -12,24 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+//go:build !wasip1
 
-import ()
+package tool
 
-// PathDirection is which way a path argument's file flows.
-type PathDirection uint8
+import (
+	"fmt"
+	"io"
 
-const (
-	PathInput PathDirection = iota
-	PathOutput
-	PathInOut
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 )
 
-// PathKind is what a path argument names.
-type PathKind uint8
-
-const (
-	PathFile PathKind = iota
-	PathDirectory
-	PathAny
-)
+// Off the wasm target there is no host to call through; see toolcall_wasm.go.
+func startToolCallHost(tool string, path []string, _ types.TypedSchemaValue, _ io.Reader, _ Streams) (toolCall, error) {
+	return toolCall{}, fmt.Errorf("golem: calling tool %s %s is only available inside a component", tool, commandLabel(path))
+}

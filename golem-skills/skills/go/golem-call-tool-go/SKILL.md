@@ -25,7 +25,7 @@ A binding on a component applies to all of its agents (see `golem-edit-manifest`
 
 ## A Tool of the Same Component
 
-Call the command declared with `golem.DefineTool` (see `golem-define-tool-go`):
+Call the command declared with `tool.DefineTool` (see `golem-define-tool-go`):
 
 ```go
 greeting, err := greeter.Greet.Call(func(a *greeter.GreetArgs) {
@@ -64,7 +64,7 @@ require golem.local/bridge/greeter-tool-guest-client v0.0.0
 replace golem.local/bridge/greeter-tool-guest-client => ../golem-temp/bridge-sdk/go/internal/greeter-tool-guest-client
 ```
 
-It declares the tool with `golem.DefineToolClient` and each command the same way, so calls look identical:
+It declares the tool with `tool.DefineToolClient` and each command the same way, so calls look identical:
 
 ```go
 import greeter "golem.local/bridge/greeter-tool-guest-client"
@@ -76,14 +76,14 @@ Names follow the command path: `Tool` (with its identity type, e.g. `GreeterTool
 
 ## A Tool Without Its Definition
 
-`golem.DefineToolClient[T](name)` declares a tool's shape for calling only, with the same commands, specs and error cases a definition has, but no handlers — what a generated client contains, and what to write by hand for a subset of a tool:
+`tool.DefineToolClient[T](name)` declares a tool's shape for calling only, with the same commands, specs and error cases a definition has, but no handlers — what a generated client contains, and what to write by hand for a subset of a tool:
 
 ```go
 type Search struct{}
 
 var (
-	Tool  = golem.DefineToolClient[Search]("document-search")
-	Query = Tool.Command[QueryArgs, QueryResult]("query", func(a *QueryArgs, s *golem.ToolCommandSpec) {
+	Tool  = tool.DefineToolClient[Search]("document-search")
+	Query = Tool.Command[QueryArgs, QueryResult]("query", func(a *QueryArgs, s *tool.CommandSpec) {
 		s.Positional(&a.Text)
 	})
 )
@@ -109,20 +109,20 @@ out, err := inv.Collect() // out.Result, out.Stdout, out.Stderr
 ```
 
 - `inv.Stdout()` and `inv.Stderr()` take an output to read while the command runs; then `inv.Wait()` returns the result. Bytes on stderr do not mean the command failed.
-- `Wait` drains and discards every output not taken before it, so a command never stalls on output nobody reads; taking one afterwards reads `golem.ErrOutputDrained`. An output you took is yours: read it while waiting, or a command writing more than the stream buffers stalls.
+- `Wait` drains and discards every output not taken before it, so a command never stalls on output nobody reads; taking one afterwards reads `tool.ErrOutputDrained`. An output you took is yours: read it while waiting, or a command writing more than the stream buffers stalls.
 - `Collect` reads both outputs concurrently while awaiting the result; a failed result is reported before a failed stdout, and that before a failed stderr, with what was read returned either way.
 - `inv.Cancel()` asks the runtime to cancel the call.
 
 ## Errors
 
-A failed call returns a `*golem.ToolCallError` (`errors.As`): its `Kind` separates the tool's declared errors (`ToolCallDeclaredError`, matched with `ErrX.Match`) from rejected input, constraint violations, denials, cancellation and runtime failures. `Message` carries the detail.
+A failed call returns a `*tool.CallError` (`errors.As`): its `Kind` separates the tool's declared errors (`tool.CallDeclaredError`, matched with `ErrX.Match`) from rejected input, constraint violations, denials, cancellation and runtime failures. `Message` carries the detail.
 
 ## Discovered Tools
 
-A tool with no Go declaration is called through **discovery**: `golem.DiscoverTool` returns a snapshot of the deployed tool, and the client bound from it validates and packs every call against it, with canonical JSON arguments and results.
+A tool with no Go declaration is called through **discovery**: `reflection.DiscoverTool` returns a snapshot of the deployed tool, and the client bound from it validates and packs every call against it, with canonical JSON arguments and results.
 
 ```go
-tool, found := golem.DiscoverTool("greeter")
+tool, found := reflection.DiscoverTool("greeter")
 if !found {
 	return fmt.Errorf("the greeter tool is not available to this agent")
 }
@@ -130,8 +130,8 @@ client := golem.Must(tool.Bind())
 out, err := client.Call([]string{"greet"}, map[string]any{
 	"name": "ada", "loud": false, "times": 2, "title": nil,
 })
-var ce *golem.ToolCallError
-if errors.As(err, &ce) && ce.Kind == golem.ToolCallDeclaredError {
+var ce *tool.CallError
+if errors.As(err, &ce) && ce.Kind == tool.CallDeclaredError {
 	fmt.Println(ce.ErrorName, golem.Must(ce.Payload().JSON()))
 }
 ```
@@ -139,7 +139,7 @@ if errors.As(err, &ce) && ce.Kind == golem.ToolCallDeclaredError {
 - Supply every field of the command's input record by its wire name: inherited globals, positionals, the tail (a list), options and flags. Nothing is filled in from declared defaults.
 - `client.Start(path, args, stdin)` runs a command that reads standard input or has outputs, and returns the running invocation with every output the command declares; `client.Call` discards them.
 - `cmd.Input()` is the input record and `cmd.Output()` the result type, as `schema.Ref`s that pack, unpack and render JSON Schema; `tool.Command(path)`, `tool.Commands()` and `cmd.Errors()` describe the rest. Arguments that do not match fail with `*schema.ValidationError` before anything is sent. A snapshot never refreshes itself.
-- `golem.BindTool(name)` gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`; its `Start` takes `golem.ToolStreams{Stdout: true, Stderr: true}` to request outputs, which must match what the command declares.
+- `reflection.BindTool(name)` gives a dynamic client that forwards already packed `golem.TypedValue`s unchecked, with the same `Call` and `Start`; its `Start` takes `tool.Streams{Stdout: true, Stderr: true}` to request outputs, which must match what the command declares.
 
 ### Related Skills
 

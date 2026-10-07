@@ -10,6 +10,7 @@ import (
 	vcs "golem.local/bridge/vcs-tool-guest-client"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 )
 
 type ID struct{ Name string }
@@ -47,13 +48,13 @@ func init() {
 			"a priority above its maximum was accepted: %v", err)
 
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "secret"; a.Paths = []string{"x"} })
-		var policy *golem.ToolCallError
-		check(errors.As(err, &policy) && policy.Kind == golem.ToolCallConstraintViolation &&
+		var policy *tool.CallError
+		check(errors.As(err, &policy) && policy.Kind == tool.CallConstraintViolation &&
 			strings.Contains(policy.Message, "forbidden by policy"),
 			"the policy middleware let a forbidden commit through: %v", err)
 
 		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "audited"; a.Paths = []string{"x"} })
-		var audit *golem.ToolCallError
+		var audit *tool.CallError
 		check(errors.As(err, &audit) && strings.Contains(audit.Message, "blocked by the environment audit"),
 			"the environment audit middleware let a blocked commit through: %v", err)
 

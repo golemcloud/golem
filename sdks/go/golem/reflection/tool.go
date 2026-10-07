@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package reflection
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 	"io"
+	"strings"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -25,41 +29,31 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// packJSONTree validates canonical JSON against a type and renders it for the
-// wire.
-func packJSONTree(ref core.Ref, value any) (types.SchemaValueTree, error) {
-	built, err := ref.PackJSON(value)
-	if err != nil {
-		return types.SchemaValueTree{}, err
-	}
-	return witschema.ValueToWit(built)
-}
-
-// ReflectedTool is an immutable snapshot of a tool deployed in the caller's
+// Tool is an immutable snapshot of a tool deployed in the caller's
 // environment.
-type ReflectedTool struct {
+type Tool struct {
 	lookupName string
 	wit        toolCommon.Tool
 	conv       witschema.Converted
 	convErr    error
 }
 
-// newReflectedTool converts a discovered tool's schema up front, on the same
+// newTool converts a discovered tool's schema up front, on the same
 // terms as an agent type.
-func newReflectedTool(lookupName string, wit toolCommon.Tool) ReflectedTool {
+func newTool(lookupName string, wit toolCommon.Tool) Tool {
 	conv, err := witschema.GraphToCore(wit.Schema)
-	return ReflectedTool{lookupName: lookupName, wit: wit, conv: conv, convErr: err}
+	return Tool{lookupName: lookupName, wit: wit, conv: conv, convErr: err}
 }
 
 // Name returns the name a client binds to, which is stable across adapters.
-func (r ReflectedTool) Name() string { return r.lookupName }
+func (r Tool) Name() string { return r.lookupName }
 
 // Version returns the tool's own version.
-func (r ReflectedTool) Version() string { return r.wit.Version }
+func (r Tool) Version() string { return r.wit.Version }
 
 // Schema returns the tool's type pool. Its root is a placeholder: command
 // bodies index into it.
-func (r ReflectedTool) Schema() (core.Ref, error) {
+func (r Tool) Schema() (core.Ref, error) {
 	if r.convErr != nil {
 		return core.Ref{}, r.convErr
 	}
@@ -67,8 +61,8 @@ func (r ReflectedTool) Schema() (core.Ref, error) {
 }
 
 // Root returns the tool's root command.
-func (r ReflectedTool) Root() ReflectedCommand {
-	return ReflectedCommand{
+func (r Tool) Root() Command {
+	return Command{
 		conv: r.conv, convErr: r.convErr, witGraph: r.wit.Schema,
 		tree: r.wit.Commands, index: 0, chain: []int32{0},
 	}
@@ -76,12 +70,12 @@ func (r ReflectedTool) Root() ReflectedCommand {
 
 // Command resolves a command path from the root, following subcommand names and
 // aliases. A path that names no command reports false.
-func (r ReflectedTool) Command(path []string) (ReflectedCommand, bool) {
+func (r Tool) Command(path []string) (Command, bool) {
 	at := r.Root()
 	for _, segment := range path {
 		next, found := at.Subcommand(segment)
 		if !found {
-			return ReflectedCommand{}, false
+			return Command{}, false
 		}
 		at = next
 	}
@@ -90,10 +84,10 @@ func (r ReflectedTool) Command(path []string) (ReflectedCommand, bool) {
 
 // Commands returns every command in the tool, each with its path from the root,
 // which is how a caller enumerates what it may invoke.
-func (r ReflectedTool) Commands() []ReflectedCommand {
-	var out []ReflectedCommand
-	var walk func(c ReflectedCommand)
-	walk = func(c ReflectedCommand) {
+func (r Tool) Commands() []Command {
+	var out []Command
+	var walk func(c Command)
+	walk = func(c Command) {
 		out = append(out, c)
 		for _, sub := range c.Subcommands() {
 			walk(sub)
@@ -103,8 +97,8 @@ func (r ReflectedTool) Commands() []ReflectedCommand {
 	return out
 }
 
-// ReflectedCommand is one node of a tool's command tree.
-type ReflectedCommand struct {
+// Command is one node of a tool's command tree.
+type Command struct {
 	conv    witschema.Converted
 	convErr error
 	// witGraph is the tool's schema as the wire carries it. An invocation
@@ -119,24 +113,24 @@ type ReflectedCommand struct {
 	chain []int32
 }
 
-func (c ReflectedCommand) node() toolCommon.CommandNode { return c.tree.Nodes[c.index] }
+func (c Command) node() toolCommon.CommandNode { return c.tree.Nodes[c.index] }
 
 // Name returns the command's own name.
-func (c ReflectedCommand) Name() string { return c.node().Name }
+func (c Command) Name() string { return c.node().Name }
 
 // Path returns the command's path from the tool's root; empty addresses the
 // root's own body.
-func (c ReflectedCommand) Path() []string { return append([]string(nil), c.path...) }
+func (c Command) Path() []string { return append([]string(nil), c.path...) }
 
 // Description returns the command's documentation.
-func (c ReflectedCommand) Description() string { return c.node().Doc.Summary }
+func (c Command) Description() string { return c.node().Doc.Summary }
 
 // Subcommands returns the command's children.
-func (c ReflectedCommand) Subcommands() []ReflectedCommand {
+func (c Command) Subcommands() []Command {
 	kids := c.node().Subcommands
-	out := make([]ReflectedCommand, 0, len(kids))
+	out := make([]Command, 0, len(kids))
 	for _, idx := range kids {
-		out = append(out, ReflectedCommand{
+		out = append(out, Command{
 			conv: c.conv, convErr: c.convErr, witGraph: c.witGraph,
 			tree: c.tree, index: idx,
 			path:  append(append([]string(nil), c.path...), c.tree.Nodes[idx].Name),
@@ -147,7 +141,7 @@ func (c ReflectedCommand) Subcommands() []ReflectedCommand {
 }
 
 // Subcommand resolves one child by name or alias.
-func (c ReflectedCommand) Subcommand(name string) (ReflectedCommand, bool) {
+func (c Command) Subcommand(name string) (Command, bool) {
 	for _, sub := range c.Subcommands() {
 		node := sub.node()
 		if node.Name == name {
@@ -159,12 +153,12 @@ func (c ReflectedCommand) Subcommand(name string) (ReflectedCommand, bool) {
 			}
 		}
 	}
-	return ReflectedCommand{}, false
+	return Command{}, false
 }
 
 // Callable reports whether the command has a body of its own. A node that only
 // dispatches to subcommands stays discoverable but cannot be invoked.
-func (c ReflectedCommand) Callable() bool { return c.node().Body.IsSome() }
+func (c Command) Callable() bool { return c.node().Body.IsSome() }
 
 // canonicalField is one field of a command's canonical input record: the
 // type node the metadata names, and how the record wraps it.
@@ -189,7 +183,7 @@ const (
 // positionals, tail, options and flags. A field is wrapped in an option when it
 // is neither required nor defaulted, and collects into a list for a tail or a
 // repeatable option.
-func (c ReflectedCommand) canonicalFields() ([]canonicalField, error) {
+func (c Command) canonicalFields() ([]canonicalField, error) {
 	if !c.Callable() {
 		return nil, fmt.Errorf("golem: command %q has no body", c.Name())
 	}
@@ -254,7 +248,7 @@ func (c ReflectedCommand) canonicalFields() ([]canonicalField, error) {
 // Input returns the command's canonical input record: inherited globals,
 // positionals, the tail, options and flags. Pack canonical JSON with its
 // PackJSON, and render it with ToJSONSchema.
-func (c ReflectedCommand) Input() (core.Ref, error) {
+func (c Command) Input() (core.Ref, error) {
 	if c.convErr != nil {
 		return core.Ref{}, c.convErr
 	}
@@ -290,7 +284,7 @@ func (c ReflectedCommand) Input() (core.Ref, error) {
 // inputGraph is the tool's wire schema extended with the command's canonical
 // input record as its root, which is what the host checks an invocation
 // against.
-func (c ReflectedCommand) inputGraph(fields []canonicalField) types.SchemaGraph {
+func (c Command) inputGraph(fields []canonicalField) types.SchemaGraph {
 	nodes := append([]types.SchemaTypeNode(nil), c.witGraph.TypeNodes...)
 	add := func(b types.SchemaTypeBody) int32 {
 		nodes = append(nodes, types.SchemaTypeNode{Body: b})
@@ -316,56 +310,56 @@ func (c ReflectedCommand) inputGraph(fields []canonicalField) types.SchemaGraph 
 }
 
 // Output returns the command's result type, none when it produces none.
-func (c ReflectedCommand) Output() (Option[core.Ref], error) {
+func (c Command) Output() (golem.Option[core.Ref], error) {
 	if c.convErr != nil {
-		return None[core.Ref](), c.convErr
+		return golem.None[core.Ref](), c.convErr
 	}
 	if !c.Callable() {
-		return None[core.Ref](), fmt.Errorf("golem: command %q has no body", c.Name())
+		return golem.None[core.Ref](), fmt.Errorf("golem: command %q has no body", c.Name())
 	}
 	body := c.node().Body.Some()
 	if body.Result.IsNone() {
-		return None[core.Ref](), nil
+		return golem.None[core.Ref](), nil
 	}
 	ref, err := c.conv.Ref(body.Result.Some().Type)
 	if err != nil {
-		return None[core.Ref](), err
+		return golem.None[core.Ref](), err
 	}
-	return Some(ref), nil
+	return golem.Some(ref), nil
 }
 
-// ReflectedError is a failure a command declares.
-type ReflectedError struct {
+// ErrorCase is a failure a command declares.
+type ErrorCase struct {
 	Name        string
-	Kind        ToolErrorKind
+	Kind        tool.ErrorKind
 	ExitCode    uint8
 	Summary     string
 	Description string
 	// Payload is the error's payload type, if it carries one.
-	Payload Option[core.Ref]
+	Payload golem.Option[core.Ref]
 }
 
 // Errors returns the failures the command declares.
-func (c ReflectedCommand) Errors() []ReflectedError {
+func (c Command) Errors() []ErrorCase {
 	if !c.Callable() {
 		return nil
 	}
-	var out []ReflectedError
+	var out []ErrorCase
 	for _, e := range c.node().Body.Some().Errors {
-		r := ReflectedError{
+		r := ErrorCase{
 			Name:        e.Name,
-			Kind:        UsageError,
+			Kind:        tool.UsageError,
 			ExitCode:    e.ExitCode,
 			Summary:     e.Doc.Summary,
 			Description: e.Doc.Description,
-			Payload:     None[core.Ref](),
+			Payload:     golem.None[core.Ref](),
 		}
 		if e.Kind == toolCommon.ErrorKindRuntimeError {
-			r.Kind = RuntimeError
+			r.Kind = tool.RuntimeError
 		}
 		if e.Payload.IsSome() && c.convErr == nil {
 			if ref, err := c.conv.Ref(e.Payload.Some()); err == nil {
-				r.Payload = Some(ref)
+				r.Payload = golem.Some(ref)
 			}
 		}
 		out = append(out, r)
@@ -376,7 +370,7 @@ func (c ReflectedCommand) Errors() []ReflectedError {
 // pack validates named arguments against the command's input record and
 // renders them with a graph rooted at that record, which is what the host
 // checks an invocation against.
-func (c ReflectedCommand) pack(args map[string]any) (types.TypedSchemaValue, error) {
+func (c Command) pack(args map[string]any) (types.TypedSchemaValue, error) {
 	input, err := c.Input()
 	if err != nil {
 		return types.TypedSchemaValue{}, err
@@ -392,16 +386,16 @@ func (c ReflectedCommand) pack(args map[string]any) (types.TypedSchemaValue, err
 	return types.TypedSchemaValue{Graph: c.inputGraph(fields), Value: tree}, nil
 }
 
-// ReflectedToolClient invokes a discovered tool. Arguments are packed and
+// ToolClient invokes a discovered tool. Arguments are packed and
 // validated against the snapshot before anything is sent.
-type ReflectedToolClient struct {
-	tool ReflectedTool
+type ToolClient struct {
+	tool Tool
 }
 
 // Tool returns the snapshot this client was built from.
-func (c *ReflectedToolClient) Tool() ReflectedTool { return c.tool }
+func (c *ToolClient) Tool() Tool { return c.tool }
 
-func (c *ReflectedToolClient) command(path []string) (ReflectedCommand, error) {
+func (c *ToolClient) command(path []string) (Command, error) {
 	cmd, found := c.tool.Command(path)
 	if !found {
 		return cmd, fmt.Errorf("golem: tool %q has no command %s", c.tool.Name(), commandLabel(path))
@@ -418,7 +412,7 @@ func (c *ReflectedToolClient) command(path []string) (ReflectedCommand, error) {
 // Call runs a command with named arguments and returns its result as canonical
 // JSON, or nil when the command produces none; its outputs, if any, are
 // discarded. Start a command to read them.
-func (c *ReflectedToolClient) Call(path []string, args map[string]any) (any, error) {
+func (c *ToolClient) Call(path []string, args map[string]any) (any, error) {
 	inv, err := c.Start(path, args, nil)
 	if err != nil {
 		return nil, err
@@ -429,7 +423,7 @@ func (c *ReflectedToolClient) Call(path []string, args map[string]any) (any, err
 // Start starts a command with named arguments and the given standard input,
 // which may be nil, and returns the running invocation with every output the
 // command declares.
-func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io.Reader) (*ToolInvocation[any], error) {
+func (c *ToolClient) Start(path []string, args map[string]any, stdin io.Reader) (*tool.Invocation[any], error) {
 	cmd, err := c.command(path)
 	if err != nil {
 		return nil, err
@@ -440,7 +434,7 @@ func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io
 	}
 	body := cmd.node().Body.Some()
 	if body.Stdin.IsSome() && body.Stdin.Some().Required && stdin == nil {
-		return nil, &ToolCallError{Tool: c.tool.Name(), CommandPath: path, Kind: ToolCallInvalidInput,
+		return nil, &tool.CallError{Tool: c.tool.Name(), CommandPath: path, Kind: tool.CallInvalidInput,
 			Message: "the command requires standard input"}
 	}
 	output, err := cmd.Output()
@@ -448,35 +442,47 @@ func (c *ReflectedToolClient) Start(path []string, args map[string]any, stdin io
 		return nil, err
 	}
 	name := c.tool.Name()
-	call, err := startToolCall(name, path, input, stdin, ToolStreams{Stdout: body.Stdout.IsSome(), Stderr: body.Stderr.IsSome()})
+	inv, err := link.StartToolCall(name, path, input, stdin,
+		tool.Streams{Stdout: body.Stdout.IsSome(), Stderr: body.Stderr.IsSome()}, false,
+		func(res witTypes.Option[types.TypedSchemaValue]) (any, error) {
+			out, declared := output.Get()
+			value, has := optionFromWit(res).Get()
+			switch {
+			case has && !declared:
+				return nil, &tool.CallError{Tool: name, CommandPath: path, Kind: tool.CallInvalidResult,
+					Message: "the command returned a value but declares none"}
+			case !has && declared:
+				return nil, &tool.CallError{Tool: name, CommandPath: path, Kind: tool.CallInvalidResult,
+					Message: "the command returned nothing but declares a result"}
+			case !has:
+				return nil, nil
+			}
+			v, err := witschema.ValueToCore(value.Value)
+			if err == nil {
+				var unpacked any
+				unpacked, err = out.UnpackJSON(v)
+				if err == nil {
+					return unpacked, nil
+				}
+			}
+			return nil, &tool.CallError{Tool: name, CommandPath: path, Kind: tool.CallInvalidResult, Message: err.Error()}
+		})
 	if err != nil {
 		return nil, err
 	}
-	return newInvocation(call, func(call toolCall) (any, error) {
-		res, rpcErr := call.wait()
-		if rpcErr != nil {
-			return nil, toolCallErrorFromWit(name, path, *rpcErr)
-		}
-		out, declared := output.Get()
-		value, has := optionFromWit(res).Get()
-		switch {
-		case has && !declared:
-			return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult,
-				Message: "the command returned a value but declares none"}
-		case !has && declared:
-			return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult,
-				Message: "the command returned nothing but declares a result"}
-		case !has:
-			return nil, nil
-		}
-		v, err := witschema.ValueToCore(value.Value)
-		if err == nil {
-			var unpacked any
-			unpacked, err = out.UnpackJSON(v)
-			if err == nil {
-				return unpacked, nil
-			}
-		}
-		return nil, &ToolCallError{Tool: name, CommandPath: path, Kind: ToolCallInvalidResult, Message: err.Error()}
-	}), nil
+	return inv.(*tool.Invocation[any]), nil
+}
+
+func commandLabel(path []string) string {
+	if len(path) == 0 {
+		return "<root>"
+	}
+	return strings.Join(path, " ")
+}
+
+// ToolOf reads the metadata a universal middleware receives about the tool it
+// wraps as a discovered tool.
+func ToolOf(m tool.Metadata) Tool {
+	name, wit := link.ToolMetadata(m)
+	return newTool(name, wit)
 }

@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool_test
 
 import (
 	"encoding/json"
 	"errors"
-	"io"
+	"slices"
 	"strings"
 	"testing"
 
 	core "github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/golem/reflection"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -43,43 +47,18 @@ func recordFieldNames(ref core.Ref) []string {
 	return out
 }
 
-var _ = witTypes.Unit{}
+func witOf(v golem.TypedValue) types.TypedSchemaValue { return link.TypedValueWit(v) }
 
-// toolSnapshotOf derives a tool the way the host publishes it, so the tool
-// reflection tests read against real metadata.
-func toolSnapshotOf(t *testing.T) ReflectedTool {
-	t.Helper()
-	r, d := newToolRegistry(), newDefinitions()
-	def := defineToolInto[Files](r, d, "files", ToolSpec{Version: "1.0.0", Summary: "File utilities"}, false)
-	index := def.Group("index").Doc("Manage the index")
-
-	type AddArgs struct {
-		Path    string
-		Force   bool
-		Retries int32
-	}
-	add := index.Command[AddArgs, string]("add", func(a *AddArgs, s *ToolCommandSpec) {
-		s.Doc("Add a file")
-		s.Aliases("a")
-		s.Positional(&a.Path)
-		s.Flag(&a.Force).Short('f')
-		s.Option(&a.Retries).Default(1)
-	})
-	_ = add.Handle(func(_ *ToolContext, in AddArgs) (string, error) { return in.Path, nil })
-
-	tools, ok := r.discover(d)
-	if !ok {
-		t.Fatalf("tool discovery failed: %s", allDefErrors(d.Errs))
-	}
-	return newReflectedTool("files", tools[0])
+type addArgs struct {
+	Path    string
+	Force   bool
+	Retries int32
 }
-
-type Files struct{}
 
 // TestToolSnapshotWalksTheCommandTree — a caller with no Go types for the tool
 // navigates it by name, including through namespace nodes and aliases.
 func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
-	r := toolSnapshotOf(t)
+	r := reflection.ToolOf(tool.FilesMetadata(t))
 	if r.Name() != "files" || r.Version() != "1.0.0" {
 		t.Errorf("snapshot is %q/%q", r.Name(), r.Version())
 	}
@@ -111,7 +90,7 @@ func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
 // TestToolInputIsTheCanonicalRecord — positionals, options and flags all
 // become fields of the single record an invocation carries.
 func TestToolInputIsTheCanonicalRecord(t *testing.T) {
-	r := toolSnapshotOf(t)
+	r := reflection.ToolOf(tool.FilesMetadata(t))
 	add, _ := r.Command([]string{"index", "add"})
 	input := need(add.Input())
 	if got := recordFieldNames(input); strings.Join(got, ",") != "path,retries,force" {
@@ -139,30 +118,11 @@ func TestToolInputIsTheCanonicalRecord(t *testing.T) {
 	}
 }
 
-// recordToolCalls routes tool calls to a scripted outcome and records them.
-func recordToolCalls(t *testing.T, outcome func(path []string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError)) *[][]string {
-	t.Helper()
-	var calls [][]string
-	prev := startToolCall
-	t.Cleanup(func() { startToolCall = prev })
-	startToolCall = func(_ string, path []string, input types.TypedSchemaValue, _ io.Reader, _ ToolStreams) (toolCall, error) {
-		root := input.Graph.TypeNodes[input.Graph.Root].Body
-		if root.Tag() != types.SchemaTypeBodyRecordType {
-			t.Errorf("the input graph is not rooted at a record")
-		}
-		calls = append(calls, path)
-		return toolCall{wait: func() (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-			return outcome(path)
-		}, cancel: func() {}}, nil
-	}
-	return &calls
-}
-
 func TestReflectedToolClientCalls(t *testing.T) {
-	r := toolSnapshotOf(t)
-	result, _ := EncodeTypedValue("/tmp/a")
-	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-		return witTypes.Some(result.wit), nil
+	r := reflection.ToolOf(tool.FilesMetadata(t))
+	result, _ := golem.EncodeTypedValue("/tmp/a")
+	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.Some(witOf(result)), nil
 	})
 	client := need(r.Bind())
 
@@ -178,18 +138,18 @@ func TestReflectedToolClientCalls(t *testing.T) {
 // TestReflectedToolClientKeepsDeclaredErrorsStructured — a declared tool error
 // reaches the caller with its name and payload rather than as a message.
 func TestReflectedToolClientKeepsDeclaredErrorsStructured(t *testing.T) {
-	r := toolSnapshotOf(t)
-	payload, _ := EncodeTypedValue("missing.txt")
-	recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+	r := reflection.ToolOf(tool.FilesMetadata(t))
+	payload, _ := golem.EncodeTypedValue("missing.txt")
+	tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		e := types.MakeToolRpcErrorRemoteToolError(types.MakeToolErrorCustomError(types.CustomToolError{
-			Name: "not-found", Payload: payload.wit,
+			Name: "not-found", Payload: witOf(payload),
 		}))
 		return witTypes.None[types.TypedSchemaValue](), &e
 	})
 	client := need(r.Bind())
 	_, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/x", "force": false, "retries": 1})
-	var ce *ToolCallError
-	if !errors.As(err, &ce) || ce.Kind != ToolCallDeclaredError || ce.ErrorName != "not-found" {
+	var ce *tool.CallError
+	if !errors.As(err, &ce) || ce.Kind != tool.CallDeclaredError || ce.ErrorName != "not-found" {
 		t.Fatalf("got %v", err)
 	}
 	if v, err := ce.Payload().JSON(); err != nil || v != "missing.txt" {
@@ -200,7 +160,7 @@ func TestReflectedToolClientKeepsDeclaredErrorsStructured(t *testing.T) {
 // TestReflectedToolClientRefusesANamespace — a dispatch-only node is
 // discoverable but has nothing to run.
 func TestReflectedToolClientRefusesANamespace(t *testing.T) {
-	r := toolSnapshotOf(t)
+	r := reflection.ToolOf(tool.FilesMetadata(t))
 	client := need(r.Bind())
 	_, err := client.Call([]string{"index"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "only dispatches to subcommands") {
@@ -209,8 +169,8 @@ func TestReflectedToolClientRefusesANamespace(t *testing.T) {
 }
 
 func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
-	r := toolSnapshotOf(t)
-	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+	r := reflection.ToolOf(tool.FilesMetadata(t))
+	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		return witTypes.None[types.TypedSchemaValue](), nil
 	})
 	client := need(r.Bind())
@@ -224,18 +184,19 @@ func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
 }
 
 func TestDynamicToolClientCalls(t *testing.T) {
-	r := toolSnapshotOf(t)
+	r := reflection.ToolOf(tool.FilesMetadata(t))
 	add, _ := r.Command([]string{"index", "add"})
-	input, err := add.pack(map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
+	input, err := golem.EncodeTypedValue(addArgs{Path: "/tmp/a", Retries: 1})
 	if err != nil {
-		t.Fatalf("pack: %v", err)
+		t.Fatalf("encode: %v", err)
 	}
-	result, _ := EncodeTypedValue("/tmp/a")
-	calls := recordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
-		return witTypes.Some(result.wit), nil
+	_ = add
+	result, _ := golem.EncodeTypedValue("/tmp/a")
+	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
+		return witTypes.Some(witOf(result)), nil
 	})
-	client := need(BindTool("files"))
-	got, err := client.Call([]string{"index", "add"}, TypedValue{wit: input})
+	client := need(reflection.BindTool("files"))
+	got, err := client.Call([]string{"index", "add"}, input)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
 	}
@@ -246,4 +207,67 @@ func TestDynamicToolClientCalls(t *testing.T) {
 	if err != nil || value != "/tmp/a" {
 		t.Errorf("result %v (%v)", value, err)
 	}
+}
+
+// TestReflectionPacksTheCanonicalRecord — a discovered command's input is the
+// record the typed client sends, and what reflection packs decodes into the
+// handler's own arguments.
+func TestReflectionPacksTheCanonicalRecord(t *testing.T) {
+	meta, invoke, seen := tool.VcsFixture(t)
+	want := []string{"dir", "verbose", "branch", "paths", "message", "author", "include", "tags", "amend", "signoff"}
+	cmd, ok := reflection.ToolOf(meta).Command([]string{"commit"})
+	if !ok {
+		t.Fatal("reflection does not find commit")
+	}
+	input, err := cmd.Input()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := recordFieldNames(input); !slices.Equal(got, want) {
+		t.Errorf("reflected fields %v, want %v", got, want)
+	}
+
+	inputs := tool.RecordToolInputs(t)
+	if _, err := need(reflection.ToolOf(meta).Bind()).Start([]string{"commit"}, map[string]any{
+		"dir": "/src", "verbose": 1, "branch": "dev", "paths": []any{"z"}, "message": "via reflection",
+		"author": "ann", "include": []any{}, "tags": []any{}, "amend": false, "signoff": false,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	packed := (*inputs)[0]
+	if root := packed.Graph.TypeNodes[packed.Graph.Root].Body; root.Tag() != types.SchemaTypeBodyRecordType {
+		t.Fatal("reflection's input graph root is not a record")
+	}
+	if err := invoke(packed); err != nil {
+		t.Fatal(err)
+	}
+	if s := seen(); s.Dir != "/src" || s.Branch != "dev" || s.Author.Unwrap() != "ann" || s.Signoff || s.Verbose != 1 {
+		t.Errorf("reflection-packed arguments decoded as %+v", s)
+	}
+}
+
+// TestReflectedCommandErrorsAreDescribed — a caller reading a tool learns its
+// declared failures in the SDK's own terms, payload type included.
+func TestReflectedCommandErrorsAreDescribed(t *testing.T) {
+	errs := reflection.ToolOf(tool.LookupMetadata(t)).Root().Errors()
+	if len(errs) != 2 {
+		t.Fatalf("errors = %+v, want not-found and offline", errs)
+	}
+	byName := map[string]reflection.ErrorCase{}
+	for _, e := range errs {
+		byName[e.Name] = e
+	}
+	notFound, offline := byName["not-found"], byName["offline"]
+	if notFound.Kind != tool.UsageError || notFound.ExitCode != 2 || notFound.Summary != "no such name" {
+		t.Errorf("not-found = %+v", notFound)
+	}
+	if ref, has := notFound.Payload.Get(); !has {
+		t.Error("not-found lost its payload type")
+	} else if _, err := ref.PackJSON(map[string]any{"name": "x"}); err != nil {
+		t.Errorf("the payload type does not accept its own shape: %v", err)
+	}
+	if offline.Kind != tool.RuntimeError || offline.ExitCode != 69 || offline.Payload.IsSome() {
+		t.Errorf("offline = %+v", offline)
+	}
+
 }

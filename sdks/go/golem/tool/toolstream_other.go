@@ -12,28 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build wasip1
+//go:build !wasip1
 
-package golem
+package tool
 
 import (
 	toolExports "github.com/golemcloud/golem/sdks/go/golem/internal/exports/export_golem_tool_guest"
 )
 
-// newToolStdin adapts the host-supplied reader, or produces one that explains
-// its own absence.
-func newToolStdin(stdin toolExports.Stdin) *byteReader {
-	if stdin.IsNone() {
-		return &byteReader{absent: absentStdin}
-	}
-	return &byteReader{src: stdin.Some()}
+// Off the wasm target the host never supplies a stream, and binding the
+// generated reader and writer to the stream interfaces would drag their
+// //go:wasmimport methods into a native link, which has no bodies for them. The
+// adapters themselves are target-independent and tested directly; only these
+// two functions are not (see toolstream_wasm.go).
+
+func newToolStdin(_ toolExports.Stdin) *byteReader {
+	return &byteReader{absent: absentStdin}
 }
 
-// hostOutput is the writer the host supplied for an output, nil when the
-// caller did not attach it.
-func hostOutput(out toolExports.Stdout) byteStreamSink {
-	if out.IsNone() {
-		return nil
-	}
-	return out.Some()
-}
+func hostOutput(_ toolExports.Stdout) byteStreamSink { return nil }

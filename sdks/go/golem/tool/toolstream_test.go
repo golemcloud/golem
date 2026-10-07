@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package tool
 
 import (
 	"errors"
@@ -32,7 +32,7 @@ func chunk(s string) streamItem {
 	return witTypes.Ok[[]uint8, streams.ByteStreamFailure]([]uint8(s))
 }
 
-func failure(f StreamFailure) streamItem {
+func failure(f OutputFailure) streamItem {
 	return witTypes.Err[[]uint8](f.wit)
 }
 
@@ -58,7 +58,7 @@ func (f *fakeSource) WriterDropped() bool { return f.at >= len(f.items) }
 type fakeSink struct {
 	written  []byte
 	finished bool
-	failed   *StreamFailure
+	failed   *OutputFailure
 	writeErr *streams.StreamWriteError
 }
 
@@ -76,7 +76,7 @@ func (f *fakeSink) Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteEr
 }
 
 func (f *fakeSink) Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
-	f.failed = &StreamFailure{reason}
+	f.failed = &OutputFailure{reason}
 	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
 }
 
@@ -115,13 +115,13 @@ func TestStdinSplitsChunksAcrossReads(t *testing.T) {
 // so it must be distinguishable from the clean end of input.
 func TestStdinReportsAFailureItemAsAnError(t *testing.T) {
 	r := &byteReader{src: &fakeSource{items: []streamItem{
-		chunk("partial"), failure(StreamResourceExhausted()),
+		chunk("partial"), failure(OutputResourceExhausted()),
 	}}}
 	_, err := io.ReadAll(r)
 	if err == nil {
 		t.Fatal("a failure item ended the stream cleanly")
 	}
-	var se *StreamError
+	var se *OutputError
 	if !errors.As(err, &se) {
 		t.Fatalf("error is %v, want a StreamError", err)
 	}
@@ -132,17 +132,17 @@ func TestStdinReportsAFailureItemAsAnError(t *testing.T) {
 
 func TestStdinFailureReasonsRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
-		f    StreamFailure
+		f    OutputFailure
 		want string
 	}{
-		{StreamCancelled(), "cancelled"},
-		{StreamAbandoned(), "abandoned"},
-		{StreamResourceExhausted(), "resource exhausted"},
-		{StreamFailed("disk gone"), "failed: disk gone"},
+		{OutputCancelled(), "cancelled"},
+		{OutputAbandoned(), "abandoned"},
+		{OutputResourceExhausted(), "resource exhausted"},
+		{OutputFailed("disk gone"), "failed: disk gone"},
 	} {
 		r := &byteReader{src: &fakeSource{items: []streamItem{failure(tc.f)}}}
 		_, err := io.ReadAll(r)
-		var se *StreamError
+		var se *OutputError
 		if !errors.As(err, &se) {
 			t.Fatalf("%s: error is %v, want a StreamError", tc.want, err)
 		}
@@ -190,7 +190,7 @@ func TestStdoutWritesAndFinishes(t *testing.T) {
 func TestStdoutFirstTerminalWins(t *testing.T) {
 	sink := &fakeSink{}
 	w := newToolOutput("stdout", sink)
-	if err := w.Fail(StreamCancelled()); err != nil {
+	if err := w.Fail(OutputCancelled()); err != nil {
 		t.Fatalf("fail: %v", err)
 	}
 	if err := w.finish(); err != nil {
@@ -209,10 +209,10 @@ func TestStdoutFirstTerminalWins(t *testing.T) {
 
 func TestStdoutSurfacesWriteErrors(t *testing.T) {
 	closed := streams.MakeStreamWriteErrorClosed(
-		streams.MakeByteStreamCloseCauseFailed(StreamFailed("consumer died").wit))
+		streams.MakeByteStreamCloseCauseFailed(OutputFailed("consumer died").wit))
 	w := newToolOutput("stdout", &fakeSink{writeErr: &closed})
 	_, err := w.Write([]byte("x"))
-	var se *StreamError
+	var se *OutputError
 	if !errors.As(err, &se) {
 		t.Fatalf("error is %v, want a StreamError", err)
 	}
@@ -248,16 +248,16 @@ type PipeArgs struct {
 // declarePipe registers a command that copies stdin to stdout and reacts to the
 // mode it is given, mirroring the tool-streaming test components.
 func declarePipe(r *toolRegistry, d *definitions) {
-	def := defineToolInto[Pipe](r, d, "pipe", ToolSpec{Version: "0.1.0"}, false)
-	cmd := def.OutputBody[PipeArgs, uint64](func(a *PipeArgs, s *ToolCommandSpec) {
+	def := defineToolInto[Pipe](r, d, "pipe", Spec{Version: "0.1.0"}, false)
+	cmd := def.OutputBody[PipeArgs, uint64](func(a *PipeArgs, s *CommandSpec) {
 		s.Positional(&a.Mode)
 		s.Stdin(&a.In)
 		s.Stdout()
 	})
-	_ = cmd.Handle(func(ctx *ToolOutputContext, in PipeArgs) (uint64, error) {
+	_ = cmd.Handle(func(ctx *OutputContext, in PipeArgs) (uint64, error) {
 		switch in.Mode {
 		case "resource-exhausted":
-			return 0, ctx.Stdout().Fail(StreamResourceExhausted())
+			return 0, ctx.Stdout().Fail(OutputResourceExhausted())
 		case "panic":
 			panic("handler gave up")
 		}
@@ -296,7 +296,7 @@ func TestCommandStreamsCopyAndFinish(t *testing.T) {
 	}
 
 	typed := got.Ok().Result.Some()
-	out, err := TypedValue{wit: typed}.JSON()
+	out, err := typedValue(typed).JSON()
 	if err != nil {
 		t.Fatalf("result is not readable: %v", err)
 	}

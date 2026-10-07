@@ -75,6 +75,8 @@ use golem_common::schema::{AgentMethodSchema, AgentTypeSchema, InputSchema, Outp
 
 /// Import path of the guest SDK.
 pub const GOLEM_PKG: &str = GO_SDK_MODULE;
+/// The Go SDK's tool package.
+pub const TOOL_PKG: &str = "github.com/golemcloud/golem/sdks/go/golem/tool";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoBridgeMode {

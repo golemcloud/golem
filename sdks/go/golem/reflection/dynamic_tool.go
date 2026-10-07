@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package reflection
 
 import (
 	"fmt"
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
 	"io"
 )
 
@@ -30,10 +35,10 @@ func (c *DynamicToolClient) ToolName() string { return c.toolName }
 
 // Call runs a command with an already-packed input and returns the raw result,
 // none for a command that produces nothing.
-func (c *DynamicToolClient) Call(path []string, input TypedValue) (Option[TypedValue], error) {
-	inv, err := c.Start(path, input, nil, ToolStreams{})
+func (c *DynamicToolClient) Call(path []string, input golem.TypedValue) (golem.Option[golem.TypedValue], error) {
+	inv, err := c.Start(path, input, nil, tool.Streams{})
 	if err != nil {
-		return None[TypedValue](), err
+		return golem.None[golem.TypedValue](), err
 	}
 	return inv.Wait()
 }
@@ -41,29 +46,25 @@ func (c *DynamicToolClient) Call(path []string, input TypedValue) (Option[TypedV
 // Start starts a command with an already-packed input and the given standard
 // input, which may be nil, requesting the outputs streams selects. The host
 // refuses a request that does not match what the command declares.
-func (c *DynamicToolClient) Start(path []string, input TypedValue, stdin io.Reader, streams ToolStreams) (*ToolInvocation[Option[TypedValue]], error) {
-	call, err := startToolCall(c.toolName, path, input.wit, stdin, streams)
+func (c *DynamicToolClient) Start(path []string, input golem.TypedValue, stdin io.Reader, streams tool.Streams) (*tool.Invocation[golem.Option[golem.TypedValue]], error) {
+	inv, err := link.StartToolCall(c.toolName, path, link.TypedValueWit(input), stdin, streams, true,
+		func(res witTypes.Option[types.TypedSchemaValue]) (any, error) {
+			value, has := optionFromWit(res).Get()
+			if !has {
+				return golem.None[golem.TypedValue](), nil
+			}
+			return golem.Some(link.TypedValue(value).(golem.TypedValue)), nil
+		})
 	if err != nil {
 		return nil, err
 	}
-	name := c.toolName
-	return newInvocation(call, func(call toolCall) (Option[TypedValue], error) {
-		res, rpcErr := call.wait()
-		if rpcErr != nil {
-			return None[TypedValue](), toolCallErrorFromWit(name, path, *rpcErr)
-		}
-		value, has := optionFromWit(res).Get()
-		if !has {
-			return None[TypedValue](), nil
-		}
-		return Some(TypedValue{wit: value}), nil
-	}), nil
+	return inv.(*tool.Invocation[golem.Option[golem.TypedValue]]), nil
 }
 
 // Bind connects to the discovered tool. Nothing is checked until a call: the
 // tool is looked up by name when a command is invoked.
-func (r ReflectedTool) Bind() (*ReflectedToolClient, error) {
-	return &ReflectedToolClient{tool: r}, nil
+func (r Tool) Bind() (*ToolClient, error) {
+	return &ToolClient{tool: r}, nil
 }
 
 // BindTool binds a tool by name without retaining its metadata.

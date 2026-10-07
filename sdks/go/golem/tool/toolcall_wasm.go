@@ -14,7 +14,7 @@
 
 //go:build wasip1
 
-package golem
+package tool
 
 import (
 	"errors"
@@ -31,7 +31,7 @@ import (
 // it is the form a suspended caller is resumed into, and it lets the stdin pump
 // run while the call is in flight.
 func startToolCallHost(
-	tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams ToolStreams,
+	tool string, path []string, input types.TypedSchemaValue, stdin io.Reader, streams Streams,
 ) (toolCall, error) {
 	created := toolHost.ToolRpcCreate(tool)
 	if created.Tag() == witTypes.ResultErr {
@@ -93,8 +93,8 @@ func pumpToolStdin(writer *toolHost.ToolStdinWriter, closed *toolHost.ToolStdinC
 			writer.Finish()
 			return
 		case err != nil:
-			failure := StreamFailed(err.Error())
-			var se *StreamError
+			failure := OutputFailed(err.Error())
+			var se *OutputError
 			if errors.As(err, &se) {
 				failure = se.Failure
 			}
