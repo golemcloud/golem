@@ -2367,7 +2367,7 @@ mod tests {
 
             let root = tempfile::tempdir().unwrap();
             let profile = FilesystemStorageConfig {
-                storage: FilesystemStorageMode::Directory {
+                mode: FilesystemStorageMode::Directory {
                     root: root.path().into(),
                 },
                 ..FilesystemStorageConfig::default()
@@ -2377,7 +2377,7 @@ mod tests {
                 &AgentId::from_agent_name_string(ComponentId::new(), "p3-pull-read").unwrap(),
             );
             let provisioning =
-                SandboxFilesystemProvisioning::new(&profile.storage, profile.cleanup_retry.clone())
+                SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
                     .unwrap();
             let created = create_fresh(
                 provisioning,
@@ -3156,7 +3156,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let profile = FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
@@ -3166,7 +3166,7 @@ mod tests {
             &AgentId::from_agent_name_string(ComponentId::new(), "staged-attributes").unwrap(),
         );
         let provisioning =
-            SandboxFilesystemProvisioning::new(&profile.storage, profile.cleanup_retry.clone())
+            SandboxFilesystemProvisioning::new(&profile.mode, profile.cleanup_retry.clone())
                 .unwrap();
         let created = create_fresh(
             provisioning,

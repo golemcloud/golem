@@ -112,7 +112,7 @@ pub(super) async fn native_resident(parent: &Path) -> (ResidentFilesystem, PathB
         .join(agent_path_segment(&id.agent_id));
     let created = create_fresh(
         sandbox_provisioning(&FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: parent.into(),
             },
             ..FilesystemStorageConfig::default()
@@ -178,7 +178,7 @@ pub(super) fn sandbox_error(
 fn sandbox_provisioning(
     settings: &FilesystemStorageConfig,
 ) -> Result<SandboxFilesystemProvisioning, FilesystemStorageError> {
-    SandboxFilesystemProvisioning::new(&settings.storage, settings.cleanup_retry.clone())
+    SandboxFilesystemProvisioning::new(&settings.mode, settings.cleanup_retry.clone())
 }
 
 /// Makes the host directories on unmanaged storage with a temporary root.
@@ -5652,7 +5652,7 @@ async fn idle_downgrade_over_usage_requires_unload_without_resource_window() {
 async fn finite_limits_fail_on_unmanaged_production_storage_and_cleanup() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::Directory {
+        mode: FilesystemStorageMode::Directory {
             root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
@@ -5684,7 +5684,7 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
     // segments, so the name of the sandbox directory is the path segment of the agent.
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::Directory {
+        mode: FilesystemStorageMode::Directory {
             root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
@@ -5724,7 +5724,7 @@ async fn an_agent_name_of_500_bytes_gets_a_sandbox() {
 async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent_deletion() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::Directory {
+        mode: FilesystemStorageMode::Directory {
             root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
@@ -5773,7 +5773,7 @@ async fn shared_provisioning_creates_distinct_typed_filesystems_with_independent
 async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permissions() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::Directory {
+        mode: FilesystemStorageMode::Directory {
             root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
@@ -5978,7 +5978,7 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
 async fn a_truncating_open_empties_a_writable_file_and_keeps_the_bytes_of_a_read_only_one() {
     let parent = tempfile::tempdir().unwrap();
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::Directory {
+        mode: FilesystemStorageMode::Directory {
             root: parent.path().into(),
         },
         ..FilesystemStorageConfig::default()
@@ -6119,7 +6119,7 @@ async fn managed_xfs_lifecycle_installs_limits_and_deletes_verified() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::ManagedXfs { root: root.into() },
+        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let initial_limits = limits(128 * 1024 * 1024, 8192);
@@ -6166,7 +6166,7 @@ async fn managed_xfs_allocated_bytes_flow_through_resource_billing() {
         .map(PathBuf::from)
         .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root");
     let profile = FilesystemStorageConfig {
-        storage: FilesystemStorageMode::ManagedXfs { root: root.into() },
+        mode: FilesystemStorageMode::ManagedXfs { root: root.into() },
         ..FilesystemStorageConfig::default()
     };
     let provisioning = sandbox_provisioning(&profile).unwrap();

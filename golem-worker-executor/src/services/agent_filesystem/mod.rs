@@ -231,7 +231,7 @@ impl AgentFilesystems {
                 initial_files,
             },
         ) = SandboxFilesystemProvisioning::provision(
-            &settings.storage,
+            &settings.mode,
             settings.cleanup_retry.clone(),
         )
         .await?;
@@ -430,7 +430,7 @@ mod tests {
     fn agent_filesystems_binding_leaves_the_file_mode_creation_mask_as_it_is() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
@@ -675,7 +675,7 @@ mod tests {
                 .unwrap();
         });
         let settings = FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
@@ -702,7 +702,7 @@ mod tests {
     async fn agent_filesystems_give_the_initial_files_directory_to_their_one_file_loader() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()
@@ -731,7 +731,7 @@ mod tests {
     async fn a_failed_binding_discards_both_host_directories() {
         let root = tempfile::tempdir().unwrap();
         let settings = FilesystemStorageConfig {
-            storage: FilesystemStorageMode::Directory {
+            mode: FilesystemStorageMode::Directory {
                 root: root.path().into(),
             },
             ..FilesystemStorageConfig::default()

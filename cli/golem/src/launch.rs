@@ -434,7 +434,7 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            storage: args
+            mode: args
                 .agent_filesystem_root
                 .clone()
                 .map_or(FilesystemStorageMode::Temporary, |root| {

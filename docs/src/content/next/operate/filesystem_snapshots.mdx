@@ -34,7 +34,7 @@ Filesystem snapshots need storage that makes copy-on-write copies: a capture and
 
 Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
 
-The storage mode is one setting, `[filesystem_storage.storage]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
+The storage mode is one setting, `[filesystem_storage.mode]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
 
 #### Managed XFS storage (`ManagedXfs`)
 
@@ -56,14 +56,14 @@ The executor reads and sets XFS project quotas, and sets the project of director
 Set the storage mode to `ManagedXfs`, with the mount point as the root:
 
 ```toml
-[filesystem_storage.storage]
+[filesystem_storage.mode]
 type = "ManagedXfs"
 
-[filesystem_storage.storage.config]
+[filesystem_storage.mode.config]
 root = "/var/lib/golem/agents"
 ```
 
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__STORAGE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__STORAGE__CONFIG__ROOT=/var/lib/golem/agents`.
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
 
 #### XFS storage without project quotas (`ReflinkXfs`)
 
@@ -91,14 +91,14 @@ The executor needs no capability. It never changes the project id or the flags o
 Set the storage mode to `ReflinkXfs`, with the mount point as the root:
 
 ```toml
-[filesystem_storage.storage]
+[filesystem_storage.mode]
 type = "ReflinkXfs"
 
-[filesystem_storage.storage.config]
+[filesystem_storage.mode.config]
 root = "/var/lib/golem/agents"
 ```
 
-The environment variables are `GOLEM__FILESYSTEM_STORAGE__STORAGE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__STORAGE__CONFIG__ROOT=/var/lib/golem/agents`.
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
 
 What `ReflinkXfs` does not give:
 
@@ -230,7 +230,7 @@ Snapshot records that an executor wrote before you enabled filesystem snapshots 
 
 ### Check that it works
 
-- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `storage: reflink XFS at /var/lib/golem/agents`.
+- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
 - Make an agent that writes a file take snapshots. Without filesystem snapshots, such an agent takes no automatic snapshot. An agent that has only its untouched read-only initial files and no provisioned files, and that did not rename or hard link any file, and did not set a given modification time on a file or directory, uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
 - After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
 - `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
