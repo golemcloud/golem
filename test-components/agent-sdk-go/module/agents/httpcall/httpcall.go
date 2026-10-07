@@ -22,6 +22,6 @@ var RetryCallback = Agent.Method[CallbackIn, string]("retry-callback", golem.Des
 // sampled clock read that coincided with the pre-send hang.
 var AtomicTimedCallback = Agent.Method[CallbackIn, string]("atomic-timed-callback", golem.Desc("time.Now() then GET, inside an atomic region"))
 
-// AtomicCallback makes the same call inside golem.Atomically — the minimal case
+// AtomicCallback makes the same call inside durability.Atomically — the minimal case
 // for "does an outbound HTTP call settle before an atomic region closes?".
 var AtomicCallback = Agent.Method[CallbackIn, string]("atomic-callback", golem.Desc("GET the callback endpoint inside an atomic region"))

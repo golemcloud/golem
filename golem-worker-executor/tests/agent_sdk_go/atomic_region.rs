@@ -40,7 +40,7 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
-/// An outbound HTTP call inside `golem.Atomically` settles before the region
+/// An outbound HTTP call inside `durability.Atomically` settles before the region
 /// closes. The region may only end once every durable call it started has its
 /// terminal recorded; for a p3 HTTP body that terminal is written when the host
 /// finalizes the consume-body scope, which it signals through the trailers

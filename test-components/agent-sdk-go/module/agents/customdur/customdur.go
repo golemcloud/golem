@@ -1,5 +1,5 @@
 // Package customdur is the DEFINITION of an agent that exercises the custom
-// durability API (golem.DurableOp): it wraps an outbound HTTP side effect so the
+// durability API (durability.Run): it wraps an outbound HTTP side effect so the
 // operation is recorded once and replayed from the oplog after a restart rather
 // than re-run. Behaviour lives in customdur/impl.
 package customdur
@@ -14,4 +14,4 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "CustomDurAgent", Description: "Custom durable operation (DurableOp) for replay tests", Mode: golem.Durable,
 })
 
-var Callback = Agent.Method[CallbackIn, string]("callback", golem.Desc("Wrap an outbound HTTP call in golem.DurableOp and return its body"))
+var Callback = Agent.Method[CallbackIn, string]("callback", golem.Desc("Wrap an outbound HTTP call in durability.Run and return its body"))

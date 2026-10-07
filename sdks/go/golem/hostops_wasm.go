@@ -26,9 +26,6 @@ var hostOps agentHost = witHost{}
 
 type witHost struct{}
 
-func (witHost) getOplogIndex() uint64      { return apiHost.GetOplogIndex() }
-func (witHost) setOplogIndex(index uint64) { apiHost.SetOplogIndex(index) }
-
 func (witHost) fork() (bool, UUID, error) {
 	res := apiHost.Fork()
 	if res.IsErr() {

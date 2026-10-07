@@ -11,6 +11,7 @@ import (
 	"agent-sdk-go/agents/rpccaller"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/durability"
 )
 
 type state struct{}
@@ -24,7 +25,7 @@ func init() {
 	})
 	agent.Handle(rpccaller.AtomicCall, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		var total int64
-		golem.Atomically(func() {
+		durability.Atomically(func() {
 			c := ledger.Agent.Get(ledger.Id{Region: in.Region})
 			total = ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 		})

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 )
 
@@ -59,6 +60,8 @@ func newDefinitions() *definitions {
 // logic added to a wrapper would execute only against this global and slip past
 // the per-instance tests.
 var defs = newDefinitions()
+
+func init() { link.Engine = defs.Engine }
 
 // discover derives every agent type and collects every problem, purely: it reads
 // d but does not mutate it, so it is idempotent and safe to call repeatedly. The

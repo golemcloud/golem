@@ -12,17 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+// Package durability exposes Golem's exactly-once execution knobs: atomic
+// regions, idempotence mode, idempotency keys, oplog commits and checkpoints,
+// and custom durable operations.
+package durability
 
 import (
 	"fmt"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"reflect"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 
 	apiHost "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_host"
 	apiOplog "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
-	durability "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_durability_durability"
+	witDurability "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_durability_durability"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -51,7 +57,7 @@ import (
 // Return a value by capturing it in an outer variable:
 //
 //	var total int64
-//	golem.Atomically(func() { total = recompute() })
+//	durability.Atomically(func() { total = recompute() })
 func Atomically(f func()) {
 	begin := apiHost.MarkBeginOperation()
 	f() // if this panics, the region stays open and is replayed on retry
@@ -61,7 +67,7 @@ func Atomically(f func()) {
 // WithIdempotenceMode sets the current idempotence mode and returns a function
 // that restores the previous mode; use it with defer to scope it:
 //
-//	defer golem.WithIdempotenceMode(false)()
+//	defer durability.WithIdempotenceMode(false)()
 //
 // The default is true — side effects are treated as idempotent and Golem gives
 // at-least-once semantics. Setting it false gives at-most-once: the agent fails
@@ -75,8 +81,8 @@ func WithIdempotenceMode(idempotent bool) (restore func()) {
 // GenerateIdempotencyKey returns a fresh idempotency key that is stable across
 // replay — it is persisted and committed, so it can be handed to a third-party
 // system (e.g. a payment processor) to make an external call idempotent.
-func GenerateIdempotencyKey() UUID {
-	return uuidFromWit(apiHost.GenerateIdempotencyKey())
+func GenerateIdempotencyKey() golem.UUID {
+	return engine.UUIDFromWit(apiHost.GenerateIdempotencyKey())
 }
 
 // OplogCommit blocks until the oplog has been written to at least the given
@@ -90,35 +96,35 @@ func OplogCommit(replicas uint8) {
 // Custom durability
 // ---------------------------------------------------------------------------
 
-// DurableFunctionType selects how the executor commits and replays a custom
+// FunctionType selects how the executor commits and replays a custom
 // durable operation. Use ReadLocal/WriteLocal/ReadRemote/WriteRemote for the
 // common cases; the batched and transaction variants are for libraries that
 // coordinate a group of writes.
-type DurableFunctionType struct{ raw apiOplog.WrappedFunctionType }
+type FunctionType struct{ raw apiOplog.WrappedFunctionType }
 
 var (
 	// ReadLocal reads local (worker-owned) state.
-	ReadLocal = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeReadLocal()}
+	ReadLocal = FunctionType{apiOplog.MakeWrappedFunctionTypeReadLocal()}
 	// WriteLocal writes local (worker-owned) state.
-	WriteLocal = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteLocal()}
+	WriteLocal = FunctionType{apiOplog.MakeWrappedFunctionTypeWriteLocal()}
 	// ReadRemote reads from an external system.
-	ReadRemote = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeReadRemote()}
+	ReadRemote = FunctionType{apiOplog.MakeWrappedFunctionTypeReadRemote()}
 	// WriteRemote writes to an external system (the usual choice for a side effect).
-	WriteRemote = DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemote()}
+	WriteRemote = FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemote()}
 )
 
 // WriteRemoteBatched marks a remote write that the executor may commit together
 // with adjacent batched writes. Pass the oplog index that begins the batch to
 // join an existing one; omit it to start a new batch.
-func WriteRemoteBatched(begin ...uint64) DurableFunctionType {
-	return DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteBatched(optionalOplogIndex(begin))}
+func WriteRemoteBatched(begin ...uint64) FunctionType {
+	return FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteBatched(optionalOplogIndex(begin))}
 }
 
 // WriteRemoteTransaction marks a remote write that participates in a durable
 // transaction. Pass the oplog index that begins the transaction to join an
 // existing one; omit it to start a new transaction.
-func WriteRemoteTransaction(begin ...uint64) DurableFunctionType {
-	return DurableFunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteTransaction(optionalOplogIndex(begin))}
+func WriteRemoteTransaction(begin ...uint64) FunctionType {
+	return FunctionType{apiOplog.MakeWrappedFunctionTypeWriteRemoteTransaction(optionalOplogIndex(begin))}
 }
 
 func optionalOplogIndex(begin []uint64) witTypes.Option[uint64] {
@@ -128,18 +134,18 @@ func optionalOplogIndex(begin []uint64) witTypes.Option[uint64] {
 	return witTypes.None[uint64]()
 }
 
-// DurableSpec describes one custom durable operation: which function it stands
+// Spec describes one custom durable operation: which function it stands
 // for (Interface::Function, used as the persisted name) and its commit/replay
 // policy. Set ForcedCommit to force an efficient oplog commit at the end of the
 // operation.
-type DurableSpec struct {
+type Spec struct {
 	Interface    string
 	Function     string
-	Type         DurableFunctionType
+	Type         FunctionType
 	ForcedCommit bool
 }
 
-// DurableOp wraps a non-durable side effect so it is recorded once and replayed
+// Run wraps a non-durable side effect so it is recorded once and replayed
 // from the oplog thereafter. It is the building block for authoring custom
 // durable operations (the SDK's own keyvalue/blobstore/http wrappers are built
 // the same way).
@@ -150,17 +156,17 @@ type DurableSpec struct {
 // and result are encoded through the ordinary schema codec.
 //
 // Failure has two distinct channels:
-//   - Returning a value carries the outcome. If Out is a [Result], an err Result
+//   - Returning a value carries the outcome. If Out is a [golem.Result], an err Result
 //     is a RECORDED durable failure — it is persisted and replayed like any other
 //     value, so the operation is not retried.
 //   - Panicking is a transient defect: the unfinished invocation is dropped and
-//     normal recovery re-executes body. Panic (or golem.Must) when the effect
+//     normal recovery re-executes body. Panic (or [golem.Must]) when the effect
 //     should be retried rather than recorded.
 //
 // There is no async variant: a blocking body already suspends the fiber at its
 // await points, so one function covers both cases.
-func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) Out {
-	durability.ObserveFunctionCall(spec.Interface, spec.Function)
+func Run[In any, Out any](spec Spec, request In, body func() Out) Out {
+	witDurability.ObserveFunctionCall(spec.Interface, spec.Function)
 
 	name := spec.Function
 	if spec.Interface != "" {
@@ -168,9 +174,9 @@ func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) O
 	}
 
 	req := encodeDurableValue(reflect.ValueOf(&request).Elem())
-	invocation := durability.BeginCustomDurableInvocation(name, req, spec.Type.raw)
+	invocation := witDurability.BeginCustomDurableInvocation(name, req, spec.Type.raw)
 
-	if invocation.Tag() == durability.CustomDurableInvocationReplayed {
+	if invocation.Tag() == witDurability.CustomDurableInvocationReplayed {
 		return decodeDurableValue[Out](name, invocation.Replayed().Response)
 	}
 
@@ -186,7 +192,7 @@ func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) O
 
 	out := body()
 	resp := encodeDurableValue(reflect.ValueOf(&out).Elem())
-	durability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
+	witDurability.LiveCustomDurableInvocationFinish(live, resp, spec.ForcedCommit)
 	committed = true
 	return out
 }
@@ -196,8 +202,8 @@ func DurableOp[In any, Out any](spec DurableSpec, request In, body func() Out) O
 // fail-loud durability surface.
 func encodeDurableValue(v reflect.Value) types.TypedSchemaValue {
 	return types.TypedSchemaValue{
-		Graph: defs.GraphForType(v.Type()),
-		Value: engine.EncodeWith(defs.Compile(v.Type()), v),
+		Graph: link.Engine.GraphForType(v.Type()),
+		Value: engine.EncodeWith(link.Engine.Compile(v.Type()), v),
 	}
 }
 
@@ -207,7 +213,7 @@ func decodeDurableValue[Out any](name string, tv types.TypedSchemaValue) Out {
 	typ := reflect.TypeFor[Out]()
 	dst := reflect.New(typ).Elem()
 	dec := engine.Decoder{Nodes: tv.Value.ValueNodes}
-	if err := defs.Compile(typ).Decode(&dec, dst, tv.Value.Root); err != nil {
+	if err := link.Engine.Compile(typ).Decode(&dec, dst, tv.Value.Root); err != nil {
 		panic(fmt.Errorf("golem: durable %s: decoding replayed response: %w", name, err))
 	}
 	return dst.Interface().(Out)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package durability
 
 import (
 	"testing"
@@ -20,13 +20,13 @@ import (
 	apiOplog "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
 )
 
-// TestDurableFunctionTypeMapping — each DurableFunctionType maps to the expected
+// TestFunctionTypeMapping — each FunctionType maps to the expected
 // host WrappedFunctionType tag. This is the pure part of the custom-durability
-// surface; DurableOp itself needs the host and is covered by the executor tests.
-func TestDurableFunctionTypeMapping(t *testing.T) {
+// surface; Run itself needs the host and is covered by the executor tests.
+func TestFunctionTypeMapping(t *testing.T) {
 	cases := []struct {
 		name string
-		ft   DurableFunctionType
+		ft   FunctionType
 		tag  uint8
 	}{
 		{"ReadLocal", ReadLocal, apiOplog.WrappedFunctionTypeReadLocal},

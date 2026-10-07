@@ -12,16 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package durability
 
 // OplogIndex returns the index of the running agent's latest oplog entry.
-func OplogIndex() uint64 { return hostOps.getOplogIndex() }
+func OplogIndex() uint64 { return oplogHost.getOplogIndex() }
 
 // SetOplogIndex moves the running agent back to an earlier oplog index: the
 // entries after it are discarded and execution continues live from there. It
 // does not return.
 func SetOplogIndex(index uint64) {
-	hostOps.setOplogIndex(index)
+	oplogHost.setOplogIndex(index)
 	panic("golem: unreachable: the oplog index was set")
 }
 
@@ -29,7 +29,7 @@ func SetOplogIndex(index uint64) {
 // Reverting discards everything recorded since and runs again from there, live —
 // the way to retry a side effect whose outcome was not acceptable:
 //
-//	cp := golem.NewCheckpoint()
+//	cp := durability.NewCheckpoint()
 //	quote := cp.Must(fetchQuote()) // reverts, and so fetches again, on an error
 //	cp.AssertOrRevert(quote.Price < limit)
 //

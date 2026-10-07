@@ -212,7 +212,7 @@ async fn go_outgoing_http_replayed_without_network(
     Ok(())
 }
 
-/// The custom durability API (`golem.DurableOp`) records an operation once and
+/// The custom durability API (`durability.Run`) records an operation once and
 /// replays its result from the oplog after a restart. The agent wraps an outbound
 /// HTTP call in `DurableOp`; on replay the recorded result is returned without
 /// re-running the body, so the external counter advances once per *live* call —

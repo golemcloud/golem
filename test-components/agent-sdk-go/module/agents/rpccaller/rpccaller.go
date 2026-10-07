@@ -23,7 +23,7 @@ var Agent = golem.DefineAgent[Id](golem.Spec{
 var (
 	Call  = Agent.Method[CallIn, int64]("call", golem.Desc("Record via a synchronous RPC and return the ledger's new total"))
 	Async = Agent.Method[CallIn, int64]("async", golem.Desc("Record via CallAsync + Future.Get and return the ledger's new total"))
-	// AtomicCall makes the same RPC inside golem.Atomically — checks whether a
+	// AtomicCall makes the same RPC inside durability.Atomically — checks whether a
 	// cross-agent call settles before an atomic region closes.
 	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Desc("Record via a synchronous RPC inside an atomic region"))
 	// AwaitRemote blocks on another agent's promise through a synchronous RPC,

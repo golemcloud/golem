@@ -13,6 +13,7 @@ import (
 	"agent-sdk-go/agents/httpcall"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	"github.com/golemcloud/golem/sdks/go/golem/retry"
 )
 
@@ -40,7 +41,7 @@ func init() {
 	})
 	agent.Handle(httpcall.AtomicTimedCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string
-		golem.Atomically(func() {
+		durability.Atomically(func() {
 			started := time.Now()
 			body = fetch(in.Payload)
 			_ = time.Since(started)
@@ -49,7 +50,7 @@ func init() {
 	})
 	agent.Handle(httpcall.AtomicCallback, func(_ *golem.Context[state], in httpcall.CallbackIn) string {
 		var body string
-		golem.Atomically(func() { body = fetch(in.Payload) })
+		durability.Atomically(func() { body = fetch(in.Payload) })
 		return body
 	})
 }

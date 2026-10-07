@@ -20,12 +20,10 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// agentHost is the host API behind checkpoints, forking and agent management.
+// agentHost is the host API behind forking and agent management.
 // The wasm build binds the generated host calls (hostops_wasm.go); a native
 // build has no host, so tests install their own.
 type agentHost interface {
-	getOplogIndex() uint64
-	setOplogIndex(index uint64)
 	fork() (forked bool, phantomID UUID, err error)
 	getSelfMetadata() (apiHost.AgentMetadata, error)
 	getAgentMetadata(id types.AgentId) (apiHost.AgentMetadata, bool)

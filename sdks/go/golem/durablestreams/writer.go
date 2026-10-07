@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/durability"
 	wire "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_durable_streams"
 )
 
@@ -87,7 +88,7 @@ func NewWriter(url, contentType string, options WriteOptions) (*Writer, error) {
 	}
 	id, ok := options.ProducerID.Get()
 	if !ok {
-		id = golem.GenerateIdempotencyKey().String()
+		id = durability.GenerateIdempotencyKey().String()
 	}
 	return &Writer{
 		append:   hostWriter(url, contentType, id, options),
