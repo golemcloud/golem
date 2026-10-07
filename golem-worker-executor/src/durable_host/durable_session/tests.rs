@@ -35,22 +35,12 @@ use golem_schema::schema::{
 use test_r::test;
 use uuid::Uuid;
 
-fn receive_guard_counts(
-    with_source_wait: bool,
-) -> (
-    ReceiveGuard,
-    Arc<std::sync::atomic::AtomicUsize>,
-    crate::durable_host::suspendable_wait::SuspendableWaitRegistry,
-) {
+fn receive_guard_counts() -> (ReceiveGuard, Arc<std::sync::atomic::AtomicUsize>) {
     let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let waits: crate::durable_host::suspendable_wait::SuspendableWaitRegistry = Default::default();
-    let source_wait =
-        with_source_wait.then(|| SuspendableWaitRegistration::new(1, None, waits.clone()));
     let guard = ReceiveGuard {
-        source_wait,
         _live_call: LiveCallPermit::new(live_calls.clone()),
     };
-    (guard, live_calls, waits)
+    (guard, live_calls)
 }
 
 async fn local_binding(
@@ -162,10 +152,9 @@ async fn forwarded_input(
 }
 
 #[test]
-fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
-    let (guard, live_calls, waits) = receive_guard_counts(true);
+fn receive_guard_drop_before_poll_releases_live_call() {
+    let (guard, live_calls) = receive_guard_counts();
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
-    assert_eq!(waits.lock().unwrap().len(), 1);
 
     let future = Box::pin(async move {
         let _guard = guard;
@@ -174,42 +163,38 @@ fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
     drop(future);
 
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
-    assert!(waits.lock().unwrap().is_empty());
 }
 
 #[test]
-fn receive_guard_clears_source_wait_but_covers_post_receive_work() {
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+fn receive_guard_covers_post_receive_work() {
+    let (guard, live_calls) = receive_guard_counts();
     let (_commit, commit_wait) = tokio::sync::oneshot::channel::<()>();
     let mut future = Box::pin(async move {
-        guard.clear_source_wait();
+        let _guard = guard;
         commit_wait.await.map_err(|error| error.to_string())?;
         Ok::<(), String>(())
     });
 
     let mut context = Context::from_waker(futures::task::noop_waker_ref());
     assert!(future.as_mut().poll(&mut context).is_pending());
-    assert!(waits.lock().unwrap().is_empty());
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
 
     drop(future);
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
 
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (guard, live_calls) = receive_guard_counts();
     let mut failed = Box::pin(async move {
-        guard.clear_source_wait();
+        let _guard = guard;
         Err::<(), _>("journal commit failed")
     });
     assert!(failed.as_mut().poll(&mut context).is_ready());
-    assert!(waits.lock().unwrap().is_empty());
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
 }
 
 #[test]
-fn replay_receive_guard_has_live_call_without_source_wait() {
-    let (guard, live_calls, waits) = receive_guard_counts(false);
+fn replay_receive_guard_has_live_call() {
+    let (guard, live_calls) = receive_guard_counts();
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
-    assert!(waits.lock().unwrap().is_empty());
     drop(guard);
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
 }
@@ -653,6 +638,7 @@ async fn unbound_rpc_inputs_cancel_only_local_inputs_and_release_empty_drains() 
         let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
         let lifecycle = endpoint.lifecycle();
         let drain = PendingOwnedStreamDrain {
+            activity: None,
             handle: mappings[0].handle.clone(),
             endpoint,
             element_type: SchemaType::u8(),
@@ -802,6 +788,7 @@ async fn cancelled_owned_input_replays_committed_items_before_closing() {
         streams
             .drain_output(
                 PendingOwnedStreamDrain {
+                    activity: None,
                     handle,
                     endpoint,
                     element_type: SchemaType::u64(),
@@ -1128,6 +1115,87 @@ async fn mapping_records_preserve_construction_and_insertion_rules() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn output_coordinator_collects_cancelled_children_after_suspension_commit() {
+    use crate::durable_host::stream_transport::accounted_output_stream_pair;
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, commit_now, eligible_now};
+
+    let owner = OwnerSuspension::new();
+    let (runtime, _, _timer) = blocked_timer(
+        &owner,
+        std::time::Instant::now() + std::time::Duration::from_secs(60),
+    );
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let streams = StreamSession::new(
+        producer,
+        oplog.clone(),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    )
+    .with_runtime_source(Some(runtime.source()));
+    let (consumer, stream) =
+        accounted_output_stream_pair(2, Arc::new(|| true), Some(runtime.source())).unwrap();
+    let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+    let lifecycle = endpoint.lifecycle();
+    let drain = PendingOwnedStreamDrain {
+        activity: streams.drain_activity(&endpoint),
+        handle,
+        endpoint,
+        element_type: SchemaType::u32(),
+        role: SessionStreamRole::Output,
+    };
+    assert!(!eligible_now(&owner), "unpolled child must veto");
+    let coordinator_activity = runtime.external_activity();
+    let entries = oplog.length().await;
+    let mut coordinator = Box::pin(streams.drain_materialized_result(
+        vec![drain],
+        Arc::new(SchemaGraph::anonymous(SchemaType::u32())),
+        Some(runtime.source()),
+        Some(coordinator_activity),
+    ));
+    while !eligible_now(&owner) {
+        assert!(futures::poll!(coordinator.as_mut()).is_pending());
+        tokio::task::yield_now().await;
+    }
+    assert!(commit_now(&owner));
+    lifecycle.abort();
+    coordinator.await.unwrap();
+    assert_eq!(
+        oplog.length().await,
+        entries,
+        "cleanup must not invent a terminal"
+    );
+    drop(consumer);
+}
+
+#[test]
 async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
@@ -1166,6 +1234,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
     let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
     let drain = PendingOwnedStreamDrain {
+        activity: None,
         handle: handle.clone(),
         endpoint,
         element_type: SchemaType::u8(),
@@ -1226,6 +1295,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
         let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
         let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
         let drain = PendingOwnedStreamDrain {
+            activity: None,
             handle,
             endpoint,
             element_type: SchemaType::u8(),
@@ -1516,6 +1586,7 @@ async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime
     drain
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: parent,
                 endpoint,
                 element_type,
@@ -4631,9 +4702,8 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     let mut replay = replay.activate();
     let request = requests.recv().await.unwrap();
     assert!(!request.opens_source);
-    assert!(!request.source_wait);
     assert_eq!(request.ordinal, 0);
-    let (guard, live_calls, _) = receive_guard_counts(false);
+    let (guard, live_calls) = receive_guard_counts();
     assert!(request.result.send(Ok(guard)).is_ok());
     assert!(matches!(replay.recv().await.unwrap().payload,
         LiveStreamEventPayload::Item(SchemaValue::Record { fields })
@@ -4641,7 +4711,6 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
     let request = requests.recv().await.unwrap();
     assert!(request.opens_source);
-    assert!(request.source_wait);
     assert_eq!(request.ordinal, 1);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), replay.recv())
@@ -6898,6 +6967,7 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
     streams
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: output.clone(),
                 endpoint: projected,
                 element_type: target_schema.root.clone(),
@@ -7110,7 +7180,7 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
         let mut target = target.activate();
         let request = receiver.recv().await.unwrap();
         assert!(request.opens_source);
-        let (guard, live_calls, waits) = receive_guard_counts(true);
+        let (guard, live_calls) = receive_guard_counts();
         if grant {
             assert!(request.result.send(Ok(guard)).is_ok());
             assert!(
@@ -7134,7 +7204,6 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
                 .is_err()
         );
         assert_eq!(live_calls.load(Ordering::Acquire), 0);
-        assert!(waits.lock().unwrap().is_empty());
         assert!(drop_events.try_recv().is_err());
         assert_eq!(oplog.current_oplog_index().await, before);
         assert!(
@@ -10532,6 +10601,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
             destination
                 .drain_output(
                     PendingOwnedStreamDrain {
+                        activity: None,
                         handle: parent,
                         endpoint,
                         element_type: root,
@@ -11052,6 +11122,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
                 destination
                     .drain_output(
                         PendingOwnedStreamDrain {
+                            activity: None,
                             handle: parent,
                             endpoint,
                             element_type: element_type.clone(),
@@ -11236,6 +11307,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             destination
                 .drain_output(
                     PendingOwnedStreamDrain {
+                        activity: None,
                         handle: parent.clone(),
                         endpoint,
                         element_type: element_type.clone(),
@@ -11901,6 +11973,7 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     streams
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: parent.clone(),
                 endpoint,
                 element_type: SchemaType::list(SchemaType::stream(Some(element_type))),

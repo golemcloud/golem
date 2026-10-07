@@ -198,6 +198,7 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
+            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),

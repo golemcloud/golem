@@ -1077,7 +1077,11 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
+            let runtime =
+                store.with(|mut access| get_ctx(access.data_mut()).runtime_suspension.clone());
+            let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             let completed_supervisor = tokio::spawn(async move {
+                let _activity = supervisor_activity;
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1123,7 +1127,9 @@ impl EntityInvocationDurability {
             });
             let (completed_tx, completed_rx) = oneshot::channel();
             let monitor_body_resources = body_resources.clone();
+            let monitor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             tokio::spawn(async move {
+                let _activity = monitor_activity;
                 let completed = match completed_supervisor.await {
                     Ok(completed) => completed,
                     Err(error) => Err(EntityInvocationDurabilityFailure {
@@ -1191,6 +1197,14 @@ impl EntityInvocationDurability {
 
         tokio::pin!(body);
         if handle.is_live() {
+            let neutral = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .runtime_suspension
+                    .as_ref()
+                    .and_then(|runtime| {
+                        runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                    })
+            });
             let body_result = match cancellation {
                 Some(cancellation) => {
                     tokio::select! {
@@ -1201,6 +1215,7 @@ impl EntityInvocationDurability {
                 }
                 None => Some(body.as_mut().await),
             };
+            drop(neutral);
             let Some(body_result) = body_result else {
                 let _ = body.as_mut().await;
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)

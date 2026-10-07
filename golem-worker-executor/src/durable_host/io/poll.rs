@@ -13,16 +13,13 @@
 // limitations under the License.
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
-use crate::durable_host::durability::InFunctionRetryHost;
 use crate::durable_host::suspendable_wait::{
-    ParkOutcome, PromiseWaiting, SuspendableWaitContext, chrono_duration_to_nanos,
-    ephemeral_sleep_too_long_error, park_suspendable_wait, std_duration_to_nanos,
+    chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use futures::pin_mut;
-use golem_common::model::Timestamp;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
 use golem_common::model::oplog::{
@@ -30,10 +27,124 @@ use golem_common::model::oplog::{
     HostResponsePollResult,
 };
 use golem_service_base::error::worker_executor::InterruptKind;
+use std::future::Future;
+use std::pin::Pin;
 use tracing::debug;
-use wasmtime::component::Resource;
+use wasmtime::component::{Accessor, Linker, Resource, ResourceType};
 use wasmtime_wasi::IoView as _;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
+
+pub(crate) fn add_to_linker<Ctx: WorkerCtx>(
+    linker: &mut Linker<Ctx>,
+    get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
+) -> wasmtime::Result<()> {
+    let mut instance = linker.instance("wasi:io/poll@0.2.6")?;
+    instance.resource(
+        "pollable",
+        ResourceType::host::<Pollable>(),
+        move |mut store, rep| HostPollable::drop(get(store.data_mut()), Resource::new_own(rep)),
+    )?;
+    instance.func_wrap_async("[method]pollable.ready", move |mut store, (pollable,)| {
+        Box::new(async move { Ok((HostPollable::ready(get(store.data_mut()), pollable).await?,)) })
+    })?;
+    instance.func_wrap_dispatch(
+        "[method]pollable.block",
+        move |ctx, (pollable,): &(Resource<Pollable>,)| {
+            Ok(owned_timers(get(ctx), std::slice::from_ref(pollable)))
+        },
+        move |mut store, (pollable,)| {
+            Box::new(async move { HostPollable::block(get(store.data_mut()), pollable).await })
+        },
+        move |accessor, (pollable,)| {
+            Box::pin(async move {
+                poll_timers(accessor, get, vec![pollable]).await?;
+                Ok(())
+            })
+        },
+    )?;
+    instance.func_wrap_dispatch(
+        "poll",
+        move |ctx, (pollables,): &(Vec<Resource<Pollable>>,)| Ok(owned_timers(get(ctx), pollables)),
+        move |mut store, (pollables,)| {
+            Box::new(async move { Ok((Host::poll(get(store.data_mut()), pollables).await?,)) })
+        },
+        move |accessor, (pollables,)| {
+            Box::pin(async move { Ok((poll_timers(accessor, get, pollables).await?,)) })
+        },
+    )?;
+    Ok(())
+}
+
+fn owned_timers<Ctx: WorkerCtx>(
+    ctx: &DurableWorkerCtx<Ctx>,
+    pollables: &[Resource<Pollable>],
+) -> bool {
+    ctx.agent_mode() == AgentMode::Durable
+        && !ctx.state.durability_is_suppressed()
+        && ctx.runtime_suspension.is_some()
+        && !pollables.is_empty()
+        && pollables
+            .iter()
+            .all(|p| ctx.state.p2_timer_deadlines.contains_key(&p.rep()))
+}
+
+async fn poll_timers<Ctx: WorkerCtx>(
+    accessor: &Accessor<Ctx>,
+    get: fn(&mut Ctx) -> &mut DurableWorkerCtx<Ctx>,
+    pollables: Vec<Resource<Pollable>>,
+) -> wasmtime::Result<Vec<u32>> {
+    let response = DurableCallSession::<IoPollPoll, NotCancellable>::invoke_access(
+        accessor,
+        get,
+        HostRequestPollCount {
+            count: pollables.len(),
+        },
+        DurableFunctionType::ReadLocal,
+        async || {
+            let (deadlines, runtime, interrupt) = accessor.with(|mut access| {
+                let ctx = get(access.data_mut());
+                let deadlines = pollables
+                    .iter()
+                    .map(|pollable| {
+                        ctx.table().get(pollable)?;
+                        ctx.state
+                            .p2_timer_deadlines
+                            .get(&pollable.rep())
+                            .copied()
+                            .ok_or_else(|| wasmtime::Error::msg("timer pollable is not registered"))
+                    })
+                    .collect::<wasmtime::Result<Vec<_>>>()?;
+                Ok::<_, wasmtime::Error>((
+                    deadlines,
+                    ctx.runtime_suspension.clone().unwrap(),
+                    ctx.create_interrupt_signal(),
+                ))
+            })?;
+            let deadline = *deadlines.iter().min().unwrap();
+            let activity = accessor
+                .runtime_activity()
+                .and_then(|id| runtime.timer(id, deadline))
+                .ok_or_else(|| wasmtime::Error::msg("timer runtime activity is not registered"))?;
+            if deadline <= std::time::Instant::now() {
+                tokio::task::yield_now().await;
+            }
+            activity
+                .wait(tokio::time::sleep_until(deadline.into()), interrupt)
+                .await
+                .map_err(|kind| wasmtime::Error::from_anyhow(kind.into()))?;
+            let now = std::time::Instant::now();
+            Ok::<_, wasmtime::Error>(HostResponsePollResult {
+                result: Ok(deadlines
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, deadline)| (*deadline <= now).then_some(index as u32))
+                    .collect()),
+            })
+        },
+    )
+    .await?;
+    response.result.map_err(wasmtime::Error::msg)
+}
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> wasmtime::Result<bool> {
@@ -98,6 +209,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
         // Only unclassify after the resource is really gone: reps are recycled by the
         // resource table, and a failed drop leaves the pollable live.
         self.state.file_stream_pollables.remove(&child_rep);
+        self.state.p2_timer_deadlines.remove(&child_rep);
 
         // If this child belonged to a FutureInvokeResult whose drop was deferred,
         // finalize the parent deletion now that this child is gone.
@@ -130,56 +242,7 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
-    /// Mixed-ABI suspension semantics: the worker may only be suspended from a P2 `poll` when
-    /// every in-flight live durable host call is parked in a recognized suspendable wait
-    /// ([`PrivateDurableWorkerState::safe_to_suspend`](crate::durable_host::PrivateDurableWorkerState)).
-    /// Pending P3 host work in the same store (e.g. an in-flight `wasi:http` send spawned by
-    /// another guest task) therefore blocks suspension: suspending would drop the pending host
-    /// future, leave its `Start` entry incomplete and force the side effect to be re-executed on
-    /// resume. Instead, a long P2 sleep parks in a suspendable wait — mirroring the P3
-    /// `monotonic-clock` waits — and either suspends once it becomes safe, or, if the sleep
-    /// deadline is reached first, re-runs the poll without ever suspending.
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> wasmtime::Result<Vec<u32>> {
-        // check if all pollables are promise backed. In this case we can suspend immediately
-        // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
-        // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
-        //
-        // The immediate suspension is additionally gated on `safe_to_suspend()`: pending live
-        // host work (e.g. an in-flight P3 HTTP send) must not be dropped by suspending. Note
-        // that `promise_backed_pollables` currently has no insertion sites (P2 promise pollables
-        // were superseded by the P3 promise-result API), so this fast path is unreachable for
-        // non-empty poll lists. If such registrations are ever reintroduced, this path must be
-        // turned into a suspendable-wait park (like the P3 promise wait) instead of skipping
-        // suspension entirely, so that a poll blocked only on promises still suspends once
-        // pending host work completes.
-        if self.durable_execution_state().is_live
-            && self.agent_mode() != AgentMode::Ephemeral
-            && self.state.safe_to_suspend()
-        {
-            let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
-            let mut all_blocked = true;
-
-            for res in &in_ {
-                if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
-                    let ready = promise_handle.is_ready().await;
-                    if ready {
-                        all_blocked = false;
-                        break;
-                    }
-                } else {
-                    all_blocked = false;
-                    break;
-                }
-            }
-
-            if all_blocked {
-                debug!("Suspending worker until a promise gets completed");
-                return Err(wasmtime::Error::from_anyhow(
-                    InterruptKind::Suspend(Timestamp::now_utc()).into(),
-                ));
-            }
-        };
-
         let count = in_.len();
         let mut handle = DurableCallSession::<IoPollPoll, NotCancellable>::start(
             self,
@@ -217,183 +280,80 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            let record_ephemeral_promise_wait = if self.agent_mode() == AgentMode::Ephemeral {
-                let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
-                let mut all_blocked = true;
-
-                for res in &in_ {
-                    if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
-                        let ready = promise_handle.is_ready().await;
-                        if ready {
-                            all_blocked = false;
-                            break;
-                        }
-                    } else {
-                        all_blocked = false;
-                        break;
-                    }
-                }
-
-                all_blocked && !in_.is_empty()
-            } else {
-                false
-            };
             let ephemeral_poll_timeout = if self.agent_mode() == AgentMode::Ephemeral {
                 Some(self.state.config.suspend.ephemeral_max_sleep)
             } else {
                 None
             };
 
-            // The poll may need to be re-executed after parking on a suspend-for-sleep (see
-            // below), but `Host::poll` consumes its pollable arguments, so keep the raw reps
-            // around to recreate the borrows for retries.
-            let reps = in_.iter().map(|res| res.rep()).collect::<Vec<_>>();
-            let mut pollables = Some(in_);
-
-            loop {
-                let in_ = pollables.take().unwrap_or_else(|| {
-                    reps.iter()
-                        .map(|rep| Resource::new_borrow(*rep))
-                        .collect::<Vec<_>>()
-                });
-
-                let interrupt_signal = self
-                    .execution_status
-                    .read()
-                    .unwrap()
-                    .create_await_interrupt_signal();
-
-                let result = {
-                    let mut view = self.as_wasi_view();
-                    let mut io_data = view.io_data();
-                    let poll = Host::poll(&mut io_data, in_);
-                    pin_mut!(poll);
-
-                    let _promise_waiting = PromiseWaiting::new(record_ephemeral_promise_wait);
-
-                    if let Some(timeout_duration) = ephemeral_poll_timeout {
-                        let timeout = tokio::time::sleep(timeout_duration);
-                        pin_mut!(timeout);
-
-                        tokio::select! {
-                            result = &mut poll => {
-                                result
-                            }
-                            interrupt_kind = interrupt_signal => {
-                                // Trap leaves the eager host-call `Start` incomplete (re-executed on
-                                // replay); never written as a `Cancelled`.
-                                handle.abandon_for_trap();
-                                return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
-                            }
-                            _ = &mut timeout => {
-                                let max_nanos = std_duration_to_nanos(timeout_duration);
-                                return Err(wasmtime::Error::from_anyhow(
-                                    handle.trap(ephemeral_sleep_too_long_error(max_nanos, max_nanos)),
-                                ));
-                            }
-                        }
-                    } else {
-                        tokio::select! {
-                            result = &mut poll => {
-                                result
-                            }
-                            interrupt_kind = interrupt_signal => {
-                                handle.abandon_for_trap();
-                                return Err(wasmtime::Error::from_anyhow(interrupt_kind.into()));
-                            }
-                        }
-                    }
-                };
-
-                match is_suspend_for_sleep(&result) {
-                    Some(duration) => {
-                        if self.agent_mode() == AgentMode::Ephemeral {
-                            let max = self.state.config.suspend.ephemeral_max_sleep;
-                            return Err(wasmtime::Error::from_anyhow(handle.trap(
-                                ephemeral_sleep_too_long_error(
-                                    chrono_duration_to_nanos(duration),
-                                    std_duration_to_nanos(max),
-                                ),
-                            )));
-                        }
-
-                        // Do not suspend the worker right away: unrelated P3 host work (e.g. an
-                        // in-flight `wasi:http` send from another guest task) may be pending in
-                        // the same store, and suspending would drop it mid-flight. Park in a
-                        // suspendable wait instead — while parked, the store's event loop keeps
-                        // driving pending host futures. The worker is only suspended once every
-                        // live host call is parked in such a wait; if the sleep deadline arrives
-                        // first, the poll is simply re-executed.
-                        let deadline = tokio::time::Instant::now()
-                            + duration.to_std().unwrap_or(std::time::Duration::ZERO);
-                        let context = SuspendableWaitContext {
-                            wait_id: self.state.next_suspendable_wait_id(),
-                            agent_mode: self.agent_mode(),
-                            suspend: self.state.config.suspend.clone(),
-                            wait_deadline: Some(Utc::now() + duration),
-                            suspendable_waits: self.state.suspendable_waits(),
-                            wakeup_scheduler: self.state.wakeup_scheduler(),
-                        };
-                        let outcome = park_suspendable_wait(
-                            context,
-                            self.create_interrupt_signal(),
-                            || tokio::time::sleep_until(deadline),
-                            || tokio::time::Instant::now() >= deadline,
-                            || self.state.safe_to_suspend(),
-                            || {
-                                Some(
-                                    deadline.saturating_duration_since(tokio::time::Instant::now()),
-                                )
-                            },
-                        )
-                        .await
-                        .map_err(|err| wasmtime::Error::from_anyhow(handle.trap(err)))?;
-
-                        match outcome {
-                            ParkOutcome::Ready => {
-                                // The sleep deadline was reached while it was not safe to
-                                // suspend: re-execute the poll, which now completes without
-                                // requesting another suspend-for-sleep.
-                            }
-                            ParkOutcome::SuspendWorker(suspend_at) => {
-                                // The worker suspends and re-executes this poll on resume; the
-                                // eager `Start` is left incomplete (resolved by incomplete-replay
-                                // re-execution), not persisted. The wakeup at the sleep deadline
-                                // was already scheduled by the park.
-                                handle.abandon_for_trap();
-                                return Err(wasmtime::Error::from_anyhow(
-                                    InterruptKind::Suspend(suspend_at).into(),
-                                ));
-                            }
-                            ParkOutcome::Interrupted(kind) => {
-                                handle.abandon_for_trap();
-                                return Err(wasmtime::Error::from_anyhow(kind.into()));
-                            }
-                            ParkOutcome::EphemeralTooLong {
-                                requested_nanos,
-                                max_nanos,
-                            } => {
-                                return Err(wasmtime::Error::from_anyhow(handle.trap(
-                                    ephemeral_sleep_too_long_error(requested_nanos, max_nanos),
-                                )));
-                            }
-                        }
-                    }
-                    None => {
-                        break 'poll handle
-                            .complete(
-                                self,
-                                HostResponsePollResult {
-                                    result: result.map_err(|err| err.to_string()),
-                                },
-                            )
-                            .await?;
-                    }
+            let interrupt_signal = self.create_interrupt_signal();
+            let result = {
+                let mut view = self.as_wasi_view();
+                let mut io_data = view.io_data();
+                poll_borrowed(&mut io_data, in_, interrupt_signal, ephemeral_poll_timeout).await
+            };
+            let result = match result {
+                Ok(result) => result,
+                Err(BorrowedPollTrap::Interrupted(kind)) => {
+                    handle.abandon_for_trap();
+                    return Err(wasmtime::Error::from_anyhow(kind.into()));
                 }
+                Err(BorrowedPollTrap::EphemeralTimeout(max)) => {
+                    let nanos = std_duration_to_nanos(max);
+                    return Err(wasmtime::Error::from_anyhow(
+                        handle.trap(ephemeral_sleep_too_long_error(nanos, nanos)),
+                    ));
+                }
+            };
+
+            if let Some(duration) = is_suspend_for_sleep(&result) {
+                let max = self.state.config.suspend.ephemeral_max_sleep;
+                return Err(wasmtime::Error::from_anyhow(handle.trap(
+                    ephemeral_sleep_too_long_error(
+                        chrono_duration_to_nanos(duration),
+                        std_duration_to_nanos(max),
+                    ),
+                )));
             }
+            break 'poll handle
+                .complete(
+                    self,
+                    HostResponsePollResult {
+                        result: result.map_err(|err| err.to_string()),
+                    },
+                )
+                .await?;
         };
 
         response.result.map_err(wasmtime::Error::msg)
+    }
+}
+
+#[derive(Debug)]
+enum BorrowedPollTrap {
+    Interrupted(InterruptKind),
+    EphemeralTimeout(std::time::Duration),
+}
+
+async fn poll_borrowed(
+    io: &mut wasmtime_wasi::IoData<'_>,
+    pollables: Vec<Resource<Pollable>>,
+    interrupt: Pin<Box<dyn Future<Output = InterruptKind> + Send>>,
+    ephemeral_timeout: Option<std::time::Duration>,
+) -> Result<wasmtime::Result<Vec<u32>>, BorrowedPollTrap> {
+    let poll = Host::poll(io, pollables);
+    pin_mut!(poll);
+    if let Some(max) = ephemeral_timeout {
+        tokio::select! {
+            result = &mut poll => Ok(result),
+            kind = interrupt => Err(BorrowedPollTrap::Interrupted(kind)),
+            _ = tokio::time::sleep(max) => Err(BorrowedPollTrap::EphemeralTimeout(max)),
+        }
+    } else {
+        tokio::select! {
+            result = &mut poll => Ok(result),
+            kind = interrupt => Err(BorrowedPollTrap::Interrupted(kind)),
+        }
     }
 }
 
@@ -410,5 +370,71 @@ fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<Durati
         None
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::pending;
+    use std::time::{Duration as StdDuration, Instant};
+    use test_r::test;
+
+    struct Pending;
+
+    #[async_trait::async_trait]
+    impl wasmtime_wasi::Pollable for Pending {
+        async fn ready(&mut self) {
+            pending::<()>().await
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn borrowed_mixed_p2_poll_times_out_ephemeral_but_only_interrupts_durable() {
+        let max = StdDuration::from_millis(2);
+        let (_, mut io_ctx, mut table) = crate::wasi_host::create_context(
+            &[] as &[&str],
+            std::io::empty(),
+            std::io::empty(),
+            std::io::empty(),
+            |duration| wasmtime::Error::from(SuspendForSleep(duration)),
+            Some(max),
+        )
+        .unwrap();
+        let timer = table.push(Pending).unwrap();
+        let timer = wasmtime_wasi::subscribe(
+            &mut table,
+            timer,
+            Some(Instant::now() + StdDuration::from_secs(60)),
+        )
+        .unwrap();
+        let unknown = table.push(Pending).unwrap();
+        let unknown = wasmtime_wasi::subscribe(&mut table, unknown, None).unwrap();
+        let reps = [timer.rep(), unknown.rep()];
+        let mut io = wasmtime_wasi::IoData {
+            table: &mut table,
+            io_ctx: &mut io_ctx,
+        };
+        assert!(matches!(poll_borrowed(
+            &mut io, reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+            Box::pin(pending()), Some(max),
+        ).await, Err(BorrowedPollTrap::EphemeralTimeout(duration)) if duration == max));
+        assert!(matches!(
+            poll_borrowed(
+                &mut io,
+                reps.iter().map(|rep| Resource::new_borrow(*rep)).collect(),
+                Box::pin(async move {
+                    tokio::time::sleep(max * 2).await;
+                    InterruptKind::Restart
+                }),
+                None,
+            )
+            .await,
+            Err(BorrowedPollTrap::Interrupted(InterruptKind::Restart))
+        ));
+        assert!(matches!(poll_borrowed(
+            &mut io, vec![], Box::pin(pending()), None,
+        ).await, Ok(Err(error)) if error.to_string().contains("empty poll list")));
     }
 }

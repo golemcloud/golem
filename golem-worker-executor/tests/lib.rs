@@ -62,6 +62,7 @@ pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;
 pub mod scope_cards;
+pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_streaming;
 pub mod transactions;
@@ -134,6 +135,7 @@ tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
 tag_suite!(tool_streaming, group1);
+tag_suite!(suspension_races, group1);
 
 sequential_suite!(key_value_storage);
 sequential_suite!(namespace_routed_key_value_storage);

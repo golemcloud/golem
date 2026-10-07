@@ -98,6 +98,7 @@ pub(crate) struct EntityInvocationResources {
     registration: Option<EntitySlotRegistration>,
     permit: Option<OwnerInvocationPermit>,
     lane_wait: Option<OwnerLaneWait>,
+    suspension: Option<Arc<super::suspension::OwnerSuspension>>,
 }
 
 pub(crate) trait RetainedEntityStore: Send {
@@ -331,6 +332,7 @@ impl EntityInvocationResources {
         hosted: Option<Box<dyn RetainedEntityStore>>,
         mut registration: EntitySlotRegistration,
         permit: Option<OwnerInvocationPermit>,
+        suspension: Arc<super::suspension::OwnerSuspension>,
     ) -> Self {
         registration.body_finished();
         Self {
@@ -338,6 +340,7 @@ impl EntityInvocationResources {
             registration: Some(registration),
             permit,
             lane_wait: None,
+            suspension: Some(suspension),
         }
     }
 
@@ -345,7 +348,12 @@ impl EntityInvocationResources {
         let Some(mut hosted) = self.hosted.take() else {
             return Ok(());
         };
+        let activity = self
+            .suspension
+            .as_ref()
+            .map(|suspension| suspension.register_external());
         let (hosted, result) = tokio::spawn(async move {
+            let _activity = activity;
             let result = hosted.prepare_parent_end().await;
             (hosted, result)
         })
@@ -371,11 +379,22 @@ impl EntityInvocationResources {
             permit.complete();
         }
         let settlement = match self.hosted.take() {
-            Some(hosted) => tokio::spawn(hosted.settle()).await.map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "Retained entity Store settlement task failed: {error}"
-                ))
-            })?,
+            Some(hosted) => {
+                let activity = self
+                    .suspension
+                    .as_ref()
+                    .map(|suspension| suspension.register_external());
+                tokio::spawn(async move {
+                    let _activity = activity;
+                    hosted.settle().await
+                })
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "Retained entity Store settlement task failed: {error}"
+                    ))
+                })?
+            }
             None => Ok(()),
         };
         drop(self.registration.take());
@@ -474,6 +493,7 @@ pub(crate) fn start_entity_invocation<Ctx, R, F, Finalize, Finalized>(
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     parent: OwnerInvocationId,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -504,13 +524,23 @@ where
         host,
         body: ClosureEntityInvocationBody(invoke),
     };
-    start_entity_invocation_inner(slot, lane, scope, mode, Some(ticket), run, finalize)
+    start_entity_invocation_inner(
+        slot,
+        lane,
+        suspension,
+        scope,
+        mode,
+        Some(ticket),
+        run,
+        finalize,
+    )
 }
 
 pub(crate) fn start_registered_entity_invocation<Ctx, R, F, Finalize, Finalized>(
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: OwnerInvocationTicket,
@@ -533,8 +563,16 @@ where
         host,
         body: ClosureEntityInvocationBody(invoke),
     };
-    let mut handle =
-        start_entity_invocation_inner(slot, lane, scope, mode, Some(ticket), run, finalize)?;
+    let mut handle = start_entity_invocation_inner(
+        slot,
+        lane,
+        suspension,
+        scope,
+        mode,
+        Some(ticket),
+        run,
+        finalize,
+    )?;
     handle.lane_await_required = false;
     Ok(handle)
 }
@@ -546,6 +584,7 @@ pub(crate) fn start_pre_acquired_entity_invocation<Ctx, R, F, Finalize, Finalize
     host: InstanceHost<Ctx>,
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     invoke: F,
@@ -559,12 +598,13 @@ where
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
     let run = ComponentEntityRunner { host, body: invoke };
-    start_entity_invocation_inner(slot, lane, scope, mode, None, run, finalize)
+    start_entity_invocation_inner(slot, lane, suspension, scope, mode, None, run, finalize)
 }
 
 pub(crate) fn start_native_entity_invocation<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     parent: Option<OwnerInvocationId>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -606,6 +646,7 @@ where
     start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         scope,
         mode,
         ticket,
@@ -617,6 +658,7 @@ where
 pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: OwnerInvocationTicket,
@@ -647,6 +689,7 @@ where
     let mut handle = start_entity_invocation_inner(
         slot,
         lane,
+        suspension,
         scope,
         mode,
         Some(ticket),
@@ -660,6 +703,7 @@ where
 fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
+    suspension: Arc<super::suspension::OwnerSuspension>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: Option<OwnerInvocationTicket>,
@@ -674,6 +718,7 @@ where
 {
     let cancellation = tokio_util::sync::CancellationToken::new();
     let registration = slot.register(&scope, cancellation.clone())?;
+    let participant = suspension.register_entity(scope.invocation_id().clone());
     let invocation_id = scope.invocation_id().clone();
     let invocation = OwnerInvocationId::Entity(invocation_id.clone());
     let lane_await_required = ticket.is_some();
@@ -694,6 +739,7 @@ where
     );
     let task = tokio::spawn(super::invocation::with_invocation_stack(
         async move {
+            let _participant = participant;
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
             debug!("Entity invocation started");
             let mut permit = None;
@@ -717,6 +763,7 @@ where
                                     hosted,
                                     registration,
                                     permit,
+                                    suspension.clone(),
                                 ),
                             };
                         }
@@ -736,6 +783,7 @@ where
                     hosted,
                     registration,
                     permit,
+                    suspension,
                 ),
             }
         }
@@ -780,6 +828,7 @@ mod tests {
                     registration: None,
                     permit: None,
                     lane_wait: None,
+                    suspension: None,
                 },
             }
         });
@@ -853,6 +902,7 @@ mod tests {
             registration: None,
             permit: None,
             lane_wait: None,
+            suspension: None,
         };
 
         resources.prepare_parent_end().await.unwrap();

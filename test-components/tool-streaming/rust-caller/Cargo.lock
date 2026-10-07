@@ -119,6 +119,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "clock-race-tool-guest-client"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "golem-rust",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -444,6 +454,7 @@ name = "golem_it_tool_streaming_rust_caller"
 version = "0.0.1"
 dependencies = [
  "capable-streaming-tool-guest-client",
+ "clock-race-tool-guest-client",
  "futures-concurrency",
  "golem-rust",
  "secret-policy-probe-tool-guest-client",

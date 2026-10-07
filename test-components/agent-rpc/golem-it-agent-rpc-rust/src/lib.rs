@@ -336,6 +336,12 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
+    async fn consume_nested_before_timer(
+        &mut self,
+        input: NestedStreamInput,
+    ) -> (Vec<String>, Vec<u32>);
     async fn consume_strings(&self, input: AgentStream<String>) -> Vec<String>;
     async fn drop_input(&self, input: AgentStream<u32>) -> u64;
     async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
@@ -346,6 +352,9 @@ pub trait StreamingRpcTarget {
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
     fn produce_bytes(&self, values: Vec<u8>) -> AgentStream<u8>;
     fn produce_byte_then_wait(&self) -> AgentStream<u8>;
+    fn produce_after_timer(&self) -> AgentStream<u32>;
+    fn produce_bytes_after_prefix_timer(&self) -> AgentStream<u8>;
+    fn produce_nested_after_prefix_timer(&self) -> AgentStream<NestedStreamItem>;
     fn produce_then_spin(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     fn produce_many_bytes(&self, count: u32) -> AgentStream<u8>;
     fn transform_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
@@ -413,6 +422,30 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .collect()
             .await
             .expect("failed to consume string input stream")
+    }
+
+    async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32> {
+        self.scalar += 1;
+        let values = self.consume(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
+    }
+
+    async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8> {
+        self.scalar += 1;
+        let values = self.consume_bytes(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
+    }
+
+    async fn consume_nested_before_timer(
+        &mut self,
+        input: NestedStreamInput,
+    ) -> (Vec<String>, Vec<u32>) {
+        self.scalar += 1;
+        let values = self.consume_nested(input).await;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        values
     }
 
     async fn drop_input(&self, input: AgentStream<u32>) -> u64 {
@@ -483,6 +516,53 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
                 .await
                 .expect("failed to write byte before waiting");
             std::future::pending::<()>().await;
+        });
+        output
+    }
+
+    fn produce_after_timer(&self) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            for value in [23, 169, 7] {
+                writer
+                    .write_one(value)
+                    .await
+                    .expect("failed to write delayed output");
+            }
+        });
+        output
+    }
+
+    fn produce_bytes_after_prefix_timer(&self) -> AgentStream<u8> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(23).await.unwrap();
+            writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            writer.write_one(7).await.unwrap();
+            writer.write_one(201).await.unwrap();
+        });
+        output
+    }
+
+    fn produce_nested_after_prefix_timer(&self) -> AgentStream<NestedStreamItem> {
+        let (mut writer, output) = AgentStream::new();
+        let (mut nested_writer, nested) = AgentStream::new();
+        spawn_local(async move {
+            writer
+                .write_one(NestedStreamItem {
+                    label: "asymmetric".to_string(),
+                    values: nested,
+                })
+                .await
+                .unwrap();
+            nested_writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            nested_writer.write_one(7).await.unwrap();
+            nested_writer.write_one(201).await.unwrap();
+            drop(nested_writer);
+            drop(writer);
         });
         output
     }
@@ -811,6 +891,7 @@ pub trait StreamingRpcCaller {
     ) -> StreamingRpcBenchmarkResult;
     fn create_input_gate(&self) -> PromiseId;
     async fn recover_input_after_caller_crash(&self, gate: PromiseId) -> Vec<u32>;
+    async fn transfer_input_after_timer(&self) -> Vec<u32>;
     async fn fork_drop_inherited_output(
         &self,
         gate: PromiseId,
@@ -946,6 +1027,19 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
 
     fn create_input_gate(&self) -> PromiseId {
         golem_rust::create_promise()
+    }
+
+    async fn transfer_input_after_timer(&self) -> Vec<u32> {
+        let (mut writer, input) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(23).await.unwrap();
+            writer.write_one(169).await.unwrap();
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+            writer.write_all([7, 201]).await.unwrap();
+        });
+        StreamingRpcTargetClient::get(self.name.clone())
+            .consume(input)
+            .await
     }
 
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64> {
@@ -1474,6 +1568,14 @@ pub trait CancelTester {
 
     async fn receive_large_rpc_result(&self, counter_name: String) -> u64;
 
+    async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64;
+
+    async fn sync_counter_with_pending_timer(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> u64;
+
     async fn grow_memory_after_rpc_result(&self, counter_name: String);
 
     async fn durable_operation_after_rpc_result(&self, counter_name: String, operation: String);
@@ -1637,6 +1739,60 @@ impl CancelTester for CancelTesterImpl {
                 .result
                 .unwrap()
         };
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+    }
+
+    async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let future = rpc
+            .async_invoke_and_await(
+                "inc_after_promise",
+                encode_single_parameter(promise_id),
+                None,
+            )
+            .future;
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
+        let result = future.get().await.unwrap().unwrap();
+        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+    }
+
+    async fn sync_counter_with_pending_timer(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> u64 {
+        let rpc = WasmRpc::new(
+            "RpcBlockingCounter",
+            encode_single_parameter(counter_name),
+            None,
+            Vec::new(),
+        );
+        let deadline = golem_rust::wasip3::clocks::monotonic_clock::now() + 30_000_000_000;
+        let mut timer = Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_until(
+            deadline,
+        ));
+        // Poll the timer before borrowing the Store for the synchronous host call.
+        // Keeping both in this poll prevents a timer-only suspension between them.
+        let result = std::future::poll_fn(|cx| {
+            assert!(timer.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(
+                rpc.invoke_and_await(
+                    "inc_after_promise",
+                    encode_single_parameter(promise_id.clone()),
+                    None,
+                )
+                .unwrap()
+                .result
+                .unwrap(),
+            )
+        })
+        .await;
+        timer.await;
         u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
     }
 

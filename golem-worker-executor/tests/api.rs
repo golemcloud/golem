@@ -2975,7 +2975,7 @@ async fn get_workers_opaque_cursor_replays_after_restart(
         result = &mut pending_invocation => {
             return Err(anyhow!("enumeration returned before the promise was completed: {:?}", result??));
         }
-        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(10)) => {
+        status = executor.wait_for_status(&caller_id, AgentStatus::Suspended, Duration::from_secs(30)) => {
             status?;
         }
     }

@@ -1,4 +1,5 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
+use clock_race_tool_guest_client::ClockRaceClient;
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
     AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
@@ -252,10 +253,15 @@ pub trait ToolStreamingCaller {
     async fn dynamic_mcp_probe(&self, value: String) -> String;
     async fn dynamic_mcp_chain_probe(&self, value: String) -> Vec<String>;
     async fn dynamic_mcp_stdout_probe(&self, value: String) -> String;
+    async fn clock_races_through_tool_entity(&self) -> Vec<String>;
+    async fn long_clock_through_tool_entity(&self) -> Vec<String>;
+    async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String>;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
+    fn native_veto_gate(&self) -> golem_rust::PromiseId;
+    async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
@@ -1399,6 +1405,85 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         String::from_utf8(stdout).expect("MCP stdout is UTF-8")
     }
 
+    async fn clock_races_through_tool_entity(&self) -> Vec<String> {
+        let client = ClockRaceClient::new();
+        let first = client
+            .race_p3_sleeps(vec![2, 60])
+            .await
+            .expect("race two P3 clocks");
+        let second = client
+            .race_p3_sleeps(vec![2, 60, 600])
+            .await
+            .expect("race three P3 clocks");
+        let promise = client
+            .race_promise_and_p3_sleep(2)
+            .await
+            .expect("race pending promise and P3 clock");
+        let polling = client
+            .polling_loop_vs_watchdog()
+            .await
+            .expect("polling loop beats long watchdog");
+        let follow_up = client.follow_up().await.expect("clock race follow-up");
+        vec![
+            first.to_string(),
+            second.to_string(),
+            promise,
+            polling,
+            follow_up,
+        ]
+    }
+
+    async fn long_clock_through_tool_entity(&self) -> Vec<String> {
+        let client = ClockRaceClient::new();
+        let timer = client
+            .race_p3_sleeps(vec![20])
+            .await
+            .expect("await long P3 clock");
+        let follow_up = client.follow_up().await.expect("clock follow-up");
+        vec![timer.to_string(), follow_up]
+    }
+
+    async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String> {
+        #[derive(IntoSchema)]
+        struct Input {
+            secs: Vec<u64>,
+        }
+        let rpc = ToolRpc::create("clock-race").expect("clock tool RPC creation");
+        let start = |secs| {
+            let input = Input { secs: vec![secs] }
+                .into_typed_schema_value()
+                .expect("encode clock input");
+            rpc.async_invoke_and_await(
+                &vec!["race-p3-sleeps".to_string()],
+                golem_rust::encode_typed_schema_value(&input).expect("encode clock wire input"),
+                None,
+                None,
+                None,
+            )
+        };
+        let long = start(20);
+        let short = start(2);
+        let results = tool_host::get_invoke_results(vec![&long, &short]).await;
+        let mut evidence: Vec<String> = results
+            .into_iter()
+            .map(|result| {
+                let result = result.expect("aggregate clock result");
+                let value = decode_typed_schema_value_owned(result.result.expect("clock result"))
+                    .expect("decode clock result");
+                u64::from_value(value.value())
+                    .expect("clock result is u64")
+                    .to_string()
+            })
+            .collect();
+        evidence.push(
+            ClockRaceClient::new()
+                .follow_up()
+                .await
+                .expect("clock follow-up"),
+        );
+        evidence
+    }
+
     async fn filesystem_tool_roundtrip(&self) -> Vec<String> {
         let path = "workspace/guest-filesystem-tools/notes.txt".to_string();
         let write: RawWriteFileResult = invoke_filesystem_tool(
@@ -1596,6 +1681,45 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .expect("decode typed input evidence");
         Vec::<TypedInputEvidence>::from_value(value.value()).expect("typed input evidence shape")
+    }
+
+    fn native_veto_gate(&self) -> golem_rust::PromiseId {
+        golem_rust::create_promise()
+    }
+
+    async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String> {
+        let rpc = ToolRpc::create("native-streaming").expect("native tool RPC creation");
+        let native = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("wait-cancel"),
+            None,
+            None,
+            None,
+        );
+        let cancel = async {
+            golem_rust::await_promise(&gate).await;
+            native.cancel();
+        };
+        let timer = async {
+            ClockRaceClient::new()
+                .race_p3_sleeps(vec![20])
+                .await
+                .expect("long sibling clock")
+        };
+        // Poll the result throughout the gate wait, not only after cancellation.
+        let (result, (), timer) = (raw_result(&native), cancel, timer).join().await;
+        assert!(
+            matches!(result, Err(ToolRpcError::Cancelled)),
+            "explicit native cancellation must select cancelled"
+        );
+        vec![
+            "cancelled".to_string(),
+            timer.to_string(),
+            ClockRaceClient::new()
+                .follow_up()
+                .await
+                .expect("clock follow-up"),
+        ]
     }
 
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String> {

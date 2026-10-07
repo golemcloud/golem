@@ -34,11 +34,11 @@ use crate::durable_host::stream_session::{
     preflight_recursive_stream_value, remap_recursive_stream_references,
 };
 use crate::durable_host::stream_transport::{LiveStreamEndpoint, SourceLifecycle};
-use crate::durable_host::suspendable_wait::SuspendableWaitRegistration;
 use crate::durable_host::tail_work::TailActivity;
 use crate::durable_host::{BeginReplayToLive, DurableWorkerCtx, DurableWorkerCtxView};
 use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
+use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
 use futures::future::{BoxFuture, try_join_all};
 use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
@@ -136,6 +136,7 @@ pub struct StreamSession {
     rpc: Option<Arc<dyn Rpc>>,
     consumer_journal: Option<Arc<dyn DurableStreamConsumerJournal>>,
     auth_ctx: Option<AuthCtx>,
+    runtime_source: Option<RuntimeSource>,
     require_root_attachment_before_production: bool,
     next_transport_stream_id: Arc<AtomicU64>,
     session_lock: Arc<Mutex<()>>,
@@ -173,6 +174,7 @@ struct PendingOwnedStreamDrain {
     endpoint: LiveStreamEndpoint,
     element_type: SchemaType,
     role: SessionStreamRole,
+    activity: Option<ExternalActivity>,
 }
 
 /// An output already registered and drained by this session before result publication.
@@ -450,6 +452,7 @@ impl StreamSession {
             rpc: None,
             consumer_journal: None,
             auth_ctx: None,
+            runtime_source: None,
             require_root_attachment_before_production: false,
             next_transport_stream_id: Arc::new(AtomicU64::new(next_transport_stream_id)),
             session_lock,
@@ -551,6 +554,18 @@ impl StreamSession {
     pub fn with_auth_ctx(mut self, auth_ctx: AuthCtx) -> Self {
         self.auth_ctx = Some(auth_ctx);
         self
+    }
+
+    pub(crate) fn with_runtime_source(mut self, source: Option<RuntimeSource>) -> Self {
+        self.runtime_source = source;
+        self
+    }
+
+    fn drain_activity(&self, endpoint: &LiveStreamEndpoint) -> Option<ExternalActivity> {
+        self.runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity)
+            .or_else(|| endpoint.external_activity())
     }
 
     /// Requires durable root attachment activation before open output production.
@@ -2882,6 +2897,7 @@ impl StreamSession {
             mappings.push(mapping);
             if let Some(endpoint) = pending.endpoint {
                 drains.push(PendingOwnedStreamDrain {
+                    activity: self.drain_activity(&endpoint),
                     handle,
                     endpoint,
                     element_type: pending.element_type,
@@ -2961,6 +2977,22 @@ impl StreamSession {
         root: &SchemaType,
         component_revision: golem_common::model::component::ComponentRevision,
     ) -> Result<SchemaValue, SessionError> {
+        let preparation = self
+            .runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
+        self.materialize_result_accounted(value, graph, root, component_revision, preparation)
+            .await
+    }
+
+    pub(crate) async fn materialize_result_accounted(
+        &self,
+        value: SchemaValue,
+        graph: &SchemaGraph,
+        root: &SchemaType,
+        component_revision: golem_common::model::component::ComponentRevision,
+        preparation: Option<ExternalActivity>,
+    ) -> Result<SchemaValue, SessionError> {
         preflight_recursive_stream_value(&value)?;
         let mut next_stream_index = 0u64;
         let retained_bytes =
@@ -2978,10 +3010,11 @@ impl StreamSession {
         let root = root.clone();
         let (result, drain) = self
             .producer
-            .run_admitted(
+            .run_admitted_accounted(
                 None,
                 retained_bytes,
                 false,
+                preparation,
                 move |_, admission| async move {
                     let MaterializedResult {
                         value: result,
@@ -2995,9 +3028,18 @@ impl StreamSession {
                             component_revision,
                         )
                         .await?;
+                    let coordinator_source = session.runtime_source.clone();
+                    let coordinator_activity = coordinator_source
+                        .as_ref()
+                        .map(RuntimeSource::external_activity);
                     let drain = tokio::spawn(async move {
                         session
-                            .drain_materialized_result(drains, Arc::new(drain_graph))
+                            .drain_materialized_result(
+                                drains,
+                                Arc::new(drain_graph),
+                                coordinator_source,
+                                coordinator_activity,
+                            )
                             .await
                     });
                     Ok::<_, SessionError>((result, drain))
@@ -3373,6 +3415,7 @@ impl StreamSession {
                 && !pending.cancelled
             {
                 drains.push(PendingOwnedStreamDrain {
+                    activity: self.drain_activity(&endpoint),
                     handle,
                     endpoint,
                     element_type: pending.element_type,
@@ -3393,6 +3436,8 @@ impl StreamSession {
         &self,
         drains: Vec<PendingOwnedStreamDrain>,
         graph: Arc<SchemaGraph>,
+        coordinator_source: Option<RuntimeSource>,
+        mut coordinator_activity: Option<ExternalActivity>,
     ) -> Result<(), SessionError> {
         if !drains.is_empty() {
             let (nested_tx, mut nested_rx) = mpsc::unbounded_channel();
@@ -3418,21 +3463,34 @@ impl StreamSession {
                 if tasks.is_empty() {
                     break;
                 }
-                tokio::select! {
-                    Some(drain) = nested_rx.recv() => {
+                let wait = async {
+                    tokio::select! {
+                        Some(drain) = nested_rx.recv() => (Some(drain), None),
+                        result = tasks.join_next() => (None, Some(result)),
+                    }
+                };
+                let (drain, result) = match (&mut coordinator_activity, &coordinator_source) {
+                    (Some(activity), Some(source)) => activity.coordinate(source, wait).await,
+                    _ => wait.await,
+                };
+                match (drain, result) {
+                    (Some(drain), _) => {
                         let streams = self.clone();
                         let graph = graph.clone();
                         let nested_tx = nested_tx.clone();
-                        tasks.spawn(async move {
-                            streams.drain_output(drain, graph, nested_tx).await
-                        });
+                        tasks.spawn(
+                            async move { streams.drain_output(drain, graph, nested_tx).await },
+                        );
                     }
-                    result = tasks.join_next() => {
+                    (_, Some(result)) => {
                         let task_result = result
                             .expect("durable output drain task set unexpectedly became empty")
-                            .map_err(|error| format!("durable output drain task failed: {error}"))?;
+                            .map_err(|error| {
+                                format!("durable output drain task failed: {error}")
+                            })?;
                         task_result?;
                     }
+                    _ => unreachable!(),
                 }
             }
         }
@@ -3612,14 +3670,24 @@ impl StreamSession {
         graph: Arc<SchemaGraph>,
         element_type: SchemaType,
     ) -> Result<(), SessionError> {
+        let coordinator_source = self
+            .runtime_source
+            .clone()
+            .or_else(|| endpoint.runtime_source());
+        let coordinator_activity = coordinator_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
         self.drain_materialized_result(
             vec![PendingOwnedStreamDrain {
+                activity: self.drain_activity(&endpoint),
                 handle,
                 endpoint,
                 element_type,
                 role: SessionStreamRole::Output,
             }],
             graph,
+            coordinator_source,
+            coordinator_activity,
         )
         .await
     }
@@ -3664,8 +3732,10 @@ impl StreamSession {
         &self,
         handle: DurableStreamHandle,
         endpoint: LiveStreamEndpoint,
+        mut activity: Option<ExternalActivity>,
     ) -> Result<(), SessionError> {
         let lifecycle = endpoint.lifecycle();
+        let runtime_source = endpoint.runtime_source();
         let mut source = endpoint.activate();
         let cancelled = tokio_util::sync::CancellationToken::new();
         let registration_id = self
@@ -3731,7 +3801,12 @@ impl StreamSession {
                     biased;
                     _ = cancelled.cancelled() => return Ok(()),
                     _ = lifecycle.cancelled() => return Ok(()),
-                    received = source.recv() => match received {
+                    received = async {
+                        match (&mut activity, &runtime_source, recorded.is_none()) {
+                            (Some(activity), Some(runtime_source), true) => activity.receive(runtime_source, source.recv()).await,
+                            _ => source.recv().await,
+                        }
+                    } => match received {
                         Ok(event) => event,
                         Err(LiveStreamReceiveError::Closed) if lifecycle.is_aborted() => return Ok(()),
                         Err(error) => {
@@ -3874,18 +3949,37 @@ impl StreamSession {
         graph: Arc<SchemaGraph>,
         nested_tx: mpsc::UnboundedSender<PendingOwnedStreamDrain>,
     ) -> Result<(), SessionError> {
+        let source = self
+            .runtime_source
+            .clone()
+            .or_else(|| drain.endpoint.runtime_source());
+        StreamWriteAdmission::account_output_mutations(
+            source,
+            self.drain_output_accounted(drain, graph, nested_tx),
+        )
+        .await
+    }
+
+    async fn drain_output_accounted(
+        &self,
+        drain: PendingOwnedStreamDrain,
+        graph: Arc<SchemaGraph>,
+        nested_tx: mpsc::UnboundedSender<PendingOwnedStreamDrain>,
+    ) -> Result<(), SessionError> {
         let PendingOwnedStreamDrain {
             handle,
             endpoint,
             element_type,
             role,
+            mut activity,
         } = drain;
         if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
-            return self.drain_byte_output(handle, endpoint).await;
+            return self.drain_byte_output(handle, endpoint, activity).await;
         }
         // Root drains require admission; children are admitted by their committed parent item.
         // A child returned unread to its producer is consumed locally, without an attachment.
         let lifecycle = endpoint.lifecycle();
+        let runtime_source = endpoint.runtime_source();
         let mut source = endpoint.activate();
         let source_cancelled = tokio_util::sync::CancellationToken::new();
         let registration_id = self
@@ -3922,7 +4016,12 @@ impl StreamSession {
                     _ = lifecycle.cancelled() => {
                         break;
                     },
-                    received = source.recv() => received,
+                    received = async {
+                        match (&mut activity, &runtime_source) {
+                            (Some(activity), Some(runtime_source)) => activity.receive(runtime_source, source.recv()).await,
+                            _ => source.recv().await,
+                        }
+                    } => received,
             };
             let event = match received {
                 Ok(event) => event,
@@ -4238,6 +4337,7 @@ impl StreamSession {
                                                         if let Some(endpoint) = output.endpoint {
                                                             nested_tx
                                                     .send(PendingOwnedStreamDrain {
+                                                        activity: session.drain_activity(&endpoint),
                                                         handle: nested_handle,
                                                         endpoint,
                                                         element_type: output.element_type,
@@ -4366,27 +4466,35 @@ impl StreamSession {
         let retained_bytes = DurableStreamStore::finish_session_retained_bytes(&result);
         let outcome = self
             .producer
-            .run_admitted(None, retained_bytes, true, move |_, admission| async move {
-                let _session_guard = session.session_lock.lock().await;
-                session.validate_topology_complete().await?;
-                let session_for_write = session.clone();
-                let outcome = admission
-                    .submit(move |owner, context| async move {
-                        owner
-                            .finish_session(
-                                Some(&context),
-                                session_for_write.session_key.clone(),
-                                session_for_write.entity_parent_start_index,
-                                result,
-                                input_cancel_reason,
-                            )
-                            .await
-                            .map_err(SessionError::from)
-                    })
-                    .await;
-                admission.wait_published().await?;
-                outcome
-            })
+            .run_admitted_accounted(
+                None,
+                retained_bytes,
+                true,
+                self.runtime_source
+                    .as_ref()
+                    .map(RuntimeSource::external_activity),
+                move |_, admission| async move {
+                    let _session_guard = session.session_lock.lock().await;
+                    session.validate_topology_complete().await?;
+                    let session_for_write = session.clone();
+                    let outcome = admission
+                        .submit(move |owner, context| async move {
+                            owner
+                                .finish_session(
+                                    Some(&context),
+                                    session_for_write.session_key.clone(),
+                                    session_for_write.entity_parent_start_index,
+                                    result,
+                                    input_cancel_reason,
+                                )
+                                .await
+                                .map_err(SessionError::from)
+                        })
+                        .await;
+                    admission.wait_published().await?;
+                    outcome
+                },
+            )
             .await;
         match outcome {
             Ok(()) => Ok(()),
@@ -5968,14 +6076,7 @@ struct DurableInputRead {
 type DurableReceiveFuture = BoxFuture<'static, Result<DurableInputRead, SessionError>>;
 
 struct ReceiveGuard {
-    source_wait: Option<SuspendableWaitRegistration>,
     _live_call: LiveCallPermit,
-}
-
-impl ReceiveGuard {
-    fn clear_source_wait(&mut self) {
-        self.source_wait = None;
-    }
 }
 
 /// Adapts a durable input endpoint to Wasmtime polling, values, and guest-drop cleanup.
@@ -6044,7 +6145,6 @@ pub(crate) enum DurableInputEvent {
 
 pub(crate) struct DurableInputReceiveAdmission {
     opens_source: bool,
-    source_wait: bool,
     ordinal: u64,
     result: oneshot::Sender<Result<ReceiveGuard, WorkerExecutorError>>,
 }
@@ -6106,9 +6206,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> AccessorTask<U, HasSelf<DurableWorkerCtx
             Ok(accessor.with(|mut access| {
                 let ctx = access.get();
                 ReceiveGuard {
-                    source_wait: self
-                        .source_wait
-                        .then(|| ctx.state.register_passive_suspendable_wait()),
                     _live_call: LiveCallPermit::new(ctx.state.live_host_call_counter()),
                 }
             }))
@@ -6342,7 +6439,6 @@ impl DurableInputProducer {
                 if admission
                     .send(DurableInputReceiveAdmission {
                         opens_source: self.input.opens_source(),
-                        source_wait: self.input.journal.is_empty(),
                         ordinal: self.input.consumer_read_ordinal,
                         result,
                     })
@@ -6404,7 +6500,7 @@ impl DurableInputEndpoint {
         let ordinal = self.consumer_read_ordinal;
         let role = self.role;
         Box::pin(async move {
-            let mut guard = guard;
+            let _guard = guard;
             let mut journaled = queued_event.is_some();
             let event = match queued_event {
                 Some(event) => Some(event),
@@ -6427,9 +6523,6 @@ impl DurableInputEndpoint {
                         Some(reader) => reader.next().await,
                         None => Ok(None),
                     };
-                    if let Some(guard) = &mut guard {
-                        guard.clear_source_wait();
-                    }
                     result.map_err(SessionError::from)?
                 }
             };
@@ -6805,15 +6898,7 @@ impl DurableInputProducer {
                     .state
                     .live_host_call_counter(),
             );
-            let source_wait = self.input.journal.is_empty().then(|| {
-                store
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .register_passive_suspendable_wait()
-            });
             self.pending = Some(self.input.receive(Some(ReceiveGuard {
-                source_wait,
                 _live_call: live_call,
             })));
         }

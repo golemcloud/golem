@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 [dependencies]
 capable-streaming-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/capable-streaming-tool-guest-client" }
+clock-race-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/clock-race-tool-guest-client" }
 futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 secret-policy-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/secret-policy-probe-tool-guest-client" }
