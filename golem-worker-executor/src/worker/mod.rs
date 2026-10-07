@@ -6206,14 +6206,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             into_pending_invocation_parts(invocation);
         let invocation_context = invocation_context
             .limit_depth(self.deps.config().limits.max_invocation_context_stack_depth);
-        let payload = oplog
-            .upload_payload_owned(invocation_payload)
-            .await
-            .map_err(|e| {
+        let payload = match invocation_payload {
+            // A manual update invocation stays in the oplog whatever the payload limit, so every
+            // reader of the oplog tells it from other invocations without a download.
+            payload @ AgentInvocationPayload::ManualUpdate { .. } => {
+                OplogPayload::SerializedInline {
+                    bytes: golem_common::serialization::serialize(&payload).map_err(|e| {
+                        WorkerExecutorError::invalid_request(format!(
+                            "Failed to serialize invocation payload: {e}"
+                        ))
+                    })?,
+                    cached: Some(Arc::new(payload)),
+                }
+            }
+            payload => oplog.upload_payload_owned(payload).await.map_err(|e| {
                 WorkerExecutorError::invalid_request(format!(
                     "Failed to upload invocation payload: {e}"
                 ))
-            })?;
+            })?,
+        };
         let invocation_context_spans = invocation_context.to_oplog_data();
         Ok((
             semantic_key,

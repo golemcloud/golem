@@ -4919,14 +4919,55 @@ async fn a_fork_whose_prefix_ends_before_a_manual_update_is_paired_cancels_the_u
     #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    assert_a_fork_before_a_manual_update_is_paired_cancels_the_update(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        None,
+    )
+    .await
+}
+
+/// With a payload limit of zero every invocation payload that may go outside the oplog does.
+#[test]
+#[timeout("4m")]
+async fn a_fork_whose_prefix_ends_before_a_manual_update_is_paired_cancels_the_update_with_a_payload_limit_of_zero(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    assert_a_fork_before_a_manual_update_is_paired_cancels_the_update(
+        last_unique_id,
+        deps,
+        initial_file_system,
+        Some(0),
+    )
+    .await
+}
+
+/// A fork whose prefix ends at the invocation of a manual update writes one failed update for
+/// it, with the invocation as its attempt, and the forked agent does not run the update.
+/// `max_payload_size` overrides the payload limit of the oplog.
+async fn assert_a_fork_before_a_manual_update_is_paired_cancels_the_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    initial_file_system: &PrecompiledComponent,
+    max_payload_size: Option<usize>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     with_snapshot_store(|store| async move {
-        let executor = crate::fork::start_with_local_resume_and(
-            deps,
-            &context,
-            snapshotting(&store, Duration::from_secs(30), None),
-        )
-        .await?;
+        let mut overrides = snapshotting(&store, Duration::from_secs(30), None);
+        let configure = overrides.configure.take();
+        overrides.configure = Some(Arc::new(move |config| {
+            if let Some(configure) = &configure {
+                configure(config);
+            }
+            if let Some(max_payload_size) = max_payload_size {
+                config.oplog.max_payload_size = max_payload_size;
+            }
+        }));
+        let executor = crate::fork::start_with_local_resume_and(deps, &context, overrides).await?;
         let source = Agent::start(
             &executor,
             &context,
@@ -4954,6 +4995,7 @@ async fn a_fork_whose_prefix_ends_before_a_manual_update_is_paired_cancels_the_u
                 vec![],
             )
             .await?;
+        let before_update = executor.stored_oplog(&source.worker_id).await.len();
         executor
             .manual_update_worker(&source.worker_id, updated.revision, false)
             .await?;
@@ -4962,8 +5004,10 @@ async fn a_fork_whose_prefix_ends_before_a_manual_update_is_paired_cancels_the_u
                 .stored_oplog(&source.worker_id)
                 .await
                 .iter()
-                .position(|entry| manual_update_target(entry) == Some(updated.revision))
-                .map(|position| OplogIndex::from_u64(position as u64 + 1)))
+                .enumerate()
+                .skip(before_update)
+                .find(|(_, entry)| matches!(entry, OplogEntry::PendingAgentInvocation { .. }))
+                .map(|(position, _)| OplogIndex::from_u64(position as u64 + 1)))
         })
         .await?;
         let target_agent = golem_common::phantom_agent_id!(

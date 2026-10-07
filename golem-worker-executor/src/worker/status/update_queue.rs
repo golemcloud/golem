@@ -311,8 +311,9 @@ thread_local! {
 
 /// The target revision of a pending agent invocation payload when it is a manual update.
 ///
-/// Manual update payloads are tiny and always stored inline, so this never needs to download an
-/// external payload: an `External` payload is by definition not a manual update.
+/// The producer of a manual update invocation keeps its payload in the oplog whatever the payload
+/// limit, so this never needs to download an external payload: an `External` payload is not a
+/// manual update.
 pub(crate) fn manual_update_target_revision_of(
     payload: &OplogPayload<AgentInvocationPayload>,
 ) -> Option<ComponentRevision> {
