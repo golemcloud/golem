@@ -111,16 +111,23 @@ pub(crate) struct RevisionUpdate {
 /// config and wallet cards of the agent type, and applies the initial-file rule to the agent
 /// filesystem.
 pub(crate) async fn prepare_revision_update(
-    inputs: &RevisionUpdateInputs,
+    inputs: RevisionUpdateInputs,
     new_revision: ComponentRevision,
 ) -> Result<RevisionUpdate, UpdateStateError> {
-    let metadata = inputs
-        .component_service
-        .get_metadata(inputs.owned_agent_id.component_id(), Some(new_revision))
+    let RevisionUpdateInputs {
+        component_service,
+        file_loader,
+        filesystem_generation_handle,
+        owned_agent_id,
+        agent_id,
+        initial_agent_config,
+    } = inputs;
+    let metadata = component_service
+        .get_metadata(owned_agent_id.component_id(), Some(new_revision))
         .await
         .map_err(UpdateStateError::Metadata)?;
 
-    let provision_config = inputs.agent_id.as_ref().and_then(|agent_id| {
+    let provision_config = agent_id.as_ref().and_then(|agent_id| {
         metadata
             .metadata
             .agent_type_provision_configs()
@@ -128,7 +135,7 @@ pub(crate) async fn prepare_revision_update(
             .cloned()
     });
 
-    let agent_state = match &inputs.agent_id {
+    let agent_state = match &agent_id {
         Some(agent_id) => {
             let agent_type = metadata
                 .metadata
@@ -137,7 +144,7 @@ pub(crate) async fn prepare_revision_update(
                     UpdateStateError::MissingAgentType(agent_id.agent_type.to_string())
                 })?;
             let updated_agent_config = effective_agent_config(
-                inputs.initial_agent_config.clone(),
+                initial_agent_config,
                 provision_config
                     .as_ref()
                     .map(|config| config.config.clone())
@@ -157,9 +164,9 @@ pub(crate) async fn prepare_revision_update(
     };
 
     update_initial_files(
-        &inputs.filesystem_generation_handle,
-        Arc::clone(&inputs.file_loader),
-        inputs.owned_agent_id.environment_id,
+        &filesystem_generation_handle,
+        file_loader,
+        owned_agent_id.environment_id,
         provision_config
             .as_ref()
             .map(|config| config.files.clone())

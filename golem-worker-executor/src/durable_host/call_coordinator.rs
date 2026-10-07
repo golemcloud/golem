@@ -1459,7 +1459,7 @@ where
         return Ok(());
     }
 
-    let update = prepare_revision_update(&inputs, new_revision).await?;
+    let update = prepare_revision_update(inputs, new_revision).await?;
     store.with(|mut access| {
         apply_revision_update(get_ctx(access.data_mut()), update)
             .map_err(UpdateStateError::WalletCards)

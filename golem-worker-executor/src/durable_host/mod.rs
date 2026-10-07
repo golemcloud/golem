@@ -5219,7 +5219,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(());
         };
         let update = revision_update::prepare_revision_update(
-            &revision_update::RevisionUpdateInputs::of(self),
+            revision_update::RevisionUpdateInputs::of(self),
             new_revision,
         )
         .await?;
