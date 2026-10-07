@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package golem
+package transaction
 
 import (
 	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
 )
 
 // tracker records execute/compensate calls in order, so tests can assert that
@@ -26,13 +28,13 @@ type tracker struct{ calls []string }
 // succeeds (recording "c<tag>").
 func okOp(tr *tracker, tag string) Operation[int, int, string] {
 	return NewOperation(
-		func(in int) Result[int, string] {
+		func(in int) golem.Result[int, string] {
 			tr.calls = append(tr.calls, "e"+tag)
-			return Ok[int, string](in + 1)
+			return golem.Ok[int, string](in + 1)
 		},
-		func(in, out int) Result[Unit, string] {
+		func(in, out int) golem.Result[golem.Unit, string] {
 			tr.calls = append(tr.calls, "c"+tag)
-			return Ok[Unit, string](Unit{})
+			return golem.Ok[golem.Unit, string](golem.Unit{})
 		},
 	)
 }
@@ -40,13 +42,13 @@ func okOp(tr *tracker, tag string) Operation[int, int, string] {
 // failOp is an operation whose execute fails, recording "e<tag>".
 func failOp(tr *tracker, tag, reason string) Operation[int, int, string] {
 	return NewOperation(
-		func(in int) Result[int, string] {
+		func(in int) golem.Result[int, string] {
 			tr.calls = append(tr.calls, "e"+tag)
-			return Err[int, string](reason)
+			return golem.Err[int, string](reason)
 		},
-		func(in, out int) Result[Unit, string] {
+		func(in, out int) golem.Result[golem.Unit, string] {
 			tr.calls = append(tr.calls, "c"+tag)
-			return Ok[Unit, string](Unit{})
+			return golem.Ok[golem.Unit, string](golem.Unit{})
 		},
 	)
 }
@@ -68,10 +70,10 @@ func eq(a, b []string) bool {
 func TestFallibleCommit(t *testing.T) {
 	tr := &tracker{}
 	a, b := okOp(tr, "1"), okOp(tr, "2")
-	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
+	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
 		r1 := tx.Step(a, 10)
 		r2 := tx.Step(b, r1.Ok())
-		return Ok[int, string](r2.Ok())
+		return golem.Ok[int, string](r2.Ok())
 	})
 	if out.IsErr() {
 		t.Fatalf("expected commit, got %+v", out.Err())
@@ -90,7 +92,7 @@ func TestFallibleRollbackComplete(t *testing.T) {
 	tr := &tracker{}
 	a, b := okOp(tr, "1"), okOp(tr, "2")
 	bad := failOp(tr, "3", "boom")
-	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
+	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
 		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
@@ -100,7 +102,7 @@ func TestFallibleRollbackComplete(t *testing.T) {
 		if r := tx.Step(bad, 3); r.IsErr() {
 			return r
 		}
-		return Ok[int, string](0)
+		return golem.Ok[int, string](0)
 	})
 	if !out.IsErr() {
 		t.Fatal("expected failure")
@@ -125,15 +127,18 @@ func TestFallibleRollbackPartial(t *testing.T) {
 	tr := &tracker{}
 	// a's compensation fails; b succeeds; c fails execution to trigger rollback.
 	a := NewOperation(
-		func(in int) Result[int, string] { tr.calls = append(tr.calls, "ea"); return Ok[int, string](in) },
-		func(in, out int) Result[Unit, string] {
+		func(in int) golem.Result[int, string] {
+			tr.calls = append(tr.calls, "ea")
+			return golem.Ok[int, string](in)
+		},
+		func(in, out int) golem.Result[golem.Unit, string] {
 			tr.calls = append(tr.calls, "ca")
-			return Err[Unit, string]("ca-failed")
+			return golem.Err[golem.Unit, string]("ca-failed")
 		},
 	)
 	b := okOp(tr, "b")
 	bad := failOp(tr, "c", "boom")
-	out := runFallible(&Transaction[string]{}, func(tx *Transaction[string]) Result[int, string] {
+	out := runFallible(&Tx[string]{}, func(tx *Tx[string]) golem.Result[int, string] {
 		if r := tx.Step(a, 1); r.IsErr() {
 			return r
 		}
@@ -143,7 +148,7 @@ func TestFallibleRollbackPartial(t *testing.T) {
 		if r := tx.Step(bad, 3); r.IsErr() {
 			return r
 		}
-		return Ok[int, string](0)
+		return golem.Ok[int, string](0)
 	})
 	f := out.Err()
 	if f.Error != "boom" {

@@ -9,6 +9,7 @@ import (
 	"agent-sdk-go/agents/saga"
 
 	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/transaction"
 )
 
 type state struct{ log []string }
@@ -21,7 +22,7 @@ func init() {
 		record := func(name string) { s.log = append(s.log, name) }
 
 		// charge succeeds and knows how to undo itself (refund).
-		charge := golem.NewOperation(
+		charge := transaction.NewOperation(
 			func(_ golem.Unit) golem.Result[string, string] {
 				record("charge")
 				return golem.Ok[string, string]("charged")
@@ -32,7 +33,7 @@ func init() {
 			},
 		)
 		// ship records its attempt, then fails when the caller asked it to.
-		ship := golem.NewOperation(
+		ship := transaction.NewOperation(
 			func(fail bool) golem.Result[string, string] {
 				record("ship")
 				if fail {
@@ -46,7 +47,7 @@ func init() {
 			},
 		)
 
-		res := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
+		res := transaction.Fallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
 			if r := tx.Step(charge, golem.Unit{}); r.IsErr() {
 				return golem.Err[string, string](r.Err())
 			}

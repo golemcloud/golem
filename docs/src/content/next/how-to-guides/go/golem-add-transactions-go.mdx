@@ -14,13 +14,13 @@ already provides.
 > still in flight"*. Cross-agent RPC is unaffected, so today a step should do its
 > external work through RPC to an agent that owns the HTTP call.
 
-The Go API lives in the `golem` package:
+The Go API lives in the `transaction` package (`github.com/golemcloud/golem/sdks/go/golem/transaction`):
 
-- `golem.Operation[In, Out, E]` — a compensable step, built with `golem.NewOperation`.
+- `transaction.Operation[In, Out, E]` — a compensable step, built with `transaction.NewOperation`.
 - `tx.Step(op, input)` — run an operation inside a transaction.
-- `golem.FallibleTransaction[Out, E](...)` — rolls back on failure and **returns** a
-  `golem.TransactionFailure[E]`.
-- `golem.InfallibleTransaction[Out, E](...)` — rolls back and **retries** the whole
+- `transaction.Fallible[Out, E](...)` — rolls back on failure and **returns** a
+  `transaction.Failure[E]`.
+- `transaction.Infallible[Out, E](...)` — rolls back and **retries** the whole
   transaction until it succeeds.
 
 Expected step failures are modeled as the **error arm** of a `golem.Result` (type
@@ -29,7 +29,7 @@ open so the runtime replays it.
 
 ## Steps
 
-1. **Define each operation** with `golem.NewOperation(execute, compensate)`.
+1. **Define each operation** with `transaction.NewOperation(execute, compensate)`.
 2. **Choose a transaction flavor** — fallible (failure is acceptable) or infallible (must eventually succeed).
 3. **Run the steps** with `tx.Step(op, input)` inside the transaction body.
 4. **Handle the outcome** — inspect the `golem.Result` (fallible) or use the returned value (infallible).
@@ -42,10 +42,13 @@ original input and the output `execute` produced, and returns
 `golem.Result[golem.Unit, E]`. Compensation runs only if a later step fails.
 
 ```go
-import "github.com/golemcloud/golem/sdks/go/golem"
+import (
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/transaction"
+)
 
 // Reserve inventory; compensation cancels the reservation. E is string here.
-var reserveInventory = golem.NewOperation(
+var reserveInventory = transaction.NewOperation(
 	func(sku string) golem.Result[string, string] {
 		reservationID, err := callInventoryAPI(sku)
 		if err != nil {
@@ -61,7 +64,7 @@ var reserveInventory = golem.NewOperation(
 	},
 )
 
-var chargePayment = golem.NewOperation(
+var chargePayment = transaction.NewOperation(
 	func(amount int64) golem.Result[string, string] {
 		chargeID, err := callPaymentAPI(amount)
 		if err != nil {
@@ -81,12 +84,12 @@ var chargePayment = golem.NewOperation(
 ## Fallible Transactions
 
 On a step failure, the completed steps are compensated (best-effort, in reverse)
-and a `golem.TransactionFailure[E]` is returned — **there is no retry**. Run steps
+and a `transaction.Failure[E]` is returned — **there is no retry**. Run steps
 with `tx.Step(op, input)`; return an error result from the body to trigger
 rollback.
 
 ```go
-result := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
+result := transaction.Fallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
 	r1 := tx.Step(reserveInventory, "SKU-123")
 	if r1.IsErr() {
 		return golem.Err[string, string](r1.Err())
@@ -100,7 +103,7 @@ result := golem.FallibleTransaction(func(tx *golem.Transaction[string]) golem.Re
 })
 
 if result.IsErr() {
-	f := result.Err() // golem.TransactionFailure[string]
+	f := result.Err() // transaction.Failure[string]
 	_ = f.Error       // the step failure that aborted the transaction
 	if !f.RolledBackFully() {
 		// A compensation itself failed — some effects may remain (needs attention).
@@ -112,7 +115,7 @@ if result.IsErr() {
 }
 ```
 
-`golem.TransactionFailure[E]` fields:
+`transaction.Failure[E]` fields:
 
 - `Error E` — the step failure that aborted the transaction.
 - `CompensationFailure golem.Option[E]` — `Some(...)` if a compensation itself
@@ -127,7 +130,7 @@ rewound to the transaction start, and the runtime **replays the whole
 transaction** — so it returns the plain `Out` value, always succeeding eventually:
 
 ```go
-orderID := golem.InfallibleTransaction(func(tx *golem.Transaction[string]) golem.Result[string, string] {
+orderID := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[string, string] {
 	r1 := tx.Step(reserveInventory, "SKU-123")
 	if r1.IsErr() {
 		return golem.Err[string, string](r1.Err())
@@ -141,7 +144,7 @@ orderID := golem.InfallibleTransaction(func(tx *golem.Transaction[string]) golem
 // orderID is a plain string — the transaction retried until it succeeded.
 ```
 
-Use `InfallibleTransaction` only when the steps are expected to **eventually
+Use `transaction.Infallible` only when the steps are expected to **eventually
 succeed** — a deterministic failure would retry forever. If a compensation itself
 fails during a rollback-for-retry, the transaction cannot be made consistent and
 the helper **panics** (surfacing which compensation failed).
@@ -150,7 +153,7 @@ the helper **panics** (surfacing which compensation failed).
 
 The Rust SDK splits operations into `sync_operation` and `operation` (async), and
 its transactions are `async` and require wrapping bodies in `boxed(async move { …
-})`. The Go SDK has **none of that** — there is a single `golem.NewOperation`, and
+})`. The Go SDK has **none of that** — there is a single `transaction.NewOperation`, and
 transaction bodies are plain synchronous functions. Blocking work inside a step
 (HTTP, RPC, promises) suspends the fiber at its await point, so no `async`/`boxed`
 plumbing is needed. A step is a method on the transaction, `tx.Step(op, input)`,
@@ -163,11 +166,11 @@ so the error type comes from the transaction itself.
 - Run every step with `tx.Step(op, input)` — that is what records the
   compensation to run on rollback.
 - Keep compensation logic **idempotent** — it may run more than once (especially
-  under `InfallibleTransaction`).
+  under `transaction.Infallible`).
 - Compensation runs in **reverse** order of execution.
 - All steps in one transaction share the error type `E` (commonly `string`).
-- Use `FallibleTransaction` when failure is an acceptable outcome;
-  `InfallibleTransaction` when the operation must eventually succeed.
+- Use `transaction.Fallible` when failure is an acceptable outcome;
+  `transaction.Infallible` when the operation must eventually succeed.
 - A transaction opens a **worker-global** atomic region — keep the whole
   transaction on one logical flow; don't run concurrent goroutines that perform
   durable side effects while it is open.
