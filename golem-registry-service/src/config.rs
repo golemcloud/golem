@@ -20,6 +20,7 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_service_base::config::BlobStorageConfig;
@@ -400,7 +401,7 @@ impl Default for RegistryServiceConfig {
             PrecreatedAccount {
                 id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
                 name: "Builtin Tool Owner".to_string(),
-                email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+                email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
                 token: None,
                 role: AccountRole::BuiltinPluginOwner,
                 plan_id: PlanId(uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")),

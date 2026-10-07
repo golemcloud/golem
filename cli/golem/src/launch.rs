@@ -23,6 +23,7 @@ use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
+use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
     BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
@@ -310,7 +311,7 @@ fn registry_service_config(
                 PrecreatedAccount {
                     id: AccountId(uuid!("58bda34c-10d4-4bfb-8abd-d5e67f09ba3c")),
                     name: "Builtin Tool Owner".to_string(),
-                    email: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+                    email: AccountEmail::new(BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL),
                     token: None,
                     plan_id,
                     role: AccountRole::BuiltinPluginOwner,
