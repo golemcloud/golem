@@ -991,7 +991,8 @@ fn blob_path_of(physical: &Path, root: &Path) -> std::io::Result<PathBuf> {
                     names.push('/');
                 }
                 names.push_str(&name);
-                Ok((names, String::new()))
+                hex.clear();
+                Ok((names, hex))
             } else {
                 Err(invalid())
             }
