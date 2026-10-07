@@ -50,7 +50,7 @@ When an attempt fails, Golem writes one `FailedUpdate` and starts the agent agai
 
 Some failures do not fail the update. When the component service does not answer, when blob storage has a temporary error, or when the executor has no free memory for the agent, Golem writes no `FailedUpdate`. The update stays pending, and Golem tries the start again with the same strategy.
 
-An interrupt of the agent while the start replays its history for a pending automatic update also writes no `FailedUpdate`. The update stays pending. The agent gets the status `Interrupted`, as after every interrupt. When you resume the agent, its next start runs the update attempt again. When another executor takes over the agent during the replay, that executor runs the update attempt again.
+While the start replays the history for a pending automatic update, the agent keeps the status that it had before the restart. An idle agent keeps the status `Idle`, so Golem ignores an interrupt of the agent during that replay. Golem writes no `Interrupted` entry and no `FailedUpdate`, and the update completes. You do not need to resume the agent. When another executor takes over the agent during the replay, that executor runs the update attempt again.
 
 ## Manual snapshot-based update
 

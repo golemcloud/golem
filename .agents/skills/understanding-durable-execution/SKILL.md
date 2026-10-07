@@ -935,12 +935,16 @@ decision retries, such as `OutOfMemory` (`ReacquirePermits`), keeps that retry
 (`DurableWorkerCtx::speculative_retry`). Any other error trap ends the replay with its error, and
 the start outcome decides: `UPDATE_REPLAY_FAILED` for `AutomaticUpdate`, a divergence or a plain
 failure for `AssistedUpdate`, a rejection or a pass-through for `PeriodicRecovery`. An
-`Interrupt` trap takes its fixed decision. The replay writes no `Interrupted` entry and no
-`FailedUpdate`, and the pending update stays pending. After the start, the invocation loop takes
-the interrupt request and records it as at the end of any generation
-(`InvocationLoop::record_retry_interrupt_failure`, which calls `on_invocation_failure`): an API
-interrupt writes `Interrupted`, and the next start, after a resume, runs the attempt again. A lost
-shard writes nothing, and the new owner runs the attempt again. This holds for all three purposes.
+`Interrupt` trap takes its fixed decision; the replay writes no `Interrupted` entry and no
+`FailedUpdate`. During the startup replay the folded status is the status before the restart.
+For an idle agent it stays `Idle`, and `worker/lifecycle.rs::interrupt_decision` ignores an API
+interrupt (`Attempted interrupting worker which is idle`): nothing reaches the replay, no
+`Interrupted` entry and no `FailedUpdate` are written, and the update completes without a resume
+(`tests/hot_update.rs::an_interrupt_during_the_full_replay_of_a_pending_automatic_update_of_an_idle_agent_is_ignored_and_the_update_completes`).
+Only a status of `Running`, `Suspended` or `Retrying` lets the interrupt through; then the
+invocation loop records the request after the start as at the end of any generation
+(`InvocationLoop::record_retry_interrupt_failure`). A lost shard writes nothing, and the new owner
+runs the attempt again. The trap path is the same for all three purposes.
 The purpose is `None` again when the replay finishes. No retry counter exists. Once
 `S` is selected, an attempt never tries another record or a full replay. On success the fold sets
 `authoritative_snapshot` to `{ S, SnapshotAssistedAutomatic { filesystem_snapshot } }` and
