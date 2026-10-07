@@ -18,6 +18,7 @@ impl UpdateTest for UpdateTestImpl {
         _bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
+        let _ = std::time::SystemTime::now();
         Err("Invalid snapshot - simulating failure".to_string())
     }
 
@@ -58,6 +59,7 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
         _bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
+        let _ = std::time::SystemTime::now();
         Err("Invalid snapshot - simulating failure".to_string())
     }
 

@@ -32,7 +32,7 @@ Single-component applications keep `src/` and `tsconfig.json` at the application
 
 - Import the SDK from `@golemcloud/effect-golem` and Effect APIs from `effect`.
 - Use `@golemcloud/effect-golem/sqlite`, `/postgres`, `/mysql`, or `/ignite2` for database access. Native Node database drivers cannot run inside WebAssembly.
-- The build externalizes Effect and the Effect SDK because both are embedded in the SDK's base WASM. Keep their versions aligned with the generated `package.json`.
+- The build bundles reachable SDK code and generates static exports for discovered capabilities. Effect remains shared in the base WASM. Keep its version aligned with the generated `package.json`.
 - The runtime reports Effect components as TypeScript source, so CLI values and agent IDs use TypeScript syntax.
 
 ## Commands

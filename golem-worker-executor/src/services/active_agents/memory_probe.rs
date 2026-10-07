@@ -426,7 +426,8 @@ mod tests {
         let limit_bytes = Arc::new(AtomicU64::new(100));
         let current_bytes = Arc::new(AtomicU64::new(1));
         let refresh_gate = Arc::new((Mutex::new(false), Condvar::new()));
-        let probe = stale_cached_probe(
+        let refresh_interval = Duration::from_secs(60 * 60);
+        let probe = CachedMemoryProbe::with_snapshot(
             Arc::new(CountingProbe {
                 reads: reads.clone(),
                 limit_bytes: limit_bytes.clone(),
@@ -437,6 +438,8 @@ mod tests {
                 limit_bytes: 100,
                 current_bytes: 1,
             },
+            refresh_interval,
+            Instant::now() - refresh_interval - Duration::from_secs(1),
         );
 
         limit_bytes.store(50, Ordering::Relaxed);

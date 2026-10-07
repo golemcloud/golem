@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::services::oplog::multilayer::{
-    MultiLayerOplogService, OplogArchiveService, new_transfer_fiber,
+    MultiLayerOplogService, OplogArchiveResult, OplogArchiveService, new_transfer_fiber,
 };
 use crate::services::oplog::primary::PrimaryOplogService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
@@ -35,12 +35,16 @@ use std::sync::{Arc, Mutex};
 use test_r::{test, timeout};
 use tokio::sync::{Notify, Semaphore};
 
-struct GatedArchive {
+pub struct GatedArchive {
     entries: Mutex<BTreeMap<OplogIndex, OplogEntry>>,
     append_started: Notify,
     append_permits: Semaphore,
     append_calls: AtomicUsize,
     read_calls: AtomicUsize,
+    /// Once set, appends are refused with this fence and write nothing, as a compressed layer
+    /// refuses them after a newer owner recorded its epoch. The archive does not report it through
+    /// `fence`, so only the writer task's latch can tell the oplog.
+    refusal: Mutex<Option<OplogFence>>,
 }
 
 impl Default for GatedArchive {
@@ -51,6 +55,7 @@ impl Default for GatedArchive {
             append_permits: Semaphore::new(0),
             append_calls: AtomicUsize::new(0),
             read_calls: AtomicUsize::new(0),
+            refusal: Mutex::default(),
         }
     }
 }
@@ -62,61 +67,79 @@ impl Debug for GatedArchive {
 }
 
 impl GatedArchive {
-    async fn wait_for_appends(&self, count: usize) {
+    pub async fn wait_for_appends(&self, count: usize) {
         while self.append_calls.load(Ordering::Acquire) < count {
             self.append_started.notified().await;
         }
     }
 
-    fn release(&self, count: usize) {
+    pub fn release(&self, count: usize) {
         self.append_permits.add_permits(count);
     }
 }
 
 #[async_trait]
 impl OplogArchive for GatedArchive {
-    async fn read_source(&self, idx: OplogIndex, n: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn read_source(
+        &self,
+        idx: OplogIndex,
+        n: u64,
+    ) -> OplogArchiveResult<BTreeMap<OplogIndex, OplogEntry>> {
         self.read_calls.fetch_add(1, Ordering::Relaxed);
         let end = idx.as_u64().saturating_add(n);
-        self.entries
+        Ok(self
+            .entries
             .lock()
             .unwrap()
             .range(idx..OplogIndex::from_u64(end))
             .map(|(idx, entry)| (*idx, entry.clone()))
-            .collect()
+            .collect())
     }
 
-    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> u64 {
+    async fn append(&self, chunk: &[(OplogIndex, OplogEntry)]) -> Result<u64, OplogError> {
         self.append_calls.fetch_add(1, Ordering::Release);
         self.append_started.notify_one();
-        self.append_permits.acquire().await.unwrap().forget();
+        self.append_permits
+            .acquire()
+            .await
+            .map_err(|error| OplogError::Maintenance(error.to_string()))?
+            .forget();
+        if let Some(fence) = self.refusal.lock().unwrap().clone() {
+            return Err(OplogError::Fenced(fence));
+        }
         self.entries.lock().unwrap().extend(chunk.iter().cloned());
-        chunk.len() as u64
+        Ok(chunk.len() as u64)
     }
 
-    async fn verify_persisted(&self, _entries: &[(OplogIndex, OplogEntry)]) {}
+    async fn verify_persisted(
+        &self,
+        _entries: &[(OplogIndex, OplogEntry)],
+    ) -> OplogArchiveResult<()> {
+        Ok(())
+    }
 
-    async fn current_oplog_index(&self) -> OplogIndex {
-        self.entries
+    async fn current_oplog_index(&self) -> OplogArchiveResult<OplogIndex> {
+        Ok(self
+            .entries
             .lock()
             .unwrap()
             .last_key_value()
             .map(|(idx, _)| *idx)
-            .unwrap_or(OplogIndex::NONE)
+            .unwrap_or(OplogIndex::NONE))
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, OplogError> {
         let mut entries = self.entries.lock().unwrap();
         let old = entries.len();
         entries.retain(|idx, _| *idx > last_dropped_id);
-        (old - entries.len()) as u64
+        Ok((old - entries.len()) as u64)
     }
 
-    async fn length(&self) -> u64 {
-        self.entries.lock().unwrap().len() as u64
+    async fn length(&self) -> OplogArchiveResult<u64> {
+        Ok(self.entries.lock().unwrap().len() as u64)
     }
 
-    async fn get_last_index(&self) -> OplogIndex {
+    async fn get_last_index(&self) -> OplogArchiveResult<OplogIndex> {
         self.current_oplog_index().await
     }
 }
@@ -131,17 +154,25 @@ impl Debug for SingletonArchiveService {
 
 #[async_trait]
 impl OplogArchiveService for SingletonArchiveService {
-    async fn open(&self, _: &OwnedAgentId, _: AgentMode) -> Arc<dyn OplogArchive + Send + Sync> {
+    async fn open(
+        &self,
+        _: &OwnedAgentId,
+        _: AgentMode,
+        _: Option<ShardEpoch>,
+    ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
     async fn open_fresh(
         &self,
         _: &OwnedAgentId,
         _: AgentMode,
+        _: Option<ShardEpoch>,
     ) -> Arc<dyn OplogArchive + Send + Sync> {
         self.0.clone()
     }
-    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) {}
+    async fn delete(&self, _: &OwnedAgentId, _: AgentMode) -> OplogArchiveResult<()> {
+        Ok(())
+    }
     async fn read_source(
         &self,
         _: &OwnedAgentId,
@@ -149,10 +180,10 @@ impl OplogArchiveService for SingletonArchiveService {
         idx: OplogIndex,
         n: u64,
     ) -> BTreeMap<OplogIndex, OplogEntry> {
-        self.0.read_source(idx, n).await
+        self.0.read_source(idx, n).await.unwrap()
     }
     async fn exists(&self, _: &OwnedAgentId, _: AgentMode) -> bool {
-        self.0.length().await != 0
+        self.0.length().await.unwrap() != 0
     }
     async fn scan_for_component(
         &self,
@@ -165,16 +196,16 @@ impl OplogArchiveService for SingletonArchiveService {
         Ok((cursor, Vec::new()))
     }
     async fn get_last_index(&self, _: &OwnedAgentId, _: AgentMode) -> OplogIndex {
-        self.0.get_last_index().await
+        self.0.get_last_index().await.unwrap()
     }
 }
 
-struct Fixture {
-    oplog: Arc<EphemeralOplog>,
-    archive: Arc<GatedArchive>,
+pub struct Fixture {
+    pub oplog: Arc<EphemeralOplog>,
+    pub archive: Arc<GatedArchive>,
 }
 
-async fn fixture(threshold: u64) -> Fixture {
+pub async fn fixture(threshold: u64) -> Fixture {
     let archive = Arc::new(GatedArchive::default());
     let primary: Arc<dyn OplogService> = Arc::new(
         PrimaryOplogService::new(
@@ -206,6 +237,7 @@ async fn fixture(threshold: u64) -> Fixture {
     let transfer = EphemeralOplog::spawn_background_transfer(
         owned_agent_id.clone(),
         lower.clone(),
+        service.clone(),
         transfer_rx,
         start_rx,
     );
@@ -344,7 +376,117 @@ async fn bounded_writer_queue_backpressures_fourth_threshold_flush_and_close_dra
     fixture.oplog.retire();
     fixture.archive.release(3);
     assert_eq!(closed.await, Ok(()));
-    assert_eq!(fixture.archive.length().await, 4);
+    assert_eq!(fixture.archive.length().await.unwrap(), 4);
+}
+
+#[test]
+#[timeout("30s")]
+async fn shutdown_waits_for_handed_off_writes_without_flushing_buffered_tail() {
+    let fixture = fixture(1).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.add(entry(1)).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    fixture.oplog.add(entry(2)).await.unwrap();
+    let shutdown_handle = fixture.oplog.executor_shutdown_handle();
+
+    shutdown_handle.fence();
+    let shutdown = tokio::spawn(async move { shutdown_handle.close_and_wait().await });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), fixture.oplog.closed())
+            .await
+            .is_err()
+    );
+
+    fixture.archive.release(1);
+    shutdown.await.unwrap().unwrap();
+    assert_eq!(fixture.archive.length().await.unwrap(), 2);
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[timeout("30s")]
+async fn executor_shutdown_marks_last_handle_drop_as_non_flushing() {
+    let fixture = fixture(10).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    let archive = fixture.archive.clone();
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+    let registered: Arc<dyn Oplog> = fixture.oplog.clone();
+    tasks.register_owner_oplog(registered);
+    let task = tasks.spawn_entity({
+        let oplog = fixture.oplog.clone();
+        async move {
+            let _oplog = oplog;
+            std::future::pending::<()>().await;
+        }
+    });
+    drop(fixture.oplog);
+
+    shutdown.cancel();
+    tasks.wait_for_exit().await.unwrap();
+    assert_eq!(task.await.unwrap(), None);
+    assert_eq!(archive.length().await.unwrap(), 0);
+    assert_eq!(archive.append_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[timeout("30s")]
+async fn saved_executor_shutdown_fence_preserves_admitted_writer_append() {
+    let fixture = fixture(0).await;
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    let shutdown = fixture.oplog.executor_shutdown_handle();
+    let weak = Arc::downgrade(&fixture.oplog);
+    let archive = fixture.archive.clone();
+
+    drop(fixture.oplog);
+    assert!(weak.upgrade().is_none());
+    shutdown.fence();
+    let mut shutdown_close = Box::pin(shutdown.close_and_wait());
+    assert!(futures::poll!(shutdown_close.as_mut()).is_pending());
+
+    archive.release(1);
+    shutdown_close.await.unwrap();
+    assert_eq!(archive.length().await.unwrap(), 1);
+}
+
+#[test]
+#[timeout("30s")]
+async fn stale_executor_shutdown_fence_does_not_stop_newer_transfer() {
+    let fixture = fixture(10).await;
+    let shutdown = fixture.oplog.executor_shutdown_handle();
+    let service = fixture.oplog.multi_layer_oplog_service.clone();
+    let agent_id = fixture.oplog.owned_agent_id.agent_id.clone();
+    let old = fixture.oplog.transfer_fiber.clone();
+    let newer = new_transfer_fiber();
+    service.register_transfer(agent_id.clone(), &newer);
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let transfer = tokio::spawn(async move {
+        if start_rx.await.is_ok() {
+            let _ = release_rx.await;
+        }
+    });
+    MultiLayerOplogService::start_transfer(&newer, start_tx, transfer).await;
+
+    shutdown.fence();
+    shutdown.fence();
+    shutdown.close_and_wait().await.unwrap();
+
+    assert!(service.has_registered_transfer(&agent_id, &newer));
+    MultiLayerOplogService::transfer_closed(&old).await.unwrap();
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(50),
+            MultiLayerOplogService::transfer_closed(&newer),
+        )
+        .await
+        .is_err()
+    );
+    release_tx.send(()).unwrap();
+    MultiLayerOplogService::transfer_closed(&newer)
+        .await
+        .unwrap();
 }
 
 #[test]
@@ -370,6 +512,7 @@ async fn receipt_overflow_retains_a_detectable_gap_and_storage_barrier_covers_it
             .archive
             .read_source(OplogIndex::INITIAL, count as u64)
             .await
+            .unwrap()
             .into_values()
             .collect::<Vec<_>>(),
         expected
@@ -387,5 +530,78 @@ async fn failed_writer_is_joined_and_reported_by_close() {
     fixture.archive.append_permits.close();
     fixture.oplog.retire();
     assert!(fixture.oplog.closed().await.is_err());
-    assert_eq!(fixture.archive.length().await, 0);
+    assert_eq!(fixture.archive.length().await.unwrap(), 0);
+}
+
+fn refusal(fixture: &Fixture) -> OplogFence {
+    OplogFence {
+        agent_id: fixture.oplog.owned_agent_id.agent_id.clone(),
+        expected_epoch: ShardEpoch(5),
+        actual_epoch: Some(ShardEpoch(6)),
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_refused_batch_fails_the_commit_waiting_on_it_and_every_later_write() {
+    let fixture = fixture(100).await;
+    *fixture.archive.refusal.lock().unwrap() = Some(refusal(&fixture));
+    fixture.archive.release(1);
+    let refused = entry(0);
+    fixture.oplog.add(refused.clone()).await.unwrap();
+
+    match fixture.oplog.commit(CommitLevel::Always).await {
+        Err(OplogError::Fenced(fence)) => {
+            assert_eq!(fence.expected_epoch, ShardEpoch(5));
+            assert_eq!(fence.actual_epoch, Some(ShardEpoch(6)));
+        }
+        other => panic!("expected the commit to be fenced, got {other:?}"),
+    }
+    assert!(fixture.oplog.fence().is_some());
+
+    // Refused on the handle, without asking the archive again.
+    assert!(matches!(
+        fixture.oplog.add(entry(1)).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert!(matches!(
+        fixture.oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(fixture.archive.length().await, Ok(0));
+
+    // The refused entry was never committed, and this handle still reads it.
+    assert_eq!(
+        fixture
+            .oplog
+            .read_exact(OplogIndex::INITIAL, 1)
+            .await
+            .into_values()
+            .collect::<Vec<_>>(),
+        vec![refused]
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn a_deferred_batch_refused_after_its_commit_returned_fails_the_next_write() {
+    let fixture = fixture(100).await;
+    *fixture.archive.refusal.lock().unwrap() = Some(refusal(&fixture));
+    fixture.oplog.add(entry(0)).await.unwrap();
+    fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    fixture.archive.wait_for_appends(1).await;
+    fixture.archive.release(1);
+
+    // The storage barrier queues behind the refused batch, so this commit reads the fence the
+    // writer latched rather than reporting the batch as stored.
+    assert!(matches!(
+        fixture.oplog.commit(CommitLevel::Always).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert!(matches!(
+        fixture.oplog.add(entry(1)).await,
+        Err(OplogError::Fenced(_))
+    ));
+    assert_eq!(fixture.archive.append_calls.load(Ordering::Relaxed), 1);
 }

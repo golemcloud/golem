@@ -26,6 +26,23 @@ below for what that leaves behind.
 | Guest dropped the completion after `End` without reading it | `Start`, `End`, `CompletionDiscarded` | `Undelivered`: parked, the guest drops at the same point | Marker |
 | Guest trapped mid-call | `Start` only | Same as "after Start" — trap is never `Cancelled` | `abandon_for_trap` |
 
+## Owner lifecycle handoff (`worker/mod.rs`, `worker/invocation_loop.rs`, `services/active_agents/mod.rs`)
+
+The primary Store plus current entity Stores form one resident lifecycle unit. Lifecycle
+establishment queues the event, waits for its predecessor, fences matching entity admission,
+signals the primary, drains fenced entity bodies, then completes. Startup takes a pending event and
+waits for this establishment before constructing a replacement, even when it already holds a
+concurrent-agent permit.
+
+| Race or loss window | Required outcome | Identity or synchronization that makes it safe |
+|---|---|---|
+| `Restart` while an entity body is running or a completed body is reconstructing | Fence new body admission, stop and drain the old primary/entity unit, then reconstruct the original owner invocation and bodies from the owner oplog; do not append a semantic tool failure or charge another semantic retry | Serialized `InterruptEstablishment`, `ActiveAgent::entity_fence_generation`, owner oplog identity |
+| Restart queued while the owner is unloaded, waiting for a permit, or already retaining its permit | Consume the restart before Store creation; a retained permit is scheduling state, not permission to bypass lifecycle control | Unconditional pending-interrupt check plus establishment wait at the top of the outer loop |
+| Explicit terminal interrupt during entity work | Drain the unit and leave the invocation interrupted until an explicit resume; do not convert it into automatic restart | The terminal interrupt remains authoritative through establishment and reconstruction gating |
+| Old cached owner A retires after replacement B is published under the same `AgentId` | A may finish its own cleanup but cannot remove, fence, reopen, or write lifecycle state for B; B remains usable for a fresh invocation | Concrete cached `Arc<Worker>` identity for removal/fencing; generation-checked entity-admission reopen |
+| Executor shutdown while a retained entity callback or Store task is entered | Fence captured oplog generations first; abandon transient entity execution without semantic finalization; join Store destruction and retained callbacks before closing the captured oplog layers | `InvocationLoops` shutdown token/tracker plus exact-generation `OplogShutdownHandle` |
+| Delayed retry begins with duplicate resident work notifications queued | Coalesce only the finite pre-teardown prefix; preserve one work hint and every replay request; leave post-boundary arrivals queued so genuinely new work can shorten the delay | `receiver.len()` boundary, deferred `WorkAvailable`, retained `ResumeReplay`, authoritative interrupt recheck |
+
 ## Invocation (`worker/mod.rs`, `durable_host/mod.rs::on_agent_invocation_success`)
 
 | Crash window | Oplog shape | Reconstruction behaviour | Durable fact |
@@ -125,8 +142,9 @@ Two triggers retire an agent for its lost shard instead of reconstructing it her
 manager revoking or reassigning the shard (a `RevokeShards` push, or any delivered assignment that
 drops the shard or raises its epoch), and a write refused because the epoch this executor asserted
 no longer matches storage (`OplogError::Fenced`). Every indexed-storage backend refuses such a
-write. Only a durable agent's primary oplog asserts an epoch; ephemeral oplogs, fork stages and
-archive layers do not, so an ephemeral agent is retired only by an assignment change.
+write. A durable agent's primary oplog asserts an epoch, and so do the compressed archive levels
+the archive transfer and an ephemeral agent's oplog write through; fork stages and the blob archive
+layer do not.
 
 | Crash window | Oplog shape left behind | What happens here | Durable fact relied on |
 |---|---|---|---|
@@ -135,6 +153,8 @@ archive layers do not, so an ephemeral agent is retired only by an assignment ch
 | A write is attempted after the shard actually moved | nothing new; the attempted batch is refused, not partially written | The refusal is returned (`OplogError::Fenced`), not retried or swallowed; the agent is retired | Epoch asserted inside the storage transaction |
 | An earlier attempt of the refused batch ended indeterminate | that attempt's entries, if it landed before the takeover | The refusal is still returned, so the batch is never acknowledged here; the owner replays it like any committed entry | Nothing is acknowledged that the owner cannot see |
 | Any later write on the same oplog handle | still nothing new | The fence latches: every later add/commit is refused immediately, without a second storage round trip | The oplog's own latched `OplogFence` |
+| An archive transfer is in flight when the shard moves | the new owner's history, untouched: no archive chunk written after its open, no primary prefix trimmed | The transfer's refused append ends it before verification (no fail-stop panic) and before the source trim; a refused trim of the primary or of an archive level removes nothing; either refusal latches the oplog's fence | Every compressed level and the primary trim assert the epoch recorded at the new owner's open, which precedes its read of the archive watermark |
+| The new owner deletes the agent while an older owner's transfer is paused | nothing: the agent's oplog and archive levels are gone | The resumed append is refused because the deletion removed each level's epoch record, so no chunk comes back for the deleted agent | An absent epoch record refuses a write that asserts an epoch |
 | An invocation still queued when the retirement runs | unaffected; its `PendingAgentInvocation` stays pending | Failed in memory with a retriable error (`fail_pending_invocations` / `retirement_error`: `ShardingNotReady`), never a cached result | The `PendingAgentInvocation` left pending in the oplog, for the owner to run |
 | A deletion step is refused by the fence | whatever the deletion had committed | The attempt fails with `ShardingNotReady` and the generation stays cached in `Deleting` with its completed stages; a retry here is refused at entry, so no remote effect repeats, and stream cleanup confirms the epoch before reaching any other agent, since a re-run elsewhere finds its fenced records already written; the generation is evicted once the shard has left, and the owner finishes the delete | Epoch asserted by the cleanup commits and by the remove, which checks ownership before removing anything and deletes the oplog after everything it can rebuild |
 | The owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `resume_replay`, from committed history exactly as it was left | Nothing is acknowledged after the fence latched, and no entry is appended or deleted without the asserted epoch |

@@ -1416,6 +1416,65 @@ pub struct UsableAutomaticSnapshot {
     pub filesystem_snapshot: Option<FilesystemSnapshotName>,
 }
 
+/// Visible rollback boundaries since the last invocation finish with no open recovery scopes.
+/// Completed atomic intervals remain necessary when a later cut crosses their ends.
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct AtomicRollbackState {
+    pub regions: OrdMap<OplogIndex, Option<OplogIndex>>,
+    pub open_cut_scopes: OrdMap<OplogIndex, ()>,
+    pub last_work: OplogIndex,
+    pub retired_through: OplogIndex,
+}
+
+impl AtomicRollbackState {
+    /// Fold one visible entry in oplog order. Jump/revert visibility is resolved by the caller.
+    pub fn observe(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        use crate::model::oplog::DurableFunctionType;
+
+        if !matches!(
+            entry,
+            OplogEntry::Jump { .. }
+                | OplogEntry::Suspend { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Restart { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::RecoverySucceeded { .. }
+        ) {
+            self.last_work = index;
+        }
+        match entry {
+            OplogEntry::BeginAtomicRegion { .. } => {
+                self.regions.insert(index, None);
+            }
+            OplogEntry::EndAtomicRegion { begin_index, .. } => {
+                if let Some(end) = self.regions.get_mut(begin_index) {
+                    *end = Some(index);
+                }
+            }
+            OplogEntry::Start {
+                request: None,
+                durable_function_type:
+                    DurableFunctionType::WriteRemoteBatched(None)
+                    | DurableFunctionType::WriteRemoteTransaction(None),
+                ..
+            } => {
+                self.open_cut_scopes.insert(index, ());
+            }
+            OplogEntry::End { start_index, .. } => {
+                self.open_cut_scopes.remove(start_index);
+            }
+            OplogEntry::AgentInvocationFinished { .. }
+                if self.open_cut_scopes.is_empty()
+                    && self.regions.values().all(Option::is_some) =>
+            {
+                self.regions.clear();
+                self.retired_through = index;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -1427,6 +1486,7 @@ pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
+    pub atomic_rollback: AtomicRollbackState,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
     pub pending_card_events: Vec<PendingCardEventRef>,
@@ -1452,14 +1512,22 @@ pub struct AgentStatusRecord {
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub revoked_cards: HashSet<CardId>,
     pub deleted_regions: DeletedRegions,
-    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
-    /// if only automatic updates were used or the version of the latest snapshot-based update
+    /// Historical component revision used for replay metadata at the recovery baseline.
+    /// Initially the `Create` revision; successful manual snapshot updates set it to their target
+    /// revision, and successful snapshot-assisted automatic updates set it to their source revision.
+    /// Automatic updates without snapshot assistance leave it unchanged.
     pub component_revision_for_replay: ComponentRevision,
+    /// Oplog index that established the active component revision (`Create` or the latest
+    /// surviving `SuccessfulUpdate`).
+    pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
     /// Index of the last manual update snapshot index. Agent will call load_snapshot
     /// on this payload before starting replay.
     pub last_manual_update_snapshot_index: Option<OplogIndex>,
+    /// Mandatory recovery snapshot established by a successful update. Agent will call
+    /// load_snapshot on this payload before starting replay.
+    pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
     /// The last automatic snapshot entry. Its index is after `last_manual_update_snapshot_index`.
     /// A start that selects it calls load_snapshot on its payload before it starts the replay. If
     /// the load_snapshot fails, the start rejects this entry and tries
@@ -1488,6 +1556,7 @@ impl Default for AgentStatusRecord {
             status: AgentStatus::Idle,
             last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
+            atomic_rollback: AtomicRollbackState::default(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
             pending_card_events: Vec::new(),
@@ -1512,8 +1581,10 @@ impl Default for AgentStatusRecord {
             revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
+            component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
             last_manual_update_snapshot_index: None,
+            authoritative_snapshot: None,
             last_automatic_snapshot: None,
             previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
@@ -2138,6 +2209,8 @@ pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
     pub details: Option<String>,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::FailedSnapshotAssistedUpdateDetails>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2152,6 +2225,22 @@ pub struct SuccessfulUpdateRecord {
     /// update, for an update without a filesystem capture, and when no pending update was in
     /// front of the queue.
     pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::SnapshotAssistedUpdateDetails>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AuthoritativeSnapshot {
+    pub index: OplogIndex,
+    pub kind: AuthoritativeSnapshotKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AuthoritativeSnapshotKind {
+    ManualUpdate,
+    SnapshotAssistedAutomatic,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -2201,6 +2290,7 @@ pub enum AgentInvocation {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -2246,6 +2336,7 @@ pub enum AgentInvocationPayload {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -2515,6 +2606,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 principal,
                 scope_card,
@@ -2525,6 +2617,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 invocation_context,
                 principal,
@@ -2599,6 +2692,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 invocation_context,
                 principal,
@@ -2612,6 +2706,7 @@ impl AgentInvocation {
                     input,
                     stdin,
                     stdout,
+                    stderr,
                     activation,
                     principal,
                     scope_card,
@@ -2794,6 +2889,11 @@ pub struct PendingCardEventRef {
 #[desert(evolution())]
 pub enum PendingUpdateKind {
     Automatic,
+    SnapshotAssistedAutomatic {
+        source_component_revision: ComponentRevision,
+        source_revision_start_index: OplogIndex,
+        selection: SnapshotAssistedUpdateSelection,
+    },
     SnapshotBased {
         /// The filesystem snapshot that the executor captured with the application snapshot.
         /// `None` means that the executor made no filesystem capture.
@@ -2802,10 +2902,11 @@ pub enum PendingUpdateKind {
 }
 
 impl PendingUpdateKind {
-    /// The filesystem snapshot of a snapshot-based update, when it has one.
+    /// The filesystem snapshot of a snapshot-based update, when it has one. A snapshot-assisted
+    /// automatic update names none.
     pub fn filesystem_snapshot(&self) -> Option<&FilesystemSnapshotName> {
         match self {
-            Self::Automatic => None,
+            Self::Automatic | Self::SnapshotAssistedAutomatic { .. } => None,
             Self::SnapshotBased {
                 filesystem_snapshot,
             } => filesystem_snapshot.as_ref(),
@@ -2816,6 +2917,20 @@ impl PendingUpdateKind {
     pub fn of(description: &oplog::UpdateDescription) -> Self {
         match description {
             oplog::UpdateDescription::Automatic { .. } => Self::Automatic,
+            oplog::UpdateDescription::SnapshotAssistedAutomatic {
+                source_component_revision,
+                source_revision_start_index,
+                snapshot_index,
+                snapshot_revision,
+                ..
+            } => Self::SnapshotAssistedAutomatic {
+                source_component_revision: *source_component_revision,
+                source_revision_start_index: *source_revision_start_index,
+                selection: SnapshotAssistedUpdateSelection::Selected {
+                    snapshot_index: *snapshot_index,
+                    snapshot_revision: *snapshot_revision,
+                },
+            },
             oplog::UpdateDescription::SnapshotBased {
                 filesystem_snapshot,
                 ..
@@ -2824,6 +2939,30 @@ impl PendingUpdateKind {
             },
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotAssistedUpdateIneligibilityReason {
+    NoSnapshotSinceSourceRevisionStart,
+    SnapshotExcluded {
+        snapshot_index: OplogIndex,
+        exclusion_through: OplogIndex,
+    },
+    SnapshotFromDifferentRevision {
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotAssistedUpdateSelection {
+    Selected {
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
+    },
+    Ineligible(SnapshotAssistedUpdateIneligibilityReason),
 }
 
 /// A lightweight reference to a pending update whose full description is stored in the oplog.
@@ -2838,6 +2977,10 @@ pub struct PendingUpdateRef {
     pub timestamp: Timestamp,
     /// Index of the `PendingUpdate` oplog entry holding the full description.
     pub oplog_index: OplogIndex,
+    /// Durable admission identity returned to the caller. For manual updates this is the
+    /// originating `PendingAgentInvocation` index. For automatic updates it identifies the first
+    /// `PendingUpdate`, while `oplog_index` can identify the later strategy-selection entry.
+    pub admission_index: OplogIndex,
     pub target_revision: ComponentRevision,
     pub kind: PendingUpdateKind,
 }

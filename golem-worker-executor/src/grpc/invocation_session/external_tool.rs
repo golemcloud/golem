@@ -17,8 +17,23 @@ use crate::durable_host::schema_value_stream::contains_stream;
 use crate::model::LookupResult;
 use crate::services::{HasActiveAgents, HasEnvironmentStateService};
 use crate::worker::ResultOrSubscription;
+use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
 use golem_common::model::agent::OwnerKind;
 use golem_common::schema::TypedSchemaValue;
+
+fn validate_live_stream_mode(
+    tool: &ExternalToolInvocation,
+    mode: AgentInvocationMode,
+    scheduled: bool,
+) -> Result<bool, WorkerExecutorError> {
+    let streaming = tool.stdin || tool.stdout || tool.stderr;
+    if streaming && (mode != AgentInvocationMode::Await || scheduled) {
+        return Err(WorkerExecutorError::invalid_request(
+            "live streams require an attached Await invocation session",
+        ));
+    }
+    Ok(streaming)
+}
 
 impl<Ctx, Svcs> WorkerExecutorImpl<Ctx, Svcs>
 where
@@ -153,12 +168,7 @@ where
                 "typed tool input cannot contain streams; use the stdin attachment",
             ));
         }
-        let streaming = tool.stdin || tool.stdout;
-        if streaming && (mode != Mode::Await || request.schedule_at.is_some()) {
-            return Err(WorkerExecutorError::invalid_request(
-                "live streams require an attached Await invocation session",
-            ));
-        }
+        let streaming = validate_live_stream_mode(tool, mode, request.schedule_at.is_some())?;
         if tool.fresh_owner
             && mode == Mode::Schedule
             && let Some(timestamp) = request.schedule_at.as_ref()
@@ -232,6 +242,7 @@ where
                 input: Box::new(TypedSchemaValue::new(graph, value)),
                 stdin: false,
                 stdout: false,
+                stderr: false,
                 activation,
                 invocation_context: context,
                 principal: principal.clone(),
@@ -302,6 +313,7 @@ where
                         TypedSchemaValue::new(graph.clone(), value.clone()),
                         tool.stdin,
                         tool.stdout,
+                        tool.stderr,
                         expected_deployment_revision,
                         context.clone(),
                         principal.clone(),
@@ -336,6 +348,7 @@ where
                     TypedSchemaValue::new(graph, value),
                     tool.stdin,
                     tool.stdout,
+                    tool.stderr,
                     None,
                     context,
                     principal,
@@ -423,5 +436,24 @@ where
         output.agent_id = response.agent_id;
         output.idempotency_key = Some(key);
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_live_stream_mode;
+    use golem_api_grpc::proto::golem::worker::{AgentInvocationMode, ExternalToolInvocation};
+    use test_r::test;
+
+    #[test]
+    fn stderr_only_requires_an_attached_await_session() {
+        let tool = ExternalToolInvocation {
+            stderr: true,
+            ..Default::default()
+        };
+
+        assert!(validate_live_stream_mode(&tool, AgentInvocationMode::Await, false).unwrap());
+        assert!(validate_live_stream_mode(&tool, AgentInvocationMode::Schedule, false).is_err());
+        assert!(validate_live_stream_mode(&tool, AgentInvocationMode::Await, true).is_err());
     }
 }

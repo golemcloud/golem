@@ -489,15 +489,16 @@ private[golem] object ToolGraphs {
         case _: SchemaTypeBody.BinaryType         => 25
         case _: SchemaTypeBody.PathType           => 26
         case _: SchemaTypeBody.UrlType            => 27
-        case SchemaTypeBody.DatetimeType          => 28
-        case SchemaTypeBody.DurationType          => 29
-        case _: SchemaTypeBody.QuantityType       => 30
-        case _: SchemaTypeBody.UnionType          => 31
-        case _: SchemaTypeBody.SecretType         => 32
-        case _: SchemaTypeBody.QuotaTokenType     => 33
-        case _: SchemaTypeBody.PermissionCardType => 34
-        case _: SchemaTypeBody.FutureType         => 35
-        case _: SchemaTypeBody.StreamType         => 36
+        case SchemaTypeBody.UuidType              => 28
+        case SchemaTypeBody.DatetimeType          => 29
+        case SchemaTypeBody.DurationType          => 30
+        case _: SchemaTypeBody.QuantityType       => 31
+        case _: SchemaTypeBody.UnionType          => 32
+        case _: SchemaTypeBody.SecretType         => 33
+        case _: SchemaTypeBody.QuotaTokenType     => 34
+        case _: SchemaTypeBody.PermissionCardType => 35
+        case _: SchemaTypeBody.FutureType         => 36
+        case _: SchemaTypeBody.StreamType         => 37
       }
     kind(a) == kind(b)
   }

@@ -492,6 +492,10 @@ declare module 'golem:api/oplog@1.5.0' {
   {
     tag: 'auto-update'
   } |
+  /** Automatic update assisted by the latest eligible periodic snapshot */
+  {
+    tag: 'snapshot-assisted-automatic'
+  } |
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
@@ -501,17 +505,34 @@ declare module 'golem:api/oplog@1.5.0' {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     description: UpdateDescription;
+    updateAttemptIndex: OplogIndex;
+  };
+  export type SnapshotAssistedUpdateDetails = {
+    pendingUpdateIndex: OplogIndex;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
   };
   export type SuccessfulUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     newComponentSize: bigint;
     newActivePlugins: PluginInstallationDescription[];
+    snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
+  };
+  export type FailedSnapshotAssistedUpdateDetails = {
+    pendingUpdateIndex: OplogIndex;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex?: OplogIndex;
+    ineligibilityReason?: string;
   };
   export type FailedUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     details?: string;
+    snapshotAssistedDetails?: FailedSnapshotAssistedUpdateDetails;
+    updateAttemptIndex?: OplogIndex;
   };
   export type GrowMemoryParameters = {
     timestamp: Datetime;
@@ -901,6 +922,13 @@ declare module 'golem:api/oplog@1.5.0' {
     traceStates: string[];
     invocationContext: SpanData[];
   };
+  export type RawSnapshotAssistedAutomaticUpdate = {
+    targetRevision: ComponentRevision;
+    sourceComponentRevision: ComponentRevision;
+    sourceRevisionStartIndex: OplogIndex;
+    snapshotIndex: OplogIndex;
+    snapshotRevision: ComponentRevision;
+  };
   export type RawSnapshotBasedUpdate = {
     targetRevision: ComponentRevision;
     payload: OplogPayload;
@@ -916,6 +944,11 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'automatic'
     val: ComponentRevision
   } |
+  /** Automatic update assisted by the latest eligible periodic snapshot */
+  {
+    tag: 'snapshot-assisted-automatic'
+    val: RawSnapshotAssistedAutomaticUpdate
+  } |
   /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
@@ -924,12 +957,14 @@ declare module 'golem:api/oplog@1.5.0' {
   export type RawPendingUpdateParameters = {
     timestamp: Datetime;
     description: RawUpdateDescription;
+    updateAttemptIndex?: OplogIndex;
   };
   export type RawSuccessfulUpdateParameters = {
     timestamp: Datetime;
     targetRevision: ComponentRevision;
     newComponentSize: bigint;
     newActivePlugins: EnvironmentPluginGrantId[];
+    snapshotAssistedDetails?: SnapshotAssistedUpdateDetails;
   };
   export type ResourceTypeId = {
     name: string;

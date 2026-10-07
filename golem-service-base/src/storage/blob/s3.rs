@@ -17,8 +17,8 @@ use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobNameError, BlobRangeError, BlobRangeStream,
     BlobStorageBackend, BlobStorageNamespace, DIR_MARKER, ExistsResult, ListedBlob,
-    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_path_to_string, blob_positions,
-    check_blob_name, validate_range,
+    NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions, check_blob_name,
+    join_blob_key, validate_range,
 };
 use anyhow::{Error, anyhow, ensure};
 use async_trait::async_trait;
@@ -178,6 +178,28 @@ struct ContentRange {
     total: Option<u64>,
 }
 
+/// The size of the largest object that S3 holds, 5 TiB. No byte at this offset or after it is in
+/// an object.
+const MAX_OBJECT_SIZE: u64 = 5 * 1024 * 1024 * 1024 * 1024;
+
+/// Gives the `Range` header of a read of the bytes from `start` to `end`.
+///
+/// No offset in the header is larger than [`MAX_OBJECT_SIZE`]. A guest gives the offsets as `u64`
+/// values, and a negative offset reaches the host as a value at the top of that range. Servers
+/// that parse an offset as a signed 64-bit number refuse such a value with an error that is not
+/// a range error, or ignore the range: RustFS answers 400, and MinIO sends the whole object. A
+/// range that ends at or after [`MAX_OBJECT_SIZE`] is outside every object, and the header with
+/// the offsets cut to that size is outside every object too. So S3 answers 416, or a 206 whose
+/// range ends before `end`, and the response gives the `BlobRangeError` of the original range.
+/// A missing object still gives `NoSuchKey`.
+fn range_header(start: u64, end: u64) -> String {
+    format!(
+        "bytes={}-{}",
+        start.min(MAX_OBJECT_SIZE),
+        end.min(MAX_OBJECT_SIZE)
+    )
+}
+
 /// Reads a `Content-Range` of the form `bytes <first>-<last>/<total>` (RFC 9110, section 14.4),
 /// or gives `None` for a value of another form.
 fn parse_content_range(value: &str) -> Option<ContentRange> {
@@ -325,12 +347,11 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
 }
 
 impl S3BlobStorage {
-    #[allow(deprecated)]
     pub async fn new(config: S3BlobStorageConfig) -> Self {
         let region = config.region.clone();
 
         let mut config_builder =
-            aws_config::defaults(BehaviorVersion::v2024_03_28()).region(Region::new(region));
+            aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
             info!("The AWS endpoint url for blob storage is {}", &endpoint_url);
@@ -354,6 +375,7 @@ impl S3BlobStorage {
 
         let mut s3_config_builder = s3_config
             .to_builder()
+            .retry_config(aws_sdk_s3::config::retry::RetryConfig::disabled())
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
 
         if let Some(path_style) = &config.aws_path_style {
@@ -389,21 +411,14 @@ impl S3BlobStorage {
         }
     }
 
-    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> PathBuf {
-        match namespace {
+    /// Gives the key prefix of the namespace: the object prefix of the configuration, then the
+    /// segments of the namespace, with `/` between two of them on every host.
+    fn prefix_of(&self, namespace: &BlobStorageNamespace) -> String {
+        let namespace_prefix = match namespace {
             BlobStorageNamespace::CompilationCache { environment_id }
             | BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id }
-            | BlobStorageNamespace::Components { environment_id } => {
-                let environment_id_string = environment_id.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string).to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(environment_id_string)
-                        .to_path_buf()
-                }
-            }
+            | BlobStorageNamespace::Components { environment_id } => environment_id.to_string(),
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
@@ -412,21 +427,9 @@ impl S3BlobStorage {
                 // The key holds the agent path segment and not the agent id. A raw agent id can
                 // hold `/`, `\` and `.` segments, and the rules of a key refuse them. The segment
                 // has at most 97 bytes and holds none of them.
-                let environment_id_string = environment_id.to_string();
-                let agent = agent_path_segment(agent_id);
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(agent)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(agent)
-                        .to_path_buf()
-                }
+                let agent = agent_path_segment(agent_id);
+                format!("{mode}/{environment_id}/{agent}")
             }
             BlobStorageNamespace::CompressedOplog {
                 environment_id,
@@ -434,21 +437,8 @@ impl S3BlobStorage {
                 agent_mode,
                 ..
             } => {
-                let environment_id_string = environment_id.to_string();
-                let component_id_string = component_id.to_string();
                 let mode = super::agent_mode_prefix(*agent_mode);
-                if self.config.object_prefix.is_empty() {
-                    Path::new(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(mode)
-                        .join(environment_id_string)
-                        .join(component_id_string)
-                        .to_path_buf()
-                }
+                format!("{mode}/{environment_id}/{component_id}")
             }
             BlobStorageNamespace::FilesystemSnapshots {
                 environment_id,
@@ -458,28 +448,19 @@ impl S3BlobStorage {
                 // The agent is one segment of a bounded length, because a raw agent id can hold
                 // `/`, `\` and `.` segments, which the rules of a key refuse. The fingerprint of
                 // the incarnation is the segment below it.
-                let environment_id_string = environment_id.to_string();
                 let agent = agent_path_segment(agent_id);
-                let fingerprint = fingerprint.0.to_string();
-                if self.config.object_prefix.is_empty() {
-                    Path::new(&environment_id_string)
-                        .join(agent)
-                        .join(fingerprint)
-                } else {
-                    Path::new(&self.config.object_prefix)
-                        .join(environment_id_string)
-                        .join(agent)
-                        .join(fingerprint)
-                }
+                format!("{environment_id}/{agent}/{}", fingerprint.0)
             }
-        }
+        };
+
+        join_blob_key(&self.config.object_prefix, &namespace_prefix)
     }
 
     /// Gives the object key of the blob at `path` in `namespace`, or a [`BlobNameError`].
     ///
-    /// The key is the prefix of the namespace, then `/`, then `path`. The key of the root of a
-    /// namespace is the prefix and a `/` after it, which is what `Path::join` gives for an
-    /// empty path. The prefix holds the environment id, so the key is never empty.
+    /// The key is the prefix of the namespace, then `/`, then the text of `path`, on every host.
+    /// The key of the root of a namespace is the prefix and a `/` after it. The prefix holds the
+    /// environment id, so the key is never empty.
     ///
     /// Each key that the backend makes of a blob path comes from this function or from
     /// `dir_marker_key_of`, so each such key satisfies the rules of [`BlobNameError`]. Two
@@ -492,8 +473,7 @@ impl S3BlobStorage {
         namespace: &BlobStorageNamespace,
         path: &NormalizedBlobPath,
     ) -> Result<String, BlobNameError> {
-        let key = blob_path_to_string(&self.prefix_of(namespace).join(path))?;
-        Self::checked_key(key)
+        Self::checked_key(format!("{}/{}", self.prefix_of(namespace), path.text()?))
     }
 
     /// Gives the key of the object that records the directory at `key`, or a
@@ -520,8 +500,36 @@ impl S3BlobStorage {
 
     /// Tells if the object key is the key of the marker object that `create_dir` writes for a
     /// directory (`dir_marker_key_of`).
-    fn is_dir_marker(key: &Path) -> bool {
-        key.file_name().and_then(|name| name.to_str()) == Some(DIR_MARKER)
+    fn is_dir_marker(key: &str) -> bool {
+        key.rsplit('/').next() == Some(DIR_MARKER)
+    }
+
+    /// Gives the path that `list_dir` lists for the object key of a listing of the directory at
+    /// `directory_key`, or `None` when the key lists nothing.
+    ///
+    /// A blob directly in the directory lists its own path. The marker of a directory below the
+    /// directory lists the path of that directory, and every other key below lists nothing. The
+    /// keys are read at `/` only, on every host, so a `\` is a character of a name. A key that
+    /// ends with `/`, which other S3 tools write for a directory, lists the path without the `/`.
+    fn listed_path(namespace_root: &str, directory_key: &str, object_key: &str) -> Option<PathBuf> {
+        let directory_key = directory_key.trim_end_matches('/');
+        let object_key = object_key.trim_end_matches('/');
+        let is_dir_marker = Self::is_dir_marker(object_key);
+        let parent = object_key.rsplit_once('/').map(|(parent, _)| parent);
+        let is_nested = parent != Some(directory_key);
+
+        let listed_key = if is_nested {
+            is_dir_marker.then_some(parent?)
+        } else if is_dir_marker {
+            None
+        } else {
+            Some(object_key)
+        }?;
+
+        listed_key
+            .strip_prefix(namespace_root)
+            .and_then(|path| path.strip_prefix('/'))
+            .map(PathBuf::from)
     }
 
     /// Applies the rules of [`BlobNameError`] to an object key. Gives the key when it
@@ -1354,7 +1362,7 @@ impl BlobStorageBackend for S3BlobStorage {
                         .get_object()
                         .bucket(*bucket)
                         .key(key.clone())
-                        .range(format!("bytes={start}-{end}"))
+                        .range(range_header(start, end))
                         .customize()
                         .interceptor(status.clone())
                         .send()
@@ -1725,27 +1733,8 @@ impl BlobStorageBackend for S3BlobStorage {
             .list_objects(target_label, op_label, bucket, &key)
             .await?
             .iter()
-            .flat_map(|obj| obj.key.as_ref().map(|k| Path::new(k).to_path_buf()))
-            .filter_map(|path| {
-                let is_dir_marker = Self::is_dir_marker(&path);
-                let is_nested = path.parent() != Some(Path::new(&key));
-                if is_nested {
-                    if is_dir_marker {
-                        path.parent().map(|p| p.to_path_buf())
-                    } else {
-                        None
-                    }
-                } else if is_dir_marker {
-                    None
-                } else {
-                    Some(path)
-                }
-            })
-            .filter_map(|path| {
-                path.strip_prefix(&namespace_root)
-                    .ok()
-                    .map(|p| p.to_path_buf())
-            })
+            .filter_map(|object| object.key())
+            .filter_map(|object_key| Self::listed_path(&namespace_root, &key, object_key))
             .filter(|path| listed.insert(path.clone()))
             .collect::<Vec<_>>())
     }
@@ -1767,11 +1756,15 @@ impl BlobStorageBackend for S3BlobStorage {
             .filter_map(|object| object.key().map(|key| (key, object.size())))
             // S3 has no directories, so it records one as an object: a key that ends with `/`,
             // which other S3 tools write, or the marker that `create_dir` writes.
-            .filter(|(key, _)| !key.ends_with('/') && !Self::is_dir_marker(Path::new(key)))
+            .filter(|(key, _)| !key.ends_with('/') && !Self::is_dir_marker(key))
             .map(|(key, size)| {
                 let size = size.ok_or_else(|| anyhow!("S3 gave no size for the key {key}"))?;
+                let path = key
+                    .strip_prefix(namespace_root.as_str())
+                    .and_then(|path| path.strip_prefix('/'))
+                    .ok_or_else(|| anyhow!("S3 listed the key {key} outside {namespace_root}"))?;
                 Ok::<_, Error>(ListedBlob {
-                    path: Path::new(key).strip_prefix(&namespace_root)?.into(),
+                    path: Path::new(path).into(),
                     size: u64::try_from(size)?,
                 })
             })

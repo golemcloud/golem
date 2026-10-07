@@ -26,6 +26,11 @@ name = "oidc"
 path = "tests/oidc/lib.rs"
 harness = false
 
+[[test]]
+name = "blob-storage"
+path = "tests/blob_storage.rs"
+harness = false
+
 # [[bench]]
 # name = "tree"
 # harness = false
@@ -37,7 +42,7 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
 anyhow = { workspace = true }
@@ -71,7 +76,7 @@ openidconnect = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 opentelemetry_sdk = { workspace = true }
-poem = { workspace = true, features = ["prometheus", "opentelemetry", "tower-compat"] }
+poem = { workspace = true, features = ["tower-compat"] }
 poem-derive = { workspace = true }
 poem-openapi = { workspace = true }
 poem-openapi-derive = { workspace = true }
@@ -110,10 +115,15 @@ golem-common = { workspace = true, features = ["proptest"] }
 golem-test-framework.workspace = true
 
 assert2 = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true, features = ["html_reports"] }
 fastrand = {workspace = true }
 h2 = { workspace = true }
+libsqlite3-sys = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+redis = { workspace = true }
 reqwest = { workspace = true }
 rsa = { workspace = true }
 rustls = { workspace = true, features = ["ring"] }

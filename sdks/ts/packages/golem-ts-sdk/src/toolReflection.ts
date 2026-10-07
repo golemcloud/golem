@@ -44,6 +44,7 @@ import {
   createToolClientTransport,
   isRpcError,
   mapSettledToolResult,
+  resultFromSettledToolResult,
   startedToolInvocation,
   type StartedToolInvocation,
   type ToolClientRuntime,
@@ -88,6 +89,7 @@ export class ToolCommand {
   readonly constraints: readonly Constraint[];
   readonly stdin?: StreamSpec;
   readonly stdout?: StreamSpec;
+  readonly stderr?: StreamSpec;
   readonly result?: SchemaRef;
   readonly errors: readonly { readonly name: string; readonly payload?: SchemaRef }[];
   readonly children: readonly ToolCommand[];
@@ -163,6 +165,7 @@ export class ToolCommand {
     this.constraints = Object.freeze([...(body?.constraints ?? [])]);
     this.stdin = body?.stdin;
     this.stdout = body?.stdout;
+    this.stderr = body?.stderr;
     this.result = body?.result
       ? SchemaRef.fromImmutableGraph(graph, typeAt(body.result.type))
       : undefined;
@@ -293,13 +296,19 @@ export class ToolCommand {
   ): StartedToolInvocation<SchemaValue | undefined> {
     if (this.stdin?.required && !stdin) throw new TypeError('Command requires stdin');
     const encoded = this.inputValue(input);
-    const started = this.runtime.start(this.path, encoded, stdin, this.stdout !== undefined);
+    const started = this.runtime.start(
+      this.path,
+      encoded,
+      stdin,
+      this.stdout !== undefined,
+      this.stderr !== undefined,
+    );
     const settled = mapSettledToolResult(
       started.settledResult,
       (value) => this.decodeResult(value),
       (error) => this.mapFailure(error),
     );
-    return startedToolInvocation(started.stdout ?? emptyStdout(), settled, started.cancel);
+    return startedToolInvocation(started.stdout, started.stderr, settled, started.cancel);
   }
 
   /** Start a cancelable invocation with canonical JSON input. */
@@ -312,6 +321,7 @@ export class ToolCommand {
       value === undefined ? undefined : this.unpackResult(value);
     return {
       stdout: started.stdout,
+      stderr: started.stderr,
       get result() {
         return started.result.then(unpackResult);
       },
@@ -319,8 +329,9 @@ export class ToolCommand {
       collect: async () => {
         const collected = await started.collect();
         return {
-          result: unpackResult(collected.result),
+          result: await mapSettledToolResult(collected.result, unpackResult),
           stdout: collected.stdout,
+          stderr: collected.stderr,
         };
       },
     };
@@ -328,12 +339,17 @@ export class ToolCommand {
 
   /** Await a structured schema-native result. */
   invokeValue(input: SchemaValue, stdin?: ToolInputStream): Promise<SchemaValue | undefined> {
-    if (this.stdout?.required)
+    if (this.stdout?.required || this.stderr?.required)
       return Promise.reject(
-        new TypeError('Command requires caller-readable stdout; use startValue'),
+        new TypeError('Command requires caller-readable output; use startValue'),
       );
     const started = this.startValue(input, stdin);
-    return started.collect().then((collected) => collected.result);
+    return started.collect().then(async (collected) => {
+      const result = await resultFromSettledToolResult(collected.result);
+      await resultFromSettledToolResult(collected.stdout);
+      await resultFromSettledToolResult(collected.stderr);
+      return result;
+    });
   }
 
   /** Await a structured canonical JSON result. */
@@ -342,9 +358,10 @@ export class ToolCommand {
     return value === undefined ? undefined : this.unpackResult(value);
   }
 
-  /** Admit a fire-and-forget invocation without a stdout attachment. */
+  /** Admit a fire-and-forget invocation without output attachments. */
   triggerValue(input: SchemaValue, stdin?: ToolInputStream): void {
-    if (this.stdout?.required) throw new TypeError('Command requires caller-readable stdout');
+    if (this.stdout?.required || this.stderr?.required)
+      throw new TypeError('Command requires caller-readable output');
     if (this.stdin?.required && !stdin) throw new TypeError('Command requires stdin');
     const encoded = typedSchemaValueToWit(this.inputValue(input));
     try {
@@ -533,10 +550,11 @@ export class DynamicToolClient {
     input: TypedSchemaValue,
     stdin?: ToolInputStream,
     stdout = false,
+    stderr = false,
   ): StartedToolInvocation<TypedSchemaValue | undefined> {
-    const started = this.runtime.start(path, input, stdin, stdout);
+    const started = this.runtime.start(path, input, stdin, stdout, stderr);
     const settled = mapSettledToolResult(started.settledResult, (result) => result.result);
-    return startedToolInvocation(started.stdout ?? emptyStdout(), settled, started.cancel);
+    return startedToolInvocation(started.stdout, started.stderr, settled, started.cancel);
   }
 
   invoke(
@@ -545,7 +563,7 @@ export class DynamicToolClient {
     stdin?: ToolInputStream,
   ): Promise<TypedSchemaValue | undefined> {
     const started = this.start(path, input, stdin);
-    return started.stdout.cancel().then(() => started.result);
+    return started.result;
   }
 
   trigger(path: readonly string[], input: TypedSchemaValue, stdin?: ToolInputStream): void {
@@ -653,8 +671,6 @@ function valueMatches(value: SchemaValue, expected: SchemaValue): boolean {
       return false;
   }
 }
-
-async function* emptyStdout(): AsyncIterable<never> {}
 
 async function* byteItems(source: ToolInputStream): AsyncIterable<ByteStreamItem> {
   for await (const value of source) {

@@ -126,7 +126,8 @@ impl FileSystemBlobStorage {
         }
     }
 
-    fn path_of(&self, namespace: &BlobStorageNamespace, path: &NormalizedBlobPath) -> PathBuf {
+    /// Gives the directory of the namespace, which holds the blobs of the namespace.
+    fn namespace_path(&self, namespace: &BlobStorageNamespace) -> PathBuf {
         let mut result = self.root.clone();
 
         match namespace {
@@ -182,8 +183,23 @@ impl FileSystemBlobStorage {
             }
         }
 
-        result.push(path);
         result
+    }
+
+    /// Gives the file of the blob at `path` in the namespace: the directory of the namespace and
+    /// the encoded names of the path (`encoded_name`).
+    fn path_of(
+        &self,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<PathBuf, Error> {
+        Ok(path.names()?.flat_map(encoded_name).fold(
+            self.namespace_path(namespace),
+            |mut result, part| {
+                result.push(part);
+                result
+            },
+        ))
     }
 
     fn ensure_path_is_inside_root(&self, path: &Path) -> Result<(), Error> {
@@ -272,7 +288,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -290,7 +306,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_ok() {
@@ -311,7 +327,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         offset: u64,
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
         let mut file = match tokio::fs::File::open(full_path).await {
             Ok(file) => file,
@@ -345,7 +361,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         start: u64,
         end: u64,
     ) -> Result<Option<Vec<u8>>, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if async_fs::metadata(&full_path).await.is_err() {
@@ -375,7 +391,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -400,7 +416,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if matches!(namespace, BlobStorageNamespace::FilesystemSnapshots { .. }) {
@@ -430,7 +446,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
         let staging = self.root.join(STAGING_DIRECTORY);
         let data: Box<[u8]> = Box::from(data);
@@ -447,7 +463,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         path: &NormalizedBlobPath<'_>,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Some(parent) = full_path.parent()
@@ -477,7 +493,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if matches!(namespace, BlobStorageNamespace::FilesystemSnapshots { .. }) {
@@ -496,7 +512,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         async_fs::create_dir_all(&full_path).await?;
@@ -511,25 +527,14 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
-        let namespace_root = self.path_of(&namespace, &NormalizedBlobPath::root());
-        let full_path = self.path_of(&namespace, path);
+        let namespace_root = self.namespace_path(&namespace);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
-        // The directory of a namespace comes into being with the first write below it, so a
-        // path that is not there holds nothing, and so does an untouched namespace.
-        let mut entries = match async_fs::read_dir(&full_path).await {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(err) => return Err(err.into()),
-        };
-
-        let mut result = Vec::new();
-        while let Some(entry) = TryStreamExt::try_next(&mut entries).await? {
-            if let Ok(path) = entry.path().strip_prefix(&namespace_root) {
-                result.push(path.to_path_buf());
-            }
-        }
-        Ok(result)
+        Ok(
+            tokio::task::spawn_blocking(move || list_names_in(&full_path, &namespace_root))
+                .await??,
+        )
     }
 
     async fn list_blobs_below_at(
@@ -539,8 +544,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Box<[ListedBlob]>, Error> {
-        let namespace_root = self.path_of(&namespace, &NormalizedBlobPath::root());
-        let full_path = self.path_of(&namespace, path);
+        let namespace_root = self.namespace_path(&namespace);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         Ok(
@@ -556,7 +561,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         let result = async_fs::remove_dir_all(&full_path).await;
@@ -579,7 +584,7 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error> {
-        let full_path = self.path_of(&namespace, path);
+        let full_path = self.path_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
         if let Ok(metadata) = async_fs::metadata(&full_path).await {
@@ -608,8 +613,8 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         to_namespace: BlobStorageNamespace,
         to: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        let from_full_path = self.path_of(&from_namespace, from);
-        let to_full_path = self.path_of(&to_namespace, to);
+        let from_full_path = self.path_of(&from_namespace, from)?;
+        let to_full_path = self.path_of(&to_namespace, to)?;
         self.ensure_path_is_inside_root(&from_full_path)?;
         self.ensure_path_is_inside_root(&to_full_path)?;
         let staging = self.root.join(STAGING_DIRECTORY);
@@ -814,7 +819,8 @@ fn copy_staged(
     Ok(true)
 }
 
-/// Lists each regular file below `directory`, with its path relative to `root` and its size.
+/// Lists each regular file below `directory`, with its blob path below `root`, the directory of
+/// its namespace, and its size.
 ///
 /// A `directory` that does not exist, or that is not a directory, gives an empty list.
 fn list_files_below(directory: &Path, root: &Path) -> std::io::Result<Box<[ListedBlob]>> {
@@ -857,10 +863,8 @@ fn add_files(
             let Some(metadata) = listed_entry(entry.metadata())? else {
                 return Ok(listed);
             };
-            let path = entry.path();
-            let relative = path.strip_prefix(root).map_err(std::io::Error::other)?;
             listed.push(ListedBlob {
-                path: relative.into(),
+                path: blob_path_of(&entry.path(), root)?.into_boxed_path(),
                 size: metadata.len(),
             });
             Ok(listed)
@@ -868,6 +872,125 @@ fn add_files(
             Ok(listed)
         }
     })
+}
+
+/// Lists the entries of the directory of a blob path, with their blob paths below `root`, the
+/// directory of the namespace: each blob and each directory of the directory.
+///
+/// A `directory` that does not exist holds nothing, because the directory of a namespace comes
+/// into being with the first write below it. The parts of a long name (`encoded_name`) are one
+/// entry. An entry that a remove takes away during the listing is not in the list.
+fn list_names_in(directory: &Path, root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    match std::fs::read_dir(directory) {
+        Ok(entries) => add_names(entries, root, Vec::new()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(err) => Err(err),
+    }
+}
+
+/// Adds the blob path of each entry of a directory to `listed`, and gives the list back. A
+/// directory of a part of a long name is not an entry: the walk adds the entries below it.
+fn add_names(
+    mut entries: impl Iterator<Item = std::io::Result<std::fs::DirEntry>>,
+    root: &Path,
+    listed: Vec<PathBuf>,
+) -> std::io::Result<Vec<PathBuf>> {
+    entries.try_fold(listed, |mut listed, entry| {
+        let Some(entry) = listed_entry(entry)? else {
+            return Ok(listed);
+        };
+        let path = entry.path();
+        if entry
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(CONTINUED_PART.as_bytes())
+        {
+            match listed_entry(std::fs::read_dir(&path))? {
+                Some(below) => add_names(below, root, listed),
+                None => Ok(listed),
+            }
+        } else {
+            listed.push(blob_path_of(&path, root)?);
+            Ok(listed)
+        }
+    })
+}
+
+/// The marker of a part of an encoded name that more parts follow (`encoded_name`).
+const CONTINUED_PART: &str = "c-";
+
+/// The marker of the last part of an encoded name (`encoded_name`).
+const LAST_PART: &str = "e-";
+
+/// The largest number of hex characters in one part of an encoded name. With its marker, a part
+/// has at most 242 bytes, and the filesystems of the hosts that run Golem accept a file name of
+/// 255 bytes.
+const PART_HEX_LENGTH: usize = 240;
+
+/// Gives the file names that hold one name of a blob path on disk, from the first to the last.
+///
+/// The name is written as lowercase hex, so each character of a name keeps its meaning on every
+/// host: a `\` or a `:` is not a separator or a prefix of the host, and two names that differ
+/// only in the case of their letters stay two names on a filesystem that ignores case. The hex is
+/// cut into parts of at most [`PART_HEX_LENGTH`] characters, so a long name stays below the name
+/// limit of the filesystem. Each part but the last is a directory with the marker
+/// [`CONTINUED_PART`], and the last part has the marker [`LAST_PART`].
+fn encoded_name(name: &str) -> impl Iterator<Item = String> + use<> {
+    let hex = hex::encode(name);
+    let parts = hex.len().div_ceil(PART_HEX_LENGTH);
+    (0..parts).map(move |index| {
+        let marker = if index + 1 == parts {
+            LAST_PART
+        } else {
+            CONTINUED_PART
+        };
+        let end = ((index + 1) * PART_HEX_LENGTH).min(hex.len());
+        format!("{marker}{}", &hex[index * PART_HEX_LENGTH..end])
+    })
+}
+
+/// Gives the blob path of the file or directory at `physical`, which is below `root`, the
+/// directory of its namespace: the names that the file names below `root` encode
+/// (`encoded_name`), with `/` between two names.
+///
+/// A file name that `encoded_name` does not give, and a path that ends in a part that more parts
+/// follow, give an error of the kind [`ErrorKind::InvalidData`].
+fn blob_path_of(physical: &Path, root: &Path) -> std::io::Result<PathBuf> {
+    let invalid = || {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("the file {physical:?} is not a file of the blob storage"),
+        )
+    };
+    let relative = physical.strip_prefix(root).map_err(std::io::Error::other)?;
+    let (names, open_hex) = relative.components().try_fold(
+        (String::new(), String::new()),
+        |(mut names, mut hex), component| {
+            let part = component.as_os_str().to_str().ok_or_else(invalid)?;
+            if let Some(chunk) = part.strip_prefix(CONTINUED_PART) {
+                hex.push_str(chunk);
+                Ok((names, hex))
+            } else if let Some(chunk) = part.strip_prefix(LAST_PART) {
+                hex.push_str(chunk);
+                let name = hex::decode(&hex)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .ok_or_else(invalid)?;
+                if !names.is_empty() {
+                    names.push('/');
+                }
+                names.push_str(&name);
+                Ok((names, String::new()))
+            } else {
+                Err(invalid())
+            }
+        },
+    )?;
+    if open_hex.is_empty() {
+        Ok(PathBuf::from(names))
+    } else {
+        Err(invalid())
+    }
 }
 
 #[cfg(test)]

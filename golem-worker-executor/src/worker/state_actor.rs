@@ -49,10 +49,7 @@
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
 //! lock-free.
 
-use super::status::{
-    calculate_last_known_status_with_checkpoint, try_fold_status_from,
-    update_status_with_new_entries,
-};
+use super::status::{StatusOplogReader, calculate_status_with_reader, fold_committed_status};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
     PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
@@ -61,7 +58,9 @@ use super::{
 use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
-use crate::services::{All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService};
+use crate::services::{
+    All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService, HasWorkerService,
+};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
 use chrono::Utc;
@@ -86,7 +85,6 @@ use tracing::{debug, warn};
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     commit: Arc<OwnerCommitController>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
-    notification_queued: Arc<AtomicBool>,
     stop: Arc<WorkerStateActorStop>,
     owned_agent_id: OwnedAgentId,
 }
@@ -206,12 +204,11 @@ enum StatusJob {
     /// Commits the oplog and folds the newly committed entries into the published status.
     /// Replies with the current oplog index after the commit and whether the status changed, or
     /// with the fence when the storage refused the commit.
-    /// The reply deliberately does not depend on the worker lifecycle lock; if the caller wants the
-    /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
+    /// The actor queues lifecycle notification without awaiting the lifecycle lock, even if the
+    /// caller has cancelled its receipt or full-transaction waiter.
     CommitAndUpdateState {
         level: CommitLevel,
         committed: Option<CommitReceipt>,
-        notify_after_fold: bool,
         done: oneshot::Sender<Result<(OplogIndex, bool), OplogFence>>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
@@ -233,23 +230,9 @@ enum StatusJob {
         instance_guard: OwnedMutexGuard<WorkerInstance>,
         done: oneshot::Sender<Result<bool, OplogError>>,
     },
-    /// Returns the published status after reattaching it when a jump or revert detached it.
-    /// Serialization on the status queue prevents observing an in-flight status transition.
-    AttachedStatus {
-        done: oneshot::Sender<Result<Arc<AgentStatusRecord>, WorkerExecutorError>>,
-    },
-    /// Returns the published status if it is currently attached to the oplog, `None` if it is
-    /// detached. Runs on the status queue so it cannot observe the detached window of an
-    /// in-flight commit or reattach transaction. The attached-ness check happens on the actor,
-    /// but the caller decides how to react (it asserts): a job whose caller was cancelled must
-    /// not be able to panic the actor.
-    NonDetachedStatus {
-        done: oneshot::Sender<Option<Arc<AgentStatusRecord>>>,
-    },
-    /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
-    /// recomputes it from the oplog, republishes it, and forces a cache flush.
-    Reattach {
-        done: oneshot::Sender<()>,
+    /// Observes completed projection work in FIFO order without committing buffered entries.
+    Status {
+        done: oneshot::Sender<Arc<AgentStatusRecord>>,
     },
     /// Writes the confirmation record of a filesystem snapshot when the last automatic snapshot
     /// record still has the name. The check and the append run in this one job, so no other
@@ -305,6 +288,9 @@ struct StatusState<Ctx: WorkerCtx> {
     /// The published worker status. Written only by this task (and during worker construction,
     /// before the actor exists); read lock-free everywhere else.
     last_known_status: Arc<ArcSwap<AgentStatusRecord>>,
+    /// Last committed prefix preceding the current invocation. Retained in memory only; repair
+    /// validates it through the same Jump/Revert checks as persisted checkpoint baselines.
+    invocation_start_status: arc_swap::ArcSwapOption<AgentStatusRecord>,
     /// Whether the published status is detached from the oplog (no longer incrementally
     /// foldable). Written only by this task; read lock-free elsewhere.
     detached: Arc<AtomicBool>,
@@ -357,6 +343,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             created_by,
             oplog,
             last_known_status,
+            invocation_start_status: arc_swap::ArcSwapOption::empty(),
             detached,
             metrics_status,
             status_flusher: status_flusher.clone(),
@@ -376,7 +363,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     StatusJob::CommitAndUpdateState {
                         level,
                         committed,
-                        notify_after_fold,
                         done,
                     } => {
                         complete_status_job(
@@ -384,7 +370,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 let changed =
                                     state.commit_and_update_state(level, committed).await?;
                                 let index = state.oplog.current_oplog_index().await;
-                                if changed && notify_after_fold {
+                                if changed {
                                     queue_status_notification(
                                         &status_lifecycle_jobs,
                                         &status_notification_queued,
@@ -413,14 +399,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                         {
                                             return Err(fenced_error(&fence));
                                         }
-                                        state.ensure_status_attached().await;
-                                        if state.detached.load(Ordering::Acquire) {
-                                            Err(WorkerExecutorError::runtime(
-                                                "Committed worker status could not be reconstructed",
-                                            ))
-                                        } else {
-                                            Ok(())
-                                        }
+                                        Ok(())
                                     }
                                     // The shard has a new owner: give the agent up and leave no
                                     // further trace in an oplog that is no longer ours.
@@ -445,7 +424,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                state.ensure_status_attached().await;
                                 let status = state.last_known_status.load();
                                 if !can_append_invocation(
                                     &status,
@@ -483,30 +461,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         )
                         .await;
                     }
-                    StatusJob::AttachedStatus { done } => {
-                        if state.detached.load(Ordering::Acquire) {
-                            state.reattach().await;
-                        }
-                        let result = if state.detached.load(Ordering::Acquire) {
-                            Err(WorkerExecutorError::runtime(
-                                "Worker status could not be reconstructed",
-                            ))
-                        } else {
-                            Ok(state.last_known_status.load_full())
-                        };
-                        let _ = done.send(result);
-                    }
-                    StatusJob::NonDetachedStatus { done } => {
-                        let status = if state.detached.load(Ordering::Acquire) {
-                            None
-                        } else {
-                            Some(state.last_known_status.load_full())
-                        };
-                        let _ = done.send(status);
-                    }
-                    StatusJob::Reattach { done } => {
-                        state.reattach().await;
-                        let _ = done.send(());
+                    StatusJob::Status { done } => {
+                        let _ = done.send(state.last_known_status.load_full());
                     }
                     StatusJob::ConfirmFilesystemSnapshot {
                         name,
@@ -554,13 +510,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         worker
                             .memory_limit_interrupt_queued
                             .store(false, Ordering::Release);
-                        if memory.exceeds_current_limit() {
-                            worker
+                        if memory.exceeds_current_limit()
+                            && let Err(error) = worker
                                 .set_interrupting_for(
                                     InterruptKind::Suspend(Timestamp::now_utc()),
                                     UnloadReason::MemoryLimit,
                                 )
-                                .await;
+                                .await
+                        {
+                            tracing::error!(%error, "Failed to establish memory-limit suspension");
                         }
                     }
                 }
@@ -591,7 +549,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 owned_agent_id: owned_agent_id.clone(),
             }),
             lifecycle_jobs,
-            notification_queued,
             stop,
             owned_agent_id,
         };
@@ -619,7 +576,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
                 committed: None,
-                notify_after_fold: false,
                 done,
             })
             .await
@@ -634,7 +590,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
                 committed: Some(committed),
-                notify_after_fold: false,
                 done,
             })
             .await
@@ -654,7 +609,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .send(StatusJob::CommitAndUpdateState {
                 level,
                 committed: Some(CommitReceipt::Refusable(committed)),
-                notify_after_fold: true,
                 done,
             })
             .is_err()
@@ -706,65 +660,37 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .await
     }
 
-    pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
+    pub async fn status(&self) -> Arc<AgentStatusRecord> {
         self.commit
-            .run_status_job(|done| StatusJob::AttachedStatus { done })
+            .run_status_job(|done| StatusJob::Status { done })
             .await
-            .expect("Worker status could not be reconstructed")
     }
 
     /// Observational reads can race retirement. A closed queue or dropped reply means the
     /// caller must resolve the worker's lifecycle before reading its persisted state.
-    pub async fn observe_attached_status(
+    pub async fn observe_status(
         &self,
     ) -> Result<Option<Arc<AgentStatusRecord>>, WorkerExecutorError> {
         let (done, response) = oneshot::channel();
         if self
             .commit
             .status_jobs
-            .send(StatusJob::AttachedStatus { done })
+            .send(StatusJob::Status { done })
             .is_err()
         {
             return Ok(None);
         }
-        response.await.ok().transpose()
+        Ok(response.await.ok())
     }
 
-    pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        self.reattach_worker_status().await;
-        self.commit
-            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
-            .await
-            .ok_or_else(|| WorkerExecutorError::runtime("Worker status could not be reconstructed"))
-    }
-
-    /// Returns the published status, asserting it is attached to the oplog. Serialized behind
-    /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
-    /// a job left behind by a cancelled caller cannot panic the actor.
-    pub async fn non_detached_status(&self) -> Arc<AgentStatusRecord> {
-        self.commit
-            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
-            .await
-            .expect("worker status was unexpectedly detached from the oplog")
-    }
-
-    /// Commits and, if the status is detached, recomputes and republishes it (see
-    /// [`Worker::reattach_worker_status`]).
-    pub async fn reattach_worker_status(&self) {
-        self.commit
-            .run_status_job(|done| StatusJob::Reattach { done })
-            .await
+    pub async fn try_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.observe_status()
+            .await?
+            .ok_or_else(|| WorkerExecutorError::runtime("Worker status actor stopped"))
     }
 
     pub fn owner_commit_controller(&self) -> Arc<OwnerCommitController> {
         self.commit.clone()
-    }
-
-    /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
-    /// forget: never blocks, and safe to call from store-polled futures and store-keeping
-    /// fibers alike, because the worker lifecycle lock is only taken on the lifecycle task.
-    pub fn notify_status_changed(&self) {
-        queue_status_notification(&self.lifecycle_jobs, &self.notification_queued);
     }
 
     /// Joins queued lifecycle work and its requeued descendants after execution has stopped.
@@ -872,7 +798,6 @@ impl OwnerCommitController {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
-            notify_after_fold: false,
             done,
         })
         .await
@@ -1084,10 +1009,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         });
     }
 
-    /// The commit + status-fold transaction. Commits the oplog, then either folds the newly
-    /// committed entries into the published status or marks the status detached when it can no
-    /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
-    /// whether the published status (or its detachment) changed.
+    /// Commits the oplog, acknowledges the persistence milestone, then folds or reconstructs
+    /// the projection before another status job can run. Returns whether status was republished.
     ///
     /// A commit the storage refused because the shard has a new owner is returned as the fence
     /// rather than folded into "unchanged": a caller whose entry was only buffered until this
@@ -1101,7 +1024,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        let mut new_entries = match self.oplog.commit(commit_level).await {
+        let new_entries = match self.oplog.commit(commit_level).await {
             Ok(entries) => entries,
             Err(OplogError::Fenced(fence)) => {
                 // Nothing was committed and nothing more can be.
@@ -1122,99 +1045,79 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             .filter(|entry| is_authority_state_entry(entry))
             .count() as u64;
 
-        let changed = if !self.detached.load(Ordering::Acquire) {
-            let old_status = self.last_known_status.load_full();
-            // A catch-up can already have folded a plugin's buffered direct-commit receipts.
-            new_entries.retain(|index, _| *index > old_status.oplog_idx);
-            let flushes_buffer =
-                self.agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
-            let contiguous = match (new_entries.first_key_value(), new_entries.last_key_value()) {
-                (Some((first, _)), Some((last, _))) => {
-                    *first == old_status.oplog_idx.next()
-                        && last.as_u64() - first.as_u64() + 1 == new_entries.len() as u64
-                        && (!flushes_buffer || *last >= appended_through)
-                }
-                _ => !flushes_buffer || appended_through <= old_status.oplog_idx,
-            };
-            let updated_status = if contiguous {
-                update_status_with_new_entries(
-                    self.agent_mode,
-                    old_status.as_ref().clone(),
-                    new_entries,
-                    &self.deps.config().retry,
-                )
-            } else {
-                // Threshold flushes and replica waits can commit entries outside this actor.
-                // Read committed storage in bounded chunks, including payload hydration, rather
-                // than retaining every automatically flushed entry in memory until this commit.
-                // The gap may contain authority changes absent from the commit receipt.
-                authority_change_count = authority_change_count.max(1);
-                if self.agent_mode == AgentMode::Ephemeral && commit_level == CommitLevel::Deferred
-                {
-                    // A bounded receipt cache may have dropped part of a long invocation. The
-                    // completion receipt has already been sent; make the deferred tail readable
-                    // from storage before taking this exceptional reconstruction path.
-                    match self.oplog.commit(CommitLevel::Always).await {
-                        Ok(_) => {}
-                        Err(OplogError::Fenced(fence)) => {
-                            self.retire_fenced_agent(fence.clone());
-                            return Err(fence);
-                        }
-                        Err(error) => panic!("oplog write: {error}"),
-                    }
-                }
-                try_fold_status_from(
+        let old_status = self.last_known_status.load_full();
+        if new_entries.iter().any(|(index, entry)| {
+            *index > old_status.oplog_idx
+                && matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+        }) {
+            self.invocation_start_status.store(Some(old_status.clone()));
+        }
+        let (updated_status, receipt_gap, horizon) = fold_committed_status(
+            &self.deps,
+            &self.owned_agent_id,
+            self.oplog.as_ref(),
+            self.agent_mode,
+            commit_level,
+            appended_through,
+            old_status.as_ref().clone(),
+            new_entries,
+        )
+        .await;
+        let (updated_status, reconstructed) = match updated_status {
+            Ok(Some(status)) => (status, false),
+            Ok(None) | Err(_) => {
+                // Suppress background cache writes until the replacement projection is installed.
+                self.detached.store(true, Ordering::Release);
+                self.status_flusher.invalidate_baseline().await;
+                let reader = StatusOplogReader::new(
                     &self.deps,
                     &self.owned_agent_id,
                     self.agent_mode,
-                    old_status.as_ref().clone(),
-                )
-                .await
-            };
+                    Some(self.oplog.as_ref()),
+                    horizon,
+                );
+                let baseline = self
+                    .invocation_start_status
+                    .load_full()
+                    .map(|status| status.as_ref().clone());
+                let status = calculate_status_with_reader(&self.deps, &reader, baseline, || async {
+                    self.deps.worker_service()
+                        .read_status_checkpoint(&self.owned_agent_id, self.fingerprint, self.agent_mode)
+                        .await
+                        .unwrap_or_else(|error| {
+                            debug!(agent_id = %self.owned_agent_id, %error, "Status checkpoint unavailable; rebuilding from oplog");
+                            None
+                        })
+                }).await
+                    .unwrap_or_else(|error| panic!("oplog status reconstruction: {error}"))
+                    .unwrap_or_else(|| panic!("worker oplog disappeared during status reconstruction"));
+                (status, true)
+            }
+        };
+        if receipt_gap || reconstructed {
+            // Repair may expose authority changes absent from the commit receipt.
+            authority_change_count = authority_change_count.max(1);
+        }
 
-            match updated_status {
-                // The comparison stays. Skipping the fold when the commit produced no entries
-                // would not be equivalent: the fold's `finalize` step prunes oplog-processor
-                // checkpoints that are neither active nor in-flight, and it runs whether or not
-                // there were entries (see `empty_fold_is_not_the_identity` in `status`).
-                Ok(Some(updated_status)) if updated_status != *old_status => {
-                    let updated_status = self.update_last_known_status(updated_status).await;
-
-                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
-                        .await;
-
-                    true
-                }
-                Ok(Some(_)) => false,
-                Ok(None) => {
-                    // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
-                    // This can happen during a revert or a snapshot update for example.
-                    debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
-                    self.detached.store(true, Ordering::Release);
-                    // The in-memory status is no longer authoritative, and after reattach it will be
-                    // recomputed from scratch, so the persisted baseline can no longer be trusted: the
-                    // next flush must be a full reconcile write.
-                    self.status_flusher.invalidate_baseline().await;
-                    true
-                }
-                Err(error) => {
-                    tracing::error!(
-                        agent_id = %self.owned_agent_id,
-                        %error,
-                        "Failed to update worker status from newly committed oplog entries; detaching status"
-                    );
-                    self.detached.store(true, Ordering::Release);
-                    self.status_flusher.invalidate_baseline().await;
-                    true
+        // Empty folds still finalize checkpoint pruning; do not bypass them on an empty receipt.
+        let changed = if reconstructed || updated_status != *old_status {
+            let updated_status = self.update_last_known_status(updated_status).await;
+            if reconstructed {
+                self.detached.store(false, Ordering::Release);
+                if let Err(error) = self.status_flusher.flush(FlushReason::Forced).await {
+                    debug!(agent_id = %self.owned_agent_id, %error, "Reconstructed status cache flush failed; background flusher will retry");
                 }
             }
+            self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
+                .await;
+            true
         } else {
             false
         };
 
         // This release-publish is deliberately owned by the cancellation-proof
         // status actor and happens only after the committed entries were folded
-        // (or the status was marked detached). A producer cannot report success
+        // or reconstructed. A producer cannot report success
         // for a committed card event while authorization still considers the
         // old generation current.
         if authority_change_count != 0 {
@@ -1223,71 +1126,6 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         }
 
         Ok(changed)
-    }
-
-    async fn reattach(&self) {
-        // A refused commit has already given the agent up; the status is still recomputed from
-        // what was committed before it.
-        let _ = self
-            .commit_and_update_state(CommitLevel::Always, None)
-            .await;
-
-        self.ensure_status_attached().await;
-    }
-
-    async fn ensure_status_attached(&self) -> bool {
-        if self.detached.load(Ordering::Acquire) {
-            debug!(
-                agent_id = %self.owned_agent_id.agent_id,
-                "Worker status was detached from oplog, recomputing it"
-            );
-
-            let worker_status = calculate_last_known_status_with_checkpoint(
-                &self.deps,
-                &self.owned_agent_id,
-                self.fingerprint,
-                self.agent_mode,
-                None,
-            )
-            .await
-            .and_then(|status| {
-                status
-                    .ok_or_else(|| "worker oplog disappeared while reattaching status".to_string())
-            });
-
-            let Ok(worker_status) = worker_status else {
-                tracing::error!(
-                    agent_id = %self.owned_agent_id,
-                    error = %worker_status.unwrap_err(),
-                    "Failed to recompute detached worker status"
-                );
-                return false;
-            };
-
-            // Install the recomputed status while still detached, so a concurrent background sweep
-            // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status).await;
-
-            // Now the in-memory status is authoritative again; clear the flag and force a flush.
-            // Release ordering pairs with the Acquire loads in the checkpoint/flusher paths: with
-            // the lock-free ArcSwap status, this flag is the publication barrier that makes the
-            // recomputed status visible before readers start trusting it again.
-            self.detached.store(false, Ordering::Release);
-
-            // The status was recomputed from an earlier baseline; persist it synchronously so the
-            // cache is immediately usable again. A failure remains best-effort because the oplog
-            // is authoritative and the flusher will retry it in the background.
-            if let Err(err) = self.status_flusher.flush(FlushReason::Forced).await {
-                debug!(
-                    agent_id = %self.owned_agent_id.agent_id,
-                    "Forced status flush on reattach failed (will retry in background): {err}"
-                );
-            }
-
-            true
-        } else {
-            false
-        }
     }
 
     /// Publishes a new status and hands the (previous, new) pair to the flusher, which updates
@@ -1427,12 +1265,10 @@ mod tests {
                     let finished = status_finished.clone();
                     async move {
                         // A lifecycle job must be able to submit status work before status Stop.
-                        let Some(StatusJob::AttachedStatus { done }) = status_rx.recv().await
-                        else {
+                        let Some(StatusJob::Status { done }) = status_rx.recv().await else {
                             panic!("status actor stopped before lifecycle work finished");
                         };
-                        done.send(Ok(Arc::new(AgentStatusRecord::default())))
-                            .unwrap();
+                        done.send(Arc::new(AgentStatusRecord::default())).unwrap();
                         assert!(matches!(status_rx.recv().await, Some(StatusJob::Stop)));
                         if pause_stage == 1 {
                             entered.notify_one();
@@ -1453,8 +1289,8 @@ mod tests {
                             Some(LifecycleJob::Stop)
                         ));
                         let (done, response) = oneshot::channel();
-                        assert!(status_jobs.send(StatusJob::AttachedStatus { done }).is_ok());
-                        response.await.unwrap().unwrap();
+                        assert!(status_jobs.send(StatusJob::Status { done }).is_ok());
+                        response.await.unwrap();
                         if pause_stage == 0 {
                             entered.notify_one();
                             release.notified().await;
@@ -1504,7 +1340,6 @@ mod tests {
                         owned_agent_id: owned_agent_id.clone(),
                     }),
                     lifecycle_jobs,
-                    notification_queued: Arc::new(AtomicBool::new(false)),
                     stop,
                     owned_agent_id,
                 });
@@ -1753,7 +1588,6 @@ mod tests {
                 owned_agent_id: owned_agent_id.clone(),
             }),
             lifecycle_jobs,
-            notification_queued: Arc::new(AtomicBool::new(false)),
             stop,
             owned_agent_id,
         };
@@ -1796,7 +1630,6 @@ mod tests {
                 owned_agent_id: owned_agent_id.clone(),
             }),
             lifecycle_jobs,
-            notification_queued: Arc::new(AtomicBool::new(false)),
             stop,
             owned_agent_id,
         };

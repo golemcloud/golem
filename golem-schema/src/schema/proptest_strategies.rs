@@ -251,6 +251,7 @@ fn leaf_schema_type_strategy(def_ids: Vec<TypeId>) -> BoxedStrategy<SchemaType> 
         Just(SchemaType::f64()).boxed(),
         Just(SchemaType::char()).boxed(),
         Just(SchemaType::string()).boxed(),
+        Just(SchemaType::uuid()).boxed(),
         Just(SchemaType::datetime()).boxed(),
         Just(SchemaType::duration()).boxed(),
         text_restrictions().prop_map(SchemaType::text).boxed(),
@@ -409,6 +410,7 @@ fn base_leaf_schema_value_strategy() -> BoxedStrategy<SchemaValue> {
         vec(any::<bool>(), 0..8).prop_map(|bits| SchemaValue::Flags { bits }),
         short_string().prop_map(|path| SchemaValue::Path { path }),
         short_string().prop_map(|url| SchemaValue::Url { url }),
+        any::<u128>().prop_map(|value| SchemaValue::Uuid(uuid::Uuid::from_u128(value))),
         datetime_strategy().prop_map(|value| SchemaValue::Datetime { value }),
         any::<i64>().prop_map(|nanoseconds| {
             SchemaValue::Duration(DurationValuePayload { nanoseconds })

@@ -98,7 +98,7 @@ class ToolMiddlewareCodegenSpec extends munit.FunSuite {
       content.contains(
         "stdin: _root_.golem.tool.ToolMiddlewareInputHandle): " +
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolInvokeError[_root_.scala.Nothing], " +
-          "(_root_.scala.Long, _root_.golem.tool.ToolMiddlewareOutputHandle)]]"
+          "_root_.golem.tool.ToolMiddlewareOutputs[_root_.scala.Long]]]"
       ),
       content
     )

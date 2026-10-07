@@ -66,12 +66,32 @@ pub fn validate_snapshot_update_boundaries(
         }
 
         match entry {
-            OplogEntry::PendingUpdate { description, .. } => pending_updates.push_back((
-                *idx,
-                matches!(description, UpdateDescription::SnapshotBased { .. }),
-            )),
+            OplogEntry::PendingUpdate {
+                description,
+                update_attempt_index,
+                ..
+            } => {
+                let target_revision = *description.target_revision();
+                let admission_index = update_attempt_index.unwrap_or(*idx);
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_updates.front().is_some_and(
+                        |(pending_target, pending_admission, _, _)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if !refines_automatic_admission {
+                    pending_updates.push_back((
+                        target_revision,
+                        admission_index,
+                        *idx,
+                        matches!(description, UpdateDescription::SnapshotBased { .. }),
+                    ));
+                }
+            }
             OplogEntry::SuccessfulUpdate { .. } => {
-                if let Some((pending_index, true)) = pending_updates.pop_front()
+                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
                     && pending_index <= cut_point
                     && cut_point < *idx
                 {
@@ -82,7 +102,7 @@ pub fn validate_snapshot_update_boundaries(
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
-                if let Some((pending_index, true)) = pending_updates.pop_front()
+                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
                     && pending_index <= cut_point
                     && cut_point < *idx
                 {
@@ -449,11 +469,21 @@ mod tests {
         }
     }
 
+    fn snapshot_assisted_update(revision: u64) -> UpdateDescription {
+        UpdateDescription::SnapshotAssistedAutomatic {
+            target_revision: ComponentRevision::new(revision).unwrap(),
+            source_component_revision: ComponentRevision::new(revision - 1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: idx(2),
+            snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
+        }
+    }
+
     #[test]
     fn successful_snapshot_update_boundary_is_validated() {
         let update = snapshot_update(2);
         let entries = BTreeMap::from([
-            (idx(3), OplogEntry::pending_update(update.clone())),
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
             (
                 idx(5),
                 OplogEntry::successful_update(
@@ -461,6 +491,7 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
         ]);
@@ -493,10 +524,15 @@ mod tests {
     fn failed_snapshot_update_boundary_is_rejected() {
         let update = snapshot_update(2);
         let entries = BTreeMap::from([
-            (idx(3), OplogEntry::pending_update(update.clone())),
+            (idx(3), OplogEntry::pending_update(update.clone(), None)),
             (
                 idx(5),
-                OplogEntry::failed_update(*update.target_revision(), Some("failed".to_string())),
+                OplogEntry::failed_update(
+                    *update.target_revision(),
+                    Some("failed".to_string()),
+                    None,
+                    None,
+                ),
             ),
         ]);
 
@@ -510,9 +546,40 @@ mod tests {
     }
 
     #[test]
+    fn assisted_update_outcome_can_be_removed_while_request_is_retained() {
+        for outcome in [
+            OplogEntry::successful_update(
+                ComponentRevision::new(2).unwrap(),
+                100,
+                None,
+                Default::default(),
+                None,
+            ),
+            OplogEntry::failed_update(
+                ComponentRevision::new(2).unwrap(),
+                Some("failed".to_string()),
+                None,
+                None,
+            ),
+        ] {
+            let entries = BTreeMap::from([
+                (
+                    idx(3),
+                    OplogEntry::pending_update(snapshot_assisted_update(2), None),
+                ),
+                (idx(5), outcome),
+            ]);
+            assert_eq!(
+                validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
     fn unapplied_snapshot_update_can_be_fully_removed_or_retained() {
         let update = snapshot_update(2);
-        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update))]);
+        let entries = BTreeMap::from([(idx(3), OplogEntry::pending_update(update, None))]);
 
         assert_eq!(
             validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
@@ -531,7 +598,7 @@ mod tests {
             target_revision: ComponentRevision::new(3).unwrap(),
         };
         let entries = BTreeMap::from([
-            (idx(2), OplogEntry::pending_update(snapshot.clone())),
+            (idx(2), OplogEntry::pending_update(snapshot.clone(), None)),
             (
                 idx(3),
                 OplogEntry::successful_update(
@@ -539,9 +606,10 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
-            (idx(5), OplogEntry::pending_update(automatic.clone())),
+            (idx(5), OplogEntry::pending_update(automatic.clone(), None)),
             (
                 idx(6),
                 OplogEntry::successful_update(
@@ -549,6 +617,7 @@ mod tests {
                     100,
                     None,
                     Default::default(),
+                    None,
                 ),
             ),
         ]);

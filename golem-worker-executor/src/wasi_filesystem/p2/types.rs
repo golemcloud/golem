@@ -69,6 +69,34 @@ fn p2_descriptor_guest_path(
         .map_err(|_| FsError::from(ErrorCode::NotPermitted))
 }
 
+/// Gives the path of `guest_path` relative to the root of the agent filesystem.
+fn p2_root_relative_path(guest_path: &CanonicalGuestPath) -> std::path::PathBuf {
+    std::path::PathBuf::from(guest_path.as_str().strip_prefix('/').unwrap_or_default())
+}
+
+/// Runs the check of `agent_filesystem::is_immutable_initial_file`: `true` when the stat reads
+/// Golem's read-only initial file, so its volatile timestamps can be removed without an oplog
+/// entry. A failure of the check traps, as a failure of the stat of the fast path does, because a
+/// guest error that the oplog does not record could differ in a replay.
+async fn p2_is_immutable_initial_file(
+    check: Result<Option<agent_filesystem::FilesystemCall<bool>>, agent_filesystem::AccessError>,
+) -> Result<bool, FsError> {
+    match check.map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))? {
+        None => Ok(false),
+        Some(call) => call.await.map_err(|error| {
+            FsError::trap(wasmtime::Error::msg(format!(
+                "immutable initial-file check failed: {error}"
+            )))
+        }),
+    }
+}
+
+fn p2_stable_initial_file_stat(mut stat: DescriptorStat) -> DescriptorStat {
+    stat.data_access_timestamp = None;
+    stat.data_modification_timestamp = None;
+    stat
+}
+
 async fn authorize_paths<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     requests: &[(FilesystemVerb, CanonicalGuestPath)],
@@ -977,9 +1005,42 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
+        let root_relative_path = p2_root_relative_path(&guest_path);
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path = descriptor.path().to_path_buf();
+        let immutable_initial_file = p2_is_immutable_initial_file(descriptor.with_node(|node| {
+            agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                &root_relative_path,
+                AgentTarget::Open(node),
+            )
+        }))
+        .await?;
+
+        if immutable_initial_file {
+            let call = descriptor
+                .with_node(|node| {
+                    agent_filesystem::attributes(&generation_handle, AgentTarget::Open(node))
+                        .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+                })
+                .map_err(|error| {
+                    FsError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error}"
+                    )))
+                })?;
+            let stat = call
+                .await
+                .map_err(p2_agent_error)
+                .and_then(p2_agent_stat)
+                .map_err(|error| {
+                    FsError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat failed: {error}"
+                    )))
+                })?;
+            self.observe_function_call("filesystem::types::descriptor", "stat");
+            return Ok(p2_stable_initial_file_stat(stat));
+        }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.
@@ -1062,6 +1123,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
+        let root_relative_path = p2_root_relative_path(&guest_path);
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let full_path = descriptor.path().join(path.clone());
@@ -1071,6 +1133,37 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         } else {
             agent_filesystem::Follow::No
         };
+        let immutable_initial_file =
+            p2_is_immutable_initial_file(agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                &root_relative_path,
+                AgentTarget::Path(&target, follow),
+            ))
+            .await?;
+
+        if immutable_initial_file {
+            let call = agent_filesystem::attributes(
+                &generation_handle,
+                AgentTarget::Path(&target, follow),
+            )
+            .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+            .map_err(|error| {
+                FsError::trap(wasmtime::Error::msg(format!(
+                    "immutable initial-file stat-at failed: {error}"
+                )))
+            })?;
+            let stat = call
+                .await
+                .map_err(p2_agent_error)
+                .and_then(p2_agent_stat)
+                .map_err(|error| {
+                    FsError::trap(wasmtime::Error::msg(format!(
+                        "immutable initial-file stat-at failed: {error}"
+                    )))
+                })?;
+            self.observe_function_call("filesystem::types::descriptor", "stat_at");
+            return Ok(p2_stable_initial_file_stat(stat));
+        }
 
         // `ReadLocal`: the local stat always runs (its timestamps are then overridden by the durable
         // value), so only the file-times are made durable via `DurableCallSession::run`.

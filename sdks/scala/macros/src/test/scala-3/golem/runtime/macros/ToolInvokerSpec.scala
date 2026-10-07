@@ -70,8 +70,7 @@ object ToolInvokerSpec extends ZIOSpecDefault {
   }
 
   private final case class FakeStdin(content: String) extends ToolInputStream {
-    override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-      Future.successful(Right(None))
+    override val stream                 = zio.blocks.streams.Stream.empty
     override def cancel(): Future[Unit] = Future.successful(())
   }
 
@@ -126,7 +125,8 @@ object ToolInvokerSpec extends ZIOSpecDefault {
 
   private final class FakeEnv(
     tools: Map[String, (ExtendedToolType, ToolInvokeHandler)] = Map.empty,
-    val stdout: Option[ToolOutputStream] = None
+    val stdout: Option[ToolOutputStream] = None,
+    val stderr: Option[ToolOutputStream] = None
   ) extends ToolInvokeEnv {
     def invokerFor(toolName: String): Option[ToolInvokeHandler]     = tools.get(toolName).map(_._2)
     def extendedToolFor(toolName: String): Option[ExtendedToolType] = tools.get(toolName).map(_._1)

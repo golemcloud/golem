@@ -237,6 +237,42 @@ test_component!(
     "golem-it:tool-streaming-rust-caller"
 );
 test_component!(
+    filesystem_tools,
+    "filesystem_tools",
+    "../builtin-tools/filesystem-tools",
+    "golem:filesystem-tools"
+);
+test_component!(
+    javascript_tools,
+    "javascript_tools",
+    "../builtin-tools/javascript-tools",
+    "golem:javascript-tools"
+);
+test_component!(
+    typescript_tools,
+    "typescript_tools",
+    "../builtin-tools/typescript-tools",
+    "golem:typescript-tools"
+);
+test_component!(
+    git_tool,
+    "git_tool",
+    "../builtin-tools/git-tool",
+    "golem:git-tool"
+);
+test_component!(
+    git_network_probe,
+    "git_network_probe",
+    "golem_it_git_network_probe",
+    "golem-it:git-network-probe"
+);
+test_component!(
+    web_fetch,
+    "web_fetch",
+    "../builtin-tools/web-fetch",
+    "golem:web-fetch"
+);
+test_component!(
     tool_streaming_ts_provider,
     "tool_streaming_ts_provider",
     "golem_it_tool_streaming_ts_provider",

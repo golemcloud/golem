@@ -19,6 +19,7 @@ mod durable_streams;
 mod http_test_context;
 mod live_files;
 mod mcp;
+mod oidc_pkce;
 mod openapi_generation;
 mod raw_http_router;
 mod readonly_http;

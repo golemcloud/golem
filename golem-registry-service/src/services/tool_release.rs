@@ -556,13 +556,13 @@ impl ToolReleaseService {
         definition: &Tool,
         component_name: &golem_common::model::component::ComponentName,
         wasm_hash: diff::Hash,
-    ) -> Result<(), ToolReleaseError> {
+    ) -> Result<bool, ToolReleaseError> {
         let Some(existing) = self
             .tool_release_repo
             .get_by_coordinates(self.builtin_tool_owner_account_id.0, name.as_str(), version)
             .await?
         else {
-            return Ok(());
+            return Ok(false);
         };
         let release: ToolRelease = existing.release.try_into()?;
         let ToolSource::Component {
@@ -592,7 +592,6 @@ impl ToolReleaseService {
             || recorded_name != *component_name
             || component.component_name != *component_name
             || component.account_id != self.builtin_tool_owner_account_id
-            || component.wasm_hash != wasm_hash
             || !deployed
                 .iter()
                 .any(|value| value.revision == component_revision)
@@ -605,7 +604,15 @@ impl ToolReleaseService {
         {
             return Err(ToolReleaseError::ImmutableReleaseConflict);
         }
-        Ok(())
+        if component.wasm_hash != wasm_hash {
+            tracing::warn!(
+                tool_name = %name,
+                tool_version = version,
+                component_name = %component_name,
+                "Built-in tool coordinate remains bound to its original component; bump the tool version to publish changed implementation bytes"
+            );
+        }
+        Ok(true)
     }
 
     async fn authorize_management(

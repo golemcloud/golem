@@ -304,9 +304,10 @@ pub struct DeploymentMiddlewareIdentity {
 
 impl DeploymentIdentity {
     pub fn into_plan(
-        self,
+        mut self,
         current_revision: Option<CurrentDeploymentRevision>,
     ) -> Result<DeploymentPlan, DeployRepoError> {
+        self.retain_dynamic_tool_bindings();
         let diffable = self.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
@@ -383,9 +384,31 @@ impl DeploymentIdentity {
 }
 
 impl DeploymentIdentity {
+    fn retain_dynamic_tool_bindings(&mut self) {
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.middleware
+            .environment_bindings
+            .retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        for bindings in self.middleware.agent_bindings.values_mut() {
+            bindings.retain(|name, _| !registered_tool_names.contains(name.as_str()));
+        }
+        self.middleware
+            .agent_bindings
+            .retain(|_, bindings| !bindings.is_empty());
+    }
+
     pub fn to_diffable(&self) -> Result<diff::Deployment, DeployRepoError> {
         let mut remote_tools = std::collections::BTreeMap::new();
         let mut published_tools = std::collections::BTreeSet::new();
+        let registered_tool_names = self
+            .tools
+            .iter()
+            .map(|tool| tool.tool_name.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
         for tool in &self.tools {
             match (tool.tool_release_id, tool.published, tool.deployment_hash) {
                 (None, false, None) => {}
@@ -470,17 +493,20 @@ impl DeploymentIdentity {
                 .middleware
                 .environment_bindings
                 .iter()
+                .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
                 .map(|(n, b)| (n.to_string(), b.into()))
                 .collect(),
             agent_tool_middleware_bindings: self
                 .middleware
                 .agent_bindings
                 .iter()
-                .map(|(a, bs)| {
-                    (
-                        a.0.clone(),
-                        bs.iter().map(|(n, b)| (n.to_string(), b.into())).collect(),
-                    )
+                .filter_map(|(agent, bindings)| {
+                    let bindings = bindings
+                        .iter()
+                        .filter(|(name, _)| !registered_tool_names.contains(name.as_str()))
+                        .map(|(name, binding)| (name.to_string(), binding.into()))
+                        .collect::<std::collections::BTreeMap<_, _>>();
+                    (!bindings.is_empty()).then(|| (agent.0.clone(), bindings))
                 })
                 .collect(),
         })
@@ -494,7 +520,8 @@ pub struct DeployedDeploymentIdentity {
 
 impl TryFrom<DeployedDeploymentIdentity> for DeploymentSummary {
     type Error = DeployRepoError;
-    fn try_from(value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+    fn try_from(mut value: DeployedDeploymentIdentity) -> Result<Self, Self::Error> {
+        value.identity.retain_dynamic_tool_bindings();
         let diffable = value.identity.to_diffable()?;
         let remote_tools = diffable
             .remote_tools
@@ -1244,6 +1271,8 @@ impl DeploymentRevisionCreationRecord {
         let remote_tools = diff::remote_tool_deployments(
             registered_tools.clone(),
             agent_tool_bindings.clone(),
+            &middleware.environment_bindings,
+            &middleware.agent_bindings,
             &components
                 .iter()
                 .map(|component| (component.id, component.component_name.clone()))
@@ -1506,6 +1535,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
 
     pub security_scheme_id: Option<Uuid>,
     pub security_scheme_name: Option<String>,
+    pub security_scheme_revision_id: Option<i64>,
     pub security_scheme_provider_type: Option<String>,
     pub security_scheme_client_id: Option<String>,
     pub security_scheme_client_secret: Option<String>,
@@ -1513,6 +1543,7 @@ pub struct DeploymentCompiledRouteWithSecuritySchemeRecord {
     pub security_scheme_scopes: Option<String>,
     pub security_scheme_custom_provider_name: Option<String>,
     pub security_scheme_custom_issuer_url: Option<String>,
+    pub security_scheme_login_config: Option<String>,
 
     pub compiled_route: Blob<UnboundCompiledRoute>,
 }
@@ -1528,20 +1559,24 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
         let security_scheme = match (
             value.security_scheme_id,
             value.security_scheme_name,
+            value.security_scheme_revision_id,
             value.security_scheme_provider_type,
             value.security_scheme_client_id,
             value.security_scheme_client_secret,
             value.security_scheme_redirect_url,
             value.security_scheme_scopes,
+            value.security_scheme_login_config,
         ) {
             (
                 Some(security_scheme_id),
                 Some(security_scheme_name),
+                Some(revision_id),
                 Some(provider_type),
                 Some(client_id),
                 Some(client_secret),
                 Some(redirect_url),
                 Some(scopes),
+                Some(login_config),
             ) => {
                 let id = SecuritySchemeId(security_scheme_id);
                 let name = SecuritySchemeName(security_scheme_name);
@@ -1563,15 +1598,19 @@ impl TryFrom<DeploymentCompiledRouteWithSecuritySchemeRecord> for BoundCompiledR
                 };
                 let client_id = ClientId::new(client_id);
                 let client_secret = ClientSecret::new(client_secret);
+                let login = serde_json::from_str(&login_config)
+                    .map_err(|e| anyhow::Error::from(e).context("Failed parsing login config"))?;
 
                 Some(SecuritySchemeDetails {
                     id,
+                    revision: revision_id.try_into()?,
                     name,
                     scopes,
                     redirect_url,
                     provider_type,
                     client_id,
                     client_secret,
+                    login,
                 })
             }
             _ => None,

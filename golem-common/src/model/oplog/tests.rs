@@ -46,9 +46,10 @@ use crate::model::oplog::{
     OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicQueuedCardEvent, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
     PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
     PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
     QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
@@ -417,6 +418,8 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
                 has_stdin: false,
                 has_stdout: true,
                 declares_stdout: true,
+                has_stderr: true,
+                declares_stderr: true,
             },
         )),
     };
@@ -867,7 +870,11 @@ fn matcher_matches_secret_reveal_request_payload() {
     });
 
     assert!(entry.matches(&Query::parse("reveal").unwrap()));
-    assert!(entry.matches(&Query::parse("request.secret_id.low-bits:291").unwrap()));
+    assert!(
+        entry.matches(
+            &Query::parse("request.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+        )
+    );
 }
 
 #[test]
@@ -989,7 +996,9 @@ fn matcher_matches_secret_revealed_response_payload() {
         span_attributes: None,
     });
 
-    assert!(entry.matches(&Query::parse("response.secret_id.low-bits:291").unwrap()));
+    assert!(entry.matches(
+        &Query::parse("response.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+    ));
     assert!(entry.matches(&Query::parse("response.pinned_revision:7").unwrap()));
     assert!(entry.matches(&Query::parse("response.audit.config_key:password").unwrap()));
 }
@@ -1293,6 +1302,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
@@ -1311,6 +1321,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -1333,6 +1344,12 @@ fn successful_update_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
+        snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: OplogIndex::from_u64(3),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1347,6 +1364,14 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: Some(PublicFailedSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: Some(OplogIndex::from_u64(3)),
+            ineligibility_reason: None,
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1361,6 +1386,8 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
+        update_attempt_index: None,
+        snapshot_assisted_details: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1715,6 +1742,7 @@ fn raw_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
             mime_type: "application/octet-stream".to_string(),
             filesystem_snapshot: Some(name.clone()),
         },
+        update_attempt_index: None,
     };
 
     fn update_snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
@@ -1804,6 +1832,7 @@ fn public_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
@@ -2772,8 +2801,8 @@ mod scope_scan {
 /// it, and of a pending update entry that holds it. The form on the wire must not change.
 const NAME_BYTES: &str =
     "034c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
-const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
-const ENTRY_BYTES: &str = "030010000000000000000007000100000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d3030303030303030303030310000";
+const ENTRY_BYTES: &str = "030010000000000000000007000200000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d30303030303030303030303100";
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
@@ -2796,6 +2825,8 @@ fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
         target_revision: ComponentRevision::new(2).unwrap(),
         oplog_index: crate::model::OplogIndex::from_u64(5),
         filesystem_snapshot: Some(name.clone()),
+        pending_update: None,
+        snapshot_assisted_details: None,
     };
     let entry = OplogEntry::PendingUpdate {
         timestamp: crate::model::Timestamp::from(7),
@@ -2805,6 +2836,7 @@ fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
             mime_type: "application/octet-stream".to_string(),
             filesystem_snapshot: Some(name.clone()),
         },
+        update_attempt_index: None,
     };
     let written = [
         hex(&crate::serialization::serialize(&name).unwrap()),

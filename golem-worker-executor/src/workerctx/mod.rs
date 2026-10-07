@@ -55,7 +55,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
+    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponseEntityInvocation,
+    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
@@ -139,6 +140,14 @@ pub enum ReplayAdmissionStage {
     BeforeScope,
     /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
     AfterScope,
+    /// Before a deferred call is prepared, on both live execution and replay.
+    BeforeDeferredStart,
+    /// After the deferred call owns its `Start`, before resolution or live execution.
+    AfterDeferredStart,
+    /// Before committing the Jump that abandons an incomplete batched attempt.
+    BeforeBatchedJump,
+    /// After that Jump is committed and registered, before continuing the scope.
+    AfterBatchedJump,
 }
 
 /// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
@@ -147,8 +156,8 @@ pub enum ReplayAdmissionStage {
 #[doc(hidden)]
 #[async_trait]
 pub trait ReplayAdmissionHook: Send + Sync {
-    /// Runs on the accessor future, outside every cursor lock, before the replaying call claims
-    /// its `Start` at `stage`.
+    /// Runs on the accessor future, outside every cursor lock, at the selected admission or
+    /// recovery stage. Deferred-call stages also run on live execution.
     async fn before_replay_access_start(&self, function: &'static str, stage: ReplayAdmissionStage);
 
     /// Runs synchronously on the Store-holding direct call right before it waits for its
@@ -553,6 +562,8 @@ pub trait UpdateManagement {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
+        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when an update attempt succeeded. Fails when the oplog refused to record the
@@ -562,6 +573,7 @@ pub trait UpdateManagement {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) -> Result<(), WorkerExecutorError>;
 }
 

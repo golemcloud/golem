@@ -41,6 +41,7 @@ export default {
   "golem-streaming-agent-effect": "Streaming Agent Methods with Effect",
   "golem-trigger-agent-effect": "Triggering a Fire-and-Forget Effect Agent Invocation",
   "golem-add-ignite-effect": "Using Apache Ignite from an Effect Agent",
+  "golem-add-sqlite-effect": "Using Embedded SQLite from Effect TypeScript",
   "golem-add-mysql-effect": "Using MySQL from an Effect Agent",
   "golem-add-postgres-effect": "Using PostgreSQL from an Effect Golem Agent",
   "golem-add-webhook-effect": "Using Webhooks in an Effect Golem Agent",

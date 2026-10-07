@@ -656,6 +656,94 @@ pub(crate) fn filesystem_activity<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
+/// Starts to check whether `target`, the object that a stat at the generation-relative `path`
+/// reads, is the read-only initial file of the declaration at `path`.
+///
+/// Gives `None`, and reads nothing, when no component or entity-provisioned declaration at `path`
+/// is read-only. Otherwise the call gives whether the object is Golem's file: a regular file
+/// without write permission whose content equals the declaration. The object that an install put
+/// at `path` passes without a read of its content (`InstalledFile`). Any other object passes only
+/// when it is the object at `path` and its content has the declared hash. Nothing at `target`
+/// gives `false`.
+///
+/// The agent can delete and rename a read-only initial file and put its own file at `path`, so
+/// the declaration alone does not tell what is there. The answer reads only the tree and the
+/// declarations, so a replay gives the answer of the live call. Host adapters use this check when
+/// they decide whether volatile file timestamps can be removed and the remaining metadata derived
+/// without an oplog entry.
+pub(crate) fn is_immutable_initial_file<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    path: &std::path::Path,
+    target: Target<'_>,
+) -> Result<Option<FilesystemCall<bool>>, AccessError> {
+    let generation = admit(generation_handle)?;
+    let state = generation.initial_files.lock().unwrap().clone();
+    let Some(declared) = [&state.initial, &state.provisioned]
+        .into_iter()
+        .filter_map(|declarations| declarations.get(path))
+        .find(|file| file.permissions == AgentFilePermissions::ReadOnly)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let installed = state.installed.get(path).cloned();
+    let target = sandbox_target(&generation, target)?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let path: Box<Path> = path.into();
+    Ok(Some(FilesystemCall::new(lease, async move {
+        let sandbox = generation.sandbox.read().await;
+        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+        holds_golems_file(
+            sandbox.as_ref(),
+            &path,
+            &declared,
+            installed.as_ref(),
+            target,
+        )
+        .await
+        .map_err(|source| classify_query_error(&generation, source))
+    })))
+}
+
+/// Tells whether `target` is the initial file of `declared` at the root-relative `path`
+/// (`is_immutable_initial_file`). Nothing at `target`, or a file above it, gives `false`.
+async fn holds_golems_file<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    declared: &InitialAgentFile,
+    installed: Option<&initial_files::InstalledFile>,
+    target: AttributeTarget,
+) -> Result<bool, FilesystemStorageError> {
+    let attributes = match read_sandbox_attributes(sandbox, target).await {
+        Ok(attributes) => attributes,
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory)
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match initial_files::initial_file_match(declared, installed, &attributes) {
+        initial_files::InitialFileMatch::Differs => Ok(false),
+        initial_files::InitialFileMatch::Matches => Ok(true),
+        // The content is read at `path`, so it tells about `target` only when `target` is the
+        // object at `path`.
+        initial_files::InitialFileMatch::MatchesIfContentHash(expected) => {
+            let at_path = initial_files::read_path(sandbox, path).await?;
+            if at_path.is_some_and(|at_path| at_path.object == attributes.object) {
+                initial_files::content_hash(sandbox, path)
+                    .await
+                    .map(|hash| hash == *expected)
+            } else {
+                Ok(false)
+            }
+        }
+    }
+}
+
 /// Adds activation-provisioned files to an active owner filesystem.
 ///
 /// Entity Stores call this inside their owner invocation scope before guest execution. Identical

@@ -159,6 +159,7 @@ object SchemaFingerprintV1 {
       case UrlType(r) =>
         e.array(4); e.uint(28); optionalSet(e, "url.allowed_schemes", r.allowedSchemes)
         optionalSet(e, "url.allowed_hosts", r.allowedHosts); encodeMetadata(e, t.metadata)
+      case UuidType        => leaf(38)
       case DatetimeType    => leaf(29); case DurationType => leaf(30)
       case QuantityType(s) =>
         e.array(6); e.uint(31); e.text(s.baseUnit); e.array(s.allowedSuffixes.size); s.allowedSuffixes.foreach(e.text)

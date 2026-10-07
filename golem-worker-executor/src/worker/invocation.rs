@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::durable_host::durability::{
-    ClassifiedHostError, DurabilityHost, DurableCallTrapContextMarker,
-    SemanticTrapRetryOverrideMarker,
+    ClassifiedHostError, DurabilityHost, DurableCallTrapContextMarker, DurableRecoveryFailure,
+    DurableRecoveryFailureKind, SemanticTrapRetryOverrideMarker,
 };
 use crate::durable_host::schema_value_stream::StoreValueResolver;
 use crate::durable_host::tool::operation::OwnerFailureWinner;
@@ -241,6 +241,18 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         Ok(result) => result,
         Err(payload) => std::panic::resume_unwind(payload),
     };
+
+    if matches!(
+        &call_result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::Jump,
+            ..
+        })
+    ) {
+        let ctx = store.data().durable_ctx();
+        ctx.begin_stream_runtime_teardown();
+        crate::durable_host::tool::fence_tool_operations_for_jump(&mut store).await?;
+    }
 
     if let Some(parent) = primary_body
         .as_ref()
@@ -497,8 +509,45 @@ fn classify_guest_call_settlement<R>(
         ));
     }
     result.map_err(|error| {
-        if interrupted || error.root_cause().downcast_ref::<InterruptKind>().is_some() {
+        if interrupted
+            || error.root_cause().downcast_ref::<InterruptKind>().is_some()
+            || matches!(
+                error.root_cause().downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::Interrupted { .. })
+            )
+        {
             GuestCallSettlementError::Interrupted(error)
+        } else if let Some(recovery_failure) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<DurableRecoveryFailure>())
+        {
+            let retry_from = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<DurableCallTrapContextMarker>())
+                .map(|marker| marker.payload.retry_from);
+            let details = format!(
+                "durable runtime reconstruction failed: {:#}",
+                recovery_failure.inner
+            );
+            GuestCallSettlementError::Infrastructure(match recovery_failure.kind {
+                DurableRecoveryFailureKind::Retryable => match retry_from {
+                    Some(retry_from) => {
+                        WorkerExecutorError::recovery_required_from(details, retry_from)
+                    }
+                    None => WorkerExecutorError::recovery_required(details),
+                },
+                DurableRecoveryFailureKind::Permanent => {
+                    WorkerExecutorError::unexpected_oplog_entry(
+                        "valid durable recovery data",
+                        details,
+                    )
+                }
+            })
+        } else if let Some(error) = error.chain().find_map(|cause| {
+            let error = cause.downcast_ref::<WorkerExecutorError>()?;
+            matches!(error, WorkerExecutorError::RecoveryRequired { .. }).then(|| error.clone())
+        }) {
+            GuestCallSettlementError::Infrastructure(error)
         } else if is_guest_semantic_trap(&error) {
             GuestCallSettlementError::Trap(error)
         } else {
@@ -773,6 +822,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         } => {
             prepare_guest_call(store, display_name).await;
@@ -784,6 +834,7 @@ async fn dispatch_call<Ctx: WorkerCtx>(
                 *input,
                 stdin,
                 stdout,
+                stderr,
                 principal,
             )
             .await;
@@ -1315,6 +1366,7 @@ enum LoweredCall {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1356,6 +1408,7 @@ enum PreparedCall {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         principal: golem_common::model::agent::Principal,
     },
 }
@@ -1452,6 +1505,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         } => PreparedCall::ExternalTool {
             activation: std::sync::Arc::from(activation),
@@ -1460,6 +1514,7 @@ fn materialize_call<Ctx: WorkerCtx>(
             input,
             stdin,
             stdout,
+            stderr,
             principal,
         },
     })
@@ -1546,6 +1601,7 @@ pub fn lower_invocation(
             input,
             stdin,
             stdout,
+            stderr,
             activation,
             principal,
             ..
@@ -1559,6 +1615,7 @@ pub fn lower_invocation(
                 input,
                 stdin,
                 stdout,
+                stderr,
                 principal,
             },
         }),
@@ -2357,6 +2414,23 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_replay_jump_settles_as_interruption() {
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    anyhow::Error::new(WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Jump,
+                    })
+                    .context("durable scope restart"),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
+    }
+
+    #[test]
     fn guest_trap_and_settlement_failures_keep_distinct_provenance() {
         let guest_trap = classify_guest_call_settlement(
             Ok::<_, wasmtime::Error>(Err::<(), _>(wasmtime::Error::msg("guest trapped"))),
@@ -2460,6 +2534,86 @@ mod tests {
             classify_guest_call_settlement::<()>(Err(error), None, false),
             Err(GuestCallSettlementError::Infrastructure(_))
         ));
+    }
+
+    #[test]
+    fn durable_recovery_failure_precedes_durable_call_semantic_marker() {
+        use crate::durable_host::durability::{DurableCallTrapContext, DurableRecoveryFailure};
+
+        let error = crate::durable_host::durability::mark_durable_call_trap_context(
+            anyhow::Error::new(DurableRecoveryFailure::new(
+                DurableRecoveryFailureKind::Retryable,
+                std::io::Error::other("payload backend unavailable"),
+            )),
+            DurableCallTrapContext {
+                retry_from: OplogIndex::from_u64(17),
+                in_atomic_region: false,
+            },
+        );
+        let result = classify_guest_call_settlement::<()>(
+            Err(wasmtime::Error::from_anyhow(error)),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
+            details,
+            retry_from,
+        })) = result
+        else {
+            panic!("retryable recovery failure must remain infrastructure recovery");
+        };
+        assert!(details.contains("payload backend unavailable"));
+        assert_eq!(retry_from, Some(OplogIndex::from_u64(17)));
+    }
+
+    #[test]
+    fn bare_recovery_required_preserves_its_retry_point() {
+        let result = classify_guest_call_settlement::<()>(
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                WorkerExecutorError::recovery_required_from(
+                    "completed prefix payload unavailable",
+                    OplogIndex::from_u64(23),
+                ),
+            ))),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
+            details,
+            retry_from,
+        })) = result
+        else {
+            panic!("bare recovery requirement must remain typed infrastructure recovery");
+        };
+        assert_eq!(details, "completed prefix payload unavailable");
+        assert_eq!(retry_from, Some(OplogIndex::from_u64(23)));
+    }
+
+    #[test]
+    fn permanent_durable_recovery_failure_is_not_retryable_recovery() {
+        use crate::durable_host::durability::DurableRecoveryFailure;
+
+        let inner = anyhow::anyhow!("payload 123 is missing")
+            .context("failed to download incoming body chunk payload");
+        let result = classify_guest_call_settlement::<()>(
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                DurableRecoveryFailure::new(DurableRecoveryFailureKind::Permanent, inner),
+            ))),
+            None,
+            false,
+        );
+
+        let Err(GuestCallSettlementError::Infrastructure(
+            WorkerExecutorError::UnexpectedOplogEntry { expected, got },
+        )) = result
+        else {
+            panic!("permanent recovery failure must remain non-retryable infrastructure");
+        };
+        assert_eq!(expected, "valid durable recovery data");
+        assert!(got.contains("failed to download incoming body chunk payload"));
+        assert!(got.contains("payload 123 is missing"));
     }
 
     #[test]

@@ -14,11 +14,12 @@
 
 use super::{
     Commit, CommitGate, FileSystemBlobStorage, STAGING_DIRECTORY, STAGING_FILE_AGE,
-    absent_on_not_found, add_files, copy_staged, first_error, listed_entry, remove_unless_dropped,
-    staging_file_is_old, write_if_absent, write_staged,
+    absent_on_not_found, add_files, blob_path_of, copy_staged, encoded_name, first_error,
+    listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
 };
 use crate::storage::blob::{
-    BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, PutIfAbsent,
+    BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    normalized_blob_path,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
@@ -296,12 +297,13 @@ fn listed_entry_gives_none_only_for_a_missing_entry() {
 
 #[test]
 async fn a_whole_and_a_partial_read_of_a_blob_removed_after_its_metadata_check_give_none() {
-    let (root, storage) = storage_with_blobs().await;
-    let blob = std::fs::canonicalize(root.path())
-        .unwrap()
-        .join("custom_data")
-        .join(EnvironmentId(Uuid::nil()).to_string())
-        .join("ranges/blob");
+    let (_root, storage) = storage_with_blobs().await;
+    let blob = storage
+        .path_of(
+            &namespace(),
+            &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
+        )
+        .unwrap();
     let removed = blob.clone();
     let storage = FileSystemBlobStorage {
         after_metadata: Some(CommitGate(Arc::new(move || {
@@ -351,13 +353,18 @@ fn a_read_of_a_blob_deleted_after_its_metadata_gives_none() {
 #[test]
 fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
     let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("kept"), b"kept").unwrap();
-    std::fs::write(root.path().join("removed"), b"removed").unwrap();
-    std::fs::create_dir(root.path().join("gone")).unwrap();
-    std::fs::write(root.path().join("gone/file"), b"file").unwrap();
+    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
+    std::fs::write(on_disk("kept"), b"kept").unwrap();
+    std::fs::write(on_disk("removed"), b"removed").unwrap();
+    std::fs::create_dir(on_disk("gone")).unwrap();
+    std::fs::write(
+        on_disk("gone").join(on_disk("file").file_name().unwrap()),
+        b"file",
+    )
+    .unwrap();
     let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    std::fs::remove_file(root.path().join("removed")).unwrap();
-    std::fs::remove_dir_all(root.path().join("gone")).unwrap();
+    std::fs::remove_file(on_disk("removed")).unwrap();
+    std::fs::remove_dir_all(on_disk("gone")).unwrap();
 
     let listed = add_files(
         std::iter::once(Err(not_found())).chain(entries),
@@ -514,10 +521,12 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .put_raw("test", "put-raw", snapshots(), blob, b"first and longer")
         .await
         .unwrap();
-    let full = storage.path_of(
-        &snapshots(),
-        &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-    );
+    let full = storage
+        .path_of(
+            &snapshots(),
+            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+        )
+        .unwrap();
     let first_inode = std::fs::metadata(&full).unwrap().ino();
     storage
         .put_raw("test", "put-raw", snapshots(), blob, b"second")
@@ -527,10 +536,12 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .put_raw("test", "put-raw", namespace(), blob, b"other")
         .await
         .unwrap();
-    let other = storage.path_of(
-        &namespace(),
-        &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-    );
+    let other = storage
+        .path_of(
+            &namespace(),
+            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+        )
+        .unwrap();
     let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
 
     assert_eq!(
@@ -551,10 +562,12 @@ async fn a_put_of_another_namespace_writes_in_place() {
     let root = tempfile::tempdir().unwrap();
     let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
     let blob = Path::new("blob");
-    let full = storage.path_of(
-        &namespace(),
-        &crate::storage::blob::normalized_blob_path(blob).unwrap(),
-    );
+    let full = storage
+        .path_of(
+            &namespace(),
+            &crate::storage::blob::normalized_blob_path(blob).unwrap(),
+        )
+        .unwrap();
     storage
         .put_raw("test", "put-raw", namespace(), blob, b"first")
         .await
@@ -765,4 +778,102 @@ fn a_copy_from_a_directory_or_from_below_a_file_gives_false_and_makes_nothing() 
         ),
         ([Ok(false), Ok(false)], false, false)
     );
+}
+
+/// The filesystem backend writes each name of a blob path as hex, cut into parts of at most 242
+/// bytes. So a `\`, a prefix of Windows and two names that differ only in case keep their
+/// meaning on every host, a long name fits the name limit of the filesystem, and no part of a
+/// path on disk goes up from its directory. The blob path of a file on disk is the path that
+/// made it.
+#[test]
+fn filesystem_paths_encode_contract_components() {
+    let storage = FileSystemBlobStorage {
+        root: PathBuf::from("root"),
+        before_commit: None,
+        after_metadata: None,
+    };
+    let namespace = BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId::new(),
+    };
+    let namespace_root = storage.namespace_path(&namespace);
+    let physical = |logical: &str| {
+        storage
+            .path_of(
+                &namespace,
+                &normalized_blob_path(Path::new(logical)).unwrap(),
+            )
+            .unwrap()
+    };
+
+    for logical in [
+        r"photos/animals\cat.png",
+        r"photos/C:\cats\kitten.png",
+        r"photos/\\server\share\kitten.png",
+    ] {
+        let physical = physical(logical);
+        assert!(
+            !physical
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        );
+        assert_eq!(
+            blob_path_of(&physical, &namespace_root).unwrap(),
+            PathBuf::from(logical)
+        );
+    }
+
+    assert_ne!(
+        physical("photos/animals/cat.png"),
+        physical(r"photos/animals\cat.png")
+    );
+
+    let first = physical("AAA");
+    let second = physical("AA[");
+    assert!(
+        !first
+            .to_str()
+            .unwrap()
+            .eq_ignore_ascii_case(second.to_str().unwrap())
+    );
+
+    let long_name = "a".repeat(255);
+    let long = physical(&long_name);
+    assert!(
+        long.strip_prefix(&namespace_root)
+            .unwrap()
+            .components()
+            .all(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|component| component.len() <= 242)
+            })
+    );
+    assert_eq!(
+        blob_path_of(&long, &namespace_root).unwrap(),
+        PathBuf::from(long_name)
+    );
+    assert_eq!(
+        storage
+            .path_of(&namespace, &NormalizedBlobPath::root())
+            .unwrap(),
+        namespace_root
+    );
+}
+
+/// A file below the directory of a namespace that the backend did not name, and a path that ends
+/// in a part of a long name that more parts follow, are not files of the blob storage.
+#[test]
+fn a_file_name_that_the_codec_does_not_give_is_invalid_data() {
+    let root = Path::new("root");
+
+    let errors = [
+        root.join("plain"),
+        root.join("e-zz"),
+        root.join("c-61"),
+        root.join("e-ff"),
+    ]
+    .map(|physical| blob_path_of(&physical, root).map_err(|error| error.kind()));
+
+    assert_eq!(errors, [(); 4].map(|()| Err(ErrorKind::InvalidData)));
 }

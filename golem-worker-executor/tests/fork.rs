@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
     invocation_request, invocation_response,
@@ -33,10 +32,12 @@ use golem_common::model::{
     OwnedAgentId, PromiseId,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rpc::{
-    DurableRpcInvocationResult, DurableStreamReadError, RemoteInvocationRpc, Rpc, RpcDemand,
+    DurableRpcInvocationResult, DurableStreamRemoteError, RemoteInvocationRpc, Rpc, RpcDemand,
     RpcError,
 };
 use golem_worker_executor::services::shard::ShardService;
@@ -77,6 +78,28 @@ pub(crate) async fn start_with_local_resume_and(
     overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
     start_with_resume_checkpoint(deps, context, false, None, overrides).await
+}
+
+/// Starts an executor with `snapshot_policy` as its default snapshot policy, whose fork
+/// activation stays local.
+pub(crate) async fn start_with_local_resume_and_snapshot_policy(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    snapshot_policy: SnapshotPolicy,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_local_resume_and(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(
+                move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                    config.oplog.default_snapshotting = snapshot_policy.clone();
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -269,7 +292,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -279,7 +302,7 @@ impl Rpc for StreamingRemoteRpc {
         &self,
         request: DurableStreamReadRequest,
         auth: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         self.inner.read_durable_stream_segment(request, auth).await
     }
 
@@ -512,7 +535,7 @@ impl WorkerProxy for LocalResumeProxy {
         &self,
         request: golem_common::model::durable_stream::StreamAttachmentControlRequest,
         auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
         self.inner
             .control_durable_stream_attachment(request, auth)
             .await
@@ -524,7 +547,7 @@ impl WorkerProxy for LocalResumeProxy {
         auth: &AuthCtx,
     ) -> Result<
         Vec<u8>,
-        golem_worker_executor::services::rpc::DurableStreamReadError<WorkerProxyError>,
+        golem_worker_executor::services::rpc::DurableStreamRemoteError<WorkerProxyError>,
     > {
         self.inner.read_durable_stream_segment(request, auth).await
     }
@@ -819,9 +842,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String(value.into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        value.into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1029,7 +1052,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     panic!("expected typed item")
                 };
                 SchemaValue::try_from(
-                    golem_api_grpc::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
+                    golem_schema::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
                         .unwrap(),
                 )
                 .unwrap()
@@ -1769,9 +1792,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String("refresh".into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        "refresh".into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],

@@ -3,7 +3,8 @@ type ToolInvoker = async (
   Array[String],
   @types.TypedSchemaValue,
   @async-core.Stream[Byte]?,
-  ProviderStdout?,
+  ProviderOutput?,
+  ProviderOutput?,
   @toolCore.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError]
 
@@ -12,10 +13,11 @@ let invokers : Map[String, ToolInvoker] = Map([])
 
 ///|
 #doc(hidden)
-pub fn validate_tool_stdout(
+pub fn validate_tool_outputs(
   tool_name : String,
   command_path : Array[String],
-  supplied : Bool,
+  stdout_supplied : Bool,
+  stderr_supplied : Bool,
 ) -> Result[Unit, @types.ToolError] {
   let tool = match get_registered_tool(tool_name) {
     Ok(tool) => tool
@@ -29,16 +31,28 @@ pub fn validate_tool_stdout(
     Some(body) => body
     None => return Err(@types.ToolError::InvalidCommandPath(command_path))
   }
-  match body.stdout {
-    None if supplied =>
-      Err(
-        @types.ToolError::InvalidInput(
-          "command does not accept a stdout stream",
-        ),
-      )
-    Some(spec) if spec.required && !supplied =>
-      Err(@types.ToolError::InvalidInput("required stdout stream is missing"))
-    _ => Ok(())
+  let validate = fn(
+    name : String,
+    spec : @toolCommon.StreamSpec?,
+    supplied : Bool,
+  ) -> Result[Unit, @types.ToolError] {
+    match spec {
+      None if supplied =>
+        Err(
+          @types.ToolError::InvalidInput(
+            "command does not accept a \{name} stream",
+          ),
+        )
+      Some(spec) if spec.required && !supplied =>
+        Err(
+          @types.ToolError::InvalidInput("required \{name} stream is missing"),
+        )
+      _ => Ok(())
+    }
+  }
+  match validate("stdout", body.stdout, stdout_supplied) {
+    Err(error) => Err(error)
+    Ok(_) => validate("stderr", body.stderr, stderr_supplied)
   }
 }
 
@@ -52,7 +66,17 @@ pub fn register_tool_def_invoker(
     Err(error) => raise error
   }
   @toolCore.register_tool_def(tool)
-  invokers[name] = invoker
+  invokers[name] = (path, input, stdin, stdout, stderr, principal) => {
+    if tool.command_index_by_path(path) is None {
+      @toolCore.reject_wire_invocation(
+        input,
+        stdin,
+        @types.ToolError::InvalidCommandPath(path),
+      )
+    } else {
+      invoker(path, input, stdin, stdout, stderr, principal)
+    }
+  }
 }
 
 ///|
@@ -82,16 +106,31 @@ pub fn register_wire_tool_invoker(
 }
 
 ///|
+pub fn register_wire_subtool_invoker(
+  tool : @toolCommon.Tool,
+  invoker : ToolInvoker,
+) -> Unit raise @toolCore.ToolBuildError {
+  let name = match @toolCore.tool_name(tool) {
+    Ok(name) => name
+    Err(error) => raise error
+  }
+  @toolCore.register_wire_subtool(tool)
+  invokers[name] = invoker
+}
+
+///|
 async fn invoke_invoker(
   tool_name : String,
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  stdout : ProviderStdout?,
+  stdout : ProviderOutput?,
+  stderr : ProviderOutput?,
   principal : @toolCore.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   match invokers.get(tool_name) {
-    Some(invoker) => invoker(command_path, input, stdin, stdout, principal)
+    Some(invoker) =>
+      invoker(command_path, input, stdin, stdout, stderr, principal)
     None =>
       @toolCore.reject_wire_invocation(
         input,
@@ -107,7 +146,8 @@ pub async fn invoke_registered_tool(
   command_path : Array[String],
   input : @types.TypedSchemaValue,
   stdin : @async-core.Stream[Byte]?,
-  stdout : ProviderStdout?,
+  stdout : ProviderOutput?,
+  stderr : ProviderOutput?,
   principal : @toolCore.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   if @toolCore.get_registered_tool(tool_name) is Err(_) {
@@ -117,16 +157,9 @@ pub async fn invoke_registered_tool(
       @types.ToolError::InvalidToolName(tool_name),
     )
   }
-  match @toolCore.registered_tool_def(tool_name) {
-    Some(def) if def.command_index_by_path(command_path) is None =>
-      return @toolCore.reject_wire_invocation(
-        input,
-        stdin,
-        @types.ToolError::InvalidCommandPath(command_path),
-      )
-    _ => ()
-  }
-  invoke_invoker(tool_name, command_path, input, stdin, stdout, principal)
+  invoke_invoker(
+    tool_name, command_path, input, stdin, stdout, stderr, principal,
+  )
 }
 
 ///|
@@ -135,7 +168,8 @@ pub async fn invoke_registered_subtool(
   command_path : Array[String],
   fields : Array[@toolCore.CanonicalInputValue],
   stdin : @async-core.Stream[Byte]?,
-  stdout : ProviderStdout?,
+  stdout : ProviderOutput?,
+  stderr : ProviderOutput?,
   principal : @toolCore.Principal,
 ) -> Result[@toolCommon.InvocationResult, @types.ToolError] {
   let route = match @toolCore.registered_tool_def(tool_name) {
@@ -157,5 +191,7 @@ pub async fn invoke_registered_subtool(
     error => return @toolCore.reject_decoded_invocation(fields, stdin, error)
   }
   @toolCore.release_registered_subtool_input(fields)
-  invoke_invoker(tool_name, command_path, input, stdin, stdout, principal)
+  invoke_invoker(
+    tool_name, command_path, input, stdin, stdout, stderr, principal,
+  )
 }

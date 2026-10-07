@@ -19,11 +19,13 @@ use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::update_names_in_use;
 use crate::worker::status::{
-    calculate_last_known_status, calculate_last_known_status_for_existing_worker,
+    StatusOplogReader, calculate_last_known_status,
+    calculate_last_known_status_for_existing_worker,
     calculate_last_known_status_with_checkpoint_reader, calculate_latest_worker_status,
     calculate_oplog_processor_checkpoints, calculate_revert_validation_regions,
-    calculate_total_linear_memory_size, fold_invocation_result_entries,
-    hydrate_initial_pending_evidence, try_fold_status_from,
+    calculate_status_with_reader, calculate_total_linear_memory_size, fold_committed_status,
+    fold_invocation_result_entries, hydrate_initial_pending_evidence, try_fold_status_from,
+    try_fold_status_from_reader,
 };
 use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
@@ -43,19 +45,23 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest, HostRequestNoInput,
-    HostResponse, OplogEntry, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
+    AgentError, AgentResourceId, DurableFunctionType, FailedSnapshotAssistedUpdateDetails,
+    FilesystemSnapshotName, HostRequest, HostRequestNoInput, HostResponse, OplogEntry,
+    OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload, SnapshotAssistedUpdateDetails,
     UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
-    AgentMetadata, AgentStatus, AgentStatusRecord, AutomaticSnapshot, FailedUpdateRecord,
-    IdempotencyKey, OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState,
-    ScanCursor, SnapshotFiles, SuccessfulUpdateRecord, Timestamp, UsableAutomaticSnapshot,
+    AgentMetadata, AgentResourceDescription, AgentStatus, AgentStatusRecord, AuthoritativeSnapshot,
+    AuthoritativeSnapshotKind, AutomaticSnapshot, FailedUpdateRecord, IdempotencyKey,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ReceivedCardTransferState, RetryConfig, RetryPolicyState, ScanCursor,
+    SnapshotAssistedUpdateSelection, SnapshotFiles, SuccessfulUpdateRecord, Timestamp,
+    UsableAutomaticSnapshot,
 };
 use golem_common::read_only_lock;
+use golem_common::resource_runtime::ResourceTypeId;
 use golem_common::schema::IntoTypedSchemaValue;
 use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -121,15 +127,16 @@ async fn invalid_initial_pending_bounds_do_not_read_the_referent() {
             },
         )]);
         test_case.read_starts.lock().unwrap().clear();
-        hydrate_initial_pending_evidence(
+        let reader = StatusOplogReader::new(
             &test_case,
             &test_case.owned_agent_id,
             AgentMode::Durable,
-            &mut baseline,
-            &entries,
-        )
-        .await
-        .unwrap();
+            None,
+            OplogIndex::from_u64(13),
+        );
+        hydrate_initial_pending_evidence(&reader, &mut baseline, &entries)
+            .await
+            .unwrap();
         assert!(test_case.read_starts.lock().unwrap().is_empty());
         assert!(
             baseline
@@ -377,6 +384,7 @@ fn successful_update_resets_total_linear_memory_size() {
                 100,
                 Some(32),
                 HashSet::new(),
+                None,
             ),
         ),
         (OplogIndex::from_u64(3), OplogEntry::grow_memory(8)),
@@ -1074,6 +1082,51 @@ async fn recovery_failure_remains_failed_until_recovery_succeeds() {
 }
 
 #[test]
+async fn infrastructure_recovery_ignores_existing_semantic_retry_count() {
+    let retry_from = OplogIndex::from_u64(1);
+    let exhausted = RetryPolicyState::Counter(100);
+    let test_case = TestCase::builder(0)
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                AgentError::TransientError("semantic failure".to_string()),
+                retry_from,
+                false,
+                Some(exhausted.clone()),
+            ),
+            {
+                let exhausted = exhausted.clone();
+                move |mut status| {
+                    status.status = AgentStatus::Failed;
+                    status.last_error_kind = Some(OplogErrorKind::Invocation);
+                    status.current_retry_state.insert(retry_from, exhausted);
+                    status
+                }
+            },
+        )
+        .add(
+            OplogEntry::error(
+                None,
+                OplogErrorKind::Recovery,
+                AgentError::Unknown("payload backend unavailable".to_string()),
+                retry_from,
+                false,
+                None,
+            ),
+            move |mut status| {
+                status.status = AgentStatus::Retrying;
+                status.last_error_kind = Some(OplogErrorKind::Recovery);
+                status.current_retry_state.insert(retry_from, exhausted);
+                status
+            },
+        )
+        .build();
+
+    run_test_case(test_case).await;
+}
+
+#[test]
 async fn incomplete_invocation_replay_does_not_hide_recovery_failure() {
     let retry_from = OplogIndex::from_u64(1);
     let idempotency_key = IdempotencyKey::fresh();
@@ -1618,6 +1671,19 @@ async fn single_manual_update() {
         )
         .build();
 
+    let successful = test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .successful_updates
+        .last()
+        .unwrap();
+    assert_eq!(
+        successful.pending_update.as_ref().unwrap().admission_index,
+        OplogIndex::from_u64(6)
+    );
+
     run_test_case(test_case).await;
 }
 
@@ -1700,6 +1766,185 @@ async fn single_manual_failed_update_during_snapshot() {
         )
         .build();
 
+    let failed = test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .failed_updates
+        .last()
+        .unwrap();
+    assert_eq!(
+        failed.pending_update.as_ref().unwrap().admission_index,
+        OplogIndex::from_u64(6)
+    );
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn manual_failure_before_pending_update_does_not_remove_automatic_update() {
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let automatic = UpdateDescription::Automatic { target_revision };
+    let manual = UpdateDescription::SnapshotBased {
+        target_revision,
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+
+    let test_case = TestCase::builder(1)
+        .pending_update(&automatic, |_| {})
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .failed_update(manual)
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(status.pending_updates.len(), 1);
+    assert_eq!(status.pending_updates[0].target_revision, target_revision);
+    assert_eq!(
+        status.failed_updates[0]
+            .pending_update
+            .as_ref()
+            .unwrap()
+            .admission_index,
+        OplogIndex::from_u64(3)
+    );
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn reverted_manual_failure_does_not_reassign_a_later_failure() {
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let manual = || UpdateDescription::SnapshotBased {
+        target_revision,
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+
+    let test_case = TestCase::builder(1)
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .failed_update(manual())
+        .revert(OplogIndex::from_u64(2))
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .failed_update(manual())
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(status.failed_updates.len(), 1);
+    assert_eq!(
+        status.failed_updates[0]
+            .pending_update
+            .as_ref()
+            .unwrap()
+            .admission_index,
+        OplogIndex::from_u64(5)
+    );
+    assert!(status.pending_invocations.is_empty());
+
+    run_test_case(test_case).await;
+}
+
+#[test]
+fn manual_failure_identity_is_chunk_independent_across_reverted_admission() {
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let manual = || UpdateDescription::SnapshotBased {
+        target_revision,
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+    let test_case = TestCase::builder(1)
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .revert(OplogIndex::INITIAL)
+        .failed_update(manual())
+        .build();
+    let entries: Vec<_> = test_case
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            (
+                OplogIndex::from_u64(index as u64 + 1),
+                entry.oplog_entry.clone(),
+            )
+        })
+        .collect();
+
+    let fold = |chunk_size: usize| {
+        let mut status = AgentStatusRecord::default();
+        let mut history = BTreeMap::new();
+        for chunk in entries.chunks(chunk_size) {
+            let chunk: BTreeMap<_, _> = chunk.iter().cloned().collect();
+            history.extend(chunk.clone());
+            status = update_status_with_new_entries(
+                AgentMode::Durable,
+                status,
+                chunk,
+                &RetryConfig::default(),
+            )
+            .unwrap_or_else(|| {
+                update_status_with_new_entries(
+                    AgentMode::Durable,
+                    AgentStatusRecord::default(),
+                    history.clone(),
+                    &RetryConfig::default(),
+                )
+                .expect("full fold must reconstruct a reverted baseline")
+            });
+        }
+        status
+    };
+
+    let full = fold(entries.len());
+    assert_eq!(full.failed_updates.len(), 1);
+    assert_eq!(
+        full.failed_updates[0]
+            .pending_update
+            .as_ref()
+            .unwrap()
+            .admission_index,
+        OplogIndex::from_u64(2)
+    );
+    assert!(full.pending_invocations.is_empty());
+    for chunk_size in 1..entries.len() {
+        assert_eq!(fold(chunk_size), full, "chunk size {chunk_size}");
+    }
+}
+
+#[test]
+async fn manual_failure_removes_only_one_same_target_admission() {
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let manual = UpdateDescription::SnapshotBased {
+        target_revision,
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".to_string(),
+        filesystem_snapshot: None,
+    };
+
+    let test_case = TestCase::builder(1)
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .pending_invocation(AgentInvocation::ManualUpdate { target_revision })
+        .failed_update(manual)
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(
+        status.failed_updates[0]
+            .pending_update
+            .as_ref()
+            .unwrap()
+            .admission_index,
+        OplogIndex::from_u64(2)
+    );
+    assert_eq!(status.pending_invocations.len(), 1);
+    assert_eq!(
+        status.pending_invocations[0].oplog_index,
+        OplogIndex::from_u64(3)
+    );
+
     run_test_case(test_case).await;
 }
 
@@ -1724,11 +1969,17 @@ fn revert_validation_preserves_jump_while_removing_crossed_snapshot_baseline() {
         ),
         (
             OplogIndex::from_u64(20),
-            OplogEntry::pending_update(update.clone()),
+            OplogEntry::pending_update(update.clone(), None),
         ),
         (
             OplogIndex::from_u64(21),
-            OplogEntry::successful_update(*update.target_revision(), 100, None, Default::default()),
+            OplogEntry::successful_update(
+                *update.target_revision(),
+                100,
+                None,
+                Default::default(),
+                None,
+            ),
         ),
     ]);
 
@@ -1754,7 +2005,10 @@ fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
         mime_type: "application/octet-stream".to_string(),
         filesystem_snapshot: None,
     };
-    let entries = BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::pending_update(update))]);
+    let entries = BTreeMap::from([(
+        OplogIndex::from_u64(3),
+        OplogEntry::pending_update(update, None),
+    )]);
 
     let regions = calculate_revert_validation_regions(
         &entries,
@@ -1765,6 +2019,42 @@ fn revert_validation_ignores_unapplied_snapshot_update_in_dropped_region() {
     );
 
     assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+}
+
+#[test]
+fn revert_validation_removes_only_crossed_assisted_promotion() {
+    let details = SnapshotAssistedUpdateDetails {
+        pending_update_index: OplogIndex::from_u64(3),
+        source_component_revision: ComponentRevision::new(1).unwrap(),
+        source_revision_start_index: OplogIndex::INITIAL,
+        snapshot_index: OplogIndex::from_u64(2),
+    };
+    let successful_update = OplogEntry::successful_update(
+        ComponentRevision::new(2).unwrap(),
+        100,
+        None,
+        Default::default(),
+        Some(details),
+    );
+    let dropped_update = OplogRegion::from_range(3..=4);
+
+    let regions = calculate_revert_validation_regions(
+        &BTreeMap::from([(OplogIndex::from_u64(4), successful_update.clone())]),
+        &dropped_update,
+    );
+    assert!(!regions.is_in_deleted_region(OplogIndex::from_u64(2)));
+
+    let regions_with_overlap = calculate_revert_validation_regions(
+        &BTreeMap::from([
+            (OplogIndex::from_u64(4), successful_update),
+            (
+                OplogIndex::from_u64(5),
+                OplogEntry::jump(None, OplogRegion::from_range(2..=2)),
+            ),
+        ]),
+        &OplogRegion::from_range(3..=5),
+    );
+    assert!(regions_with_overlap.is_in_deleted_region(OplogIndex::from_u64(2)));
 }
 
 #[test]
@@ -2104,6 +2394,7 @@ fn a_successful_update_without_a_pending_update_has_no_name_and_no_baseline() {
             100,
             None,
             HashSet::new(),
+            None,
         ),
     )]);
 
@@ -2756,6 +3047,399 @@ async fn failed_auto_update_keeps_automatic_snapshot() {
     run_test_case(test_case).await;
 }
 
+fn snapshot_assisted_pending_details(
+    pending: &PendingUpdateRef,
+) -> (
+    ComponentRevision,
+    OplogIndex,
+    SnapshotAssistedUpdateSelection,
+) {
+    match pending.kind {
+        PendingUpdateKind::SnapshotAssistedAutomatic {
+            source_component_revision,
+            source_revision_start_index,
+            selection,
+        } => (
+            source_component_revision,
+            source_revision_start_index,
+            selection,
+        ),
+        _ => panic!("expected snapshot-assisted automatic pending update"),
+    }
+}
+
+fn automatic_update(target_revision: u64) -> UpdateDescription {
+    UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(target_revision).unwrap(),
+    }
+}
+
+fn assisted_update(
+    target_revision: u64,
+    source_component_revision: u64,
+    source_revision_start_index: u64,
+    snapshot_index: u64,
+) -> UpdateDescription {
+    UpdateDescription::SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision::new(target_revision).unwrap(),
+        source_component_revision: ComponentRevision::new(source_component_revision).unwrap(),
+        source_revision_start_index: OplogIndex::from_u64(source_revision_start_index),
+        snapshot_index: OplogIndex::from_u64(snapshot_index),
+        snapshot_revision: ComponentRevision::new(source_component_revision).unwrap(),
+    }
+}
+
+#[test]
+async fn automatic_strategy_refines_admission_in_place_and_freezes_selection() {
+    let admission = automatic_update(2);
+    let selected = assisted_update(2, 1, 1, 3);
+    let test_case = TestCase::builder(1)
+        .pending_update(&admission, |_| {})
+        // A snapshot committed after admission is eligible when the queue head is activated.
+        .snapshot()
+        .pending_update(&selected, |_| {})
+        // Once persisted, later snapshots cannot change the selected strategy.
+        .snapshot()
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(status.pending_updates.len(), 1);
+    let pending = &status.pending_updates[0];
+    assert_eq!(pending.admission_index, OplogIndex::from_u64(2));
+    assert_eq!(pending.oplog_index, OplogIndex::from_u64(4));
+    assert_eq!(
+        snapshot_assisted_pending_details(pending),
+        (
+            ComponentRevision::new(1).unwrap(),
+            OplogIndex::INITIAL,
+            SnapshotAssistedUpdateSelection::Selected {
+                snapshot_index: OplogIndex::from_u64(3),
+                snapshot_revision: ComponentRevision::new(1).unwrap(),
+            },
+        )
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn automatic_full_replay_strategy_refines_admission_in_place() {
+    let update = automatic_update(2);
+    let test_case = TestCase::builder(1)
+        .pending_update(&update, |_| {})
+        .pending_update(&update, |_| {})
+        .build();
+    let pending = &test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates[0];
+
+    assert_eq!(pending.kind, PendingUpdateKind::Automatic);
+    assert_eq!(pending.admission_index, OplogIndex::from_u64(2));
+    assert_eq!(pending.oplog_index, OplogIndex::from_u64(3));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn different_target_automatic_admissions_remain_distinct() {
+    let first = automatic_update(2);
+    let second = automatic_update(3);
+    let test_case = TestCase::builder(1)
+        .pending_update(&first, |_| {})
+        .pending_update(&second, |_| {})
+        .build();
+    let pending = &test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates;
+
+    assert_eq!(pending.len(), 2);
+    assert_eq!(
+        pending[0].target_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(
+        pending[1].target_revision,
+        ComponentRevision::new(3).unwrap()
+    );
+    assert_eq!(pending[0].admission_index, OplogIndex::from_u64(2));
+    assert_eq!(pending[1].admission_index, OplogIndex::from_u64(3));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn snapshot_assisted_selection_survives_outcome_revert_and_checkpoint_fold() {
+    let admission = automatic_update(2);
+    let selected = assisted_update(2, 1, 1, 2);
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&selected, |_| {})
+        .failed_update(selected)
+        .revert(OplogIndex::from_u64(4))
+        .build();
+    let expected = test_case.entries.last().unwrap().expected_status.clone();
+    let expected_selection = Some(SnapshotAssistedUpdateSelection::Selected {
+        snapshot_index: OplogIndex::from_u64(2),
+        snapshot_revision: ComponentRevision::new(1).unwrap(),
+    });
+    assert_eq!(
+        Some(snapshot_assisted_pending_details(&expected.pending_updates[0]).2),
+        expected_selection,
+    );
+
+    let checkpoint = test_case.entries[2].expected_status.clone();
+    test_case.read_starts.lock().unwrap().clear();
+    let checkpoint_fold = calculate_last_known_status_with_checkpoint_reader(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        || async { Some(checkpoint) },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(checkpoint_fold, expected);
+    let read_starts = test_case.read_starts.lock().unwrap().clone();
+    assert!(read_starts.contains(&OplogIndex::from_u64(4).as_u64()));
+    assert!(!read_starts.contains(&OplogIndex::INITIAL.as_u64()));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn reverting_strategy_selection_restores_unselected_admission() {
+    let admission = automatic_update(2);
+    let selected = assisted_update(2, 1, 1, 2);
+    let test_case = TestCase::builder(1)
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&selected, |_| {})
+        .revert(OplogIndex::from_u64(3))
+        .build();
+    let pending = &test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates[0];
+
+    assert_eq!(pending.kind, PendingUpdateKind::Automatic);
+    assert_eq!(pending.admission_index, OplogIndex::from_u64(3));
+    assert_eq!(pending.oplog_index, pending.admission_index);
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn snapshot_assisted_selection_survives_successful_outcome_revert() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let admission = automatic_update(2);
+    let selected = assisted_update(2, 1, 1, 2);
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&selected, |_| {})
+        .successful_snapshot_assisted_update(selected, OplogIndex::from_u64(2))
+        .revert(OplogIndex::from_u64(4))
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+    let (selected_source, source_revision_start_index, selection) =
+        snapshot_assisted_pending_details(&status.pending_updates[0]);
+
+    assert_eq!(status.component_revision, source_revision);
+    assert_eq!(status.component_revision_start_index, OplogIndex::INITIAL);
+    assert_eq!(status.authoritative_snapshot, None);
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(3))
+    );
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(4))
+    );
+    assert!(
+        status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(5))
+    );
+    assert_eq!(selected_source, source_revision);
+    assert_eq!(source_revision_start_index, OplogIndex::INITIAL);
+    assert_eq!(
+        selection,
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(2),
+            snapshot_revision: source_revision,
+        }
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn assisted_strategy_preserves_post_aba_source_start_index() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let away = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let back = UpdateDescription::Automatic {
+        target_revision: source_revision,
+    };
+    let admission = automatic_update(3);
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&away, |_| {})
+        .successful_update(away, 2000, &HashSet::new())
+        .pending_update(&back, |_| {})
+        .successful_update(back, 1000, &HashSet::new())
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&assisted_update(3, 1, 6, 7), |_| {})
+        .build();
+    let pending = &test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates[0];
+    assert_eq!(
+        snapshot_assisted_pending_details(pending).1,
+        OplogIndex::from_u64(6)
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn snapshot_assisted_selection_freezes_source_revision_start_index() {
+    let first_update = UpdateDescription::Automatic {
+        target_revision: ComponentRevision::new(2).unwrap(),
+    };
+    let admission = automatic_update(3);
+    let test_case = TestCase::builder(1)
+        .pending_update(&first_update, |_| {})
+        .successful_update(first_update, 2000, &HashSet::new())
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&assisted_update(3, 2, 3, 4), |_| {})
+        .build();
+    let pending = test_case
+        .entries
+        .last()
+        .unwrap()
+        .expected_status
+        .pending_updates[0]
+        .clone();
+    let (source_component_revision, source_revision_start_index, selection) =
+        snapshot_assisted_pending_details(&pending);
+
+    assert_eq!(
+        source_component_revision,
+        ComponentRevision::new(2).unwrap()
+    );
+    assert_eq!(source_revision_start_index, OplogIndex::from_u64(3));
+    assert_eq!(
+        selection,
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(4),
+            snapshot_revision: ComponentRevision::new(2).unwrap(),
+        }
+    );
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn successful_snapshot_assisted_update_promotes_only_selected_snapshot_prefix() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let admission = automatic_update(2);
+    let update = assisted_update(2, 1, 1, 3);
+    let before_snapshot = AgentResourceId(11);
+    let after_snapshot = AgentResourceId(12);
+    let snapshot_index = OplogIndex::from_u64(3);
+    let mut test_case = TestCase::builder(source_revision.get())
+        .create_resource(before_snapshot)
+        .snapshot()
+        .create_resource(after_snapshot)
+        .pending_update(&admission, |_| {})
+        .pending_update(&update, |_| {})
+        .successful_snapshot_assisted_update(update, snapshot_index)
+        .build();
+    test_case
+        .entries
+        .last_mut()
+        .unwrap()
+        .expected_status
+        .owned_resources
+        .remove(&before_snapshot);
+    let status = &test_case.entries.last().unwrap().expected_status;
+
+    assert_eq!(status.component_revision, target_revision);
+    assert_eq!(status.component_revision_for_replay, source_revision);
+    assert_eq!(
+        status.authoritative_snapshot,
+        Some(AuthoritativeSnapshot {
+            index: snapshot_index,
+            kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+        })
+    );
+    assert!(status.skipped_regions.is_in_deleted_region(snapshot_index));
+    for index in 4..=7 {
+        assert!(
+            !status
+                .skipped_regions
+                .is_in_deleted_region(OplogIndex::from_u64(index))
+        );
+    }
+    assert_eq!(status.last_automatic_snapshot, None);
+    assert!(!status.owned_resources.contains_key(&before_snapshot));
+    assert!(status.owned_resources.contains_key(&after_snapshot));
+    run_test_case(test_case).await;
+}
+
+#[test]
+async fn failed_snapshot_assisted_update_does_not_promote_snapshot() {
+    let source_revision = ComponentRevision::new(1).unwrap();
+    let admission = automatic_update(2);
+    let update = assisted_update(2, 1, 1, 2);
+    let test_case = TestCase::builder(source_revision.get())
+        .snapshot()
+        .pending_update(&admission, |_| {})
+        .pending_update(&update, |_| {})
+        .failed_snapshot_assisted_update(update)
+        .build();
+    let status = &test_case.entries.last().unwrap().expected_status;
+    let failed = status.failed_updates.last().unwrap();
+
+    assert_eq!(status.component_revision, source_revision);
+    assert_eq!(status.component_revision_for_replay, source_revision);
+    assert_eq!(status.authoritative_snapshot, None);
+    assert!(
+        !status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert_eq!(
+        status
+            .last_automatic_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.index),
+        Some(OplogIndex::from_u64(2))
+    );
+    assert_eq!(
+        failed.pending_update.as_ref().unwrap().oplog_index,
+        OplogIndex::from_u64(4)
+    );
+    run_test_case(test_case).await;
+}
+
 #[test]
 async fn snapshot_tracking_with_revert() {
     let k1 = IdempotencyKey::fresh();
@@ -2803,7 +3487,9 @@ async fn non_existing_oplog() {
 /// Builds an oplog where a clean idle boundary (idx 3) precedes an invocation that later jumps,
 /// deleting the region [4, 7]. Returns the test case plus the clean-checkpoint baseline (idx 3),
 /// a stale live baseline inside the deleted region (idx 6), and the expected final status.
-fn jump_repair_fixture() -> (
+fn jump_repair_fixture(
+    agent_mode: AgentMode,
+) -> (
     TestCase,
     AgentStatusRecord,
     AgentStatusRecord,
@@ -2813,6 +3499,7 @@ fn jump_repair_fixture() -> (
     let k2 = IdempotencyKey::fresh();
 
     let test_case = TestCase::builder(0)
+        .agent_mode(agent_mode)
         .agent_invocation_started("a", vec![], k1.clone()) // idx 2
         .agent_invocation_finished(
             AgentInvocationResult::AgentInitialization,
@@ -2838,8 +3525,190 @@ fn jump_repair_fixture() -> (
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let (test_case, checkpoint, stale_live, expected) = jump_repair_fixture(AgentMode::Ephemeral);
+    let fixture = gated_ephemeral_fixture(100).await;
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    let horizon = *receipt.last_key_value().unwrap().0;
+    fixture.archive.wait_for_appends(1).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Ephemeral,
+        Some(fixture.oplog.as_ref()),
+        horizon,
+    );
+    // Exercise both checkpoint fallback and full reconstruction with the writer blocked.
+    for candidate in [Some(checkpoint), None] {
+        let result =
+            calculate_status_with_reader(&test_case, &reader, Some(stale_live.clone()), || async {
+                candidate
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, expected);
+        assert_eq!(result.oplog_idx, horizon);
+    }
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    assert_eq!(fixture.archive.length().await.unwrap(), 0);
+    // The actor's fold must not mistake a DurableOnly precommit tip for acknowledged coverage.
+    let sampled = fixture.oplog.current_oplog_index().await;
+    let receipt = fixture
+        .oplog
+        .commit(CommitLevel::DurableOnly)
+        .await
+        .unwrap();
+    let (result, gap, projected_through) = fold_committed_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::DurableOnly,
+        sampled,
+        expected.clone(),
+        receipt,
+    )
+    .await;
+    assert_eq!(projected_through, horizon);
+    assert_eq!(result.unwrap(), Some(expected));
+    assert!(!gap);
+    fixture.archive.release(2);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn bounded_fold_covers_receipt_gap_and_unpersisted_tail() {
+    use crate::services::oplog::{CommitLevel, OplogArchive, gated_ephemeral_fixture};
+
+    let mut builder = TestCase::builder(0).agent_mode(AgentMode::Ephemeral);
+    for delta in 1..80 {
+        builder = builder.grow_memory(delta);
+    }
+    let test_case = builder.build();
+    let fixture = gated_ephemeral_fixture(1).await;
+    // Forty threshold batches overflow the receipt cache. The last two remain unpersisted.
+    fixture.archive.release(38);
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    assert!(!receipt.contains_key(&OplogIndex::from_u64(3)));
+    let horizon = *receipt.last_key_value().unwrap().0;
+    assert_eq!(horizon, OplogIndex::from_u64(80));
+    fixture.archive.wait_for_appends(39).await;
+    let sentinel = fixture
+        .oplog
+        .add(OplogEntry::grow_memory(9876))
+        .await
+        .unwrap();
+    // The receipt proves coverage beyond the sampled tip; an empty consumed receipt uses
+    // the precommit sample instead. Both paths must stop before the buffered sentinel.
+    for (sampled, receipt) in [
+        (OplogIndex::from_u64(78), receipt),
+        (horizon, BTreeMap::new()),
+    ] {
+        let (result, gap, projected_through) = fold_committed_status(
+            &test_case,
+            &test_case.owned_agent_id,
+            fixture.oplog.as_ref(),
+            AgentMode::Ephemeral,
+            CommitLevel::Deferred,
+            sampled,
+            test_case.entries[0].expected_status.clone(),
+            receipt,
+        )
+        .await;
+        assert_eq!(projected_through, horizon);
+        let result = result.unwrap().unwrap();
+        assert!(gap);
+        assert_eq!(result, test_case.entries[79].expected_status);
+        assert_eq!(result.total_linear_memory_size, 200 + (79 * 80 / 2));
+    }
+    assert_eq!(fixture.archive.length().await.unwrap(), 76);
+    assert!(test_case.read_starts.lock().unwrap().is_empty());
+    fixture.archive.release(3);
+    let remaining = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(
+        remaining.keys().copied().collect::<Vec<_>>(),
+        vec![sentinel]
+    );
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+#[test]
+async fn bounded_fold_excludes_later_jump_and_rejects_ahead_baseline() {
+    let (test_case, checkpoint, stale_live, _) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(6),
+    );
+    let result = try_fold_status_from_reader(&test_case, &reader, checkpoint)
+        .await
+        .unwrap();
+    assert_eq!(result, Some(stale_live.clone()));
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(5),
+    );
+    assert!(
+        try_fold_status_from_reader(&test_case, &reader, stale_live)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+async fn invocation_prefix_repairs_jump_without_reading_persisted_checkpoint() {
+    let (test_case, invocation_prefix, _, final_expected) = jump_repair_fixture(AgentMode::Durable);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        final_expected.oplog_idx,
+    );
+    let repaired =
+        calculate_status_with_reader(&test_case, &reader, Some(invocation_prefix), || async {
+            panic!("a surviving invocation prefix must avoid the storage checkpoint read")
+        })
+        .await
+        .unwrap();
+    assert_eq!(repaired, Some(final_expected));
+    assert!(!test_case.read_starts.lock().unwrap().contains(&1));
+}
+
+#[test]
 async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
-    let (test_case, checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // The stale live baseline is inside the deleted region, so it cannot be folded forward.
     let direct = try_fold_status_from(
@@ -2879,7 +3748,8 @@ async fn checkpoint_repair_folds_from_checkpoint_after_jump() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     test_case.read_starts.lock().unwrap().clear();
 
@@ -2904,7 +3774,8 @@ async fn checkpoint_repair_falls_back_to_full_recompute_without_checkpoint() {
 
 #[test]
 async fn full_recompute_reads_each_oplog_chunk_twice() {
-    let (test_case, _checkpoint, _stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, _stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     let result = calculate_last_known_status(
         &test_case,
@@ -2924,7 +3795,8 @@ async fn full_recompute_reads_each_oplog_chunk_twice() {
 
 #[test]
 async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable() {
-    let (test_case, _checkpoint, stale_live, final_expected) = jump_repair_fixture();
+    let (test_case, _checkpoint, stale_live, final_expected) =
+        jump_repair_fixture(AgentMode::Durable);
 
     // A checkpoint that itself falls inside the deleted region (idx 5) cannot be folded forward
     // either, so we must fall back to a full recompute.
@@ -2948,6 +3820,386 @@ async fn checkpoint_repair_falls_back_to_full_recompute_when_checkpoint_unusable
     assert!(
         read_starts.contains(&1),
         "expected a full recompute from idx 1, got {read_starts:?}"
+    );
+}
+
+fn rollback_fixture() -> TestCase {
+    TestCase::builder(0)
+        .add(
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            |status| status,
+        ) // 2
+        .add(
+            OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::Custom("<scope:transaction>".into()),
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                span_started: None,
+            },
+            |status| status,
+        ) // 3
+        .grow_memory(17) // 4: work inside the transaction and atomic region
+        .add(
+            OplogEntry::EndAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                begin_index: OplogIndex::from_u64(2),
+            },
+            |status| status,
+        ) // 5
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            IdempotencyKey::fresh(),
+            ComponentRevision::INITIAL,
+        ) // 6: transaction still open
+        .add(
+            OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index: OplogIndex::from_u64(3),
+                response: None,
+                forced_commit: true,
+                span_finished: None,
+                span_attributes: None,
+            },
+            |status| status,
+        ) // 7: may have drained after acceptance of a runtime cut
+        .agent_invocation_finished(
+            AgentInvocationResult::AgentInitialization,
+            IdempotencyKey::fresh(),
+            ComponentRevision::INITIAL,
+        ) // 8: safe retirement boundary
+        .build()
+}
+
+fn fold_rollback_fixture(test_case: &TestCase, tip: usize, chunk_size: usize) -> AgentStatusRecord {
+    let mut status = AgentStatusRecord::default();
+    for (chunk_index, chunk) in test_case.entries[..tip].chunks(chunk_size).enumerate() {
+        let entries = chunk
+            .iter()
+            .enumerate()
+            .map(|(offset, entry)| {
+                (
+                    OplogIndex::from_u64((chunk_index * chunk_size + offset + 1) as u64),
+                    entry.oplog_entry.clone(),
+                )
+            })
+            .collect();
+        status = super::update_status_with_new_entries(
+            AgentMode::Durable,
+            status,
+            entries,
+            &RetryConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    }
+    status
+}
+
+#[test]
+fn atomic_rollback_retirement_is_entry_ordered_and_chunk_independent() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    let fixture = rollback_fixture();
+    for tip in [6, 7, 8] {
+        for chunk_size in 1..=tip {
+            let status = fold_rollback_fixture(&fixture, tip, chunk_size);
+            let state = &status.atomic_rollback;
+            assert_eq!(state.last_work, OplogIndex::from_u64(tip as u64));
+            assert_eq!(
+                state.open_cut_scopes.contains_key(&OplogIndex::from_u64(3)),
+                tip == 6
+            );
+            if tip < 8 {
+                assert_eq!(state.retired_through, OplogIndex::NONE);
+                assert_eq!(
+                    state.regions.get(&OplogIndex::from_u64(2)),
+                    Some(&Some(OplogIndex::from_u64(5)))
+                );
+                assert_eq!(
+                    suffix_rollback_region(
+                        state,
+                        &status.skipped_regions,
+                        status.oplog_idx,
+                        Some(OplogIndex::from_u64(4))
+                    )
+                    .unwrap(),
+                    Some(OplogRegion::from_range(3..=tip as u64))
+                );
+            } else {
+                assert!(state.regions.is_empty());
+                assert_eq!(state.retired_through, OplogIndex::from_u64(8));
+                assert!(
+                    suffix_rollback_region(
+                        state,
+                        &status.skipped_regions,
+                        status.oplog_idx,
+                        Some(OplogIndex::from_u64(4))
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+async fn atomic_rollback_serialized_warm_status_never_reads_its_prefix() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    use golem_common::serialization::{deserialize, serialize};
+    let mut fixture = rollback_fixture();
+    fixture.entries.truncate(7);
+    let baseline = fold_rollback_fixture(&fixture, 6, 2);
+    let bytes = serialize(&baseline).unwrap();
+    let restored: AgentStatusRecord = deserialize(&bytes).unwrap();
+    fixture.read_starts.lock().unwrap().clear();
+    let status = try_fold_status_from(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        restored,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        suffix_rollback_region(
+            &status.atomic_rollback,
+            &status.skipped_regions,
+            status.oplog_idx,
+            Some(OplogIndex::from_u64(4))
+        )
+        .unwrap(),
+        Some(OplogRegion::from_range(3..=7))
+    );
+    let reads = fixture.read_starts.lock().unwrap();
+    assert!(!reads.is_empty());
+    assert!(
+        reads.iter().all(|start| *start == 7),
+        "read cached prefix: {reads:?}"
+    );
+}
+
+#[test]
+fn atomic_rollback_snapshot_selection_does_not_destroy_fallback_state() {
+    use crate::durable_host::replay_state::suffix_rollback_region;
+    let fixture = rollback_fixture();
+    let status = fold_rollback_fixture(&fixture, 4, 1);
+    let mut selected = status.skipped_regions.clone();
+    selected.set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+        2..=4,
+    )]));
+    assert_eq!(
+        suffix_rollback_region(&status.atomic_rollback, &selected, status.oplog_idx, None).unwrap(),
+        None
+    );
+    assert_eq!(
+        suffix_rollback_region(
+            &status.atomic_rollback,
+            &status.skipped_regions,
+            status.oplog_idx,
+            None
+        )
+        .unwrap(),
+        Some(OplogRegion::from_range(3..=4))
+    );
+}
+
+#[test]
+fn atomic_rollback_ignores_cancelled_and_transaction_precommit_as_scope_ends() {
+    let fixture = rollback_fixture();
+    let mut state = fold_rollback_fixture(&fixture, 6, 1).atomic_rollback;
+    state.observe(
+        OplogIndex::from_u64(7),
+        &OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc(),
+            start_index: OplogIndex::from_u64(3),
+            partial: None,
+            span_finished: None,
+        },
+    );
+    state.observe(
+        OplogIndex::from_u64(8),
+        &OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index: OplogIndex::from_u64(4),
+        },
+    );
+    state.observe(OplogIndex::from_u64(9), &fixture.entries[7].oplog_entry);
+    assert!(state.open_cut_scopes.contains_key(&OplogIndex::from_u64(3)));
+    assert_eq!(state.regions.len(), 1);
+    assert_eq!(state.retired_through, OplogIndex::NONE);
+}
+
+#[test]
+fn atomic_rollback_long_completed_history_does_not_accumulate_regions() {
+    let fixture = rollback_fixture();
+    let mut state = golem_common::model::AtomicRollbackState::default();
+    for invocation in 0..10_000 {
+        let begin = OplogIndex::from_u64(invocation * 3 + 1);
+        state.observe(begin, &fixture.entries[1].oplog_entry);
+        state.observe(
+            begin.next(),
+            &OplogEntry::EndAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                begin_index: begin,
+            },
+        );
+        state.observe(begin.next().next(), &fixture.entries[7].oplog_entry);
+        assert!(state.regions.is_empty());
+        assert!(state.open_cut_scopes.is_empty());
+    }
+    assert_eq!(state.retired_through, OplogIndex::from_u64(30_000));
+}
+
+#[test]
+fn baseline_rejects_newly_exposed_snapshot_prefix() {
+    let mut baseline = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(8),
+        ..Default::default()
+    };
+    baseline
+        .skipped_regions
+        .set_override(DeletedRegions::from_regions([OplogRegion::from_range(
+            2..=5,
+        )]));
+    assert!(super::baseline_is_invalidated(
+        &baseline,
+        &DeletedRegions::new(),
+        &DeletedRegions::new()
+    ));
+    let mut later = baseline.skipped_regions.clone();
+    later.add(OplogRegion::from_range(9..=10));
+    assert!(!super::baseline_is_invalidated(
+        &baseline,
+        &DeletedRegions::new(),
+        &later
+    ));
+}
+
+#[test]
+async fn atomic_rollback_jump_and_revert_repair_from_a_retained_prefix() {
+    for revert in [false, true] {
+        let mut fixture = rollback_fixture();
+        let prefix = fold_rollback_fixture(&fixture, 1, 1);
+        let stale = fold_rollback_fixture(&fixture, 8, 2);
+        assert_eq!(
+            stale.atomic_rollback.retired_through,
+            OplogIndex::from_u64(8)
+        );
+        fixture.entries.push(TestEntry {
+            oplog_entry: if revert {
+                OplogEntry::revert(OplogRegion::from_range(2..=8))
+            } else {
+                OplogEntry::jump(None, OplogRegion::from_range(3..=8))
+            },
+            expected_status: AgentStatusRecord::default(),
+        });
+        fixture.read_starts.lock().unwrap().clear();
+        let reader = StatusOplogReader::new(
+            &fixture,
+            &fixture.owned_agent_id,
+            AgentMode::Durable,
+            None,
+            OplogIndex::from_u64(9),
+        );
+        let repaired =
+            calculate_status_with_reader(&fixture, &reader, Some(stale), || async { Some(prefix) })
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(repaired.atomic_rollback.retired_through, OplogIndex::NONE);
+        assert!(repaired.atomic_rollback.open_cut_scopes.is_empty());
+        assert_eq!(repaired.atomic_rollback.regions.len(), usize::from(!revert));
+        if !revert {
+            assert_eq!(
+                repaired
+                    .atomic_rollback
+                    .regions
+                    .get(&OplogIndex::from_u64(2)),
+                Some(&None)
+            );
+            assert_eq!(repaired.atomic_rollback.last_work, OplogIndex::from_u64(2));
+        }
+        assert!(
+            fixture
+                .read_starts
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|start| *start > 1)
+        );
+    }
+}
+
+#[test]
+async fn atomic_rollback_failed_snapshot_update_restores_prefix_without_full_scan() {
+    let update = UpdateDescription::SnapshotBased {
+        target_revision: ComponentRevision::new(2).unwrap(),
+        payload: OplogPayload::Inline(Box::new(vec![])),
+        mime_type: "application/octet-stream".into(),
+        filesystem_snapshot: None,
+    };
+    let fixture = TestCase::builder(0)
+        .add(
+            OplogEntry::BeginAtomicRegion {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+            },
+            |status| status,
+        )
+        .grow_memory(17)
+        .pending_update(&update, |_| {})
+        .failed_update(update)
+        .build();
+    let prefix = fold_rollback_fixture(&fixture, 3, 1);
+    let pending_reader = StatusOplogReader::new(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(4),
+    );
+    let pending = calculate_status_with_reader(&fixture, &pending_reader, None, || async { None })
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(pending.atomic_rollback.regions.is_empty());
+    fixture.read_starts.lock().unwrap().clear();
+    let reader = StatusOplogReader::new(
+        &fixture,
+        &fixture.owned_agent_id,
+        AgentMode::Durable,
+        None,
+        OplogIndex::from_u64(5),
+    );
+    let repaired =
+        calculate_status_with_reader(&fixture, &reader, Some(pending), || async { Some(prefix) })
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        repaired
+            .atomic_rollback
+            .regions
+            .get(&OplogIndex::from_u64(2)),
+        Some(&None)
+    );
+    assert_eq!(repaired.total_linear_memory_size, 217);
+    assert!(
+        fixture
+            .read_starts
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|start| *start >= 4)
     );
 }
 
@@ -3001,6 +4253,17 @@ impl TestCaseBuilder {
             previous_status_record: status,
             owned_agent_id,
         }
+    }
+
+    fn agent_mode(mut self, agent_mode: AgentMode) -> Self {
+        assert_eq!(self.entries.len(), 1);
+        let OplogEntry::Create { parameters, .. } = &mut self.entries[0].oplog_entry else {
+            unreachable!()
+        };
+        parameters.agent_mode = agent_mode;
+        self.entries[0].expected_status.agent_mode = agent_mode;
+        self.previous_status_record.agent_mode = agent_mode;
+        self
     }
 
     pub fn add(
@@ -3122,6 +4385,33 @@ impl TestCaseBuilder {
         )
     }
 
+    pub fn create_resource(self, id: AgentResourceId) -> Self {
+        let timestamp = Timestamp::now_utc().rounded();
+        let resource_type_id = ResourceTypeId {
+            name: format!("resource-{id}"),
+            owner: "test:resources".to_string(),
+        };
+        self.add(
+            OplogEntry::CreateResource {
+                timestamp,
+                entity_parent_start_index: None,
+                id,
+                resource_type_id: resource_type_id.clone(),
+            },
+            move |mut status| {
+                status.owned_resources.insert(
+                    id,
+                    AgentResourceDescription {
+                        created_at: timestamp,
+                        resource_owner: resource_type_id.owner,
+                        resource_name: resource_type_id.name,
+                    },
+                );
+                status
+            },
+        )
+    }
+
     pub fn snapshot(self) -> Self {
         self.snapshot_with_filesystem(None)
     }
@@ -3235,12 +4525,15 @@ impl TestCaseBuilder {
             status.owned_resources = old_status.owned_resources;
             status.successful_updates = old_status.successful_updates;
             status.failed_updates = old_status.failed_updates;
+            status.pending_updates = old_status.pending_updates;
             status.invocation_results = old_status.invocation_results;
             status
                 .invocation_results
                 .set_revert_generation(revert_generation);
             status.component_revision_for_replay = old_status.component_revision_for_replay;
+            status.component_revision_start_index = old_status.component_revision_start_index;
             status.last_manual_update_snapshot_index = old_status.last_manual_update_snapshot_index;
+            status.authoritative_snapshot = old_status.authoritative_snapshot;
             status.last_automatic_snapshot = old_status.last_automatic_snapshot;
             status.previous_usable_automatic_snapshot =
                 old_status.previous_usable_automatic_snapshot;
@@ -3315,18 +4608,61 @@ impl TestCaseBuilder {
         update_description: &UpdateDescription,
         extra_status_updates: impl Fn(&mut AgentStatusRecord),
     ) -> Self {
-        let entry = OplogEntry::pending_update(update_description.clone()).rounded();
+        let update_attempt_index = self.entries.last().and_then(|entry| {
+            let status = &entry.expected_status;
+            status
+                .pending_invocations
+                .iter()
+                .find(|invocation| {
+                    invocation.manual_update_target_revision
+                        == Some(*update_description.target_revision())
+                })
+                .map(|invocation| invocation.oplog_index)
+                .or_else(|| {
+                    status.pending_updates.front().and_then(|pending| {
+                        (pending.target_revision == *update_description.target_revision()
+                            && pending.kind == PendingUpdateKind::Automatic
+                            && pending.oplog_index == pending.admission_index)
+                            .then_some(pending.admission_index)
+                    })
+                })
+        });
+        let entry =
+            OplogEntry::pending_update(update_description.clone(), update_attempt_index).rounded();
         let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
         self.add(entry.clone(), move |mut status| {
-            status.pending_updates.push_back(PendingUpdateRef {
-                timestamp: entry.timestamp(),
-                oplog_index: oplog_idx,
-                target_revision: *update_description.target_revision(),
-                kind: PendingUpdateKind::of(update_description),
-            });
+            let kind = PendingUpdateKind::of(update_description);
+            let admission_index = update_attempt_index.unwrap_or(oplog_idx);
+            let target_revision = *update_description.target_revision();
+            let refines_automatic_admission = update_attempt_index.is_some()
+                && !matches!(update_description, UpdateDescription::SnapshotBased { .. })
+                && status.pending_updates.front().is_some_and(|pending| {
+                    pending.admission_index == admission_index
+                        && pending.target_revision == target_revision
+                        && pending.kind == PendingUpdateKind::Automatic
+                        && pending.oplog_index == pending.admission_index
+                });
+            if refines_automatic_admission {
+                let pending = status.pending_updates.front_mut().unwrap();
+                pending.oplog_index = oplog_idx;
+                pending.kind = kind;
+            } else {
+                status.pending_updates.push_back(PendingUpdateRef {
+                    timestamp: entry.timestamp(),
+                    oplog_index: oplog_idx,
+                    admission_index,
+                    target_revision,
+                    kind,
+                });
+            }
 
-            if !status.pending_invocations.is_empty() {
-                status.pending_invocations.pop();
+            if update_attempt_index.is_some()
+                && let Some(position) = status
+                    .pending_invocations
+                    .iter()
+                    .position(|invocation| invocation.oplog_index == admission_index)
+            {
+                status.pending_invocations.remove(position);
             }
 
             if let UpdateDescription::SnapshotBased { .. } = update_description {
@@ -3355,24 +4691,53 @@ impl TestCaseBuilder {
             new_component_size,
             None,
             new_active_plugins.clone(),
+            None,
         )
         .rounded();
         self.add(entry.clone(), move |mut status| {
-            let applied_update = status.pending_updates.pop_front();
+            let target_revision = *update_description.target_revision();
+            let applied_update = if status
+                .pending_updates
+                .front()
+                .is_some_and(|pending| pending.target_revision == target_revision)
+            {
+                status.pending_updates.pop_front()
+            } else {
+                status
+                    .pending_invocations
+                    .iter()
+                    .position(|invocation| {
+                        invocation.manual_update_target_revision == Some(target_revision)
+                    })
+                    .map(|position| status.pending_invocations.remove(position))
+                    .map(|invocation| PendingUpdateRef {
+                        timestamp: invocation.timestamp,
+                        oplog_index: invocation.oplog_index,
+                        admission_index: invocation.oplog_index,
+                        target_revision,
+                        kind: PendingUpdateKind::SnapshotBased {
+                            filesystem_snapshot: None,
+                        },
+                    })
+            };
             status.successful_updates.push(SuccessfulUpdateRecord {
                 timestamp: entry.timestamp(),
-                target_revision: *update_description.target_revision(),
+                target_revision,
                 oplog_index: status.oplog_idx,
                 filesystem_snapshot: match &update_description {
                     UpdateDescription::SnapshotBased {
                         filesystem_snapshot,
                         ..
                     } => filesystem_snapshot.clone(),
-                    UpdateDescription::Automatic { .. } => None,
+                    UpdateDescription::Automatic { .. }
+                    | UpdateDescription::SnapshotAssistedAutomatic { .. } => None,
                 },
+                pending_update: applied_update.clone(),
+                snapshot_assisted_details: None,
             });
             status.component_size = new_component_size;
             status.component_revision = *update_description.target_revision();
+            status.component_revision_start_index = status.oplog_idx;
             status.active_plugins = new_active_plugins.clone();
             status.last_automatic_snapshot = None;
             status.previous_usable_automatic_snapshot = None;
@@ -3388,37 +4753,11 @@ impl TestCaseBuilder {
             } = update_description
             {
                 status.component_revision_for_replay = target_revision;
-                status.last_manual_update_snapshot_index = applied_update.map(|au| au.oplog_index);
-            };
-
-            status
-        })
-    }
-
-    pub fn failed_update(self, update_description: UpdateDescription) -> Self {
-        let entry = OplogEntry::failed_update(
-            *update_description.target_revision(),
-            Some("details".to_string()),
-        )
-        .rounded();
-        self.add(entry.clone(), move |mut status| {
-            status.failed_updates.push(FailedUpdateRecord {
-                timestamp: entry.timestamp(),
-                target_revision: *update_description.target_revision(),
-                details: Some("details".to_string()),
-            });
-            status.pending_updates.pop_front();
-
-            if status.skipped_regions.is_overridden() {
-                status.skipped_regions.drop_override();
-            }
-
-            if let UpdateDescription::SnapshotBased {
-                target_revision, ..
-            } = update_description
-            {
-                status.pending_invocations.retain(|invocation| {
-                    invocation.manual_update_target_revision != Some(target_revision)
+                status.last_manual_update_snapshot_index =
+                    applied_update.as_ref().map(|au| au.oplog_index);
+                status.authoritative_snapshot = applied_update.map(|au| AuthoritativeSnapshot {
+                    index: au.oplog_index,
+                    kind: AuthoritativeSnapshotKind::ManualUpdate,
                 });
             };
 
@@ -3426,7 +4765,214 @@ impl TestCaseBuilder {
         })
     }
 
-    pub fn build(self) -> TestCase {
+    pub fn successful_snapshot_assisted_update(
+        self,
+        update_description: UpdateDescription,
+        snapshot_index: OplogIndex,
+    ) -> Self {
+        let pending = self
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates
+            .front()
+            .unwrap()
+            .clone();
+        let (source_component_revision, source_revision_start_index, _) =
+            snapshot_assisted_pending_details(&pending);
+        let details = SnapshotAssistedUpdateDetails {
+            pending_update_index: pending.oplog_index,
+            source_component_revision,
+            source_revision_start_index,
+            snapshot_index,
+        };
+        let target_revision = *update_description.target_revision();
+        let entry = OplogEntry::successful_update(
+            target_revision,
+            2000,
+            None,
+            HashSet::new(),
+            Some(details.clone()),
+        )
+        .rounded();
+        self.add(entry.clone(), move |mut status| {
+            let applied_update = status.pending_updates.pop_front();
+            status.successful_updates.push(SuccessfulUpdateRecord {
+                timestamp: entry.timestamp(),
+                target_revision,
+                oplog_index: status.oplog_idx,
+                filesystem_snapshot: None,
+                pending_update: applied_update,
+                snapshot_assisted_details: Some(details.clone()),
+            });
+            status.component_size = 2000;
+            status.component_revision = target_revision;
+            status.component_revision_start_index = status.oplog_idx;
+            status.component_revision_for_replay = source_component_revision;
+            status.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                index: snapshot_index,
+                kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+            });
+            status.skipped_regions.add(OplogRegion::from_index_range(
+                OplogIndex::INITIAL.next()..=snapshot_index,
+            ));
+            status.last_automatic_snapshot = None;
+            status.previous_usable_automatic_snapshot = None;
+            status
+        })
+    }
+
+    pub fn failed_update(self, update_description: UpdateDescription) -> Self {
+        let update_attempt_index = self.entries.last().and_then(|entry| {
+            let status = &entry.expected_status;
+            let manual_admission =
+                matches!(update_description, UpdateDescription::SnapshotBased { .. })
+                    .then(|| {
+                        status
+                            .pending_invocations
+                            .iter()
+                            .find(|invocation| {
+                                invocation.manual_update_target_revision
+                                    == Some(*update_description.target_revision())
+                            })
+                            .map(|invocation| invocation.oplog_index)
+                    })
+                    .flatten();
+            manual_admission.or_else(|| {
+                status
+                    .pending_updates
+                    .front()
+                    .filter(|pending| {
+                        pending.target_revision == *update_description.target_revision()
+                    })
+                    .map(|pending| pending.admission_index)
+                    .or_else(|| {
+                        status
+                            .pending_invocations
+                            .iter()
+                            .find(|invocation| {
+                                invocation.manual_update_target_revision
+                                    == Some(*update_description.target_revision())
+                            })
+                            .map(|invocation| invocation.oplog_index)
+                    })
+            })
+        });
+        let entry = OplogEntry::failed_update(
+            *update_description.target_revision(),
+            Some("details".to_string()),
+            None,
+            update_attempt_index,
+        )
+        .rounded();
+        self.add(entry.clone(), move |mut status| {
+            let target_revision = *update_description.target_revision();
+            let matches_pending = status.pending_updates.front().is_some_and(|pending| {
+                update_attempt_index
+                    .is_some_and(|attempt_index| pending.admission_index == attempt_index)
+                    || (update_attempt_index.is_none()
+                        && pending.target_revision == target_revision)
+            });
+            let applied_update = if matches_pending {
+                status.pending_updates.pop_front()
+            } else {
+                status
+                    .pending_invocations
+                    .iter()
+                    .position(|invocation| {
+                        update_attempt_index
+                            .is_some_and(|attempt_index| invocation.oplog_index == attempt_index)
+                            || (update_attempt_index.is_none()
+                                && invocation.manual_update_target_revision
+                                    == Some(target_revision))
+                    })
+                    .map(|position| status.pending_invocations.remove(position))
+                    .map(|invocation| PendingUpdateRef {
+                        timestamp: invocation.timestamp,
+                        oplog_index: invocation.oplog_index,
+                        admission_index: invocation.oplog_index,
+                        target_revision,
+                        kind: PendingUpdateKind::SnapshotBased {
+                            filesystem_snapshot: None,
+                        },
+                    })
+            };
+            status.failed_updates.push(FailedUpdateRecord {
+                timestamp: entry.timestamp(),
+                target_revision,
+                details: Some("details".to_string()),
+                pending_update: applied_update,
+                snapshot_assisted_details: None,
+            });
+
+            if status.skipped_regions.is_overridden() {
+                status.skipped_regions.drop_override();
+            }
+
+            status
+        })
+    }
+
+    pub fn failed_snapshot_assisted_update(self, update_description: UpdateDescription) -> Self {
+        let pending = self
+            .entries
+            .last()
+            .unwrap()
+            .expected_status
+            .pending_updates
+            .front()
+            .unwrap()
+            .clone();
+        let (source_component_revision, source_revision_start_index, selection) =
+            snapshot_assisted_pending_details(&pending);
+        let SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. } = selection else {
+            panic!("test requires a selected snapshot")
+        };
+        let details = FailedSnapshotAssistedUpdateDetails {
+            pending_update_index: pending.oplog_index,
+            source_component_revision,
+            source_revision_start_index,
+            snapshot_index: Some(snapshot_index),
+            ineligibility_reason: None,
+        };
+        let target_revision = *update_description.target_revision();
+        let entry = OplogEntry::failed_update(
+            target_revision,
+            Some("details".to_string()),
+            Some(details.clone()),
+            Some(pending.admission_index),
+        )
+        .rounded();
+        self.add(entry.clone(), move |mut status| {
+            let applied_update = status.pending_updates.pop_front();
+            status.failed_updates.push(FailedUpdateRecord {
+                timestamp: entry.timestamp(),
+                target_revision,
+                details: Some("details".to_string()),
+                pending_update: applied_update,
+                snapshot_assisted_details: Some(details.clone()),
+            });
+            status
+        })
+    }
+
+    pub fn build(mut self) -> TestCase {
+        // These fixtures assert the other status fields. Rollback state has dedicated assertions
+        // below, while each cached baseline here must also carry its derived rollback summary.
+        for tip in 0..self.entries.len() {
+            let visibility = &self.entries[tip].expected_status;
+            let mut state = golem_common::model::AtomicRollbackState::default();
+            for (offset, entry) in self.entries[..=tip].iter().enumerate() {
+                let index = OplogIndex::from_u64(offset as u64 + 1);
+                if !visibility.skipped_regions.is_in_deleted_region(index)
+                    && !visibility.deleted_regions.is_in_deleted_region(index)
+                {
+                    state.observe(index, &entry.oplog_entry);
+                }
+            }
+            self.entries[tip].expected_status.atomic_rollback = state;
+        }
         TestCase {
             owned_agent_id: self.owned_agent_id,
             entries: self
@@ -4137,6 +5683,7 @@ fn successful_update_drops_old_grant_retains_new() {
                 new_component_size: 200,
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::from([new_grant]),
+                snapshot_assisted_details: None,
             },
         ),
         (
@@ -5507,9 +7054,12 @@ fn empty_update_fields() -> super::UpdateFields {
         component_revision: ComponentRevision::new(3).unwrap(),
         component_size: 10,
         component_revision_for_replay: ComponentRevision::new(1).unwrap(),
+        component_revision_start_index: OplogIndex::INITIAL,
         last_manual_update_snapshot_index: None,
+        authoritative_snapshot: None,
         last_automatic_snapshot: None,
         previous_usable_automatic_snapshot: None,
+        manual_update_admissions: std::collections::VecDeque::new(),
     }
 }
 
@@ -5571,6 +7121,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
                     mime_type: "application/octet-stream".to_string(),
                     filesystem_snapshot: None,
                 },
+                update_attempt_index: None,
             },
         )
         .after(
@@ -5581,6 +7132,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
                 new_component_size: 20,
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
             },
         );
 
@@ -5647,25 +7199,27 @@ fn fork_prefix_entry(position: u64, entry: &ForkPrefixEntry) -> OplogEntry {
                 OplogIndex::from_u64(*start)..=OplogIndex::from_u64(start + length),
             ),
         },
-        ForkPrefixEntry::SnapshotBased(named) => {
-            OplogEntry::pending_update(UpdateDescription::SnapshotBased {
+        ForkPrefixEntry::SnapshotBased(named) => OplogEntry::pending_update(
+            UpdateDescription::SnapshotBased {
                 target_revision,
                 payload: OplogPayload::Inline(Box::new(vec![])),
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: named.then(FilesystemSnapshotName::update),
-            })
-        }
+            },
+            None,
+        ),
         ForkPrefixEntry::Automatic => {
-            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision })
+            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None)
         }
         ForkPrefixEntry::Successful => OplogEntry::successful_update(
             ComponentRevision::new(2).unwrap(),
             100,
             None,
             HashSet::new(),
+            None,
         ),
         ForkPrefixEntry::Failed => {
-            OplogEntry::failed_update(ComponentRevision::new(2).unwrap(), None)
+            OplogEntry::failed_update(ComponentRevision::new(2).unwrap(), None, None, None)
         }
     }
 }
@@ -5726,8 +7280,8 @@ proptest::proptest! {
             OplogIndex::from_u64(prefix.len() as u64 + 1),
         );
         let (cancelled, baseline) = crate::services::worker_fork::fork_update_indices(copied, &deleted)
-            .filter_map(|index| entries.get(&index))
-            .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, entry| updates.after(entry))
+            .filter_map(|index| entries.get(&index).map(|entry| (index, entry)))
+            .fold(crate::services::worker_fork::ForkUpdates::default(), |updates, (index, entry)| updates.after(index, entry))
             .into_parts();
 
         proptest::prop_assert_eq!(
@@ -5736,7 +7290,7 @@ proptest::proptest! {
                 fields
                     .pending_updates
                     .iter()
-                    .map(|update| update.target_revision)
+                    .map(|update| (update.target_revision, update.admission_index))
                     .collect::<Vec<_>>(),
                 pending_update_name(&entries, fields.last_manual_update_snapshot_index)
             )

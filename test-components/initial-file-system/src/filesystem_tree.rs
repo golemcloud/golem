@@ -165,12 +165,14 @@ impl SnapshotTree for SnapshotTreeImpl {
         let applied = <[u8; 4]>::try_from(bytes.as_slice())
             .map(u32::from_le_bytes)
             .map_err(|_| format!("Invalid snapshot size: {}", bytes.len()))?;
-        let golem_rust::SchemaValue::Record { fields } = context.parameters else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
-        let [golem_rust::SchemaValue::String(_)] = fields.as_slice() else {
-            return Err("Invalid snapshot restore parameters".to_string());
-        };
+        let mut parameters = golem_rust::agentic::DirectAgentInput::new(context.parameters)
+            .map_err(|_| "Invalid snapshot restore parameters".to_string())?;
+        parameters
+            .take::<String>()
+            .map_err(|_| "Invalid snapshot restore parameters".to_string())?;
+        parameters
+            .finish()
+            .map_err(|_| "Invalid snapshot restore parameters".to_string())?;
         Ok(Self { applied })
     }
 }

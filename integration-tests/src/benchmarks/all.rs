@@ -313,20 +313,8 @@ fn benchmark_registry() -> BenchmarkRegistry {
     benchmarks_by_name.insert(
         "throughput-echo",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::throughput::ThroughputEcho>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "throughput-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(
-                run_benchmark::<benchmarks::throughput::ThroughputLargeInput>(
+                run_benchmark::<benchmarks::throughput::ThroughputEcho<false>>(
                     mode,
                     verbosity,
                     item,
@@ -337,10 +325,48 @@ fn benchmark_registry() -> BenchmarkRegistry {
         }),
     );
     benchmarks_by_name.insert(
+        "throughput-echo-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(
+                run_benchmark::<benchmarks::throughput::ThroughputEcho<true>>(
+                    mode,
+                    verbosity,
+                    item,
+                    primary_only,
+                    otlp,
+                ),
+            )
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputLargeInput<false>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-large-input-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputLargeInput<true>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
         "throughput-cpu-intensive",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
-                benchmarks::throughput::ThroughputCpuIntensive,
+                benchmarks::throughput::ThroughputCpuIntensive<false>,
+            >(mode, verbosity, item, primary_only, otlp))
+        }),
+    );
+    benchmarks_by_name.insert(
+        "throughput-cpu-intensive-aggregate",
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
+            Box::pin(run_benchmark::<
+                benchmarks::throughput::ThroughputCpuIntensive<true>,
             >(mode, verbosity, item, primary_only, otlp))
         }),
     );
@@ -488,7 +514,12 @@ fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
     for benchmark in &suite.benchmarks {
         let names: &[&str] = match benchmark.name.as_str() {
             "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
-            "throughput-echo" | "throughput-large-input" | "throughput-cpu-intensive" => {
+            "throughput-echo"
+            | "throughput-echo-aggregate"
+            | "throughput-large-input"
+            | "throughput-large-input-aggregate"
+            | "throughput-cpu-intensive"
+            | "throughput-cpu-intensive-aggregate" => {
                 &["benchmark_agent_rust_release", "benchmark_agent_ts"]
             }
             "streaming-tool" => &[

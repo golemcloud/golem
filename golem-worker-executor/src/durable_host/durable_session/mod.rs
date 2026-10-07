@@ -41,12 +41,11 @@ use crate::services::oplog::{Oplog, OplogOps};
 use crate::services::rpc::Rpc;
 use crate::workerctx::WorkerCtx;
 use futures::future::{BoxFuture, try_join_all};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamHandle as ProtoDurableStreamHandle, DurableStreamMapping,
     InputStreamHighWater as ProtoInputStreamHighWater, InvocationResponse, OutputStreamEnd,
     OutputStreamError, OutputStreamItem, StreamCancel, StreamInvocationIdentity, StreamMappingRole,
-    invocation_response,
+    ToolByteStreamRole as ProtoToolByteStreamRole, invocation_response,
 };
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, DurableStreamHandle,
@@ -63,13 +62,14 @@ use golem_common::base_model::durable_stream::{
     StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
     StreamSessionRecord, StreamSessionResumeAttemptRecord, StreamSlotTombstonedRecord,
     StreamSourceKind, StreamTopologyActivatedRecord, StreamTopologyPreparedRecord,
-    StreamValuePathStep,
+    StreamValuePathStep, ToolByteStreamRole,
 };
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::payload::OplogPayload;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::wit::{encode_value_with_streams, wire};
 use golem_schema::schema::{SchemaFingerprintV1, SchemaGraph, SchemaType, schema_fingerprint_v1};
 use golem_schema::schema::{SchemaValue, SchemaValueStream, TypedSchemaValue};
@@ -178,6 +178,7 @@ struct PendingOwnedStreamDrain {
 /// An output already registered and drained by this session before result publication.
 pub(crate) struct RegisteredOutputStream {
     pub transport_stream_id: u64,
+    pub role: SessionStreamRole,
 }
 
 /// A stream-bearing value whose references name its binding-local transport mappings.
@@ -264,10 +265,18 @@ pub fn durable_stream_mapping_to_proto(
             resulting_offset: high_water.resulting_offset.as_bytes().to_vec(),
             terminal: high_water.terminal,
         }),
-        role: match mapping.role {
+        role: match mapping.role.direction() {
             SessionStreamRole::Input => StreamMappingRole::Input as i32,
             SessionStreamRole::Output => StreamMappingRole::Output as i32,
+            SessionStreamRole::ToolStdin
+            | SessionStreamRole::ToolStdout
+            | SessionStreamRole::ToolStderr => unreachable!(),
         },
+        tool_byte_stream_role: mapping.role.tool_byte_stream_role().map(|role| match role {
+            ToolByteStreamRole::Stdin => ProtoToolByteStreamRole::Stdin as i32,
+            ToolByteStreamRole::Stdout => ProtoToolByteStreamRole::Stdout as i32,
+            ToolByteStreamRole::Stderr => ProtoToolByteStreamRole::Stderr as i32,
+        }),
     }
 }
 
@@ -288,7 +297,7 @@ pub fn durable_stream_mapping_from_proto(
         .element_schema_fingerprint
         .try_into()
         .map_err(|_| "durable stream schema fingerprint must contain 32 bytes".to_string())?;
-    let role =
+    let direction =
         match StreamMappingRole::try_from(mapping.role).unwrap_or(StreamMappingRole::Unspecified) {
             StreamMappingRole::Input => SessionStreamRole::Input,
             StreamMappingRole::Output => SessionStreamRole::Output,
@@ -296,6 +305,30 @@ pub fn durable_stream_mapping_from_proto(
                 return Err("durable stream mapping has no role".to_string());
             }
         };
+    let byte_stream_role = mapping
+        .tool_byte_stream_role
+        .map(|role| {
+            ProtoToolByteStreamRole::try_from(role)
+                .map_err(|_| "durable stream mapping has an invalid tool byte role".to_string())
+                .map(|role| match role {
+                    ProtoToolByteStreamRole::Stdin => ToolByteStreamRole::Stdin,
+                    ProtoToolByteStreamRole::Stdout => ToolByteStreamRole::Stdout,
+                    ProtoToolByteStreamRole::Stderr => ToolByteStreamRole::Stderr,
+                })
+        })
+        .transpose()?;
+    if matches!(byte_stream_role, Some(ToolByteStreamRole::Stdin))
+        != matches!(direction, SessionStreamRole::Input)
+        && byte_stream_role.is_some()
+    {
+        return Err("tool byte stream role conflicts with mapping direction".to_string());
+    }
+    let role = match byte_stream_role {
+        Some(ToolByteStreamRole::Stdin) => SessionStreamRole::ToolStdin,
+        Some(ToolByteStreamRole::Stdout) => SessionStreamRole::ToolStdout,
+        Some(ToolByteStreamRole::Stderr) => SessionStreamRole::ToolStderr,
+        None => direction,
+    };
     Ok(StreamSessionMappingRecord {
         transport_stream_id: mapping.transport_stream_id,
         handle: DurableStreamHandle {
@@ -626,7 +659,7 @@ impl StreamSession {
     pub async fn validate_frame(
         &self,
         transport_stream_id: u64,
-        durable_stream_id: Option<golem_api_grpc::proto::golem::common::Uuid>,
+        durable_stream_id: Option<golem_schema::proto::golem::common::Uuid>,
         epoch: u64,
         expected_role: SessionStreamRole,
     ) -> Result<DurableStreamHandle, SessionError> {
@@ -665,7 +698,9 @@ impl StreamSession {
         let mapping = mappings
             .get(&transport_stream_id)
             .ok_or_else(|| format!("unknown durable transport stream ID {transport_stream_id}"))?;
-        if mapping.handle.stream_id.0 != durable_stream_id || mapping.role != expected_role {
+        if mapping.handle.stream_id.0 != durable_stream_id
+            || mapping.role.direction() != expected_role.direction()
+        {
             return Err(SessionError::from(
                 "transport stream mapping does not match the durable stream ID and role"
                     .to_string(),
@@ -1473,7 +1508,7 @@ impl StreamSession {
                 .iter()
                 .find_map(|(_, mapping)| {
                     (mapping.handle.stream_id == cursor.stream_id
-                        && mapping.role == SessionStreamRole::Output)
+                        && mapping.role.direction() == SessionStreamRole::Output)
                         .then(|| mapping.clone())
                 })
                 .ok_or_else(|| {
@@ -2200,9 +2235,12 @@ impl StreamSession {
                         consumer_invocation: self.consumer_invocation.idempotency_key.clone(),
                         source: binding.source,
                         epoch,
-                        role: match role {
+                        role: match role.direction() {
                             SessionStreamRole::Input => StreamCancelRole::InputProducer,
                             SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
+                            SessionStreamRole::ToolStdin
+                            | SessionStreamRole::ToolStdout
+                            | SessionStreamRole::ToolStderr => unreachable!(),
                         },
                         reason: StreamCancelReason::Cancelled,
                         details: None,
@@ -2291,7 +2329,7 @@ impl StreamSession {
                 ));
             }
         };
-        if mapping.role != expected_role {
+        if mapping.role.direction() != expected_role {
             return Err(SessionError::from(
                 "durable stream cancellation role does not match its mapping".to_string(),
             ));
@@ -2614,7 +2652,7 @@ impl StreamSession {
             .clone();
         let mut result = HashMap::new();
         for (transport_stream_id, mapping) in mappings {
-            if mapping.role != SessionStreamRole::Input
+            if mapping.role.direction() != SessionStreamRole::Input
                 || !self.producer.owns_handle_identity(&mapping.handle)
             {
                 continue;
@@ -2641,7 +2679,7 @@ impl StreamSession {
             .expect("durable stream mapping lock poisoned")
             .values()
             .filter(|mapping| {
-                mapping.role == SessionStreamRole::Input
+                mapping.role.direction() == SessionStreamRole::Input
                     && !accepted.iter().any(|accepted| {
                         accepted.role == mapping.role && accepted.handle == mapping.handle
                     })
@@ -3003,6 +3041,7 @@ impl StreamSession {
             endpoint: Option<LiveStreamEndpoint>,
             forwarded: Option<F>,
             registered_transport_id: Option<u64>,
+            registered_role: Option<SessionStreamRole>,
             element_type: SchemaType,
             element_schema_fingerprint: SchemaFingerprintV1,
             cancelled: bool,
@@ -3021,11 +3060,14 @@ impl StreamSession {
                 let element_schema_fingerprint =
                     schema_fingerprint_v1(&graph, element).map_err(|error| error.to_string())?;
                 let forwarded = forwarded_durable_input_reference(stream)?;
-                let registered_transport_id = stream
+                let registered = stream
                     .with_host_endpoint::<RegisteredOutputStream, _>(|output| {
-                        output.transport_stream_id
+                        (output.transport_stream_id, output.role)
                     })
                     .ok();
+                let (registered_transport_id, registered_role) = registered
+                    .map(|(id, role)| (Some(id), Some(role)))
+                    .unwrap_or((None, None));
                 let (endpoint, forwarded) = match forwarded {
                     Some(forwarded) => (None, Some(forwarded.take(stream)?)),
                     None if registered_transport_id.is_some() => (None, None),
@@ -3056,6 +3098,7 @@ impl StreamSession {
                     endpoint,
                     forwarded,
                     registered_transport_id,
+                    registered_role,
                     element_type: element.cloned().unwrap_or_else(SchemaType::u8),
                     element_schema_fingerprint,
                     cancelled: first_result
@@ -3090,6 +3133,7 @@ impl StreamSession {
                         endpoint: output.endpoint,
                         forwarded,
                         registered_transport_id: output.registered_transport_id,
+                        registered_role: output.registered_role,
                         element_type: output.element_type,
                         element_schema_fingerprint: output.element_schema_fingerprint,
                         cancelled: output.cancelled,
@@ -3110,7 +3154,9 @@ impl StreamSession {
         };
         let requests = pending
             .iter()
-            .filter(|pending| pending.forwarded.is_none())
+            .filter(|pending| {
+                pending.forwarded.is_none() && pending.registered_transport_id.is_none()
+            })
             .map(|pending| ProducerRegistrationRequest {
                 entity_parent_start_index: self.entity_parent_start_index,
                 coordinate: StreamRegistrationCoordinate::Root {
@@ -3164,45 +3210,44 @@ impl StreamSession {
                 }
                 mapping.transport_stream_id
             } else {
-                let request = &requests[request_index];
-                request_index += 1;
                 if let Some(id) = pending.registered_transport_id {
-                    let handle = self
-                        .producer
-                        .validate_registration(request)
-                        .await
-                        .map_err(SessionError::from)?;
-                    let binding = self
-                        .producer
-                        .local_binding(id, &handle, SessionStreamRole::Output)
-                        .await
-                        .map_err(SessionError::from)?;
-                    if self.binding(id).as_ref() != Some(&binding) {
+                    let mapping = self.mapping(id).ok_or_else(|| {
+                        "registered result output has no local session mapping".to_string()
+                    })?;
+                    if Some(mapping.role) != pending.registered_role
+                        || mapping.role.direction() != SessionStreamRole::Output
+                        || mapping.handle.element_schema_fingerprint
+                            != pending.element_schema_fingerprint
+                    {
                         return Err(
                             "registered result output does not match its local session binding"
                                 .into(),
                         );
                     }
-                }
-                let existing_handle = self
-                    .producer
-                    .handle_for_coordinate(&request.coordinate)
-                    .await
-                    .map_err(SessionError::from)?;
-                let existing_mapping = if let Some(handle) = existing_handle {
-                    let binding = self
+                    id
+                } else {
+                    let request = &requests[request_index];
+                    request_index += 1;
+                    let existing_handle = self
                         .producer
-                        .local_binding(0, &handle, SessionStreamRole::Output)
+                        .handle_for_coordinate(&request.coordinate)
                         .await
                         .map_err(SessionError::from)?;
-                    self.mapping_for_reference(&binding.source, SessionStreamRole::Output)
-                } else {
-                    None
-                };
-                existing_mapping
-                    .map(|mapping| mapping.transport_stream_id)
-                    .map(Ok)
-                    .unwrap_or_else(|| self.allocate_transport_stream_id())?
+                    let existing_mapping = if let Some(handle) = existing_handle {
+                        let binding = self
+                            .producer
+                            .local_binding(0, &handle, SessionStreamRole::Output)
+                            .await
+                            .map_err(SessionError::from)?;
+                        self.mapping_for_reference(&binding.source, SessionStreamRole::Output)
+                    } else {
+                        None
+                    };
+                    existing_mapping
+                        .map(|mapping| mapping.transport_stream_id)
+                        .map(Ok)
+                        .unwrap_or_else(|| self.allocate_transport_stream_id())?
+                }
             };
             transport_stream_ids.push(transport_stream_id);
         }
@@ -3222,14 +3267,29 @@ impl StreamSession {
                                 ))
                             })
                     }),
-                    source: match &pending.forwarded {
-                        Some(mapping) => ProducerOutputSource::Existing(mapping.handle.clone()),
-                        None => ProducerOutputSource::New(
+                    source: match (&pending.forwarded, pending.registered_transport_id) {
+                        (Some(mapping), _) => {
+                            ProducerOutputSource::Existing(mapping.handle.clone())
+                        }
+                        (None, Some(transport_stream_id)) => {
+                            let mapping = self
+                                .mapping(transport_stream_id)
+                                .expect("registered output mapping is available");
+                            let binding = self
+                                .binding(transport_stream_id)
+                                .expect("registered output binding is available");
+                            ProducerOutputSource::Registered(mapping.handle, binding.source)
+                        }
+                        (None, None) => ProducerOutputSource::New(
                             requests
                                 .next()
                                 .expect("each owned output has a registration request"),
                         ),
                     },
+                    role: pending
+                        .registered_role
+                        .or_else(|| pending.forwarded.as_ref().map(|mapping| mapping.role))
+                        .unwrap_or(SessionStreamRole::Output),
                 },
             )
             .collect::<Vec<_>>();
@@ -3258,8 +3318,19 @@ impl StreamSession {
         let mut drains = Vec::with_capacity(pending.len());
         let mut owned_handles = owned_handles.into_iter();
         for (pending, transport_stream_id) in pending.into_iter().zip(transport_stream_ids) {
-            let (handle, local) = match pending.forwarded {
-                Some(mapping) => (mapping.handle, false),
+            let existing_mapping = pending
+                .registered_transport_id
+                .and_then(|id| self.mapping(id));
+            let (handle, local) = match &pending.forwarded {
+                Some(mapping) => (mapping.handle.clone(), false),
+                None if existing_mapping.is_some() => (
+                    existing_mapping
+                        .as_ref()
+                        .expect("checked above")
+                        .handle
+                        .clone(),
+                    true,
+                ),
                 None => (
                     owned_handles
                         .next()
@@ -3267,19 +3338,36 @@ impl StreamSession {
                     true,
                 ),
             };
-            let mapping = StreamSessionMappingRecord {
-                transport_stream_id,
-                handle: handle.clone(),
-                role: SessionStreamRole::Output,
-            };
-            let binding = if local {
+            let binding = if let Some(mapping) = &existing_mapping {
                 self.producer
-                    .local_binding(transport_stream_id, &handle, SessionStreamRole::Output)
+                    .local_binding(transport_stream_id, &handle, mapping.role)
+                    .await
+                    .map_err(|error| error.to_string())?
+            } else if local {
+                self.producer
+                    .local_binding(
+                        transport_stream_id,
+                        &handle,
+                        pending.registered_role.unwrap_or(SessionStreamRole::Output),
+                    )
                     .await
                     .map_err(SessionError::from)?
             } else {
-                StreamBindingRecord::foreign(&mapping)
+                StreamBindingRecord {
+                    transport_stream_id,
+                    source: StreamRecordReference::Foreign(handle.clone()),
+                    role: pending
+                        .forwarded
+                        .as_ref()
+                        .map_or(SessionStreamRole::Output, |mapping| mapping.role),
+                }
             };
+            let mapping = existing_mapping.unwrap_or(StreamSessionMappingRecord {
+                transport_stream_id,
+                handle: handle.clone(),
+                role: binding.role,
+            });
+            let role = binding.role;
             self.insert_binding_mapping(binding, mapping)?;
             if let Some(endpoint) = pending.endpoint
                 && !pending.cancelled
@@ -3288,7 +3376,7 @@ impl StreamSession {
                     handle,
                     endpoint,
                     element_type: pending.element_type,
-                    role: SessionStreamRole::Output,
+                    role,
                 });
             }
         }
@@ -3396,7 +3484,7 @@ impl StreamSession {
         }
         if by_transport
             .values()
-            .any(|mapping| mapping.role != SessionStreamRole::Output)
+            .any(|mapping| mapping.role.direction() != SessionStreamRole::Output)
         {
             return Err(SessionError::from(
                 "durable RPC result stream has a non-output role".to_string(),
@@ -4555,7 +4643,7 @@ impl StreamSession {
             .expect("durable stream mapping lock poisoned")
             .iter()
             .filter_map(|(transport_stream_id, mapping)| {
-                (mapping.role == SessionStreamRole::Input
+                (mapping.role.direction() == SessionStreamRole::Input
                     && mapping.handle.producer_environment_id
                         == self.session_key.callee_environment_id
                     && mapping.handle.producer == self.session_key.callee
@@ -4617,6 +4705,15 @@ impl StreamSession {
         responses: &mpsc::Sender<InvocationResponse>,
     ) -> Result<Vec<StreamSessionMappingRecord>, SessionError> {
         let durable_stream_id = handle.stream_id;
+        let role = self
+            .mapping(transport_stream_id)
+            .ok_or_else(|| format!("unknown durable output stream {transport_stream_id}"))?
+            .role;
+        if role.direction() != SessionStreamRole::Output {
+            return Err(SessionError::from(format!(
+                "durable stream {transport_stream_id} is not an output"
+            )));
+        }
         let OutputReplay {
             mappings: mut nested_streams,
             terminal_cursor,
@@ -4638,7 +4735,7 @@ impl StreamSession {
                 StreamSessionMappingRecord {
                     transport_stream_id,
                     handle,
-                    role: SessionStreamRole::Output,
+                    role,
                 },
                 after,
             )
@@ -4987,7 +5084,7 @@ impl StreamSession {
             .expect("durable stream mapping lock poisoned")
             .values()
             .filter_map(|mapping| {
-                if mapping.role != SessionStreamRole::Output {
+                if mapping.role.direction() != SessionStreamRole::Output {
                     return None;
                 }
                 cursors
@@ -5037,7 +5134,7 @@ impl StreamSession {
                 .cloned()
                 .ok_or_else(|| format!("unknown durable input handle index {handle_index}"))?;
             if self.mapping(mapping.transport_stream_id).as_ref() != Some(&mapping)
-                || mapping.role != role
+                || mapping.role.direction() != role.direction()
             {
                 return Err(SessionError::from(format!(
                     "durable input mapping {handle_index} does not match its handle"
@@ -6581,9 +6678,12 @@ impl Drop for DurableInputProducer {
         let Some(drop_event_sink) = &self.drop_event_sink else {
             return;
         };
-        let role = match self.input.role {
+        let role = match self.input.role.direction() {
             SessionStreamRole::Input => StreamCancelRole::InputConsumer,
             SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
+            SessionStreamRole::ToolStdin
+            | SessionStreamRole::ToolStdout
+            | SessionStreamRole::ToolStderr => unreachable!(),
         };
         let _ = drop_event_sink.send(DropEvent::CancelDroppedDurableInput {
             cancellation: Box::new(DroppedDurableInput {
@@ -6614,9 +6714,12 @@ impl DurableInputProducer {
             if !self.dropping {
                 self.dropping = true;
                 self.pending = None;
-                let role = match self.input.role {
+                let role = match self.input.role.direction() {
                     SessionStreamRole::Input => StreamCancelRole::InputConsumer,
                     SessionStreamRole::Output => StreamCancelRole::OutputConsumer,
+                    SessionStreamRole::ToolStdin
+                    | SessionStreamRole::ToolStdout
+                    | SessionStreamRole::ToolStderr => unreachable!(),
                 };
                 let (result, receiver) = oneshot::channel();
                 store.as_context_mut().spawn(DurableInputDropTask {

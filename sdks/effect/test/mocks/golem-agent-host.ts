@@ -248,14 +248,16 @@ export class FutureInvokeResult {
     return new MockPollable(this)
   }
 
-  get(): { tag: "ok"; val: any } | { tag: "err"; val: any } | undefined {
-    if (!this.resolved) return undefined
+  async get(): Promise<any> {
+    this.ensureResolved()
+    await this.readyPromise
     if (this.throwError) {
       const e = this.throwError
       this.throwError = null
       throw e
     }
-    return this.result
+    if (this.result?.tag === "err") throw this.result.val
+    return this.result?.val
   }
 
   cancel(): void {
@@ -344,6 +346,10 @@ class MockPollable {
 }
 
 export class WasmRpc {
+  static create(agentTypeName: string, input: any, phantomId: any, config: ReadonlyArray<any>) {
+    return new WasmRpc(agentTypeName, input, phantomId, config)
+  }
+
   constructor(
     private readonly agentTypeName: string,
     private readonly constructorValue: any,
@@ -405,15 +411,17 @@ export class WasmRpc {
     // fire-and-forget: `err`, `ok`, `pending` results are dropped
   }
 
-  asyncInvokeAndAwait(methodName: string, input: any): FutureInvokeResult {
+  asyncInvokeAndAwait(methodName: string, input: any) {
     const call = this.record("asyncInvokeAndAwait", methodName, input)
-    return new FutureInvokeResult(methodName, () =>
-      responder({
-        agentTypeName: call.agentTypeName,
-        methodName,
-        input,
-      }),
-    )
+    return {
+      metadata: {
+        agentId: this.agentTypeName + "()",
+        idempotencyKey: String(recordedCalls.length),
+      },
+      future: new FutureInvokeResult(methodName, () =>
+        responder({ agentTypeName: call.agentTypeName, methodName, input }),
+      ),
+    }
   }
 
   scheduleInvocation(scheduledTime: any, methodName: string, input: any): void {

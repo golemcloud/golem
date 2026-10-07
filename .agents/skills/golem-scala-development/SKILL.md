@@ -9,7 +9,7 @@ Work from `sdks/scala/` unless a command says repository root. The Scala SDK is 
 
 ## Authoritative build matrix
 
-- JDK 17+, sbt 1.12.x (`project/build.properties` is authoritative)
+- JDK 21+, sbt 1.12.x (`project/build.properties` is authoritative)
 - Scala **3.8.2** for SDK modules and the Mill plugin build
 - Scala **2.12.21** only for sbt 1.x plugin loading and its shared codegen dependency
 - Scala **3.3.7** in the current Mill consumer fixtures; this is fixture configuration, not a general Scala.js limit
@@ -70,7 +70,7 @@ The Scala.js core exposes the current schema-based host surface. Useful authorit
 
 Durable generated clients return plain values/`Unit` plus cancellation tokens where applicable. Ephemeral invocations return metadata-bearing `InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` values. Do not describe the old wasm-rpc resource API without checking these files.
 
-After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.4, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
+After WIT or guest-role changes, sync and regenerate as described by `golem-scala-base-image`. The script uses `wasm-rquickjs` 0.4.6, Preview 3, and `wasm32-wasip2`; generated WASMs are ignored while ordinary-role d.ts files are tracked.
 
 ## Example and end-to-end work
 

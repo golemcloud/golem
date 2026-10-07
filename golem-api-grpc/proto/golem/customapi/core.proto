@@ -54,6 +54,7 @@ message PathSegmentType {
     U8   = 11;
     S8   = 12;
     BOOL = 13;
+    UUID = 14;
   }
 
   message Enum {
@@ -375,6 +376,8 @@ message SecuritySchemeDetails {
   string client_secret = 5;
   string redirect_url = 6;
   repeated string scopes = 7;
+  uint64 revision = 8;
+  string login_config = 9;
 }
 
 message CorsOptions {

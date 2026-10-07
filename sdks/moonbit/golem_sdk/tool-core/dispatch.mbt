@@ -206,6 +206,7 @@ fn value_matches_type(
     @model.SchemaTypeBody::Binary(_) => value is @model.SchemaValue::Binary(_)
     @model.SchemaTypeBody::Path(_) => value is @model.SchemaValue::Path(_)
     @model.SchemaTypeBody::Url(_) => value is @model.SchemaValue::Url(_)
+    @model.SchemaTypeBody::Uuid => value is @model.SchemaValue::Uuid(_)
     @model.SchemaTypeBody::Datetime => value is @model.SchemaValue::Datetime(_)
     @model.SchemaTypeBody::Duration => value is @model.SchemaValue::Duration(_)
     @model.SchemaTypeBody::Quantity(_) =>
@@ -512,21 +513,42 @@ pub async fn[T : @schema.IntoSchema] encode_result_value(
 
 ///|
 pub fn invocation_result_empty() -> @toolCommon.InvocationResult {
-  { result: None, stdout: None, }
+  { result: None, stdout: None, stderr: None, }
+}
+
+///|
+/// Encodes generated concrete results and error payloads without a model value.
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] encode_wire_result(
+  value : T,
+) -> @types.TypedSchemaValue {
+  errdefer @schema.release_wire(value)
+  let graph = @schema.wire_schema((@schema.type_tag() : @schema.TypeTag[T]))
+  let value = @schema.into_wire_async(value) catch {
+    @async-core.Cancelled::Cancelled as error => raise error
+    error => raise @types.ToolError::InvalidResult(repr(error))
+  }
+  { graph, value, }
+}
+
+///|
+pub async fn[T : @schema.WireSchema + @schema.IntoWire] invocation_result_wire(
+  value : T,
+) -> @toolCommon.InvocationResult {
+  { result: Some(encode_wire_result(value)), stdout: None, stderr: None, }
 }
 
 ///|
 pub async fn[T : @schema.IntoSchema] invocation_result_value(
   value : T,
 ) -> @toolCommon.InvocationResult {
-  { result: Some(encode_result_value(value)), stdout: None, }
+  { result: Some(encode_result_value(value)), stdout: None, stderr: None, }
 }
 
 ///|
 pub fn invocation_result_stdout(
   stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult {
-  { result: None, stdout: Some(stdout), }
+  { result: None, stdout: Some(stdout), stderr: None, }
 }
 
 ///|
@@ -535,7 +557,56 @@ pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stdout(
   stdout : @async-core.Stream[Byte],
 ) -> @toolCommon.InvocationResult {
   errdefer stdout.drop_sync()
-  { result: Some(encode_result_value(value)), stdout: Some(stdout), }
+  {
+    result: Some(encode_result_value(value)),
+    stdout: Some(stdout),
+    stderr: None,
+  }
+}
+
+///|
+pub fn invocation_result_stderr(
+  stderr : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult {
+  { result: None, stdout: None, stderr: Some(stderr), }
+}
+
+///|
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_stderr(
+  value : T,
+  stderr : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult {
+  errdefer stderr.drop_sync()
+  {
+    result: Some(encode_result_value(value)),
+    stdout: None,
+    stderr: Some(stderr),
+  }
+}
+
+///|
+pub fn invocation_result_outputs(
+  stdout : @async-core.Stream[Byte],
+  stderr : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult {
+  { result: None, stdout: Some(stdout), stderr: Some(stderr), }
+}
+
+///|
+pub async fn[T : @schema.IntoSchema] invocation_result_value_with_outputs(
+  value : T,
+  stdout : @async-core.Stream[Byte],
+  stderr : @async-core.Stream[Byte],
+) -> @toolCommon.InvocationResult {
+  errdefer {
+    stdout.drop_sync()
+    stderr.drop_sync()
+  }
+  {
+    result: Some(encode_result_value(value)),
+    stdout: Some(stdout),
+    stderr: Some(stderr),
+  }
 }
 
 ///|

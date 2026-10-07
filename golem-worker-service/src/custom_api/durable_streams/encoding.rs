@@ -19,11 +19,11 @@ use super::super::error::RequestHandlerError;
 use super::super::{ResponseBody, RouteExecutionResult};
 use super::expiry::{add_expiry_headers, cache_control};
 use super::response;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{ReadStreamSlotSuccess, stream_slot_item};
 use golem_common::model::OplogIndex;
 use golem_common::model::durable_stream::StreamOffset;
 use golem_common::schema::SchemaValue;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_schema::schema::render::to_json_value;
 use golem_service_base::custom_api::{DurableStreamRepresentation, DurableStreamSlot};
 use http::{HeaderName, HeaderValue, StatusCode};
@@ -267,7 +267,10 @@ fn interval_cursor(
 mod tests {
     use super::*;
     use golem_api_grpc::proto::golem::workerexecutor::v1::StreamSlotItem;
-    use golem_common::schema::{SchemaGraph, SchemaType, schema_value_to_proto_with_streams};
+    use golem_common::schema::{
+        NamedFieldType, ResultSpec, ResultValuePayload, SchemaGraph, SchemaType,
+        schema_value_to_proto_with_streams,
+    };
     use std::str::FromStr;
     use test_r::test;
 
@@ -457,6 +460,75 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(data).unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn json_stream_items_preserve_reserved_looking_application_fields() {
+        let ty = SchemaType::record(vec![
+            NamedFieldType {
+                name: "kind".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "value".into(),
+                body: SchemaType::option(SchemaType::result(ResultSpec {
+                    ok: Some(Box::new(SchemaType::string())),
+                    err: None,
+                })),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "$option".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+            NamedFieldType {
+                name: "$result".into(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ]);
+        let value = SchemaValue::Record {
+            fields: vec![
+                SchemaValue::String("application-field".into()),
+                SchemaValue::Option {
+                    inner: Some(Box::new(SchemaValue::Result(ResultValuePayload::Ok {
+                        value: Some(Box::new(SchemaValue::String("nested".into()))),
+                    }))),
+                },
+                SchemaValue::String("ordinary-option-field".into()),
+                SchemaValue::String("ordinary-result-field".into()),
+            ],
+        };
+        let batch = ReadStreamSlotSuccess {
+            content_type: "application/json".into(),
+            element_schema: Some(SchemaGraph::anonymous(ty).into()),
+            items: vec![StreamSlotItem {
+                offset: Vec::new(),
+                content: Some(stream_slot_item::Content::Value(
+                    schema_value_to_proto_with_streams(value, |stream| {
+                        stream.take_host_endpoint::<u64>()
+                    })
+                    .unwrap()
+                    .encode_to_vec(),
+                )),
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(
+                &render_items(&batch, DurableStreamRepresentation::Json).unwrap(),
+            )
+            .unwrap(),
+            serde_json::json!([{
+                "kind": "application-field",
+                "value": { "ok": "nested" },
+                "$option": "ordinary-option-field",
+                "$result": "ordinary-result-field"
+            }])
         );
     }
 

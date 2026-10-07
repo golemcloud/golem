@@ -233,7 +233,7 @@ fn check_type(
         None => ()
       }
     // Leaves with no structural constraints: primitives, Char, String,
-    // Datetime, Duration, Path, Url, QuotaToken.
+    // Uuid, Datetime, Duration, Path, Url, QuotaToken.
     _ => ()
   }
 }
@@ -301,7 +301,8 @@ fn is_primitive_key(body : SchemaTypeBody) -> Bool {
     | F32(_)
     | F64(_)
     | Char
-    | String => true
+    | String
+    | Uuid => true
     _ => false
   }
 }

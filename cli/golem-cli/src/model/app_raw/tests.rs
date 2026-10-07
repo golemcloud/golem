@@ -99,6 +99,10 @@ fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
     .boxed()
 }
 
+fn arb_guest_language_model() -> BoxedStrategy<GuestLanguage> {
+    prop::sample::select(GuestLanguage::iter().collect::<Vec<_>>()).boxed()
+}
+
 fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
     prop_oneof![
         Just(VecMergeMode::Append),
@@ -492,7 +496,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
-        arb_token_list_model(),
+        (arb_token_list_model(), arb_opt(arb_guest_language_model())),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -529,7 +533,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     )
         .prop_map(
             |(
-                templates,
+                (templates, guest_language),
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
@@ -539,6 +543,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 presets,
             )| ComponentTemplate {
                 templates,
+                guest_language,
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
@@ -1151,11 +1156,117 @@ fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> 
         .boxed()
 }
 
+fn arb_rust_bridge_sdk_language_targets() -> BoxedStrategy<RustBridgeSdkLanguageTargets> {
+    (
+        arb_opt(
+            (
+                arb_bridge_sdk_external_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkExternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+        arb_opt(
+            (
+                arb_bridge_sdk_internal_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkInternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+    )
+        .prop_map(|(external, internal)| RustBridgeSdkLanguageTargets { external, internal })
+        .boxed()
+}
+
+fn arb_rust_bridge_derives() -> BoxedStrategy<Vec<String>> {
+    prop::collection::vec(
+        (arb_ident(), arb_ident()).prop_map(|(pattern, derive)| format!("^{pattern}={derive}")),
+        0..=2,
+    )
+    .boxed()
+}
+
+fn arb_rust_bridge_dependencies() -> BoxedStrategy<BTreeMap<String, RustBridgeDependency>> {
+    let version = arb_ident().prop_map(RustBridgeDependency::Version);
+    let common = || {
+        (
+            arb_opt(arb_ident()),
+            prop::collection::vec(arb_ident(), 0..=2),
+            any::<Option<bool>>(),
+        )
+    };
+    let detailed_version =
+        (arb_ident(), common()).prop_map(|(version, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                version: Some(version),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_path =
+        (arb_ident(), common()).prop_map(|(path, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                path: Some(path),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_git = (
+        arb_ident(),
+        common(),
+        prop_oneof![
+            Just((None, None, None)),
+            arb_ident().prop_map(|value| (Some(value), None, None)),
+            arb_ident().prop_map(|value| (None, Some(value), None)),
+            arb_ident().prop_map(|value| (None, None, Some(value))),
+        ],
+    )
+        .prop_map(
+            |(git, (package, features, default_features), (branch, tag, rev))| {
+                RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                    git: Some(git),
+                    package,
+                    features,
+                    default_features,
+                    branch,
+                    tag,
+                    rev,
+                    ..Default::default()
+                })
+            },
+        );
+    prop::collection::btree_map(
+        arb_ident(),
+        prop_oneof![version, detailed_version, detailed_path, detailed_git],
+        0..=2,
+    )
+    .boxed()
+}
+
 fn arb_bridge_sdks_model() -> BoxedStrategy<BridgeSdks> {
     (
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
-        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_rust_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
     )
@@ -1558,6 +1669,48 @@ fn schema_and_serde_accept_inherited_component_config_schema() {
     });
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
     serde_json::from_value::<Application>(value).unwrap();
+}
+
+#[test]
+fn schema_and_serde_accept_component_template_guest_language() {
+    for language in GuestLanguage::iter() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language.id()}}
+        });
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value), "{}", language.id());
+        let app = serde_json::from_value::<Application>(value.clone()).unwrap();
+        assert_eq!(
+            app.component_templates["custom"].guest_language,
+            Some(language)
+        );
+        assert_eq!(serde_json::to_value(&app).unwrap(), value);
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_unknown_component_template_guest_language() {
+    for language in ["typescript", "TypeScript", "java"] {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language}}
+        });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value), "{language}");
+        assert!(
+            serde_json::from_value::<Application>(value).is_err(),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_component_guest_language() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "components": {"app:main": {"componentWasm": "main.wasm", "guestLanguage": "ts"}}
+    });
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
 }
 
 #[test]
@@ -2137,9 +2290,61 @@ fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
     let rust = app.bridge.unwrap().rust.unwrap();
     let external = rust.external.unwrap();
 
-    assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
-    assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+    assert_eq!(
+        external.common.agents.into_vec(),
+        vec!["CounterAgent".to_string()]
+    );
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
     assert!(rust.internal.is_none());
+}
+
+#[test]
+fn rust_bridge_configuration_roundtrips_and_is_rejected_for_other_languages() {
+    let source = r#"
+app: test-app
+bridge:
+  rust:
+    external:
+      agents: "*"
+      additionalDerives:
+        - '^Order=serde::Serialize,custom::Marker'
+      additionalDependencies:
+        custom: { path: ../custom, package: custom-derive, features: [extra], defaultFeatures: false }
+        anyhow: "1"
+"#;
+    let app = Application::from_yaml_str(source).unwrap();
+    let serialized = serde_yaml::to_string(&app).unwrap();
+    let reparsed = Application::from_yaml_str(&serialized).unwrap();
+    let external = reparsed.bridge.unwrap().rust.unwrap().external.unwrap();
+    assert_eq!(external.additional_derives.len(), 1);
+    assert_eq!(external.additional_dependencies.len(), 2);
+    assert!(
+        JSON_SCHEMA_VALIDATOR.is_valid(&serde_yaml::from_str::<serde_json::Value>(source).unwrap())
+    );
+
+    let non_rust = source.replace("  rust:", "  ts:");
+    assert!(Application::from_yaml_str(&non_rust).is_err());
+    assert!(
+        !JSON_SCHEMA_VALIDATOR
+            .is_valid(&serde_yaml::from_str::<serde_json::Value>(&non_rust).unwrap())
+    );
+
+    for invalid_dependency in [
+        "{ version: '1', path: ../custom }",
+        "{ version: '1', branch: main }",
+        "{ git: https://example.test/repo, branch: main, tag: v1 }",
+        "{ workspace: true }",
+        "{ version: '1', optional: true }",
+    ] {
+        let invalid = format!(
+            "app: test-app\nbridge:\n  rust:\n    external:\n      agents: '*'\n      additionalDependencies:\n        custom: {invalid_dependency}\n"
+        );
+        assert!(
+            !JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&invalid).unwrap()),
+            "schema accepted {invalid_dependency}"
+        );
+    }
 }
 
 #[test]
@@ -2164,12 +2369,18 @@ fn bridge_rust_guest_parses_as_guest_bridge_targets() {
     let guest = rust.internal.unwrap();
 
     assert_eq!(
-        external.agents.into_vec(),
+        external.common.agents.into_vec(),
         vec!["ExternalAgent".to_string()]
     );
-    assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
-    assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
-    assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
+    assert_eq!(
+        guest.common.agents.into_vec(),
+        vec!["GuestAgent".to_string()]
+    );
+    assert_eq!(
+        guest.common.output_dir.as_deref(),
+        Some("bridge/rust-guest")
+    );
 }
 
 #[test]

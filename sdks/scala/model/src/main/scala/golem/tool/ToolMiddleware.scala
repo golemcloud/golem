@@ -47,7 +47,8 @@ final case class ToolMiddlewareMethodBinding(
 
 final case class ToolMiddlewareResult(
   result: Option[TypedSchemaValue],
-  stdout: Option[ToolMiddlewareOutputHandle]
+  stdout: Option[ToolMiddlewareOutputHandle],
+  stderr: Option[ToolMiddlewareOutputHandle]
 )
 
 sealed trait ToolMiddlewareParamDecoder extends Product with Serializable
@@ -104,6 +105,7 @@ trait RawToolUnderlying {
       Future.successful(
         ToolUnderlyingAdmission(
           None,
+          None,
           () => terminal,
           () => (),
           () => ()
@@ -127,26 +129,59 @@ object ToolUnderlyingError {
  * One independently observable invocation of the next middleware-chain layer.
  */
 final case class ToolUnderlyingInvocation[+E, +A](
-  admission: Future[ToolUnderlyingAdmission[E, A]]
+  private val underlyingAdmission: Future[ToolUnderlyingAdmission[E, A]],
+  private val onObserve: () => Unit = () => ()
 ) {
+  def admission: Future[ToolUnderlyingAdmission[E, A]] = {
+    onObserve()
+    underlyingAdmission
+  }
+
+  private[golem] def mapAdmission[E2, A2](
+    f: ToolUnderlyingAdmission[E, A] => ToolUnderlyingAdmission[E2, A2]
+  ): ToolUnderlyingInvocation[E2, A2] =
+    ToolUnderlyingInvocation(
+      underlyingAdmission.map(f)(ToolInvokerRuntime.executionContext),
+      onObserve
+    )
+
   def toMiddlewareResult: Future[Either[ToolInvokeError[E], A]] =
-    admission
-      .flatMap(_.result)(ToolInvokerRuntime.executionContext)
-      .map {
-        case Right(value)                                     => Right(value)
-        case Left(ToolUnderlyingError.Tool(error))            => Left(error)
-        case Left(ToolUnderlyingError.ProtocolError(message)) => Left(ToolInvokeError.ProtocolError(message))
-        case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
-        case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
-        case Left(ToolUnderlyingError.Cancelled)              =>
-          Left(ToolInvokeError.Cancelled)
-        case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
-          Left(ToolInvokeError.ResourceExhausted(message))
-      }(ToolInvokerRuntime.executionContext)
+    admission.flatMap { admitted =>
+      implicit val ec: scala.concurrent.ExecutionContext = ToolInvokerRuntime.executionContext
+      val result                                         = admitted.result
+        .map(Right(_): Either[Throwable, Either[ToolUnderlyingError[E], A]])
+        .recover { case error => Left(error) }
+      val stdout = admitted.stdout
+        .fold(Future.successful(()))(_.drained)
+        .map(Right(_): Either[Throwable, Unit])
+        .recover { case error => Left(error) }
+      val stderr = admitted.stderr
+        .fold(Future.successful(()))(_.drained)
+        .map(Right(_): Either[Throwable, Unit])
+        .recover { case error => Left(error) }
+      result.zip(stdout).zip(stderr).flatMap {
+        case ((Left(error), _), _)                                             => Future.failed(error)
+        case ((Right(Left(ToolUnderlyingError.Tool(error))), _), _)            => Future.successful(Left(error))
+        case ((Right(Left(ToolUnderlyingError.ProtocolError(message))), _), _) =>
+          Future.successful(Left(ToolInvokeError.ProtocolError(message)))
+        case ((Right(Left(ToolUnderlyingError.Denied(message))), _), _) =>
+          Future.successful(Left(ToolInvokeError.Denied(message)))
+        case ((Right(Left(ToolUnderlyingError.InternalError(message))), _), _) =>
+          Future.successful(Left(ToolInvokeError.InternalError(message)))
+        case ((Right(Left(ToolUnderlyingError.Cancelled)), _), _) =>
+          Future.successful(Left(ToolInvokeError.Cancelled))
+        case ((Right(Left(ToolUnderlyingError.ResourceExhausted(message))), _), _) =>
+          Future.successful(Left(ToolInvokeError.ResourceExhausted(message)))
+        case ((_, Left(error)), _)         => Future.failed(error)
+        case ((_, _), Left(error))         => Future.failed(error)
+        case ((Right(Right(value)), _), _) => Future.successful(Right(value))
+      }
+    }(ToolInvokerRuntime.executionContext)
 }
 
 final case class ToolUnderlyingAdmission[+E, +A](
   stdout: Option[ToolMiddlewareOutputHandle],
+  stderr: Option[ToolMiddlewareOutputHandle],
   startResult: () => Future[Either[ToolUnderlyingError[E], A]],
   cancel: () => Unit,
   drop: () => Unit
@@ -175,9 +210,9 @@ object ToolMiddlewareInvokerRuntime {
     parameters: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
     principal: Principal,
-    validateFinalStdout: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
+    validateFinalOutput: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
-    ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalStdout) { underlying =>
+    ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalOutput) { underlying =>
       handle.descriptor(new ToolBuildCtx) match {
         case Left(error) =>
           failed(ToolInvokeError.InvalidInput(s"tool middleware descriptor build failed: ${error.message}"))
@@ -384,8 +419,15 @@ object ToolMiddlewareInvokerRuntime {
           case (true, false)  => Left("tool result did not contain declared stdout stream")
           case (true, true)   => Right(())
         }
+        val stderrValidation = (body.stderr.isDefined, result.stderr.isDefined) match {
+          case (false, false) => Right(())
+          case (false, true)  => Left("tool result unexpectedly contained stderr stream")
+          case (true, false)  => Left("tool result did not contain declared stderr stream")
+          case (true, true)   => Right(())
+        }
         valueValidation
           .flatMap(_ => stdoutValidation)
+          .flatMap(_ => stderrValidation)
           .left
           .map(ToolInvokeError.InvalidResult.apply)
     }
@@ -485,19 +527,38 @@ object ToolMiddlewareInvokerRuntime {
     }
 
   def encodeUnit: Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
-    Right(ToolMiddlewareResult(None, None))
+    Right(ToolMiddlewareResult(None, None, None))
 
   def encodeValue[A](
     value: A,
     into: golem.schema.IntoSchema[A]
   ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
-    Right(ToolMiddlewareResult(Some(into.toTyped(value)), None))
+    Right(ToolMiddlewareResult(Some(into.toTyped(value)), None, None))
 
   def encodeStdout(
     stdout: ToolMiddlewareOutputHandle,
     scoped: RawToolUnderlying
   ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
-    Right(ToolMiddlewareResult(None, Some(ToolMiddlewareOwnershipRuntime.registerFinalStdout(scoped, stdout))))
+    Right(ToolMiddlewareResult(None, Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stdout)), None))
+
+  def encodeStderr(
+    stderr: ToolMiddlewareOutputHandle,
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
+    Right(ToolMiddlewareResult(None, None, Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stderr))))
+
+  def encodeOutputs(
+    stdout: ToolMiddlewareOutputHandle,
+    stderr: ToolMiddlewareOutputHandle,
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
+    Right(
+      ToolMiddlewareResult(
+        None,
+        Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stdout)),
+        Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stderr))
+      )
+    )
 
   def encodeValueStdout[A](
     value: A,
@@ -505,9 +566,59 @@ object ToolMiddlewareInvokerRuntime {
     into: golem.schema.IntoSchema[A],
     scoped: RawToolUnderlying
   ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] = {
-    val tracked = ToolMiddlewareOwnershipRuntime.registerFinalStdout(scoped, stdout)
-    Right(ToolMiddlewareResult(Some(into.toTyped(value)), Some(tracked)))
+    val tracked = ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stdout)
+    Right(ToolMiddlewareResult(Some(into.toTyped(value)), Some(tracked), None))
   }
+
+  def encodeValueStderr[A](
+    value: A,
+    stderr: ToolMiddlewareOutputHandle,
+    into: golem.schema.IntoSchema[A],
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] = {
+    val tracked = ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stderr)
+    Right(ToolMiddlewareResult(Some(into.toTyped(value)), None, Some(tracked)))
+  }
+
+  def encodeValueOutputs[A](
+    value: A,
+    stdout: ToolMiddlewareOutputHandle,
+    stderr: ToolMiddlewareOutputHandle,
+    into: golem.schema.IntoSchema[A],
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
+    Right(
+      ToolMiddlewareResult(
+        Some(into.toTyped(value)),
+        Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stdout)),
+        Some(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, stderr))
+      )
+    )
+
+  def encodeOutputResult(
+    outputs: ToolMiddlewareOutputs[Unit],
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
+    Right(
+      ToolMiddlewareResult(
+        None,
+        outputs.stdout.map(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, _)),
+        outputs.stderr.map(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, _))
+      )
+    )
+
+  def encodeValueOutputResult[A](
+    outputs: ToolMiddlewareOutputs[A],
+    into: golem.schema.IntoSchema[A],
+    scoped: RawToolUnderlying
+  ): Either[ToolInvokeError[Nothing], ToolMiddlewareResult] =
+    Right(
+      ToolMiddlewareResult(
+        Some(into.toTyped(outputs.result)),
+        outputs.stdout.map(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, _)),
+        outputs.stderr.map(ToolMiddlewareOwnershipRuntime.registerFinalOutput(scoped, _))
+      )
+    )
 
   private def failed[A](
     error: ToolInvokeError[TypedSchemaValue]
@@ -556,26 +667,33 @@ object ToolUnderlyingRuntime {
         val commandIndex = tool.commandIndexByPath(commandPath)
         if (commandIndex.isEmpty)
           return completed(Left(ToolInvokeError.InvalidCommandPath(commandPath)))
+        def validate(
+          outcome: Either[ToolUnderlyingError[TypedSchemaValue], ToolMiddlewareResult]
+        ): Either[ToolUnderlyingError[E], ToolMiddlewareResult] = outcome match {
+          case Left(ToolUnderlyingError.Tool(error)) =>
+            Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+          case Left(error: ToolUnderlyingError.ProtocolError)     => Left(error)
+          case Left(error: ToolUnderlyingError.Denied)            => Left(error)
+          case Left(error: ToolUnderlyingError.InternalError)     => Left(error)
+          case Left(ToolUnderlyingError.Cancelled)                => Left(ToolUnderlyingError.Cancelled)
+          case Left(error: ToolUnderlyingError.ResourceExhausted) => Left(error)
+          case Right(result)                                      =>
+            ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, Right(result)) match {
+              case Right(valid) => Right(valid)
+              case Left(error)  => Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
+            }
+        }
+
         val started = underlying.start(commandPath, value, stdin)
-        ToolUnderlyingInvocation(started.admission.map { admission =>
-          admission.copy(startResult =
-            () =>
-              admission.result.map {
-                case Left(ToolUnderlyingError.Tool(error)) =>
-                  Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
-                case Left(error: ToolUnderlyingError.ProtocolError)     => Left(error)
-                case Left(error: ToolUnderlyingError.Denied)            => Left(error)
-                case Left(error: ToolUnderlyingError.InternalError)     => Left(error)
-                case Left(ToolUnderlyingError.Cancelled)                => Left(ToolUnderlyingError.Cancelled)
-                case Left(error: ToolUnderlyingError.ResourceExhausted) => Left(error)
-                case Right(result)                                      =>
-                  ToolMiddlewareInvokerRuntime.validateOutcome(tool, commandIndex.get, Right(result)) match {
-                    case Right(valid) => Right(valid)
-                    case Left(error)  => Left(ToolUnderlyingError.Tool(mapDeclared(error, decodeError)))
-                  }
-              }
+        started.mapAdmission(admission =>
+          ToolUnderlyingAdmission(
+            admission.stdout,
+            admission.stderr,
+            () => admission.result.map(validate),
+            admission.cancel,
+            admission.drop
           )
-        })
+        )
     }
 
   private def mapDeclared[E](
@@ -599,6 +717,7 @@ object ToolUnderlyingRuntime {
     ToolUnderlyingInvocation(
       Future.successful(
         ToolUnderlyingAdmission(
+          None,
           None,
           () => Future.successful(value.left.map(ToolUnderlyingError.Tool(_))),
           () => (),
@@ -626,14 +745,12 @@ object ToolUnderlyingRuntime {
   def complete[E, T](call: ToolUnderlyingInvocation[E, ToolMiddlewareResult])(
     decode: ToolMiddlewareResult => Either[ToolError[Nothing], T]
   ): ToolUnderlyingInvocation[E, T] =
-    ToolUnderlyingInvocation(
-      call.admission.map(admission =>
-        admission.copy(startResult =
-          () =>
-            admission.result.map(
-              _.flatMap(result => decode(result).left.map(error => ToolUnderlyingError.Tool(resultError(error))))
-            )
-        )
+    call.mapAdmission(admission =>
+      admission.copy(startResult =
+        () =>
+          admission.result.map(
+            _.flatMap(result => decode(result).left.map(error => ToolUnderlyingError.Tool(resultError(error))))
+          )
       )
     )
 
@@ -783,9 +900,9 @@ object UniversalToolMiddlewareInvokerRuntime {
     input: TypedSchemaValue,
     stdin: Option[ToolMiddlewareInputHandle],
     principal: Principal,
-    validateFinalStdout: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
+    validateFinalOutput: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
-    ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalStdout) { scoped =>
+    ToolMiddlewareOwnershipRuntime.withInvocationScopedUnderlying(wrapped, stdin, validateFinalOutput) { scoped =>
       val instance = handle.newInstance()
       ToolMiddlewareInvokerRuntime.validateRawInput(input) match {
         case Left(error)                                                                                    => Future.successful(Left(error))
@@ -854,7 +971,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
   def withInvocationScopedUnderlying(
     raw: RawToolUnderlying,
     stdin: Option[ToolMiddlewareInputHandle],
-    validateFinalStdout: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
+    validateFinalOutput: ToolMiddlewareOutputHandle => Either[String, Unit] = _ => Right(())
   )(
     invoke: RawToolUnderlying => Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]]
   ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] = {
@@ -869,9 +986,20 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     outcome.transformWith { completed =>
       val result = completed.flatMap {
         case Right(value) =>
-          Try(ownership.validateStdout(value.stdout, validateFinalStdout)).flatMap {
+          Try(
+            for {
+              _ <- ownership.validateOutput(value.stdout, validateFinalOutput)
+              _ <- ownership.validateOutput(value.stderr, validateFinalOutput)
+            } yield ()
+          ).flatMap {
             case Left(message) => Success(Left(ToolInvokeError.InvalidResult(message)))
-            case Right(_)      => Try(value.copy(stdout = ownership.releaseStdout(value.stdout))).map(Right(_))
+            case Right(_)      =>
+              Try(
+                value.copy(
+                  stdout = ownership.releaseOutput(value.stdout),
+                  stderr = ownership.releaseOutput(value.stderr)
+                )
+              ).map(Right(_))
           }
         case failure => Success(failure)
       }
@@ -896,12 +1024,12 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
       case _                                      => validate(outcome)
     }
 
-  def registerFinalStdout(
+  def registerFinalOutput(
     scoped: RawToolUnderlying,
     stream: ToolMiddlewareOutputHandle
   ): ToolMiddlewareOutputHandle =
     scoped match {
-      case invocation: InvocationScopedUnderlying => invocation.trackFinalStdout(stream)
+      case invocation: InvocationScopedUnderlying => invocation.trackFinalOutput(stream)
       case _                                      => stream
     }
 
@@ -910,26 +1038,44 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     ownership: InvocationOwnership
   ) extends RawToolUnderlying {
     private type Admission = ToolUnderlyingAdmission[TypedSchemaValue, ToolMiddlewareResult]
+    private final case class ActiveInvocation(admission: Promise[Admission], var observed: Boolean)
 
     private var revoked           = false
-    private val activeInvocations = mutable.ListBuffer.empty[Promise[Admission]]
+    private val activeInvocations = mutable.ListBuffer.empty[ActiveInvocation]
 
     def invoke(
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolMiddlewareInputHandle]
     ): Future[Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]] =
-      start(commandPath, input, stdin).admission.flatMap { admission =>
-        admission.result.map {
-          case Right(value)                                     => Right(value)
-          case Left(ToolUnderlyingError.Tool(error))            => Left(error)
-          case Left(ToolUnderlyingError.ProtocolError(message)) => Left(ToolInvokeError.ProtocolError(message))
-          case Left(ToolUnderlyingError.Denied(message))        => Left(ToolInvokeError.Denied(message))
-          case Left(ToolUnderlyingError.InternalError(message)) => Left(ToolInvokeError.InternalError(message))
-          case Left(ToolUnderlyingError.Cancelled)              =>
-            Left(ToolInvokeError.Cancelled)
-          case Left(ToolUnderlyingError.ResourceExhausted(message)) =>
-            Left(ToolInvokeError.ResourceExhausted(message))
+      start(commandPath, input, stdin, observed = true).admission.flatMap { admission =>
+        val result = admission.result
+          .map(Right(_): Either[Throwable, Either[ToolUnderlyingError[TypedSchemaValue], ToolMiddlewareResult]])
+          .recover { case error => Left(error) }
+        val stdout = admission.stdout
+          .fold(Future.successful(()))(_.drained)
+          .map(Right(_): Either[Throwable, Unit])
+          .recover { case error => Left(error) }
+        val stderr = admission.stderr
+          .fold(Future.successful(()))(_.drained)
+          .map(Right(_): Either[Throwable, Unit])
+          .recover { case error => Left(error) }
+        result.zip(stdout).zip(stderr).flatMap {
+          case ((Left(error), _), _)                                             => Future.failed(error)
+          case ((Right(Left(ToolUnderlyingError.Tool(error))), _), _)            => Future.successful(Left(error))
+          case ((Right(Left(ToolUnderlyingError.ProtocolError(message))), _), _) =>
+            Future.successful(Left(ToolInvokeError.ProtocolError(message)))
+          case ((Right(Left(ToolUnderlyingError.Denied(message))), _), _) =>
+            Future.successful(Left(ToolInvokeError.Denied(message)))
+          case ((Right(Left(ToolUnderlyingError.InternalError(message))), _), _) =>
+            Future.successful(Left(ToolInvokeError.InternalError(message)))
+          case ((Right(Left(ToolUnderlyingError.Cancelled)), _), _) =>
+            Future.successful(Left(ToolInvokeError.Cancelled))
+          case ((Right(Left(ToolUnderlyingError.ResourceExhausted(message))), _), _) =>
+            Future.successful(Left(ToolInvokeError.ResourceExhausted(message)))
+          case ((_, Left(error)), _)         => Future.failed(error)
+          case ((_, _), Left(error))         => Future.failed(error)
+          case ((Right(Right(value)), _), _) => Future.successful(Right(value))
         }
       }
 
@@ -937,6 +1083,14 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
       commandPath: List[String],
       input: TypedSchemaValue,
       stdin: Option[ToolMiddlewareInputHandle]
+    ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] =
+      start(commandPath, input, stdin, observed = false)
+
+    private def start(
+      commandPath: List[String],
+      input: TypedSchemaValue,
+      stdin: Option[ToolMiddlewareInputHandle],
+      observed: Boolean
     ): ToolUnderlyingInvocation[TypedSchemaValue, ToolMiddlewareResult] = {
       val completion = {
         if (revoked)
@@ -944,7 +1098,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
             Future.failed(new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.Revoked))
           )
         val result = Promise[Admission]()
-        activeInvocations += result
+        activeInvocations += ActiveInvocation(result, observed)
         result
       }
 
@@ -953,6 +1107,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
           case Left(error) =>
             Future.successful(
               ToolUnderlyingAdmission(
+                None,
                 None,
                 () => Future.successful(Left(ToolUnderlyingError.Tool(error))),
                 () => (),
@@ -964,13 +1119,18 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
               ownership.forwardStdin(stdin)
               val started = raw.start(commandPath, input, stdin)
               started.admission.map { admission =>
-                val trackedStdout = admission.stdout.map(ownership.trackStdout)
+                val trackedStdout = admission.stdout.map(ownership.trackOutput)
+                val trackedStderr = admission.stderr.map(ownership.trackOutput)
                 admission.copy(
                   stdout = trackedStdout,
+                  stderr = trackedStderr,
                   startResult = () =>
                     admission.result.map {
                       case Right(value) =>
-                        val merged = value.copy(stdout = trackedStdout.orElse(value.stdout))
+                        val merged = value.copy(
+                          stdout = trackedStdout.orElse(value.stdout),
+                          stderr = trackedStderr.orElse(value.stderr)
+                        )
                         ownership.trackAndValidate(Right(merged)).left.map(ToolUnderlyingError.Tool(_))
                       case Left(error) => Left(error)
                     }
@@ -983,16 +1143,31 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
       invocation.onComplete { result =>
         completion.tryComplete(result)
       }
-      ToolUnderlyingInvocation(completion.future)
+      val active = activeInvocations.last
+      ToolUnderlyingInvocation(completion.future, () => active.observed = true)
     }
 
     def revokeAdmission(): Unit = revoked = true
 
     def drain(): Future[Unit] =
       Future
-        .sequence(activeInvocations.toList.map(_.future.map { admission =>
-          admission.drop()
-        }.recover { case _ => () }))
+        .sequence(
+          activeInvocations.toList.map(active =>
+            active.admission.future.flatMap { admission =>
+              if (!active.observed) {
+                admission.drop()
+                Future.successful(())
+              } else {
+                val result = admission.result.map(_ => ()).recover { case _ => () }
+                val stdout = admission.stdout.fold(Future.successful(()))(_.drained.recover { case _ => () })
+                val stderr = admission.stderr.fold(Future.successful(()))(_.drained.recover { case _ => () })
+                Future.sequence(List(result, stdout, stderr)).map { _ =>
+                  admission.drop()
+                }
+              }
+            }.recover { case _ => () }
+          )
+        )
         .map(_ => ())
 
     def trackFinal(
@@ -1000,13 +1175,13 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     ): Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult] =
       ownership.track(outcome)
 
-    def trackFinalStdout(stream: ToolMiddlewareOutputHandle): ToolMiddlewareOutputHandle =
-      ownership.trackStdout(stream)
+    def trackFinalOutput(stream: ToolMiddlewareOutputHandle): ToolMiddlewareOutputHandle =
+      ownership.trackOutput(stream)
   }
 
   private final class InvocationOwnership(outerStdin: Option[ToolMiddlewareInputHandle]) {
     private val transferred           = mutable.ListBuffer.empty[AnyRef]
-    private val stdout                = mutable.ListBuffer.empty[(ToolMiddlewareOutputHandle, TrackedOutputHandle)]
+    private val outputs               = mutable.ListBuffer.empty[(ToolMiddlewareOutputHandle, TrackedOutputHandle)]
     private var outerStdinTransferred = false
 
     def forwardStdin(stream: Option[ToolMiddlewareInputHandle]): Unit =
@@ -1020,22 +1195,27 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     def track(
       outcome: Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult]
     ): Either[ToolInvokeError[TypedSchemaValue], ToolMiddlewareResult] =
-      outcome.map(result => result.copy(stdout = result.stdout.map(trackStdout)))
+      outcome.map(result =>
+        result.copy(
+          stdout = result.stdout.map(trackOutput),
+          stderr = result.stderr.map(trackOutput)
+        )
+      )
 
-    def validateStdout(
+    def validateOutput(
       stream: Option[ToolMiddlewareOutputHandle],
       validate: ToolMiddlewareOutputHandle => Either[String, Unit]
     ): Either[String, Unit] =
       stream match {
-        case Some(value) => validate(trackStdout(value).release())
+        case Some(value) => validate(trackOutput(value).release())
         case None        => Right(())
       }
 
-    def releaseStdout(
+    def releaseOutput(
       stream: Option[ToolMiddlewareOutputHandle]
     ): Option[ToolMiddlewareOutputHandle] =
       stream.map { value =>
-        val tracked = trackStdout(value)
+        val tracked = trackOutput(value)
         transfer(tracked)
         tracked.release()
       }
@@ -1043,17 +1223,17 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
     def dispose(): Future[Unit] = {
       val actions = {
         val inputs = outerStdin.filterNot(_ => outerStdinTransferred).toList.map(stream => () => stream.close())
-        inputs ++ stdout.toList.map { case (_, stream) => () => stream.disposeIfOwned() }
+        inputs ++ outputs.toList.map { case (_, stream) => () => stream.disposeIfOwned() }
       }
       Future.sequence(actions.map(action => cleanup(action()))).map(_ => ())
     }
 
-    def trackStdout(stream: ToolMiddlewareOutputHandle): TrackedOutputHandle =
-      stdout.collectFirst {
+    def trackOutput(stream: ToolMiddlewareOutputHandle): TrackedOutputHandle =
+      outputs.collectFirst {
         case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
       }.getOrElse {
         val tracked = new TrackedOutputHandle(stream)
-        stdout += ((stream, tracked))
+        outputs += ((stream, tracked))
         tracked
       }
 
@@ -1062,7 +1242,7 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
         throw new ToolUnderlyingMisuseException(ToolUnderlyingMisuse.StreamAlreadyTransferred)
       transferred += stream
       if (outerStdin.exists(_ eq stream)) outerStdinTransferred = true
-      stdout.collectFirst {
+      outputs.collectFirst {
         case (raw, tracked) if (raw eq stream) || (tracked eq stream) => tracked
       }.foreach(_.transfer())
     }
@@ -1087,6 +1267,8 @@ private[golem] object ToolMiddlewareOwnershipRuntime {
         closed = true
         underlying.close()
       }
+
+    override private[golem] def drained: Future[Unit] = underlying.drained
   }
 
   private def cleanup(action: => Future[Unit]): Future[Unit] =

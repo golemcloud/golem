@@ -14,7 +14,7 @@
 
 import { makeAgentId, parseAgentId } from 'golem:agent/host@2.0.0';
 import { Uuid } from './uuid';
-import { Uuid as RawUuid } from 'golem:core/types@2.0.0';
+import { Uuid as RawUuid, type SchemaValueTree } from 'golem:core/types@2.0.0';
 import { SchemaValue, schemaValueFromWit, schemaValueToWit } from './internal/schema-model';
 import { DynamicAgentClient, type DynamicAgentClientSurface } from './dynamicClient';
 
@@ -63,6 +63,7 @@ export class ParsedAgentId {
   readonly value: string;
 
   parsedCache: [string, SchemaValue, Uuid | undefined] | undefined = undefined;
+  private wireCache: [string, SchemaValueTree, Uuid | undefined] | undefined;
 
   constructor(agentId: string) {
     this.value = agentId;
@@ -86,14 +87,19 @@ export class ParsedAgentId {
    */
   parsed(): [string, SchemaValue, Uuid | undefined] {
     if (!this.parsedCache) {
-      const [typeName, typedParams, rawPhantomId] = parseAgentId(this.value);
-      this.parsedCache = [
-        typeName,
-        schemaValueFromWit(typedParams.value),
-        rawPhantomId ? Uuid.from(rawPhantomId) : undefined,
-      ];
+      const [typeName, parameters, phantomId] = this.parsedWire();
+      this.parsedCache = [typeName, schemaValueFromWit(parameters), phantomId];
     }
     return this.parsedCache;
+  }
+
+  /** @internal Identity decoding for generated invocation and snapshot dispatch. */
+  parsedWire(): [string, SchemaValueTree, Uuid | undefined] {
+    if (!this.wireCache) {
+      const [typeName, parameters, phantomId] = parseAgentId(this.value);
+      this.wireCache = [typeName, parameters.value, phantomId ? Uuid.from(phantomId) : undefined];
+    }
+    return this.wireCache;
   }
 
   /** Return the semantic parts of this environment-scoped identity. */

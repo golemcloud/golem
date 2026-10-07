@@ -895,7 +895,7 @@ pub(super) async fn holds_initial_file<Adapter: SandboxFilesystemAdapter>(
 
 /// What the attributes of an object tell about whether it is the initial file of `declared`.
 #[derive(Debug, Eq, PartialEq)]
-enum InitialFileMatch<'a> {
+pub(super) enum InitialFileMatch<'a> {
     /// The object is not the initial file of `declared`.
     Differs,
     /// The object is the initial file of `declared`.
@@ -910,7 +910,7 @@ enum InitialFileMatch<'a> {
 /// or that has another size is not the initial file of `declared`. An object that matches
 /// `installed` is the initial file of `declared`. Any other object is the initial file of
 /// `declared` only when its content has the declared hash.
-fn initial_file_match<'a>(
+pub(super) fn initial_file_match<'a>(
     declared: &'a InitialAgentFile,
     installed: Option<&InstalledFile>,
     attributes: &SandboxAttributes,
@@ -929,7 +929,7 @@ fn initial_file_match<'a>(
 }
 
 /// Computes the content hash of the regular file at `path`.
-async fn content_hash<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn content_hash<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
 ) -> Result<blake3::Hash, FilesystemStorageError> {
@@ -1034,7 +1034,7 @@ impl PathReader {
 
 /// Reads the attributes of the object at the root-relative `path` without following a final
 /// symlink, or gives `None` when nothing is at the path.
-async fn read_path<Adapter: SandboxFilesystemAdapter>(
+pub(super) async fn read_path<Adapter: SandboxFilesystemAdapter>(
     sandbox: &Adapter,
     path: &Path,
 ) -> Result<Option<SandboxAttributes>, FilesystemStorageError> {

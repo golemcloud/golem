@@ -26,13 +26,12 @@ use crate::service::worker::{
 };
 use futures::{SinkExt, StreamExt};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationRejected,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionResult,
     OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeOperation, StreamCancel,
-    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, input_stream_item,
-    invocation_request, invocation_response, invocation_session_completion,
+    StreamCancelReason, StreamCancelRole, StreamCursor, StreamMappingRole, ToolByteStreamRole,
+    input_stream_item, invocation_request, invocation_response, invocation_session_completion,
     invocation_session_result,
 };
 use golem_common::SafeDisplay;
@@ -45,6 +44,7 @@ use golem_common::model::invocation_session_public::{
     PublicServerMessage, PublicStreamDirection, PublicStreamMapping, PublicTypedValue,
     decode_binary_message, decode_client_text, encode_binary_message, encode_text,
 };
+use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::fingerprint::{
     SchemaFingerprintV1, resolve_stream_element_schema_v1, schema_fingerprint_v1,
 };
@@ -57,6 +57,7 @@ use golem_common::schema::validation::validate_value;
 use golem_common::schema::{
     BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -979,7 +980,12 @@ pub async fn serve_public_invocation_session(
             return;
         }
     };
-    if initial_state.initialize(&started).is_err() {
+    if let Err(error) = initial_state.initialize(&started) {
+        tracing::warn!(
+            attempt_id = %attempt_id,
+            error = ?error,
+            "Invocation session adapter initialization failed"
+        );
         let message = safe_rejection_message(PublicErrorCode::InternalError);
         send_rejection(
             &outbound,
@@ -1106,6 +1112,7 @@ where
                         input,
                         stdin,
                         stdout,
+                        stderr,
                         ..
                     } => Ok(Some(InitialMessage::ToolStart {
                         start: PublicToolSessionStart {
@@ -1117,6 +1124,7 @@ where
                             input: *input,
                             stdin,
                             stdout,
+                            stderr,
                             idempotency_key,
                             attempt_id,
                             expected_deployment_revision: None,
@@ -1168,7 +1176,7 @@ where
                                 return Err(());
                             }
                         };
-                        let mut cursors = Vec::with_capacity(output_cursors.len());
+                        let mut verified_cursors = Vec::with_capacity(output_cursors.len());
                         let mut streams = HashSet::new();
                         for token in output_cursors {
                             let verified = match keyring.verify(
@@ -1205,11 +1213,20 @@ where
                                 .await;
                                 return Err(());
                             }
-                            cursors.push(StreamCursor {
+                            verified_cursors.push(cursor);
+                        }
+                        // Clients order cursor tokens by public stream, while the trusted
+                        // protocol requires cursors sorted by durable stream ID, which only
+                        // the decoded tokens reveal.
+                        verified_cursors
+                            .sort_by_key(|cursor| cursor.output_durable_stream_id.as_u64_pair());
+                        let cursors = verified_cursors
+                            .into_iter()
+                            .map(|cursor| StreamCursor {
                                 stream_id: Some(cursor.output_durable_stream_id.into()),
                                 last_observed_offset: Some(cursor.durable_offset),
-                            });
-                        }
+                            })
+                            .collect();
                         Ok(Some(InitialMessage::Resume {
                             resume: PublicAgentSessionResume {
                                 identity,
@@ -1859,6 +1876,14 @@ async fn translate_private_response(
         }
         invocation_response::Response::Rejected(rejected) => {
             let code = rejection_code(&rejected);
+            tracing::warn!(
+                attempt_id = %attempt_id,
+                reason = rejected.reason,
+                public_code = ?code,
+                error = %rejected.error,
+                worker_error = ?rejected.worker_error,
+                "Private invocation session response was rejected"
+            );
             Ok(vec![frame(text_message(
                 &PublicServerMessage::InvocationRejected {
                     attempt_id: Some(attempt_id),
@@ -2101,10 +2126,14 @@ fn translate_accepted(
         .map_err(|error| AdapterError::new(error.code, error.to_string()))?;
     if accepted.tool_name.is_some() {
         for mapping in &accepted.stream_mappings {
-            let role = match mapping.role() {
-                StreamMappingRole::Input => PublicByteStreamRole::Stdin,
-                StreamMappingRole::Output => PublicByteStreamRole::Stdout,
-                StreamMappingRole::Unspecified => continue,
+            let Some(role) = mapping.tool_byte_stream_role else {
+                continue;
+            };
+            let role = match ToolByteStreamRole::try_from(role) {
+                Ok(ToolByteStreamRole::Stdin) => PublicByteStreamRole::Stdin,
+                Ok(ToolByteStreamRole::Stdout) => PublicByteStreamRole::Stdout,
+                Ok(ToolByteStreamRole::Stderr) => PublicByteStreamRole::Stderr,
+                Err(_) => continue,
             };
             state.byte_roles.insert(mapping.transport_stream_id, role);
         }
@@ -2161,13 +2190,17 @@ fn translate_result(
                     Ok(reference)
                 },
             )?;
-            PublicInvocationResult::Value { value }
+            let graph = SchemaGraph {
+                defs: reachable_defs(&graph, &schema),
+                root: schema,
+            };
+            PublicInvocationResult::Value { graph, value }
         }
         Some(invocation_session_result::Result::ToolResult(value)) => {
             use golem_api_grpc::proto::golem::worker::{
                 public_external_tool_result, public_tool_error, public_tool_rpc_error,
             };
-            let decode_typed = |typed: golem_api_grpc::proto::golem::schema::TypedSchemaValue,
+            let decode_typed = |typed: golem_schema::proto::golem::schema::TypedSchemaValue,
                                 state: &mut AdapterState,
                                 mappings: &mut Vec<PublicStreamMapping>|
              -> Result<PublicTypedValue, AdapterError> {
@@ -2195,11 +2228,8 @@ fn translate_result(
                         Ok(reference)
                     },
                 )?;
-                Ok::<_, PublicSchemaValueError>(PublicTypedValue {
-                    schema: graph,
-                    value,
-                })
-                .map_err(AdapterError::from)
+                Ok::<_, PublicSchemaValueError>(PublicTypedValue { graph, value })
+                    .map_err(AdapterError::from)
             };
             match value
                 .result
@@ -2781,7 +2811,7 @@ fn channel_for_transport(state: &AdapterState, transport_id: u64) -> Result<u32,
 }
 
 fn required_uuid(
-    value: Option<&golem_api_grpc::proto::golem::common::Uuid>,
+    value: Option<&golem_schema::proto::golem::common::Uuid>,
     name: &str,
 ) -> Result<Uuid, AdapterError> {
     Ok(value
@@ -3007,18 +3037,19 @@ fn bounded_close_reason(reason: &str) -> String {
 mod tests {
     use super::*;
     use crate::config::{InvocationSessionTokenConfig, InvocationSessionTokenKeyConfig};
-    use golem_api_grpc::proto::golem::common::{EnvironmentId, Uuid as ProtoUuid};
+    use golem_api_grpc::proto::golem::common::EnvironmentId;
     use golem_api_grpc::proto::golem::component::ComponentId;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::{
         AgentId as ProtoAgentId, DurableStreamHandle, IdempotencyKey as ProtoIdempotencyKey,
-        InputStreamAck, InvocationStart, StreamInvocationIdentity,
+        InputStreamAck, InvocationStart, ResumeAttach, StreamInvocationIdentity,
     };
     use golem_common::base_model::base64::Base64;
     use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
     use golem_common::schema::{BinaryRestrictions, MetadataEnvelope};
+    use golem_schema::proto::golem::common::Uuid as ProtoUuid;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+    };
     use test_r::test;
 
     fn proto_uuid(value: u64) -> ProtoUuid {
@@ -3089,6 +3120,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 
@@ -3188,7 +3220,7 @@ mod tests {
         PublicClientMessage::InputStreamItem {
             channel: 1,
             sequence: DecimalU64(sequence),
-            value: serde_json::json!(value),
+            value: serde_json::json!({"kind": "u8", "value": value}),
             version: 1,
         }
     }
@@ -3382,9 +3414,13 @@ mod tests {
             });
             state.application = Some("app".to_string());
             state.environment = Some("env".to_string());
-            let fingerprint = schema_fingerprint_v1(&SchemaGraph::empty(), Some(&SchemaType::u8()))
-                .unwrap()
-                .0;
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
             let accepted = translate_accepted(
                 &mut state,
                 InvocationAccepted {
@@ -3403,10 +3439,11 @@ mod tests {
                         Vec::new()
                     },
                     stream_mappings: if native {
-                        vec![
-                            private_mapping(7, StreamMappingRole::Input, fingerprint),
-                            private_mapping(8, StreamMappingRole::Output, fingerprint),
-                        ]
+                        let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+                        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                        let mut stdout = private_mapping(8, StreamMappingRole::Output, fingerprint);
+                        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                        vec![stdin, stdout]
                     } else {
                         Vec::new()
                     },
@@ -4115,14 +4152,17 @@ mod tests {
         else {
             panic!("stream result translated to the wrong public message")
         };
-        let PublicInvocationResult::Value { value } = *result else {
+        let PublicInvocationResult::Value { graph, value } = *result else {
             panic!("stream result translated to the wrong public value")
         };
+        assert_eq!(graph.root, SchemaType::stream(Some(SchemaType::u8())));
+        assert!(graph.defs.is_empty());
         assert_eq!(mappings.len(), 1);
         assert_eq!(mappings[0].direction, PublicStreamDirection::Output);
         assert_eq!(mappings[0].channel, 1);
+        assert_eq!(value["kind"], "stream");
         assert_eq!(
-            value["$stream"]["streamToken"],
+            value["value"]["streamToken"],
             serde_json::Value::String(mappings[0].stream_token.clone())
         );
         assert!(matches!(
@@ -4350,6 +4390,172 @@ mod tests {
         assert_eq!(
             resume.cursors[0].last_observed_offset,
             Some(durable_offset(4))
+        );
+    }
+
+    /// Opens a resume through `receive_initial` with the given `(durable stream ID, offset)`
+    /// cursors in the given order and returns the decoded resume, or the rejection it caused.
+    async fn resume_with_cursors(
+        cursors: &[(Uuid, u64)],
+    ) -> Result<PublicAgentSessionResume, PublicServerMessage> {
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let logical_invocation_id = Uuid::from_u128(10);
+        let identity = SessionAgentIdentity {
+            component_id: Uuid::from_u128(20),
+            component_revision: 12,
+            agent_id: "agent".to_string(),
+            target: SessionInvocationTarget::Method {
+                agent_type: "test-agent".to_string(),
+                method: "run".to_string(),
+            },
+        };
+        let session = SessionTokenPayload {
+            application: "app".to_string(),
+            environment: "env".to_string(),
+            agent: encode_session_agent_identity(&identity).unwrap(),
+            idempotency_key: "session-key".to_string(),
+            logical_invocation_id,
+            attachment_id: Uuid::from_u128(1),
+            expected_attachment_generation: 1,
+            callee_incarnation: Uuid::from_u128(4),
+            stream_key_id: keyring.active_key_id().to_string(),
+        };
+        let session_token = keyring
+            .sign(&bindings, &InvocationSessionTokenPayload::Session(session))
+            .unwrap();
+        let output_cursors = cursors
+            .iter()
+            .map(|&(stream_id, offset)| {
+                keyring
+                    .sign(
+                        &bindings,
+                        &InvocationSessionTokenPayload::Cursor(CursorTokenPayload {
+                            parent_logical_invocation_id: logical_invocation_id,
+                            output_durable_stream_id: stream_id,
+                            durable_offset: durable_offset(offset),
+                        }),
+                    )
+                    .unwrap()
+            })
+            .collect();
+        let message = PublicClientMessage::ResumeAttach {
+            attempt_id: "00000000-0000-4000-8000-000000000002".parse().unwrap(),
+            operation: PublicResumeOperation::Takeover,
+            output_cursors,
+            session_token,
+            version: 1,
+        };
+        let websocket =
+            futures::stream::iter(vec![Ok(Message::text(encode_text(&message).unwrap()))]);
+        futures::pin_mut!(websocket);
+        let budgets = SessionBudgets::new();
+        let (sender, mut receiver) = mpsc::channel(1);
+        let outbound = Outbound {
+            sender,
+            budgets: budgets.clone(),
+        };
+        match receive_initial(&mut websocket, &outbound, &keyring, &bindings, &budgets).await {
+            Ok(Some(InitialMessage::Resume { resume, .. })) => Ok(resume),
+            Ok(_) => panic!("resume message was not decoded as a resume"),
+            Err(()) => {
+                let Message::Text(text) = receiver.recv().await.unwrap().message else {
+                    panic!("rejection was not text")
+                };
+                Err(
+                    golem_common::model::invocation_session_public::decode_server_text(
+                        text.as_bytes(),
+                    )
+                    .unwrap(),
+                )
+            }
+        }
+    }
+
+    /// The trusted request the worker service builds for `resume`, with `cursors` in place of
+    /// the adapter's.
+    fn trusted_resume_request(
+        resume: &PublicAgentSessionResume,
+        cursors: Vec<StreamCursor>,
+    ) -> InvocationRequest {
+        InvocationRequest {
+            request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                idempotency_key: idempotency_key(),
+                agent_id: Some(proto_agent_id()),
+                environment_id: Some(EnvironmentId {
+                    value: Some(proto_uuid(30)),
+                }),
+                attachment_id: Some(resume.session.attachment_id.into()),
+                attempt_id: Some(resume.attempt_id.into()),
+                expected_callee_fingerprint: Some(resume.session.callee_incarnation.into()),
+                expected_epoch: resume.session.expected_attachment_generation,
+                operation: resume.operation as i32,
+                cursors,
+                auth_ctx: None,
+                principal: None,
+            })),
+        }
+    }
+
+    #[test]
+    async fn resume_cursors_are_sorted_by_durable_stream_id() {
+        // Durable IDs chosen so that neither the client's order nor an order by the low half
+        // alone is the protocol's `(high_bits, low_bits)` order.
+        let low_high = Uuid::from_u64_pair(0, 9);
+        let high_low = Uuid::from_u64_pair(1, 2);
+        let high_high = Uuid::from_u64_pair(1, 5);
+        let client_order = [(low_high, 9), (high_high, 5), (high_low, 2)];
+
+        let resume = resume_with_cursors(&client_order).await.unwrap();
+
+        let decoded: Vec<(Uuid, Vec<u8>)> = resume
+            .cursors
+            .iter()
+            .map(|cursor| {
+                (
+                    Uuid::from(cursor.stream_id.unwrap()),
+                    cursor.last_observed_offset.clone().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            decoded,
+            vec![
+                (low_high, durable_offset(9)),
+                (high_low, durable_offset(2)),
+                (high_high, durable_offset(5)),
+            ]
+        );
+
+        InvocationSessionState::default()
+            .validate_trusted_request(&trusted_resume_request(&resume, resume.cursors.clone()))
+            .expect("the protocol accepts the adapter's cursor order");
+
+        let mut unsorted = resume.cursors.clone();
+        unsorted.swap(0, 1);
+        assert_eq!(
+            InvocationSessionState::default()
+                .validate_trusted_request(&trusted_resume_request(&resume, unsorted))
+                .unwrap_err(),
+            "resume cursors must be unique and sorted by durable stream ID"
+        );
+    }
+
+    #[test]
+    async fn resume_rejects_two_cursors_for_the_same_durable_stream() {
+        let stream = Uuid::from_u64_pair(1, 2);
+        let Err(rejection) = resume_with_cursors(&[(stream, 2), (stream, 5)]).await else {
+            panic!("duplicate durable stream cursors were accepted")
+        };
+        assert!(
+            matches!(
+                rejection,
+                PublicServerMessage::InvocationRejected {
+                    code: PublicErrorCode::InvalidCursor,
+                    ..
+                }
+            ),
+            "{rejection:?}"
         );
     }
 

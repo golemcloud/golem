@@ -21,6 +21,7 @@ use crate::components::rdb::PostgresInfo;
 use crate::components::rdb::Rdb;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
+use crate::components::rdb::sqlite::SqliteRdb;
 use crate::components::rdb::unavailable::UnavailableRdb;
 use crate::components::redis::Redis;
 use crate::components::redis::provided::ProvidedRedis;
@@ -61,6 +62,7 @@ use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use url::Url;
@@ -233,6 +235,8 @@ pub enum TestMode {
         shard_manager_http_port: u16,
         #[arg(long, default_value = "9096")]
         shard_manager_grpc_port: u16,
+        #[arg(long, default_value = "4500")]
+        shard_manager_state_write_timeout_millis: u64,
         #[arg(long, default_value = "8081")]
         registry_service_http_port: u16,
         #[arg(long, default_value = "9091")]
@@ -352,6 +356,7 @@ impl BenchmarkTestDependencies {
         redis_prefix: &str,
         shard_manager_http_port: u16,
         shard_manager_grpc_port: u16,
+        shard_manager_state_write_timeout_millis: u64,
         registry_service_http_port: u16,
         registry_service_grpc_port: u16,
         component_compilation_service_http_port: u16,
@@ -384,10 +389,14 @@ impl BenchmarkTestDependencies {
         let initial_agent_files_service =
             Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
-        let rdb: Arc<dyn Rdb> = {
-            let unique_network_id = Uuid::new_v4().to_string();
-            Arc::new(DockerPostgresRdb::new(&unique_network_id, true).await)
-        };
+        let unique_id = Uuid::new_v4().to_string();
+        let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_id, true).await);
+        // The shard manager only stores lease and quota state that nothing else reads. Keeping it
+        // out of the shared Postgres instance means executor and registry load cannot delay its
+        // state writes past `state_write_timeout`, which would make it lose its leases mid-run.
+        let shard_manager_rdb: Arc<dyn Rdb> = Arc::new(SqliteRdb::new(
+            &std::env::temp_dir().join(format!("golem-bench-shard-manager-{unique_id}")),
+        ));
 
         let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
             SpawnedComponentCompilationService::new(
@@ -438,9 +447,13 @@ impl BenchmarkTestDependencies {
                 &build_root.join("golem-shard-manager"),
                 &workspace_root.join("golem-shard-manager"),
                 None,
+                Some(Duration::from_millis(
+                    shard_manager_state_write_timeout_millis,
+                )),
+                true,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
-                rdb.clone(),
+                shard_manager_rdb,
                 registry_service.clone(),
                 verbosity,
                 out_level,
@@ -642,6 +655,7 @@ impl BenchmarkTestDependencies {
                 redis_prefix,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
+                shard_manager_state_write_timeout_millis,
                 registry_service_http_port,
                 registry_service_grpc_port,
                 component_compilation_service_http_port,
@@ -664,6 +678,7 @@ impl BenchmarkTestDependencies {
                     redis_prefix,
                     *shard_manager_http_port,
                     *shard_manager_grpc_port,
+                    *shard_manager_state_write_timeout_millis,
                     *registry_service_http_port,
                     *registry_service_grpc_port,
                     *component_compilation_service_http_port,
@@ -871,5 +886,34 @@ impl CliTestService {
                 panic!("Test mode {:?} not supported", mode)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchmarkCliParameters, TestMode};
+    use crate::benchmark::BenchmarkConfig;
+    use clap::Parser;
+    use test_r::test;
+
+    #[test]
+    fn spawned_benchmarks_default_to_a_4500ms_shard_state_write_timeout() {
+        let parameters =
+            BenchmarkCliParameters::try_parse_from(["benchmark", "benchmark", "noop", "spawned"])
+                .expect("the minimal spawned benchmark command must parse");
+
+        let BenchmarkConfig::Benchmark {
+            mode:
+                TestMode::Spawned {
+                    shard_manager_state_write_timeout_millis,
+                    ..
+                },
+            ..
+        } = parameters.benchmark_config
+        else {
+            panic!("expected spawned benchmark mode");
+        };
+
+        assert_eq!(shard_manager_state_write_timeout_millis, 4_500);
     }
 }

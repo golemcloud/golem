@@ -27,6 +27,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{self, PoolApi};
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_service_base::repo::{Blob, SqlDateTime};
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use http::{Request, Response};
 use http_body_util::Full;
 use serde_json::{Value, json};
@@ -121,6 +122,10 @@ impl Fixture {
                             Arc::new(DbRegistryChangeRepo::new(pool.clone())),
                         )),
                     )),
+                    Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                    Arc::new(InMemoryBlobStorage::new()),
+                    false,
+                    crate::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
                 )),
             ),
             pool,
@@ -217,7 +222,7 @@ impl Fixture {
 
     async fn rotate_scheme(&self) {
         let mut db = self.pool.with_rw("oauth-service-test", "rotate");
-        db.execute(sqlx::query("INSERT INTO security_scheme_revisions SELECT security_scheme_id, revision_id + 1, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url FROM security_scheme_revisions WHERE revision_id = 1")).await.unwrap();
+        db.execute(sqlx::query("INSERT INTO security_scheme_revisions (security_scheme_id, revision_id, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url, login_config) SELECT security_scheme_id, revision_id + 1, provider_type, client_id, client_secret, redirect_url, scopes, created_at, created_by, deleted, custom_provider_name, custom_issuer_url, login_config FROM security_scheme_revisions WHERE revision_id = 1")).await.unwrap();
         db.execute(sqlx::query(
             "UPDATE security_schemes SET current_revision_id = 2",
         ))
@@ -1114,6 +1119,21 @@ async fn declared_consent_and_refresh_work_before_first_deployment_and_grant_is_
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();

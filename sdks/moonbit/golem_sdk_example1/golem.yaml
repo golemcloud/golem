@@ -23,6 +23,7 @@ environments:
 
 componentTemplates:
   moonbit-local:
+    guestLanguage: moonbit
     presets:
       debug:
         default: true
@@ -101,4 +102,5 @@ agents:
       moonbit-streaming: {}
   MoonBitToolReflectionCaller:
     tools:
-      moonbit-reflection-test: {}
+      moonbit-reflection-test:
+        filesystemAccess: allowed

@@ -631,7 +631,7 @@ fn make_resume(
     let mut cursors = cursors
         .iter()
         .map(|(&(high_bits, low_bits), offset)| StreamCursor {
-            stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+            stream_id: Some(golem_schema::proto::golem::common::Uuid {
                 high_bits,
                 low_bits,
             }),
@@ -709,7 +709,7 @@ pub(super) fn output_cancel_request(
             role: StreamCancelRole::OutputConsumer as i32,
             reason: reason as i32,
             details: None,
-            durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+            durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                 high_bits: durable_id.0,
                 low_bits: durable_id.1,
             }),
@@ -735,7 +735,7 @@ pub(super) fn request_end_sequence(request: &InvocationRequest) -> u64 {
     }
 }
 
-pub(super) fn uuid_pair(uuid: &golem_api_grpc::proto::golem::common::Uuid) -> (u64, u64) {
+pub(super) fn uuid_pair(uuid: &golem_schema::proto::golem::common::Uuid) -> (u64, u64) {
     (uuid.high_bits, uuid.low_bits)
 }
 

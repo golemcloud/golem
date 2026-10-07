@@ -40,6 +40,7 @@ import type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
+  Uuid,
 } from "golem:core/types@2.0.0"
 import { GuestSecretHandle } from "./secretHandle.js"
 import { GuestQuotaTokenHandle } from "./quotaTokenHandle.js"
@@ -61,6 +62,7 @@ export type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
+  Uuid,
 }
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -72,7 +74,6 @@ export type {
   PathDirection,
   PathKind,
   FieldDiscriminator,
-  Uuid,
   EnvironmentId,
 } from "golem:core/types@2.0.0"
 
@@ -119,6 +120,7 @@ export type SchemaTypeBody =
   | { tag: "binary"; restrictions: BinaryRestrictions }
   | { tag: "path"; spec: PathSpec }
   | { tag: "url"; restrictions: UrlRestrictions }
+  | { tag: "uuid" }
   | { tag: "datetime" }
   | { tag: "duration" }
   | { tag: "quantity"; spec: QuantitySpec }
@@ -431,6 +433,7 @@ export type SchemaValue =
   | { tag: "binary"; bytes: Uint8Array; mimeType?: string }
   | { tag: "path"; value: string }
   | { tag: "url"; value: string }
+  | { tag: "uuid"; value: Uuid }
   | { tag: "datetime"; value: Datetime }
   | { tag: "duration"; nanoseconds: bigint }
   | { tag: "quantity"; value: QuantityValue }
@@ -510,6 +513,7 @@ export const t = {
     schemaType({ tag: "binary", restrictions }),
   path: (spec: PathSpec): SchemaType => schemaType({ tag: "path", spec }),
   url: (restrictions: UrlRestrictions): SchemaType => schemaType({ tag: "url", restrictions }),
+  uuid: (): SchemaType => schemaType({ tag: "uuid" }),
   datetime: (): SchemaType => schemaType({ tag: "datetime" }),
   duration: (): SchemaType => schemaType({ tag: "duration" }),
   quantity: (spec: QuantitySpec): SchemaType => schemaType({ tag: "quantity", spec }),
@@ -578,6 +582,7 @@ export const v = {
   }),
   path: (value: string): SchemaValue => ({ tag: "path", value }),
   url: (value: string): SchemaValue => ({ tag: "url", value }),
+  uuid: (value: Uuid): SchemaValue => ({ tag: "uuid", value }),
   datetime: (value: Datetime): SchemaValue => ({ tag: "datetime", value }),
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: "duration", nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: "quantity", value }),
@@ -634,6 +639,8 @@ export function cloneSchemaValue(value: SchemaValue): SchemaValue {
       }
     case "binary":
       return { ...value, bytes: value.bytes.slice() }
+    case "uuid":
+      return { ...value, value: { ...value.value } }
     case "datetime":
       return { ...value, value: { ...value.value } }
     case "quantity":

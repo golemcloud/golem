@@ -273,7 +273,6 @@ pub struct ApplicationPreloadResult {
     pub loaded_with_warnings: bool,
     pub application_preload: Option<ApplicationPreload>,
     pub resolved_local_server: Option<ResolvedLocalServer>,
-    pub used_language_templates: HashSet<GuestLanguage>,
 }
 
 pub struct ApplicationContext {
@@ -409,7 +408,6 @@ impl ApplicationContext {
                 loaded_with_warnings: false,
                 application_preload: None,
                 resolved_local_server: None,
-                used_language_templates: HashSet::new(),
             }),
         }
     }
@@ -474,6 +472,7 @@ impl ApplicationContext {
             agent_type_names: Default::default(),
             target_language: Some(language),
             output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+            rust_config: Default::default(),
         }
     }
 
@@ -883,13 +882,13 @@ fn preload_app(
 ) -> Option<ValidatedResult<ApplicationPreloadResult>> {
     load_raw_apps(source_mode).map(|loaded_raw_apps| {
         loaded_raw_apps.and_then(|loaded_raw_apps| {
-            let used_language_templates =
-                Application::language_templates_from_raw_apps(&loaded_raw_apps.raw_apps);
+            let referenced_template_names =
+                Application::referenced_template_names_from_raw_apps(&loaded_raw_apps.raw_apps);
 
             Application::preload_from_raw_apps(loaded_raw_apps.raw_apps.as_slice())
                 .and_then(|application_preload| {
                     ValidatedResult::from_result(ensure_on_demand_commons(
-                        &used_language_templates,
+                        &referenced_template_names,
                         dev_mode,
                     ))
                     .map(|on_demand_common_raw_apps| {
@@ -922,7 +921,6 @@ fn preload_app(
                         loaded_with_warnings: false,
                         application_preload: Some(application_preload),
                         resolved_local_server,
-                        used_language_templates,
                     }
                 })
         })
@@ -930,15 +928,15 @@ fn preload_app(
 }
 
 fn ensure_on_demand_commons(
-    languages: &HashSet<GuestLanguage>,
+    referenced_template_names: &BTreeSet<String>,
     dev_mode: bool,
 ) -> anyhow::Result<Vec<app_raw::ApplicationWithSource>> {
     let app_template_repo = AppTemplateRepo::get(dev_mode)?;
 
     let mut on_demand_raw_apps = Vec::new();
 
-    for language in languages {
-        if let Some(template) = app_template_repo.common_on_demand_template(*language)? {
+    for language in app_template_repo.builtin_template_languages(referenced_template_names) {
+        if let Some(template) = app_template_repo.common_on_demand_template(language)? {
             let app_dir = std::env::current_dir()?;
             let target_dir = Application::on_demand_common_dir_for_language(template.0.language);
             template.generate(&app_dir, &target_dir)?;

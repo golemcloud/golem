@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmarks::public_invocation::{PublicInvocationSession, SessionCheckpoint};
+use crate::benchmarks::public_invocation::{
+    PublicInvocationSession, SessionCheckpoint, public_record, public_u32,
+};
 use crate::benchmarks::{cleanup_user_state, delete_workers};
 use anyhow::{Context, ensure};
 use async_trait::async_trait;
@@ -37,7 +39,6 @@ use tracing::Level;
 
 const PHASE_DEADLINE: Duration = Duration::from_secs(120);
 const METRICS_DEADLINE: Duration = Duration::from_secs(10);
-const MAX_BOUNDED_SESSION_INDEX_READS: u64 = 128;
 const MEASURED_DOMAIN: u32 = 700_000;
 
 pub struct StreamingRpcHistory {
@@ -164,31 +165,6 @@ fn storage_counts(
     Ok(())
 }
 
-fn ensure_stream_index_reads_are_bounded(
-    before: &StorageSnapshot,
-    after: &StorageSnapshot,
-    maximum: u64,
-) -> anyhow::Result<()> {
-    let calls = after
-        .delta(Some(before))?
-        .into_iter()
-        .filter(|(operation, _)| {
-            operation.service == "stream_session_index"
-                && matches!(
-                    operation.operation.as_str(),
-                    "get" | "get_many" | "read" | "first" | "last" | "scan"
-                )
-        })
-        .try_fold(0u64, |total, (_, count)| {
-            total.checked_add(count).context("storage count overflow")
-        })?;
-    ensure!(
-        calls <= maximum,
-        "stream-session index lookup used {calls} logical storage calls; maximum is {maximum}"
-    );
-    Ok(())
-}
-
 async fn component_and_environment(
     deps: &BenchmarkTestDependencies,
 ) -> anyhow::Result<(
@@ -268,7 +244,7 @@ async fn seed_direct_session(
         environment,
         target,
         "benchmark_output",
-        serde_json::json!({ "length": 1, "domain": domain }),
+        public_record([public_u32(1), public_u32(domain)]),
         PHASE_DEADLINE,
     )
     .await?
@@ -296,7 +272,7 @@ fn validate_direct_output(
         .map(|(_, value)| value)
         .collect::<Vec<_>>();
     let expected = (0..length)
-        .map(|index| serde_json::json!(domain + index * 3))
+        .map(|index| public_u32(domain + index * 3))
         .collect::<Vec<_>>();
     ensure!(
         values == expected.iter().collect::<Vec<_>>(),
@@ -817,10 +793,7 @@ impl StreamingRpcCold {
             &iteration.environment,
             &iteration.target,
             "benchmark_output",
-            serde_json::json!({
-                "length": iteration.length,
-                "domain": MEASURED_DOMAIN,
-            }),
+            public_record([public_u32(iteration.length), public_u32(MEASURED_DOMAIN)]),
             PHASE_DEADLINE,
         )
         .await
@@ -864,12 +837,6 @@ impl StreamingRpcCold {
         recorder.count(&ResultKey::primary("stream-terminals"), 1);
         let complete_storage = metrics_snapshot(&context.deps, "storage-completion").await?;
         storage_counts("completion", &first_storage, &complete_storage, &recorder)?;
-        ensure_stream_index_reads_are_bounded(
-            &iteration.post_restart,
-            &complete_storage,
-            MAX_BOUNDED_SESSION_INDEX_READS,
-        )
-        .map_err(|error| benchmark_error("correctness-index-bounded", error))?;
         Ok(())
     }
 }

@@ -5,12 +5,14 @@ import * as Ids from "../src/Ids.js"
 import { method } from "../src/Method.js"
 import * as Snapshot from "../src/Snapshot.js"
 import { toWitCodec } from "../src/WitCodec.js"
+import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 
-const uuid = { highBits: 1n, lowBits: 2n }
+const uuid = Ids.Uuid.make("00000000-0000-0001-0000-000000000002")
+const encodedUuid = { highBits: 1n, lowBits: 2n }
 const componentId = { uuid }
 const agentId = { componentId, agentId: 'Counter("canonical")' }
-const accountId = { uuid: { highBits: 3n, lowBits: 4n } }
-const environmentId = { uuid: { highBits: 5n, lowBits: 6n } }
+const accountId = { uuid: Ids.Uuid.make("00000000-0000-0003-0000-000000000004") }
+const environmentId = { uuid: Ids.Uuid.make("00000000-0000-0005-0000-000000000006") }
 const promiseId = { agentId, oplogIdx: 7n }
 
 const roundTripWit = <S extends Schema.Codec<any, any, never, never>>(
@@ -25,6 +27,22 @@ const roundTripWit = <S extends Schema.Codec<any, any, never, never>>(
   })
 
 describe("Ids", () => {
+  it.effect("uses the first-class UUID schema type and value nodes", () =>
+    Effect.gen(function* () {
+      const wit = yield* toWitCodec(Ids.Uuid)
+      expect(wit.graph.root.body).toEqual({ tag: "uuid" })
+      expect(schemaGraphToWit(wit.graph).typeNodes.at(-1)?.body).toEqual({ tag: "uuid-type" })
+
+      const encoded = yield* Schema.encodeEffect(wit.codec)(uuid)
+      expect(encoded).toEqual({ tag: "uuid", value: encodedUuid })
+      expect(schemaValueToWit(encoded)).toEqual({
+        valueNodes: [{ tag: "uuid-value", val: encodedUuid }],
+        root: 0,
+      })
+      expect(yield* Schema.decodeEffect(wit.codec)(encoded)).toEqual(uuid)
+    }),
+  )
+
   it.effect("round-trips every canonical identifier through its host WIT representation", () =>
     Effect.gen(function* () {
       expect(yield* roundTripWit(Ids.Uuid, uuid)).toEqual(uuid)
@@ -70,7 +88,8 @@ describe("Ids", () => {
   )
 
   it("exports canonical identifier schemas from the owning module", () => {
-    expect(Ids.Uuid.fields.highBits).toBeDefined()
+    expect(uuid).toBe("00000000-0000-0001-0000-000000000002")
+    expect(() => Ids.Uuid.make("00000000-0000-0001-0000-00000000000A")).toThrow()
     expect(Ids.EnvironmentId.fields.uuid).toBe(Ids.Uuid)
   })
 })

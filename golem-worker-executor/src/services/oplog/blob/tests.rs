@@ -163,10 +163,11 @@ async fn check_that_each_agent_name_gets_its_own_archive(
             let service = &service;
             async move {
                 service
-                    .open(agent, MODE)
+                    .open(agent, MODE, None)
                     .await
                     .append(&[(OplogIndex::INITIAL, entry.clone())])
-                    .await;
+                    .await
+                    .unwrap();
             }
         })
         .await;
@@ -176,7 +177,7 @@ async fn check_that_each_agent_name_gets_its_own_archive(
     );
 
     let first_deleted = &archives[3].0;
-    service.delete(first_deleted, MODE).await;
+    service.delete(first_deleted, MODE).await.unwrap();
     let after_one_delete = (
         observe_all().await,
         scan(&service, environment_id, component_id).await,
@@ -184,7 +185,10 @@ async fn check_that_each_agent_name_gets_its_own_archive(
 
     futures::stream::iter(archives.iter())
         .filter(|(agent, _)| futures::future::ready(agent != first_deleted))
-        .for_each(|(agent, _)| service.delete(agent, MODE))
+        .for_each(|(agent, _)| {
+            let service = &service;
+            async move { service.delete(agent, MODE).await.unwrap() }
+        })
         .await;
     let after_all_deletes = (
         observe_all().await,
@@ -249,12 +253,13 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let component_id = ComponentId::new();
     let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
     let second = log_entry("second");
-    let archive = service.open(&agent, MODE).await;
+    let archive = service.open(&agent, MODE, None).await;
 
     archive
         .append(&[(OplogIndex::INITIAL, log_entry("first"))])
-        .await;
-    let dropped = archive.drop_prefix(OplogIndex::INITIAL).await;
+        .await
+        .unwrap();
+    let dropped = archive.drop_prefix(OplogIndex::INITIAL).await.unwrap();
     let emptied = (
         dropped,
         service.exists(&agent, MODE).await,
@@ -262,7 +267,8 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     );
     archive
         .append(&[(OplogIndex::INITIAL.next(), second.clone())])
-        .await;
+        .await
+        .unwrap();
     let appended = (
         service.exists(&agent, MODE).await,
         scan(&service, environment_id, component_id).await,
@@ -316,10 +322,11 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
         scan(&service, environment_id, component_id).await,
     );
     service
-        .open(&agent, MODE)
+        .open(&agent, MODE, None)
         .await
         .append(&[(OplogIndex::INITIAL, entry.clone())])
-        .await;
+        .await
+        .unwrap();
     let after = (
         service.exists(&agent, MODE).await,
         scan(&service, environment_id, component_id).await,
@@ -361,9 +368,8 @@ fn chunk_index_gives_the_index_of_a_chunk_and_none_for_the_agent_id_blob() {
 }
 
 /// The directory of an archive holds only the `agent_id` blob and chunks. The listing of the
-/// chunks stops with a panic at any other name, and does not skip it.
+/// chunks gives an error of the archive of this agent at any other name, and does not skip it.
 #[test]
-#[should_panic(expected = "failed to parse oplog index from path")]
 async fn the_chunk_listing_refuses_a_name_that_is_not_a_chunk() {
     let storage = Arc::new(InMemoryBlobStorage::new());
     let environment_id = EnvironmentId::new();
@@ -387,5 +393,11 @@ async fn the_chunk_listing_refuses_a_name_that_is_not_a_chunk() {
         .await
         .unwrap();
 
-    super::BlobOplogArchive::entries(agent, MODE, storage, 0).await;
+    let error = super::BlobOplogArchive::entries(agent, MODE, storage, 0)
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("failed to parse oplog index from path"),
+        "{error}"
+    );
 }

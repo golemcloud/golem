@@ -24,6 +24,10 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::security_scheme::{
+    AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
+    SecuritySchemeName, SecuritySchemeRevision,
+};
 use golem_common::schema::metadata::{MetadataEnvelope, TypeId};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, NamedFieldType, ResultSpec, TextRestrictions,
@@ -45,6 +49,10 @@ use golem_service_base::model::SafeIndex;
 use http::Method;
 use serde_json::{Value, json};
 use test_r::test;
+
+use crate::custom_api::RichSecuritySchemeRouteSecurity;
+use golem_service_base::custom_api::SecuritySchemeDetails;
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 
 // --------------------------------------------------------------------------
 // Route construction helpers
@@ -1695,6 +1703,107 @@ fn generated_session_security_encodes_header_punctuation_in_component_keys() {
         "x-session+id"
     );
     assert!(super::provider_document::parse("generated", &spec.to_string()).is_ok());
+}
+
+#[test]
+fn generated_pkce_security_describes_golem_authorization_endpoints() {
+    let mut route = call_agent_route(
+        Method::GET,
+        vec![PathSegment::Literal {
+            value: "item".into(),
+        }],
+        RequestBodySchema::Unused,
+        vec![],
+        unit_response(),
+        None,
+    );
+    let id = SecuritySchemeId::new();
+    let name = SecuritySchemeName("frontend".into());
+    route.security = RichRouteSecurity::SecurityScheme(RichSecuritySchemeRouteSecurity {
+        security_scheme: std::sync::Arc::new(SecuritySchemeDetails {
+            id,
+            revision: SecuritySchemeRevision::INITIAL,
+            name: name.clone(),
+            provider_type: Provider::Google(golem_common::model::Empty {}),
+            client_id: ClientId::new("upstream-client".into()),
+            client_secret: ClientSecret::new("upstream-secret".into()),
+            redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
+            scopes: vec![Scope::new("email".into())],
+            login: SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+                redirect_uris: vec!["https://frontend.example/callback".into()],
+                origins: vec!["https://frontend.example".into()],
+            }),
+        }),
+    });
+
+    let mut route = std::sync::Arc::new(route);
+    let original_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
+    let RichRouteSecurity::SecurityScheme(security) =
+        &mut std::sync::Arc::get_mut(&mut route).unwrap().security
+    else {
+        unreachable!()
+    };
+    let details = std::sync::Arc::get_mut(&mut security.security_scheme).unwrap();
+    let SecuritySchemeLogin::AuthorizationCodePkce(config) = &mut details.login else {
+        unreachable!()
+    };
+    config.origins.push("https://second.example".into());
+    let updated_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
+    assert_ne!(original_key, updated_key);
+    {
+        let RichRouteSecurity::SecurityScheme(security) =
+            &mut std::sync::Arc::get_mut(&mut route).unwrap().security
+        else {
+            unreachable!()
+        };
+        std::sync::Arc::get_mut(&mut security.security_scheme)
+            .unwrap()
+            .login = SecuritySchemeLogin::Cookie(golem_common::model::Empty {});
+    }
+    let cookie_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
+    assert_ne!(updated_key, cookie_key);
+    let endpoint_id = SecuritySchemeId::new();
+    {
+        let RichRouteSecurity::SecurityScheme(security) =
+            &mut std::sync::Arc::get_mut(&mut route).unwrap().security
+        else {
+            unreachable!()
+        };
+        let details = std::sync::Arc::get_mut(&mut security.security_scheme).unwrap();
+        details.login = SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec!["https://frontend.example/callback".into()],
+            origins: vec![
+                "https://frontend.example".into(),
+                "https://second.example".into(),
+            ],
+        });
+        details.id = endpoint_id;
+    }
+    let endpoint_key = super::OpenApiKey::from_inputs("https://example.com", &[route.clone()]);
+    assert_ne!(updated_key, endpoint_key);
+
+    let spec = spec_for(vec![std::sync::Arc::try_unwrap(route).unwrap()]);
+    let definition = &spec["components"]["securitySchemes"][name.0];
+    assert_eq!(definition["type"], "oauth2");
+    assert_eq!(
+        definition["flows"]["authorizationCode"]["authorizationUrl"],
+        format!(
+            "https://example.com{}",
+            golem_service_base::custom_api::pkce_authorization_path(&endpoint_id)
+        )
+    );
+    assert_eq!(
+        definition["flows"]["authorizationCode"]["tokenUrl"],
+        format!(
+            "https://example.com{}",
+            golem_service_base::custom_api::pkce_token_path(&endpoint_id)
+        )
+    );
+    assert!(definition["description"].as_str().unwrap().contains("S256"));
+    assert_eq!(
+        spec["paths"]["/item"]["get"]["security"],
+        json!([{"frontend":["email"]}])
+    );
 }
 
 #[test]

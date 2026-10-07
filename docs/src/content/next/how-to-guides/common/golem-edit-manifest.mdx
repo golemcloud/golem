@@ -123,19 +123,20 @@ Templates define reusable property layers. Components reference them via `templa
 
 ```yaml
 componentTemplates:
-  rust:
-    build:
-      - command: cargo build --target wasm32-wasip2
+  my-rust:
+    templates: [rust]              # Inherits the built-in "rust" template (build, guestLanguage)
     env:
       RUST_LOG: info
 
 components:
   my-app:service:
-    templates: [rust]              # Inherits build and env from "rust" template
+    templates: [my-rust]           # Inherits from "my-rust" and, through it, from "rust"
     dir: service
 ```
 
-Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`.
+Templates support the same fields as components except `dir`. Templates can themselves reference other templates via `templates:`, but a template may be inherited only through a single path: using two templates that both inherit the same template (e.g. `templates: [my-ts, ts-extra]` where both inherit `ts`) is rejected. The same applies to the `templates` lists of agents and tools. The built-in templates (`rust`, `ts`, `effect`, `scala` and `moonbit`) are provided by the CLI; don't define templates with these names.
+
+Templates can declare the guest language of the components built with them via `guestLanguage` (`ts`, `effect`, `rust`, `scala` or `moonbit`). The built-in templates declare it, so templates inheriting them don't need to. A custom template that builds a component on its own (without inheriting a built-in template) should declare it, otherwise language-specific CLI features (dependency checks, bridge generation, REPL) are unavailable for its components. The templates applied to a component must not declare different languages.
 
 ## Agents
 
@@ -474,7 +475,32 @@ bridge:
         - MyAgent                    # Agent type name
         - my-app:billing             # Component name (all agents in that component)
       outputDir: ./bridge-sdk/rust
+      additionalDerives:
+        - '^Order.*=PartialEq,Eq'
+        - 'Response$=custom_derive::ApiType'
+      additionalDependencies:
+        anyhow: "1"
+        custom_derive:
+          path: ./crates/custom-derive   # Relative to this manifest file
+          package: custom-derive-macros
+          features: [api]
+          defaultFeatures: false
+        git_derive:
+          git: https://github.com/example/derive-macros
+          tag: v1.2.3                    # Use at most one of branch/tag/rev
 ```
+
+`additionalDerives` entries are `<regex>=Trait,Trait`; every matching final generated Rust type name receives the merged, deduplicated derives. `additionalDependencies` accepts a version string or one source (`version`, `path`, or `git`) plus `package`, `features`, and `defaultFeatures`; git accepts one of `branch`, `tag`, or `rev`. Workspace and optional dependencies are not supported. These Rust-only fields are valid under `bridge.rust.external` and `bridge.rust.internal` for agent bridges only. An internal entry using them must select `agents`; tool bridge generation is unchanged.
+
+The low-level equivalent uses repeatable options and parses each dependency as Cargo TOML:
+
+```shell
+golem generate-bridge --language rust \
+  --derive-rule '^Order.*=PartialEq,Eq' \
+  --rust-dependency 'custom_derive = { package = "custom-derive-macros", path = "./crates/custom-derive", features = ["api"], default-features = false }'
+```
+
+CLI paths are relative to the invocation directory; manifest paths are relative to the directory containing the bridge declaration.
 
 ## Plugin Installations
 
@@ -716,6 +742,7 @@ This table shows where each property can be defined:
 | Field | Root | Component Template | Component | Agent | Component Preset | Agent Preset |
 |-------|:----:|:------------------:|:---------:|:-----:|:----------------:|:------------:|
 | `templates` | — | ✅ | ✅ | ✅ | — | — |
+| `guestLanguage` | — | ✅ | — | — | — | — |
 | `build` | — | ✅ | ✅ | — | ✅ | — |
 | `env` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `wasiConfig` | — | ✅ | ✅ | ✅ | ✅ | ✅ |

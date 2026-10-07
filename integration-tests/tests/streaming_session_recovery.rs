@@ -17,13 +17,13 @@ test_r::enable!();
 #[test_r::sequential]
 mod tests {
     use anyhow::{Context, ensure};
-    use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_api_grpc::proto::golem::worker::{ResumeOperation, invocation_session_result};
     use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId};
     use golem_common::schema::SchemaValue;
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_id, data_value};
+    use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
     use golem_test_framework::config::{
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
@@ -184,6 +184,10 @@ mod tests {
                         output.items.len() == (length / 4).clamp(1, 8) as usize
                     })
                 }) {
+                    ensure!(
+                        ids.iter().all(|id| report.outputs[id].terminal.is_none()),
+                        "gated output completed before the crash"
+                    );
                     return Ok(ids);
                 }
             }
@@ -191,7 +195,11 @@ mod tests {
         }
     }
 
-    async fn scenario(topology: Topology, second_restart: bool) -> anyhow::Result<()> {
+    async fn scenario(
+        topology: Topology,
+        second_restart: bool,
+        historical_sessions: usize,
+    ) -> anyhow::Result<()> {
         let deps = dependencies().await;
         let user = deps.user().await?;
         let (_, environment) = user.app_and_env().await?;
@@ -213,6 +221,19 @@ mod tests {
         let mut stream_ids = Vec::new();
         for branch in 0..if topology == Topology::Flat { 2 } else { 1 } {
             let agent = agent_id!("StreamingRpcTarget", uuid::Uuid::new_v4().to_string());
+            for _ in 0..historical_sessions {
+                InvocationSession::start(
+                    &deps,
+                    &component,
+                    &agent,
+                    "benchmark_output",
+                    data_value!(1u32, 23u32),
+                    PHASE,
+                )
+                .await?
+                .finish()
+                .await?;
+            }
             let left = user
                 .invoke_and_await_agent(&component, &agent, "create_output_gate", data_value!())
                 .await?
@@ -230,9 +251,10 @@ mod tests {
                     .await?
                     .into_typed::<PromiseId>()?;
                 gates.push(right.clone());
+                let length = if historical_sessions == 0 { 8 } else { 32 };
                 (
-                    data_value!(8u32, left.clone(), right),
-                    vec![(1000, 8), (100_000, 11)],
+                    data_value!(length, left.clone(), right),
+                    vec![(1000, length), (100_000, length + 3)],
                 )
             };
             gates.push(left);
@@ -358,24 +380,30 @@ mod tests {
     #[test]
     #[timeout("8 minutes")]
     async fn durable_streaming_output_recovers_after_hard_crash() -> anyhow::Result<()> {
-        scenario(Topology::Flat, false).await
+        scenario(Topology::Flat, false, 0).await
     }
 
     #[test]
     #[timeout("8 minutes")]
     async fn durable_streaming_output_stays_retired_after_second_restart() -> anyhow::Result<()> {
-        scenario(Topology::Flat, true).await
+        scenario(Topology::Flat, true, 0).await
     }
 
     #[test]
     #[timeout("8 minutes")]
     async fn sibling_output_recovers_mid_production() -> anyhow::Result<()> {
-        scenario(Topology::Siblings, false).await
+        scenario(Topology::Siblings, false, 0).await
+    }
+
+    #[test]
+    #[timeout("8 minutes")]
+    async fn sibling_output_recovers_with_large_session_history() -> anyhow::Result<()> {
+        scenario(Topology::Siblings, false, 129).await
     }
 
     #[test]
     #[timeout("8 minutes")]
     async fn nested_sibling_output_recovers_mid_production() -> anyhow::Result<()> {
-        scenario(Topology::Nested, false).await
+        scenario(Topology::Nested, false, 0).await
     }
 }

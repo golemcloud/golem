@@ -242,7 +242,9 @@ impl Fixture {
             .monthly_http_call_limit = monthly_http_call_limit;
         let root = &config.initial_accounts["root"];
         let mut tasks = JoinSet::new();
-        let services = Services::new(&config, &mut tasks).await.unwrap();
+        let services = Services::new_without_component_builtins(&config, &mut tasks)
+            .await
+            .unwrap();
         services.mcp_oauth_service.trust_certificate(
             reqwest::Certificate::from_pem(include_bytes!("tls/ca.pem")).unwrap(),
         );
@@ -595,6 +597,21 @@ async fn deployment_without_oauth_consent_succeeds_with_discovery_warning() {
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();
@@ -700,6 +717,21 @@ async fn preview_before_deployment_paginates_merges_and_does_not_cache() {
     ))
     .await
     .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_tool_bindings"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_registered_tools"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM deployment_component_revisions"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployments"))
+        .await
+        .unwrap();
+    db.execute(sqlx::query("DELETE FROM current_deployment_revisions"))
+        .await
+        .unwrap();
     db.execute(sqlx::query("DELETE FROM deployment_revisions"))
         .await
         .unwrap();

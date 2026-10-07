@@ -110,6 +110,7 @@ fn __golem_middleware_tool_extract_prepared(
 ) -> @tool.ToolDef {
   {
     version: def.version,
+    requires_filesystem: def.requires_filesystem,
     commands: def.commands[1:].map(node => {
       __golem_middleware_tool_rebase_node(node, -1)
     }),
@@ -136,7 +137,11 @@ fn __golem_middleware_tool_append_prepared(
   for node in child.commands {
     commands.push(__golem_middleware_tool_rebase_node(node, offset))
   }
-  { version: def.version, commands, }
+  {
+    version: def.version,
+    requires_filesystem: def.requires_filesystem,
+    commands,
+  }
 }
 
 ///|
@@ -145,6 +150,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "presented",
@@ -167,6 +173,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: [],
             annotations: Some({
@@ -205,6 +212,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
@@ -255,6 +263,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
@@ -294,6 +303,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
               mime: [],
               required: true,
             }),
+            stderr: None,
             result: None,
             errors: [],
             annotations: Some({
@@ -321,6 +331,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
               mime: [],
               required: true,
             }),
+            stderr: None,
             result: None,
             errors: [],
             annotations: Some({
@@ -363,6 +374,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
               mime: [],
               required: true,
             }),
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[Int]),
@@ -406,6 +418,7 @@ fn __golem_middleware_tool_def_raw_Presented() -> @tool.ToolDef {
               mime: [],
               required: true,
             }),
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -451,6 +464,7 @@ fn __golem_middleware_tool_def_prepare_Presented(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -526,6 +540,7 @@ fn __golem_middleware_tool_def_raw_Nested() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "nested",
@@ -563,6 +578,7 @@ fn __golem_middleware_tool_def_raw_Nested() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -605,6 +621,7 @@ fn __golem_middleware_tool_def_prepare_Nested(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -653,6 +670,7 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
   try {
     let def : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "storage",
@@ -690,6 +708,7 @@ fn __golem_middleware_tool_def_raw_Storage() -> @tool.ToolDef {
             constraints: [],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: Some({
               type_: @schema.into_schema_graph(
                 (@schema.TypeTag::{ } : @schema.TypeTag[String]),
@@ -732,6 +751,7 @@ fn __golem_middleware_tool_def_prepare_Storage(
   try {
     let carrier : @tool.ToolDef = {
       version: "0.0.0",
+      requires_filesystem: false,
       commands: [
         {
           name: "__golem_ancestry",
@@ -1091,52 +1111,6 @@ pub async fn PresentedUnderlying::start_retry(
 
 ///|
 ///
-pub async fn PresentedUnderlying::stdout(
-  self : PresentedUnderlying,
-) -> Result[
-  @asyncCore.Stream[Byte],
-  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
-] {
-  let __golem_command_path = ["stdout"]
-  let __golem_def = __golem_middleware_tool_def_Presented()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-          __golem_command_path,
-        ),
-      )
-  }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_values : Array[(String, @model.SchemaValue)] = []
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_result = match
-    self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
-      _,
-      _,
-    ) {
-      None
-    }) {
-    Ok(__golem_result) => __golem_result
-    Err(__golem_error) => return Err(__golem_error)
-  }
-  @toolMiddleware.decode_result_stdout_only(__golem_result)
-}
-
-///|
-///
 pub async fn PresentedUnderlying::start_stdout(
   self : PresentedUnderlying,
 ) -> Result[
@@ -1180,52 +1154,6 @@ pub async fn PresentedUnderlying::start_stdout(
     Err(__golem_error) => return Err(__golem_error)
   }
   Ok(__golem_result)
-}
-
-///|
-///
-pub async fn PresentedUnderlying::abandon_stdout(
-  self : PresentedUnderlying,
-) -> Result[
-  @asyncCore.Stream[Byte],
-  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
-] {
-  let __golem_command_path = ["abandon-stdout"]
-  let __golem_def = __golem_middleware_tool_def_Presented()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-          __golem_command_path,
-        ),
-      )
-  }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_values : Array[(String, @model.SchemaValue)] = []
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_result = match
-    self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
-      _,
-      _,
-    ) {
-      None
-    }) {
-    Ok(__golem_result) => __golem_result
-    Err(__golem_error) => return Err(__golem_error)
-  }
-  @toolMiddleware.decode_result_stdout_only(__golem_result)
 }
 
 ///|
@@ -1277,54 +1205,6 @@ pub async fn PresentedUnderlying::start_abandon_stdout(
 
 ///|
 ///
-pub async fn PresentedUnderlying::value_stdout(
-  self : PresentedUnderlying,
-  value : String,
-) -> Result[
-  (Int, @asyncCore.Stream[Byte]),
-  @toolMiddleware.ToolInvokeError[@tool.NoToolError],
-] {
-  let __golem_command_path = ["value-stdout"]
-  let __golem_def = __golem_middleware_tool_def_Presented()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-          __golem_command_path,
-        ),
-      )
-  }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_values : Array[(String, @model.SchemaValue)] = []
-  __golem_values.push(("value", @schema.to_value_as(value)))
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_result = match
-    self.underlying.invoke_with(__golem_command_path, __golem_input, None, fn(
-      _,
-      _,
-    ) {
-      None
-    }) {
-    Ok(__golem_result) => __golem_result
-    Err(__golem_error) => return Err(__golem_error)
-  }
-  @toolMiddleware.decode_result_with_stdout(__golem_result)
-}
-
-///|
-///
 pub async fn PresentedUnderlying::start_value_stdout(
   self : PresentedUnderlying,
   value : String,
@@ -1370,55 +1250,6 @@ pub async fn PresentedUnderlying::start_value_stdout(
     Err(__golem_error) => return Err(__golem_error)
   }
   Ok(__golem_result)
-}
-
-///|
-///
-pub async fn PresentedUnderlying::io(
-  self : PresentedUnderlying,
-  input : @toolMiddleware.MiddlewareStdin,
-) -> Result[
-  (String, @asyncCore.Stream[Byte]),
-  @toolMiddleware.ToolInvokeError[RunError],
-] {
-  let __golem_command_path = ["io"]
-  let __golem_def = __golem_middleware_tool_def_Presented()
-  let __golem_index = match
-    __golem_def.command_index_by_path(__golem_command_path) {
-    Some(__golem_index) => __golem_index
-    None =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidCommandPath(
-          __golem_command_path,
-        ),
-      )
-  }
-  let __golem_model = __golem_def.canonical_input_model(__golem_index) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_values : Array[(String, @model.SchemaValue)] = []
-  let __golem_input = @tool.build_canonical_input(__golem_model, __golem_values) catch {
-    __golem_error =>
-      return Err(
-        @toolMiddleware.ToolInvokeError::InvalidInput(repr(__golem_error)),
-      )
-  }
-  let __golem_result = match
-    self.underlying.invoke_with(
-      __golem_command_path,
-      __golem_input,
-      Some(input),
-      fn(__golem_name, __golem_error) {
-        @tool.decode_named_tool_error(__golem_name, __golem_error)
-      },
-    ) {
-    Ok(__golem_result) => __golem_result
-    Err(__golem_error) => return Err(__golem_error)
-  }
-  @toolMiddleware.decode_result_with_stdout(__golem_result)
 }
 
 ///|

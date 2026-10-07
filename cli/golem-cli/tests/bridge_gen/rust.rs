@@ -19,7 +19,9 @@ use crate::bridge_gen::fixtures::{
 };
 use crate::bridge_gen::type_naming::test_type_naming;
 use camino::{Utf8Path, Utf8PathBuf};
-use golem_cli::bridge_gen::rust::{RustBridgeGenerator, RustBridgeMode, RustTypeName};
+use golem_cli::bridge_gen::rust::{
+    RustBridgeGenerator, RustBridgeGeneratorConfig, RustBridgeMode, RustTypeName,
+};
 use golem_cli::bridge_gen::{BridgeGenerator, BridgeMode, bridge_client_directory_name};
 use golem_cli::model::language::GuestLanguage;
 use golem_common::model::Empty;
@@ -93,7 +95,9 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
     let path = target.join("src/lib.rs");
     let mut source = std::fs::read_to_string(&path).unwrap();
     assert!(source.contains("golem_rust::agentic::AgentStream<"));
-    assert!(source.contains("encode_schema_value_async(&method_parameters)"));
+    assert!(source.contains("new_with_wire_codecs"));
+    assert!(!source.contains("encode_schema_value"));
+    assert!(!source.contains("schema::SchemaValue::"));
     for method in [
         "consume",
         "produce",
@@ -149,22 +153,22 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
         let item_type = quote::quote!(#item_type).to_string();
         let reader = quote::quote!(#reader).to_string();
         let codec_test = match name.as_str() {
-            "new_string_stream" => Some(("String::from(\"value\")", "String(_)")),
+            "new_string_stream" => Some(("String::from(\"value\")", "StringValue(_)")),
             "new_stream_item_stream" => Some((
                 "StreamItem { label: String::from(\"root\"), children: vec![StreamItem { label: String::from(\"child\"), children: vec![] }] }",
-                "Record { .. }",
+                "RecordValue(_)",
             )),
-            "new_path_stream" => Some(("String::from(\"value\")", "Path { .. }")),
+            "new_path_stream" => Some(("String::from(\"value\")", "PathValue(_)")),
             "new_list_stream" => Some((
                 "vec![String::from(\"a\"), String::from(\"b\")]",
-                "List { .. }",
+                "ListValue(_)",
             )),
             "new_fixed_list_stream" => Some((
                 "vec![String::from(\"a\"), String::from(\"b\")]",
-                "FixedList { .. }",
+                "FixedListValue(_)",
             )),
-            "new_map_stream" => Some(("vec![(String::from(\"a\"), 1u32)]", "Map { .. }")),
-            "new_list_stream1" => Some(("vec![(String::from(\"a\"), 1u32)]", "List { .. }")),
+            "new_map_stream" => Some(("vec![(String::from(\"a\"), 1u32)]", "MapValue(_)")),
+            "new_list_stream1" => Some(("vec![(String::from(\"a\"), 1u32)]", "ListValue(_)")),
             _ => None,
         };
         if let Some((value, kind)) = codec_test {
@@ -179,13 +183,23 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
             source.push_str(&format!(r#"
                 #[test]
                 fn codec_{name}() {{
-                    let encode: fn({item_type}) -> Result<crate::__golem_bridge_runtime::schema::SchemaValue, String> = {encode};
+                    fn complete<F: std::future::Future>(future: F) -> F::Output {{
+                        let mut future = std::pin::pin!(future);
+                        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+                        match std::future::Future::poll(future.as_mut(), &mut context) {{
+                            std::task::Poll::Ready(value) => value,
+                            std::task::Poll::Pending => panic!("pure codec unexpectedly suspended"),
+                        }}
+                    }}
+                    let encode = |value: {item_type}| ({encode})(value);
                     let decode = {decode};
                     let original = {value};
-                    let wire = encode(original.clone()).unwrap();
-                    assert!(matches!(wire, crate::__golem_bridge_runtime::schema::SchemaValue::{kind}));
-                    assert_eq!(encode(decode(wire.clone()).unwrap()).unwrap(), wire);
-                    assert!(decode(crate::__golem_bridge_runtime::schema::SchemaValue::Bool(false)).is_err());
+                    let wire = complete(encode(original.clone())).unwrap();
+                    assert!(matches!(wire.value_nodes[wire.root as usize], __wire::SchemaValueNode::{kind}));
+                    let expected = format!("{{wire:?}}");
+                    let actual = complete(encode(decode(wire).unwrap())).unwrap();
+                    assert_eq!(format!("{{actual:?}}"), expected);
+                    assert!(decode(__wire::SchemaValueTree {{ value_nodes: vec![__wire::SchemaValueNode::BoolValue(false)], root: 0 }}).is_err());
                 }}
             "#));
         }
@@ -347,13 +361,15 @@ fn bridge_rust_ephemeral_agent_skips_non_phantom_constructors() {
     assert!(lib_rs.contains("pub async fn new_phantom("));
     assert!(!lib_rs.contains("pub async fn get_phantom("));
     assert!(!lib_rs.contains("Uuid::new_v4"));
-    assert!(lib_rs.contains(
-        "return Ok(Self {\n            constructor_parameters,\n            phantom_id: None,"
-    ));
+    let compact_lib_rs: String = lib_rs
+        .chars()
+        .filter(|char| !char.is_whitespace())
+        .collect();
+    assert!(compact_lib_rs.contains("returnOk(Self{constructor_parameters,phantom_id:None,"));
 }
 
 #[test]
-fn bridge_rust_external_rest_config_uses_canonical_json_and_session_public_json() {
+fn bridge_rust_external_rest_and_session_config_use_application_json() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     let mut agent_type = agent(
@@ -385,15 +401,9 @@ fn bridge_rust_external_rest_config_uses_canonical_json_and_session_public_json(
         .unwrap();
 
     let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
-    assert!(source.contains(
-        "let __public_config_json = golem_client::invocation_session::encode_generated_streamless_value("
-    ));
-    assert!(
-        source
-            .contains("let __canonical_config_json = golem_common::schema::render::to_json_value(")
-    );
-    assert!(source.contains("value: __public_config_json"));
-    assert!(source.contains("value: __canonical_config_json.into()"));
+    assert!(source.contains("let __config_json = golem_common::schema::render::to_json_value("));
+    assert!(source.contains("value: __config_json.clone()"));
+    assert!(source.contains("value: __config_json.into()"));
     assert!(!source.contains("serde_json::to_value(&__config_value)"));
 }
 
@@ -527,11 +537,14 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         vec![def("CapabilityEnvelope", envelope)],
         AgentMode::Durable,
     );
-    let mut generator = RustBridgeGenerator::new_with_mode(
+    let config =
+        RustBridgeGeneratorConfig::from_cli(&[".*=Debug,Clone".into()], &[], dir.path()).unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
         agent_type,
         target_path,
         true,
         RustBridgeMode::GuestWasmRpc,
+        config,
     )
     .unwrap();
     generator.generate().unwrap();
@@ -563,6 +576,115 @@ fn guest_generation_compiles_host_managed_capability_methods() {
         "generated guest capability crate failed cargo check\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn configured_derives_cover_generated_named_and_synthetic_types() {
+    let dir = TempDir::new().unwrap();
+    let target_path = Utf8Path::from_path(dir.path()).unwrap();
+    let media = multimodal(vec![
+        variant_case("text", Some(SchemaType::string())),
+        variant_case("count", Some(SchemaType::u32())),
+    ]);
+    let agent_type = agent(
+        "DerivedAgent",
+        "rust",
+        vec![],
+        vec![
+            method(
+                "named",
+                vec![field("record", ref_to("OrderRecord"))],
+                Some(ref_to("OrderVariant")),
+            ),
+            method("media", vec![field("media", media.clone())], Some(media)),
+            method(
+                "language",
+                vec![field(
+                    "text",
+                    unstructured_text_schema_type(TextRestrictions {
+                        languages: Some(vec!["en".into(), "de".into()]),
+                        ..Default::default()
+                    }),
+                )],
+                None,
+            ),
+            method(
+                "mime",
+                vec![field(
+                    "binary",
+                    unstructured_binary_schema_type(BinaryRestrictions {
+                        mime_types: Some(vec!["image/png".into(), "image/jpeg".into()]),
+                        ..Default::default()
+                    }),
+                )],
+                None,
+            ),
+            method("alias", vec![field("alias", ref_to("StringAlias"))], None),
+        ],
+        vec![
+            def(
+                "OrderRecord",
+                SchemaType::record(vec![named_field("id", SchemaType::u32())]),
+            ),
+            def(
+                "OrderVariant",
+                SchemaType::variant(vec![
+                    variant_case("empty", None),
+                    variant_case("record", Some(ref_to("OrderRecord"))),
+                ]),
+            ),
+            def("StringAlias", SchemaType::string()),
+        ],
+        AgentMode::Durable,
+    );
+    let config = RustBridgeGeneratorConfig::from_cli(
+        &[
+            ".*=PartialEq,Clone".into(),
+            "^(OrderRecord|Multimodal0)$=Eq,PartialEq".into(),
+        ],
+        &[],
+        dir.path(),
+    )
+    .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        agent_type,
+        target_path,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let source = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
+    for type_name in [
+        "OrderRecord",
+        "OrderVariant",
+        "Multimodal0",
+        "Languages0",
+        "Mimetypes0",
+    ] {
+        let declaration = ["pub struct ", "pub enum "]
+            .into_iter()
+            .find_map(|prefix| source.find(&format!("{prefix}{type_name}")))
+            .unwrap_or_else(|| panic!("missing generated type {type_name}:\n{source}"));
+        let derive = &source[source[..declaration].rfind("#[derive(").unwrap()..declaration];
+        assert!(derive.contains("PartialEq"), "{type_name}: {derive}");
+        assert_eq!(derive.matches("Clone").count(), 1, "{type_name}: {derive}");
+        if matches!(type_name, "OrderRecord" | "Multimodal0") {
+            assert_eq!(
+                derive.matches("PartialEq").count(),
+                1,
+                "{type_name}: {derive}"
+            );
+            assert!(derive.contains("Eq"), "{type_name}: {derive}");
+        }
+    }
+    let alias = source.find("pub type StringAlias").unwrap();
+    assert!(
+        !source[source[..alias].rfind('\n').unwrap_or(0)..alias].contains("derive"),
+        "aliases cannot receive derives:\n{source}"
     );
 }
 
@@ -630,6 +752,206 @@ counter-agent-client = {{ path = {package_dir:?} }}
 }
 
 #[test]
+fn external_type_only_crate_is_portable_serializable_and_client_free() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let restricted_text = unstructured_text_schema_type(TextRestrictions {
+        languages: Some(vec!["en".to_string(), "de".to_string()]),
+        ..Default::default()
+    });
+    let restricted_binary = unstructured_binary_schema_type(BinaryRestrictions {
+        mime_types: Some(vec!["image/png".to_string(), "application/pdf".to_string()]),
+        ..Default::default()
+    });
+    let envelope = SchemaType::record(vec![
+        named_field("recursive", ref_to("recursive-record")),
+        named_field("variant", ref_to("portable-variant")),
+        named_field("state", ref_to("portable-enum")),
+        named_field("restricted-text", restricted_text.clone()),
+        named_field(
+            "unrestricted-text",
+            unstructured_text_schema_type(TextRestrictions::default()),
+        ),
+        named_field("restricted-binary", restricted_binary.clone()),
+        named_field(
+            "unrestricted-binary",
+            unstructured_binary_schema_type(BinaryRestrictions::default()),
+        ),
+        named_field(
+            "bare-binary",
+            SchemaType::binary(BinaryRestrictions::default()),
+        ),
+    ]);
+    let media = multimodal(vec![
+        variant_case("caption", Some(restricted_text)),
+        variant_case("picture", Some(restricted_binary)),
+    ]);
+    let agent_type = agent(
+        "PortableAgent",
+        "rust",
+        vec![],
+        vec![
+            method(
+                "round-trip",
+                vec![field("value", ref_to("portable-envelope"))],
+                Some(ref_to("portable-envelope")),
+            ),
+            method("media", vec![field("parts", media.clone())], Some(media)),
+        ],
+        vec![
+            def(
+                "recursive-record",
+                SchemaType::record(vec![
+                    named_field("label", SchemaType::string()),
+                    named_field("child", SchemaType::option(ref_to("recursive-record"))),
+                ]),
+            ),
+            def(
+                "portable-variant",
+                SchemaType::variant(vec![
+                    variant_case("empty", None),
+                    variant_case("record", Some(ref_to("recursive-record"))),
+                ]),
+            ),
+            def(
+                "portable-enum",
+                SchemaType::r#enum(vec!["ready".to_string(), "waiting".to_string()]),
+            ),
+            def("portable-envelope", envelope),
+        ],
+        AgentMode::Durable,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    RustBridgeGenerator::new(agent_type, &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    cargo_check_with_args(
+        &package_dir,
+        &["--no-default-features", "--features", "serde"],
+    );
+
+    let tree = cargo_output(
+        &package_dir,
+        &["tree", "--no-default-features", "--edges", "normal"],
+    );
+    for forbidden in [
+        "golem-client",
+        "golem-common",
+        "reqwest ",
+        "reqwest-middleware",
+    ] {
+        assert!(
+            !tree.contains(forbidden),
+            "no-default generated crate resolved forbidden dependency {forbidden}:\n{tree}"
+        );
+    }
+
+    let consumer_dir = target_dir.join("consumer");
+    std::fs::create_dir_all(consumer_dir.join("src")).unwrap();
+    std::fs::write(
+        consumer_dir.join("Cargo.toml"),
+        format!(
+            r#"[package]
+name = "portable-bridge-consumer"
+version = "0.0.1"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+portable-agent-client = {{ path = {package_dir:?}, default-features = false, features = ["serde"] }}
+serde_json = "1"
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        consumer_dir.join("src/main.rs"),
+        r#"use portable_agent_client::*;
+
+fn main() {
+    let leaf = RecursiveRecord { label: "leaf".into(), child: None };
+    let recursive = RecursiveRecord {
+        label: "root".into(),
+        child: Some(Box::new(leaf)),
+    };
+    let value = PortableEnvelope {
+        recursive: Box::new(recursive.clone()),
+        variant: PortableVariant::record(Box::new(recursive)),
+        state: PortableEnum::ready,
+        restricted_text: UnstructuredText::from_inline("hello", languages::Languages0::En),
+        unrestricted_text: UnstructuredText::from_inline_any("hello"),
+        restricted_binary: UnstructuredBinary::from_inline(
+            vec![1, 2, 3],
+            mimetypes::Mimetypes0::ImagePng,
+        ),
+        unrestricted_binary: UnstructuredBinary::from_inline(vec![4, 5], "data/test".to_string()),
+        bare_binary: AgentBinary { bytes: vec![6, 7], mime_type: None },
+    };
+    let media = vec![
+        Multimodal0::caption(UnstructuredText::from_inline(
+            "caption",
+            languages::Languages0::De,
+        )),
+        Multimodal0::picture(UnstructuredBinary::from_url("https://example.test/image.png")),
+    ];
+    let value_json = serde_json::to_string(&value).unwrap();
+    let media_json = serde_json::to_string(&media).unwrap();
+    let _: PortableEnvelope = serde_json::from_str(&value_json).unwrap();
+    let _: Vec<Multimodal0> = serde_json::from_str(&media_json).unwrap();
+}
+"#,
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("cargo")
+        .args(["run", "--quiet"])
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
+        .current_dir(&consumer_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "portable consumer failed to construct and serde-roundtrip generated values\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let installed_targets = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .unwrap();
+    let installed_targets = String::from_utf8(installed_targets.stdout).unwrap();
+    assert!(
+        installed_targets
+            .lines()
+            .any(|line| line == "wasm32-unknown-unknown"),
+        "wasm32-unknown-unknown must be installed to verify the browser-WASM type-only contract"
+    );
+    let output = std::process::Command::new("cargo")
+        .args(["check", "--target", "wasm32-unknown-unknown"])
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
+        .current_dir(&consumer_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "portable consumer failed browser-WASM cargo check\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn bridge_rust_agent_named_golem_server_still_compiles() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
@@ -646,12 +968,90 @@ fn bridge_rust_agent_named_golem_server_still_compiles() {
 }
 
 #[test]
+fn external_agent_named_agent_binary_still_compiles() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let agent_type = agent(
+        "AgentBinary",
+        "rust",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    RustBridgeGenerator::new(agent_type, &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+    std::fs::create_dir(package_dir.join("examples")).unwrap();
+    std::fs::write(
+        package_dir.join("examples/client.rs"),
+        "fn main() { let _ = agent_binary_client::AgentBinary::get; }\n",
+    )
+    .unwrap();
+
+    cargo_check_with_args(&package_dir, &["--example", "client"]);
+}
+
+#[test]
 fn bridge_rust_agent_named_bridge_still_compiles() {
     let dir = TempDir::new().unwrap();
     let target_dir = Utf8Path::from_path(dir.path()).unwrap();
     let agent_type = agent("bridge", "", vec![], vec![], vec![], AgentMode::Durable);
 
     generate_and_compile(agent_type, target_dir);
+}
+
+#[test]
+fn external_portable_helper_and_multimodal_names_are_collision_protected() {
+    let dir = TempDir::new().unwrap();
+    let target_dir = Utf8Path::from_path(dir.path()).unwrap();
+    let media = multimodal(vec![variant_case(
+        "binary",
+        Some(SchemaType::binary(BinaryRestrictions::default())),
+    )]);
+    let agent_type = agent(
+        "CollisionAgent",
+        "typescript",
+        vec![],
+        vec![
+            method(
+                "use-helpers",
+                vec![
+                    field("named", ref_to("AgentBinary")),
+                    field("named-multimodal", ref_to("Multimodal0")),
+                    field("named-text", ref_to("UnstructuredText")),
+                    field("binary", SchemaType::binary(BinaryRestrictions::default())),
+                ],
+                None,
+            ),
+            method("media", vec![field("parts", media.clone())], Some(media)),
+        ],
+        vec![
+            def("AgentBinary", SchemaType::record(vec![])),
+            def("Multimodal0", SchemaType::record(vec![])),
+            def("UnstructuredText", SchemaType::record(vec![])),
+        ],
+        AgentMode::Durable,
+    );
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    RustBridgeGenerator::new(agent_type, &package_dir, true)
+        .unwrap()
+        .generate()
+        .unwrap();
+
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+    let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    assert!(source.contains("pub struct AgentBinary"));
+    assert!(source.contains("pub enum Multimodal1"), "{source}");
 }
 
 #[test]
@@ -738,7 +1138,56 @@ fn external_streaming_generation_compiles_recursive_streams_and_config() {
     );
     agent_type.config = vec![local_config(vec!["stream", "mode"], SchemaType::string())];
 
-    generate_and_compile(agent_type, target_dir);
+    let package_dir = target_dir.join(bridge_client_directory_name(
+        &agent_type.type_name,
+        BridgeMode::External,
+    ));
+    let config =
+        RustBridgeGeneratorConfig::from_cli(&["^Streaming.*=Debug,Clone".into()], &[], dir.path())
+            .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        agent_type,
+        &package_dir,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+    let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    for type_name in ["StreamingInput", "StreamingOutput"] {
+        let declaration = source.find(&format!("pub struct {type_name}")).unwrap();
+        let derive = &source[source[..declaration].rfind("#[derive(").unwrap()..declaration];
+        assert_eq!(derive.matches("Debug").count(), 1, "{type_name}: {derive}");
+        assert!(!derive.contains("Clone"), "{type_name}: {derive}");
+    }
+    cargo_check_with_args(&package_dir, &[]);
+    cargo_check_with_args(&package_dir, &["--no-default-features"]);
+
+    let source = std::fs::read_to_string(package_dir.join("src/lib.rs")).unwrap();
+    let client_module = source
+        .find("mod __golem_bridge_client")
+        .expect("generated external bridge must have one client feature boundary");
+    for client_only_shape in [
+        "pub struct StreamingInput",
+        "pub struct StreamingOutput",
+        "pub enum Multimodal0",
+        "pub struct StreamingAgent",
+        "pub async fn exchange(",
+        "pub async fn multimodal(",
+    ] {
+        let position = source.find(client_only_shape).unwrap_or_else(|| {
+            panic!("missing streaming client shape {client_only_shape}:\n{source}")
+        });
+        assert!(
+            position > client_module,
+            "stream-bearing shape escaped the client feature boundary: {client_only_shape}"
+        );
+    }
+    assert!(
+        source[..client_module].contains("pub struct AgentBinary"),
+        "portable helpers must remain outside the client boundary"
+    );
 }
 
 // Compiler-backed generator checks live in the integration target.
@@ -810,8 +1259,9 @@ fn guest_runtime_prelude_compiles_with_generated_golem_rust_dependency_flags() {
         "the relocated prelude test no longer exercises unrestricted binary values"
     );
     assert!(
-        lib_rs.contains("::__golem_bridge_runtime::agentic::UnstructuredText as crate")
-            && lib_rs.contains("::to_schema_value(input)"),
+        lib_rs.contains("::__golem_bridge_runtime::agentic::UnstructuredText as")
+            && lib_rs.contains("golem_rust::schema::wit::direct::IntoWire")
+            && lib_rs.contains("::write_wire(__source, __writer)"),
         "the relocated prelude test no longer exercises unrestricted text encoding:\n{lib_rs}"
     );
 
@@ -851,6 +1301,11 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     assert!(cargo_toml.contains("name = \"alpha-agent-guest-client\""));
     assert!(cargo_toml.contains("golem-rust"));
     assert!(cargo_toml.contains("export_golem_agentic"));
+    assert!(cargo_toml.contains("chrono = \"0.4\""));
+    assert!(cargo_toml.contains("serde = { version = \"1\""));
+    assert!(cargo_toml.contains("uuid = { version = \"1.18.1\""));
+    assert!(!cargo_toml.contains("[features]"));
+    assert!(!cargo_toml.contains("optional = true"));
     assert!(!cargo_toml.contains("golem-client"));
     assert!(!cargo_toml.contains("reqwest"));
 
@@ -866,7 +1321,7 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
         "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
         "pub fn schedule_cancelable_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
         "async_invoke_and_await",
-        "await_invoke_schema_value_result",
+        "WireReader::new",
         ".invoke(",
         "schedule_invocation",
         "schedule_cancelable_invocation",
@@ -1441,12 +1896,12 @@ fn guest_generation_emits_self_contained_typed_config_schema_values() {
         "generated typed config schema graph must include referenced definitions:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("TypedSchemaValue::new"),
-        "generated typed config encoding must build a typed value:\n{lib_rs}"
+        lib_rs.contains("__wire::TypedSchemaValue"),
+        "generated typed config encoding must build a wire typed value:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("golem_rust::encode_typed_schema_value"),
-        "generated typed config encoding must use guest golem-rust wire encoding:\n{lib_rs}"
+        !lib_rs.contains("golem_rust::encode_typed_schema_value"),
+        "generated typed config encoding must not build owned models:\n{lib_rs}"
     );
 
     let output = std::process::Command::new("cargo")
@@ -1591,8 +2046,15 @@ fn generate_tool(tool: golem_common::schema::tool::Tool, dir_name: &str) -> (Tem
 }
 
 fn cargo_check(target_path: &Utf8Path) {
+    cargo_check_with_args(target_path, &[]);
+}
+
+fn cargo_check_with_args(target_path: &Utf8Path, args: &[&str]) {
     let output = std::process::Command::new("cargo")
         .arg("check")
+        .args(args)
+        .arg("--target-dir")
+        .arg(crate::workspace_path().join("target/shared_bridge_tests"))
         .current_dir(target_path)
         .output()
         .unwrap();
@@ -1604,8 +2066,87 @@ fn cargo_check(target_path: &Utf8Path) {
     );
 }
 
+fn cargo_output(target_path: &Utf8Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("cargo")
+        .args(args)
+        .current_dir(target_path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "cargo {} failed\nstdout:\n{}\nstderr:\n{}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[test]
-fn tool_generation_compiles() {
+fn configured_agent_bridges_compile_with_local_custom_derive_dependency() {
+    let dir = TempDir::new().unwrap();
+    let root = Utf8Path::from_path(dir.path()).unwrap();
+    let derive_crate = root.join("custom-derive");
+    std::fs::create_dir_all(derive_crate.join("src")).unwrap();
+    std::fs::write(
+        derive_crate.join("Cargo.toml"),
+        "[package]\nname = \"custom-derive\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nproc-macro = true\n",
+    ).unwrap();
+    std::fs::write(
+        derive_crate.join("src/lib.rs"),
+        "extern crate proc_macro;\nuse proc_macro::TokenStream;\n#[proc_macro_derive(Marker)]\npub fn marker(_: TokenStream) -> TokenStream { TokenStream::new() }\n",
+    ).unwrap();
+
+    let target = root.join("configured-client");
+    let config = RustBridgeGeneratorConfig::from_cli(
+        &[".*=custom_derive::Marker".into()],
+        &[format!(
+            "custom-derive = {{ path = {:?} }}",
+            derive_crate.as_str()
+        )],
+        root.as_std_path(),
+    )
+    .unwrap();
+    let mut generator = RustBridgeGenerator::new_with_mode_and_config(
+        code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"),
+        &target,
+        true,
+        RustBridgeMode::ExternalRest,
+        config,
+    )
+    .unwrap();
+    generator.generate().unwrap();
+
+    let cargo_toml = std::fs::read_to_string(target.join("Cargo.toml")).unwrap();
+    let lib_rs = std::fs::read_to_string(target.join("src/lib.rs")).unwrap();
+    assert!(cargo_toml.contains("custom-derive"), "{cargo_toml}");
+    assert!(lib_rs.contains("custom_derive::Marker"), "{lib_rs}");
+    cargo_check(&target);
+
+    let guest_target = root.join("configured-guest-client");
+    let guest_config = RustBridgeGeneratorConfig::from_cli(
+        &[".*=custom_derive::Marker".into()],
+        &[format!(
+            "custom-derive = {{ path = {:?} }}",
+            derive_crate.as_str()
+        )],
+        root.as_std_path(),
+    )
+    .unwrap();
+    let mut guest_generator = RustBridgeGenerator::new_with_mode_and_config(
+        code_first_snippets_agent_type(GuestLanguage::Rust, "FooAgent"),
+        &guest_target,
+        true,
+        RustBridgeMode::GuestWasmRpc,
+        guest_config,
+    )
+    .unwrap();
+    guest_generator.generate().unwrap();
+    cargo_check(&guest_target);
+}
+
+#[test]
+fn rust_tool_generation_compiles_unchanged() {
     let (_dir, target_path) = generate_tool(grep_tool(), "grep-tool-guest-client");
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     assert!(lib_rs.contains("pub async fn replace("), "{lib_rs}");
@@ -1614,13 +2155,13 @@ fn tool_generation_compiles() {
         "{lib_rs}"
     );
     assert!(
-        lib_rs.contains("agentic::start_tool_invocation("),
+        lib_rs.contains("agentic::start_tool_invocation_direct_input("),
         "{lib_rs}"
     );
     assert!(lib_rs.contains(")\n            .await"), "{lib_rs}");
     for shape in [
-        "__name: String",
-        "__value: golem_rust::TypedSchemaValue",
+        "__name: &str",
+        "__value: i32",
         "Result<Option<GrepError>, String>",
         "\"bad-pattern\" =>",
         "Some(GrepError::BadPattern(__payload))",
@@ -1633,6 +2174,19 @@ fn tool_generation_compiles() {
         "_ => Ok(None)",
     ] {
         assert!(lib_rs.contains(shape), "missing {shape}:\n{lib_rs}");
+    }
+    for forbidden in [
+        "FromSchema",
+        "IntoSchema",
+        "schema::SchemaValue",
+        "golem_rust::TypedSchemaValue",
+        "decode_canonical_input_record",
+        "try_into_schema_graph",
+    ] {
+        assert!(
+            !lib_rs.contains(forbidden),
+            "retained {forbidden}:\n{lib_rs}"
+        );
     }
     assert!(!lib_rs.contains("expect_stdout"), "{lib_rs}");
     cargo_check(&target_path);
@@ -1702,6 +2256,7 @@ fn body() -> CommandBody {
         constraints: vec![],
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: vec![],
         annotations: None,
@@ -1847,6 +2402,7 @@ fn grep_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, replace],
         },
@@ -1882,6 +2438,7 @@ fn git_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, stash, pop],
         },
@@ -1932,6 +2489,7 @@ fn colliding_names_tool() -> Tool {
     });
     Tool {
         version: "1".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, sub],
         },

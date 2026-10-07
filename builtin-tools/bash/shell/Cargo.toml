@@ -1,0 +1,117 @@
+[package]
+name = "bash-shell"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+test-support = []
+
+[lib]
+crate-type = ["rlib"]
+
+
+[dependencies]
+libc = "0.2"
+brush-core = "0.5"
+brush-builtins = "0.2"
+brush-parser = "0.4"
+wcurl = { path = "../utilities/wcurl" }
+waget = { path = "../utilities/waget" }
+tokio = { version = "1", features = ["rt", "time"] }
+diffy = { version = "0.5", features = ["std"] }
+diffutils = "0.5"
+fancy-regex = "0.18"
+infer = "0.19"
+jaq-core = "3.1"
+jaq-json = "2.0"
+# `file`'s JSON detection (validate, don't reparse): already in the dependency tree
+# transitively (jaq-json and others pull it in), this just makes it a direct one.
+serde_json = "1.0"
+jaq-std = "3.0"
+uu_sed = { package = "sed", version = "0.2" }
+regex = "1"
+unicode-width = "0.2"
+similar = "2.7"
+walkdir = "2"
+uu_cat = "0.13"
+uu_ls = "0.13"
+uu_wc = "0.13"
+uu_head = "0.13"
+uu_sort = "0.13"
+uu_mkdir = "0.13"
+uu_rm = "0.13"
+uu_mv = "0.13"
+uu_cp = "0.13"
+uu_env = "0.13"
+uu_cut = "0.13"
+uu_tr = "0.13"
+uu_uniq = "0.13"
+uu_tail = "0.13"
+uu_tee = "0.13"
+uu_touch = "0.13"
+uu_sleep = "0.13"
+uu_printf = "0.13"
+uucore = "0.13"
+# Further coreutils. default-features = false — these are the ones the coreutils fork
+# (rev b1e88c20) only builds for wasm32-wasip2 with default features off (icu/openssl/hardware
+# extras that don't target wasm); core functionality does not depend on those extras.
+uu_basename = { version = "0.13", default-features = false }
+uu_dirname = { version = "0.13", default-features = false }
+uu_realpath = { version = "0.13", default-features = false }
+uu_readlink = { version = "0.13", default-features = false }
+uu_ln = { version = "0.13", default-features = false }
+uu_link = { version = "0.13", default-features = false }
+uu_unlink = { version = "0.13", default-features = false }
+uu_rmdir = { version = "0.13", default-features = false }
+uu_mktemp = { version = "0.13", default-features = false }
+uu_truncate = { version = "0.13", default-features = false }
+uu_nl = { version = "0.13", default-features = false }
+uu_paste = { version = "0.13", default-features = false }
+uu_join = { version = "0.13", default-features = false }
+uu_comm = { version = "0.13", default-features = false }
+uu_fold = { version = "0.13", default-features = false }
+uu_fmt = { version = "0.13", default-features = false }
+uu_expand = { version = "0.13", default-features = false }
+uu_unexpand = { version = "0.13", default-features = false }
+uu_tsort = { version = "0.13", default-features = false }
+uu_split = { version = "0.13", default-features = false }
+uu_csplit = { version = "0.13", default-features = false }
+uu_base64 = { version = "0.13", default-features = false }
+uu_base32 = { version = "0.13", default-features = false }
+uu_basenc = { version = "0.13", default-features = false }
+uu_md5sum = { version = "0.13", default-features = false }
+uu_sha1sum = { version = "0.13", default-features = false }
+uu_sha256sum = { version = "0.13", default-features = false }
+uu_sha512sum = { version = "0.13", default-features = false }
+uu_b2sum = { version = "0.13", default-features = false }
+uu_cksum = { version = "0.13", default-features = false }
+uu_od = { version = "0.13", default-features = false }
+uu_date = { version = "0.13", default-features = false }
+uu_expr = { version = "0.13", default-features = false }
+uu_factor = { version = "0.13", default-features = false }
+uu_numfmt = { version = "0.13", default-features = false }
+uu_shuf = { version = "0.13", default-features = false }
+uu_nproc = { version = "0.13", default-features = false }
+uu_uname = { version = "0.13", default-features = false }
+uu_dd = { version = "0.13", default-features = false }
+uu_du = { version = "0.13", default-features = false }
+futures = { workspace = true }
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# GNU's date grammar for `find -newerXt` (relative dates, month names, offsets). Already in the
+# wasm build through uu_date/uu_touch; the same version the coreutils fork pins.
+parse_datetime = "0.16"
+# Diagnostics for the agent's log. A facade: the component installs Golem's logger; natively
+# and in tests nothing is installed and every call is a no-op.
+log = "0.4"
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread"] }
+tempfile = "3"

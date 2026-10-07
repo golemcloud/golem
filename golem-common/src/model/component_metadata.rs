@@ -1409,7 +1409,7 @@ mod protobuf {
             use golem_api_grpc::proto::golem::component::config_key_scope::Value;
             let value = match value {
                 crate::model::tool::ConfigKeyScope::All => {
-                    Value::All(golem_api_grpc::proto::golem::common::Empty {})
+                    Value::All(golem_schema::proto::golem::common::Empty {})
                 }
                 crate::model::tool::ConfigKeyScope::Keys(keys) => {
                     Value::Keys(golem_api_grpc::proto::golem::component::ConfigKeyPaths {
@@ -1454,7 +1454,7 @@ mod protobuf {
         fn from(value: SecretKeyScope) -> Self {
             use golem_api_grpc::proto::golem::component::secret_key_scope::Value;
             let value = match value {
-                SecretKeyScope::All => Value::All(golem_api_grpc::proto::golem::common::Empty {}),
+                SecretKeyScope::All => Value::All(golem_schema::proto::golem::common::Empty {}),
                 SecretKeyScope::Keys(keys) => {
                     Value::Keys(golem_api_grpc::proto::golem::component::SecretKeyPaths {
                         paths: keys
@@ -2347,6 +2347,7 @@ mod tests {
 
     fn sample_tool() -> Tool {
         Tool {
+            requires_filesystem: false,
             version: "1.2.3".to_string(),
             commands: CommandTree {
                 nodes: vec![CommandNode {

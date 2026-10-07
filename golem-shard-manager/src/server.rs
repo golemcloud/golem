@@ -19,13 +19,14 @@ use golem_shard_manager::config::{
 };
 use golem_shard_manager::{Deployment, ShardManagerError};
 use prometheus::default_registry;
+use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 fn main() -> Result<(), anyhow::Error> {
-    // Before the configuration is loaded at all, so that `--dump-config` cannot print a config
-    // that silently ignores a deployment's legacy settings.
+    // Before the configuration is loaded at all, so config loading cannot silently ignore a
+    // deployment's legacy settings.
     reject_legacy_db_env_vars().map_err(|err| anyhow::anyhow!(err))?;
 
     match make_config_loader().load_or_dump_config() {
@@ -63,6 +64,12 @@ async fn async_main(
     });
 
     let mut join_set = JoinSet::new();
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        registry.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
     let details = match golem_shard_manager::run(
         &config,
         Deployment::Standalone {

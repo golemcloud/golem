@@ -4818,7 +4818,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                         let execution_status = retry_params.execution_status;
                         let current_retry_policy_state = retry_params
                             .worker
-                            .get_attached_last_known_status()
+                            .get_last_known_status()
                             .await
                             .current_retry_state
                             .get(&retry_params.retry_point)
@@ -4927,7 +4927,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 #[derive(Clone)]
 struct DurableStreamingTaskParams {
     streams: StreamSession,
-    input: golem_api_grpc::proto::golem::schema::SchemaValue,
+    input: golem_schema::proto::golem::schema::SchemaValue,
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,
     attempt_id: uuid::Uuid,

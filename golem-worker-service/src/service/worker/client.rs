@@ -546,7 +546,7 @@ pub trait WorkerClient: Send + Sync {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()>;
+    ) -> WorkerResult<OplogIndex>;
 
     async fn get_oplog(
         &self,
@@ -651,7 +651,7 @@ pub trait WorkerClient: Send + Sync {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -1380,7 +1380,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         disable_wakeup: bool,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let agent_id = agent_id.clone();
         self.call_worker_executor(
             agent_id.clone(),
@@ -1400,8 +1400,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             |response| match response.into_inner() {
                 workerexecutor::v1::UpdateWorkerResponse {
-                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(_)),
-                } => Ok(()),
+                    result: Some(workerexecutor::v1::update_worker_response::Result::Success(index)),
+                } => Ok(OplogIndex::from_u64(index)),
                 workerexecutor::v1::UpdateWorkerResponse {
                     result: Some(workerexecutor::v1::update_worker_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -1409,8 +1409,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await?;
-        Ok(())
+        .await
     }
 
     async fn get_oplog(
@@ -2128,7 +2127,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -2849,8 +2848,6 @@ mod one_shot_session_tests {
     };
     use futures::stream;
     use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-    use golem_api_grpc::proto::golem::common::Empty;
-    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::worker::{
         AgentId, IdempotencyKey, InvocationAccepted, InvocationFailure, InvocationFailureKind,
         InvocationRequest, InvocationResponse, InvocationSessionCompletion,
@@ -2859,6 +2856,8 @@ mod one_shot_session_tests {
     };
     use golem_common::model::AgentFingerprint;
     use golem_common::model::oplog::{AgentError, OplogIndex};
+    use golem_schema::proto::golem::common::Empty;
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
     use tonic::Status;
@@ -3211,7 +3210,6 @@ mod rejection_mapping_tests {
         validate_agent_enumeration_count,
     };
     use futures::{Stream, StreamExt, stream};
-    use golem_api_grpc::proto::golem::schema::{SchemaValue, schema_value};
     use golem_api_grpc::proto::golem::shardmanager::{
         IpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry, ShardId,
         ip_address,
@@ -3233,6 +3231,7 @@ mod rejection_mapping_tests {
     use golem_common::model::oplog::AgentError as OplogAgentError;
     use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
     use golem_common::model::{AgentId, RetryConfig, RoutingTable, ShardEpoch};
+    use golem_schema::proto::golem::schema::{SchemaValue, schema_value};
     use golem_service_base::clients::shard_manager::{
         BatchRenewalEntry, QuotaError, ShardLease, ShardLeaseError, ShardManager,
         ShardManagerError, ShardRegistration,
@@ -3935,7 +3934,7 @@ mod delete_reply_tests {
     fn success() -> workerexecutor::v1::DeleteWorkerResponse {
         workerexecutor::v1::DeleteWorkerResponse {
             result: Some(workerexecutor::v1::delete_worker_response::Result::Success(
-                golem_api_grpc::proto::golem::common::Empty {},
+                golem_schema::proto::golem::common::Empty {},
             )),
         }
     }

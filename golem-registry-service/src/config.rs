@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::services::domain_registration::DomainRegistrationConfig;
+use anyhow::Context;
 use golem_common::config::DbConfig;
 use golem_common::config::{ConfigLoader, DbSqliteConfig};
 use golem_common::model::Empty;
@@ -26,11 +27,132 @@ use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::uuid;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BuiltinArtifactSource {
+    pub url: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BuiltinArtifactsConfig {
+    pub cache_dir: Option<PathBuf>,
+    /// Per-artifact source overrides. Production defaults come from the embedded release lock.
+    pub source_overrides: BTreeMap<String, BuiltinArtifactSource>,
+}
+
+impl BuiltinArtifactsConfig {
+    pub fn resolved_artifacts(&self) -> anyhow::Result<BTreeMap<String, BuiltinArtifactSource>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Lock {
+            schema_version: u32,
+            repository: String,
+            artifacts: BTreeMap<String, LockEntry>,
+        }
+
+        #[derive(Deserialize)]
+        struct LockEntry {
+            component: String,
+            version: String,
+            sha256: String,
+        }
+
+        let lock: Lock = serde_json::from_str(include_str!("../../builtin-artifacts.lock.json"))
+            .context("failed to parse builtin-artifacts.lock.json")?;
+        anyhow::ensure!(
+            lock.schema_version == 1,
+            "unsupported built-in artifact lock schema version {}",
+            lock.schema_version
+        );
+        anyhow::ensure!(
+            lock.repository == "golemcloud/golem-builtins",
+            "unsupported built-in artifact repository '{}'",
+            lock.repository
+        );
+
+        let mut artifacts = lock
+            .artifacts
+            .into_iter()
+            .map(|(artifact_id, entry)| {
+                anyhow::ensure!(
+                    valid_artifact_id(&artifact_id),
+                    "invalid built-in artifact ID '{artifact_id}'"
+                );
+                anyhow::ensure!(
+                    valid_component_name(&entry.component),
+                    "invalid built-in artifact component '{}'",
+                    entry.component
+                );
+                semver::Version::parse(&entry.version).with_context(|| {
+                    format!(
+                        "invalid version '{}' for built-in artifact '{artifact_id}'",
+                        entry.version
+                    )
+                })?;
+                anyhow::ensure!(
+                    entry.sha256.len() == 64
+                        && entry
+                            .sha256
+                            .bytes()
+                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                    "invalid SHA-256 for built-in artifact '{artifact_id}'"
+                );
+                let url = format!(
+                    "https://github.com/{}/releases/download/{}-v{}/{}.wasm",
+                    lock.repository, entry.component, entry.version, entry.component
+                );
+                Ok((
+                    artifact_id,
+                    BuiltinArtifactSource {
+                        url,
+                        sha256: Some(entry.sha256),
+                    },
+                ))
+            })
+            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+        artifacts.extend(self.source_overrides.clone());
+        Ok(artifacts)
+    }
+
+    pub fn resolved_cache_dir(&self) -> anyhow::Result<PathBuf> {
+        match &self.cache_dir {
+            Some(path) => Ok(path.clone()),
+            None => {
+                let executable = std::env::current_exe().map_err(|error| {
+                    anyhow::anyhow!("failed to locate registry executable: {error}")
+                })?;
+                let parent = executable.parent().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "registry executable '{}' has no parent directory",
+                        executable.display()
+                    )
+                })?;
+                Ok(parent.join("builtin-artifacts"))
+            }
+        }
+    }
+}
+
+fn valid_artifact_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn valid_component_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct McpImportResolverConfig {
@@ -114,6 +236,8 @@ pub struct RegistryServiceConfig {
     pub environment: String,
     pub workspace: String,
     pub http_port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub grpc: GrpcApiConfig,
     pub db: DbConfig,
     pub login: LoginConfig,
@@ -127,6 +251,8 @@ pub struct RegistryServiceConfig {
     pub initial_plans: HashMap<String, PrecreatedPlan>,
     #[serde(default)]
     pub builtin_plugins: BuiltinPluginsConfig,
+    #[serde(default)]
+    pub builtin_artifacts: BuiltinArtifactsConfig,
     #[serde(default)]
     pub deployment_events: DeploymentEventsConfig,
     #[serde(default)]
@@ -144,6 +270,11 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
@@ -188,6 +319,16 @@ impl SafeDisplay for RegistryServiceConfig {
             &mut result,
             "builtin plugins: enabled={}",
             self.builtin_plugins.enabled(),
+        );
+        let _ = writeln!(
+            &mut result,
+            "builtin artifacts: cache_dir={}, source_overrides={}",
+            self.builtin_artifacts
+                .cache_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "<next to executable>".to_string()),
+            self.builtin_artifacts.source_overrides.len(),
         );
 
         let _ = writeln!(&mut result, "deployment events:");
@@ -277,6 +418,7 @@ impl Default for RegistryServiceConfig {
                 component_limit: 100,
                 worker_connection_limit: 100,
                 storage_limit: 500000000,
+                blob_storage_limit: default_unlimited(),
                 monthly_gas_limit: 1000000000000000000,
                 monthly_upload_limit: 1000000000,
                 max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
@@ -303,6 +445,7 @@ impl Default for RegistryServiceConfig {
             environment: "dev".to_string(),
             workspace: "release".to_string(),
             http_port: 8081,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "golem_registry_service.db".to_string(),
@@ -318,6 +461,7 @@ impl Default for RegistryServiceConfig {
             initial_accounts,
             initial_plans,
             builtin_plugins: BuiltinPluginsConfig::default(),
+            builtin_artifacts: BuiltinArtifactsConfig::default(),
             deployment_events: DeploymentEventsConfig::default(),
             security_scheme: SecuritySchemeConfig::default(),
             mcp_oauth: golem_mcp_import::oauth::Limits::default(),
@@ -626,6 +770,7 @@ pub struct PrecreatedPlan {
     pub component_limit: u64,
     pub worker_connection_limit: u64,
     pub storage_limit: u64,
+    pub blob_storage_limit: u64,
     pub monthly_gas_limit: u64,
     pub monthly_upload_limit: u64,
     pub max_memory_per_worker: u64,
@@ -708,13 +853,63 @@ pub fn make_config_loader() -> ConfigLoader<RegistryServiceConfig> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use test_r::test;
 
-    use crate::config::{ComponentFileUploadConfig, RegistryServiceConfig, make_config_loader};
+    use crate::config::{
+        BuiltinArtifactsConfig, ComponentFileUploadConfig, RegistryServiceConfig,
+        make_config_loader,
+    };
 
     #[test]
     pub fn config_is_loadable() {
         make_config_loader().load().expect("Failed to load config");
+    }
+
+    #[test]
+    pub fn builtin_artifact_defaults_are_pinned() {
+        let config = BuiltinArtifactsConfig::default();
+        assert!(config.source_overrides.is_empty());
+        let artifacts = config.resolved_artifacts().unwrap();
+        assert_eq!(artifacts.len(), 7);
+        for (artifact_id, source) in artifacts {
+            assert!(
+                source
+                    .url
+                    .starts_with("https://github.com/golemcloud/golem-builtins/releases/download/"),
+                "unexpected URL for {artifact_id}: {}",
+                source.url
+            );
+            assert_eq!(
+                source.sha256.as_deref().map(str::len),
+                Some(64),
+                "missing or invalid SHA-256 for {artifact_id}"
+            );
+        }
+    }
+
+    #[test]
+    pub fn builtin_artifact_config_overrides_one_embedded_source() {
+        let override_source = crate::config::BuiltinArtifactSource {
+            url: "https://example.com/javascript-tools.wasm".to_string(),
+            sha256: None,
+        };
+        let config = BuiltinArtifactsConfig {
+            source_overrides: BTreeMap::from([(
+                "javascript_tools".to_string(),
+                override_source.clone(),
+            )]),
+            ..Default::default()
+        };
+
+        let artifacts = config.resolved_artifacts().unwrap();
+        assert_eq!(artifacts.len(), 7);
+        assert_eq!(artifacts["javascript_tools"].url, override_source.url);
+        assert_eq!(artifacts["javascript_tools"].sha256, None);
+        assert!(artifacts["git_tool"].sha256.is_some());
+        assert!(artifacts["typescript_tools"].sha256.is_some());
+        assert!(artifacts["web_fetch"].sha256.is_some());
     }
 
     #[test]

@@ -9,7 +9,7 @@
  */
 import { fileURLToPath } from "node:url"
 import { dirname, relative, resolve } from "node:path"
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import ts from "typescript"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -111,6 +111,48 @@ const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, root)
 const program = ts.createProgram(parsed.fileNames, { ...parsed.options, noEmit: true })
 const checker = program.getTypeChecker()
 const index = program.getSourceFile(resolve(root, "src/index.ts"))
+const witCodecFacade = resolve(distDir, "src/WitCodec.js")
+const witCodecImplementation = resolve(distDir, "src/internal/WitCodec.js")
+
+function relativeImport(fromFile, toFile) {
+  const path = relative(dirname(fromFile), toFile).replaceAll("\\", "/")
+  return path.startsWith(".") ? path : `./${path}`
+}
+
+function rewriteRelativeImports(source, fromFile, rewrite, outputFile = fromFile) {
+  return source.replace(/(["'])(\.\.?\/[^"']+)\1/g, (match, quote, specifier) => {
+    const target = resolve(dirname(fromFile), specifier)
+    const replacement = rewrite(target)
+    return replacement ? `${quote}${relativeImport(outputFile, replacement)}${quote}` : match
+  })
+}
+
+const witCodecSource = readFileSync(witCodecFacade, "utf8")
+writeFileSync(
+  witCodecImplementation,
+  rewriteRelativeImports(
+    witCodecSource,
+    witCodecFacade,
+    (target) => target,
+    witCodecImplementation,
+  ),
+)
+function redirectWitCodecImports(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name)
+    if (entry.isDirectory()) {
+      redirectWitCodecImports(path)
+    } else if (path.endsWith(".js") && path !== witCodecImplementation) {
+      const source = readFileSync(path, "utf8")
+      const rewritten = rewriteRelativeImports(source, path, (target) =>
+        target === witCodecFacade ? witCodecImplementation : undefined,
+      )
+      if (rewritten !== source) writeFileSync(path, rewritten)
+    }
+  }
+}
+redirectWitCodecImports(resolve(distDir, "src"))
+
 const facades = index.statements
   .filter(
     (node) =>
@@ -118,16 +160,46 @@ const facades = index.statements
   )
   .map((node) => [
     node.moduleSpecifier.text.slice(2, -3),
-    "@golemcloud/effect-golem",
+    resolve(distDir, "index.mjs"),
     node.exportClause.name.text,
   ])
 facades.push(
-  ["ToolReflection", "@golemcloud/effect-golem", "Reflection"],
-  ["Sqlite/SqliteClient", "@golemcloud/effect-golem/sqlite"],
-  ["Postgres/PgClient", "@golemcloud/effect-golem/postgres"],
-  ["Mysql/MySqlClient", "@golemcloud/effect-golem/mysql"],
-  ["Ignite/IgniteClient", "@golemcloud/effect-golem/ignite2"],
+  ["ToolReflection", resolve(distDir, "index.mjs"), "Reflection"],
+  ["Sqlite/SqliteClient", resolve(distDir, "sqlite.mjs")],
+  ["Postgres/PgClient", resolve(distDir, "postgres.mjs")],
+  ["Mysql/MySqlClient", resolve(distDir, "mysql.mjs")],
+  ["Ignite/IgniteClient", resolve(distDir, "ignite.mjs")],
 )
+
+// Component builds need a complete tree-shakeable module graph, while public
+// subpath imports use the facades below to share state with the bundled entry.
+// Preserve every runtime module under one private root before replacing the
+// public files so all transitive imports remain inside the modular graph.
+const componentDir = resolve(distDir, "component")
+rmSync(componentDir, { recursive: true, force: true })
+function copyComponentModules(sourceDir, outputDir) {
+  for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
+    const source = resolve(sourceDir, entry.name)
+    const output = resolve(outputDir, entry.name)
+    if (entry.isDirectory()) {
+      copyComponentModules(source, output)
+    } else if (source.endsWith(".js") || source.endsWith(".mjs")) {
+      mkdirSync(dirname(output), { recursive: true })
+      copyFileSync(source, output)
+    }
+  }
+}
+copyComponentModules(resolve(distDir, "src"), componentDir)
+const componentIndex = resolve(componentDir, "index.js")
+writeFileSync(
+  componentIndex,
+  readFileSync(componentIndex, "utf8").replace(
+    /^export \{ (?:guest as golemAgent200Guest|toolGuest as golemTool010Guest|toolMiddlewareGuest)[^\n]*\n/gm,
+    "",
+  ),
+)
+writeFileSync(resolve(componentDir, "WitCodec.js"), 'export * from "./internal/WitCodec.js";\n')
+
 for (const [modulePath, owner, namespace] of facades) {
   const source = program.getSourceFile(resolve(root, "src", `${modulePath}.ts`))
   const exports = checker
@@ -151,11 +223,13 @@ for (const [modulePath, owner, namespace] of facades) {
       }
     }
   }
+  const output = resolve(distDir, "src", `${modulePath}.js`)
+  const ownerImport = relativeImport(output, owner)
   const imports = namespace
-    ? `import { ${namespace} as shared } from ${JSON.stringify(owner)};`
-    : `import * as shared from ${JSON.stringify(owner)};`
+    ? `import { ${namespace} as shared } from ${JSON.stringify(ownerImport)};`
+    : `import * as shared from ${JSON.stringify(ownerImport)};`
   writeFileSync(
-    resolve(distDir, "src", `${modulePath}.js`),
+    output,
     [
       imports,
       ...[...names].map(
@@ -166,4 +240,4 @@ for (const [modulePath, owner, namespace] of facades) {
     ].join("\n"),
   )
 }
-writeFileSync(resolve(distDir, "src/index.js"), 'export * from "@golemcloud/effect-golem";\n')
+writeFileSync(resolve(distDir, "src/index.js"), 'export * from "../index.mjs";\n')

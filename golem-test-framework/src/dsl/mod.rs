@@ -147,11 +147,16 @@ impl Drop for LogOutputGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     value: Option<SchemaValue>,
+    agent_id: AgentId,
 }
 
 impl AgentResult {
-    pub fn new(value: Option<SchemaValue>) -> Self {
-        Self { value }
+    pub fn new(value: Option<SchemaValue>, agent_id: AgentId) -> Self {
+        Self { value, agent_id }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
     }
 
     /// The raw decoded output value, if the method returned one.
@@ -684,6 +689,13 @@ pub trait TestDsl {
     }
 
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()>;
+
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,
@@ -1301,6 +1313,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         ),
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
+        }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            format!("Runtime reconstruction required: {}", details)
         }
         WorkerExecutorError::InvalidShardId {
             shard_id,

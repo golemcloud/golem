@@ -64,7 +64,7 @@ use crate::metrics::workers::AdmissionPhase;
 use crate::model::{AgentConfig, ExecutionStatus, LookupResult, SnapshotSource, TrapType};
 use crate::sandbox_filesystem::{SandboxFilesystem, SandboxFilesystemAdapter};
 use crate::services::active_agents::{
-    MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
+    ActiveAgent, MemoryGrant, RegisteredConcurrentAccount, WorkerComponentCharge,
 };
 use crate::services::agent_filesystem::{
     AccessMode, FilesystemGenerationHandle, Follow, ObjectKind, OpenOptions, PathTarget,
@@ -87,7 +87,7 @@ use crate::services::oplog::{
 };
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::resource_usage_metering::ResourceUsageAccount;
-use crate::services::rpc::DurableStreamReadError;
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::worker::{
     GetWorkerMetadataResult, InvocationResultIndexLookup, WorkerService,
 };
@@ -149,8 +149,9 @@ use golem_common::model::entity::{
 use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    AgentError, DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogErrorKind,
-    OplogIndex, OplogPayload, ReadOnlyViolationError, TimestampedUpdateDescription,
+    AgentError, DurableStreamEventSummary, FailedSnapshotAssistedUpdateDetails,
+    FilesystemSnapshotName, OplogEntry, OplogErrorKind, OplogIndex, OplogPayload,
+    ReadOnlyViolationError, SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
     UpdateDescription,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
@@ -160,13 +161,15 @@ use golem_common::model::worker::{
 };
 use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
+    AgentInvocationResult, AgentMetadata, AgentStatusRecord, AuthoritativeSnapshotKind,
+    IdempotencyKey, OwnedAgentId, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef,
+    RetryPolicyState, ShardAssignment, ShardEpoch, ShardId, SnapshotAssistedUpdateSelection,
+    Timestamp, TimestampedAgentInvocation,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
 use golem_common::related_span;
+use golem_common::retries::get_delay;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -175,7 +178,7 @@ use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast::Receiver;
@@ -277,6 +280,17 @@ fn component_charge_revision(
     pending_target_revision.unwrap_or(last_known_revision)
 }
 
+fn startup_component_charge_revision(status: &AgentStatusRecord) -> ComponentRevision {
+    component_charge_revision(
+        status
+            .pending_updates
+            .iter()
+            .find(|update| snapshot_assisted_head_failure(status, update).is_none())
+            .map(|update| update.target_revision),
+        status.component_revision,
+    )
+}
+
 /// How a pending-update target's metadata-resolution outcome should drive the
 /// startup component charge.
 #[derive(Debug, PartialEq, Eq)]
@@ -314,6 +328,14 @@ struct StartupComponentChargeRequirement {
 /// loop and re-runs `lookup_invocation_result`, which loads the published status
 /// record. Cheap, but not free, so this is not a millisecond knob.
 pub const INVOCATION_OWNERSHIP_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Upper bound on telling one stream producer that this consumer is being deleted.
+///
+/// The control is retried while the producer is unavailable, which covers a producer that is
+/// recovering, migrating or being deleted itself. A producer that stays unavailable longer than
+/// this, typically because its own deletion failed, fails this deletion attempt instead of
+/// leaving the consumer in `Deleting` without a result; the deletion can then be retried.
+const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Classifies a `get_metadata(target)` result into the startup charge action,
 /// preserving the invariant that admission charges the target revision whenever
@@ -683,6 +705,16 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Lifecycle request shared across resident worker generations. A terminal request is retained
     /// until the worker stops so permit reacquisition cannot lose it between `RunningWorker`s.
     interrupts: Arc<Interrupts>,
+    /// The establishment of the last interrupt request that `queue_interrupt` queued. A later
+    /// request waits for it before it signals the Store, and an entity admission reopens only
+    /// when it is still the last one.
+    interrupt_establishment_tail: StdMutex<Arc<InterruptEstablishment>>,
+    /// Earliest oplog index requested for deletion by runtime recovery. The same lock is the
+    /// publication gate between accepting a cut and publishing a successful invocation.
+    pending_runtime_jump: Arc<Mutex<Option<OplogIndex>>>,
+    runtime_append_tasks: StdMutex<Arc<tasks::RuntimeAppendTasks>>,
+    infrastructure_recovery_retry_config: RetryConfig,
+    infrastructure_recovery_attempt: AtomicU32,
     oom_retry_config: RetryConfig,
     snapshot_policy: SnapshotPolicy,
 
@@ -1087,14 +1119,10 @@ struct WorkerDurableStreamConsumerJournal<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
     #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
     async fn commit(&self) -> Result<(), SessionError> {
-        let (_, changed) = self
-            .state_actor
+        self.state_actor
             .commit_and_update_state(CommitLevel::Always)
             .await
             .map_err(SessionError::Fenced)?;
-        if changed {
-            self.state_actor.notify_status_changed();
-        }
         Ok(())
     }
 
@@ -1176,6 +1204,7 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
             AgentError::InternalError(error.to_string())
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1189,12 +1218,21 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
     }
 }
 
+fn recovery_retry_from(error: &WorkerExecutorError) -> Option<OplogIndex> {
+    match error {
+        WorkerExecutorError::RecoveryRequired { retry_from, .. } => *retry_from,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => recovery_retry_from(reason),
+        _ => None,
+    }
+}
+
 fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
     match error {
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
             is_infrastructure_recovery_error(reason)
         }
         WorkerExecutorError::Runtime { .. }
+        | WorkerExecutorError::RecoveryRequired { .. }
         | WorkerExecutorError::Unknown { .. }
         | WorkerExecutorError::AgentCreationFailed { .. }
         | WorkerExecutorError::ComponentNotFound { .. }
@@ -1248,7 +1286,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// entries.
     pub(crate) async fn settle_exclusions_after_prepare(&self) -> Result<(), WorkerExecutorError> {
         if let Some(rejected) = self.read_exclusions(SnapshotExclusions::persisted_rejections) {
-            let status = self.get_non_detached_last_known_status().await;
+            let status = self.get_last_known_status().await;
             self.worker_service()
                 .reject_periodic_snapshots(
                     &self.owned_agent_id,
@@ -1345,19 +1383,39 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn find_durable_stream_worker<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-    ) -> Result<Option<Arc<Self>>, WorkerExecutorError>
+    ) -> Result<
+        Option<(Arc<Self>, Option<Arc<EphemeralResponseLease>>)>,
+        DurableStreamRemoteError<WorkerExecutorError>,
+    >
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        if Self::get_latest_metadata(deps, owned_agent_id)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        Self::get_existing_suspended(deps, owned_agent_id, Principal::anonymous())
+        loop {
+            let worker = match Self::get_exact_existing_suspended(
+                deps,
+                owned_agent_id,
+                Principal::anonymous(),
+            )
             .await
-            .map(Some)
+            {
+                Ok(worker) => worker,
+                Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            };
+            if worker.agent_mode() != AgentMode::Ephemeral {
+                return Ok(Some((worker, None)));
+            }
+            match worker
+                .durable_stream_producer
+                .retain_response_or_wait_for_archive()
+                .await
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                })? {
+                Some(lease) => return Ok(Some((worker, Some(lease)))),
+                None => continue,
+            }
+        }
     }
 
     pub(crate) fn is_resolved(&self) -> bool {
@@ -1543,6 +1601,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .is_some_and(|worker| std::ptr::eq(worker.as_ref(), self))
     }
 
+    pub(crate) async fn active_agent_for_this_owner(&self) -> Option<Arc<ActiveAgent<Ctx>>> {
+        self.active_agents()
+            .try_get_active_agent(&self.owned_agent_id)
+            .await
+            .filter(|active_agent| std::ptr::eq(active_agent.primary().as_ref(), self))
+    }
+
     /// Interrupts and retires this worker as its owner - an environment deletion, or its shard
     /// moving to another executor (`ShardLost`) - draining it and dropping it from `ActiveAgents`.
     /// Idempotent and shared: a second caller while retirement is already in flight awaits the
@@ -1561,7 +1626,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // stop or this generation is no longer the cached one. The ack is not awaited: a
             // caller blocking on it would panic if the worker was already stopping.
             self.set_interrupting_for(InterruptKind::ShardLost, UnloadReason::ShardLost)
-                .await;
+                .await?;
         }
         // A deletion that already failed on the lost shard holds the cache entry with nothing
         // running, and nothing here can finish it any more. Checked on every call rather than in
@@ -1618,13 +1683,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn quiesce_for_owner_retirement(
-        &self,
+        self: &Arc<Self>,
         interrupt: Option<InterruptKind>,
         forwarding: Option<&ForwardingOplog>,
     ) -> Result<(), WorkerExecutorError> {
         let retirement = self.retire_durable_stream_producer();
         if let Some(interrupt) = interrupt {
-            self.set_interrupting(interrupt).await;
+            self.set_interrupting(interrupt).await?;
         }
         let unload_reason = interrupt.map_or(UnloadReason::Idle, UnloadReason::from_interrupt);
         self.stop_internal(
@@ -1640,6 +1705,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if let WorkerInstance::CleanupFailed(error) = &*self.instance.lock().await {
             return Err(error.clone());
         }
+        self.owner_execution
+            .tool_operations()
+            .join_owner_failure_cleanup()
+            .await?;
         // A lost shard: the oplog is the new owner's. No terminal is claimed, written or cached,
         // and the waiters are sent to the owner (`fail_pending_invocations` maps the error).
         if self.retired_for_lost_shard() {
@@ -1650,7 +1719,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if interrupt.is_some() {
             let pending = self.interrupts.claim_pending_terminal().await;
             if let Some(pending) = pending {
-                let status = self.get_attached_last_known_status().await;
+                pending.establishment.wait().await;
+                let status = self.get_last_known_status().await;
                 if matches!(
                     status.status,
                     AgentStatus::Running | AgentStatus::Retrying | AgentStatus::Suspended
@@ -1670,7 +1740,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Err(error) = self.add_and_commit_oplog(entry).await {
                             let fence = match error {
                                 OplogError::Fenced(fence) => Some(fence),
-                                OplogError::Payload(_) => None,
+                                OplogError::Payload(_) | OplogError::Maintenance(_) => None,
                             };
                             self.record_retirement(
                                 InterruptKind::ShardLost,
@@ -1968,7 +2038,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(worker)
     }
 
-    pub async fn validate_invocation_freshness<T: HasComponentService + Sync>(
+    pub async fn validate_invocation_freshness<T: HasComponentService + HasWorkerService + Sync>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         idempotency_key: &IdempotencyKey,
@@ -2004,11 +2074,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        if agent_type.mode == AgentMode::Ephemeral {
+        let agent_mode = if freshness_disposition == InvocationFreshnessDisposition::MayExist {
+            deps.worker_service()
+                .get(owned_agent_id)
+                .await?
+                .map(|metadata| metadata.initial_worker_metadata.agent_mode)
+                .unwrap_or(agent_type.mode)
+        } else {
+            agent_type.mode
+        };
+
+        if agent_mode == AgentMode::Ephemeral {
             crate::metrics::ephemeral::record_invocation_attempt(freshness_disposition);
         }
         let result = validate_resolved_invocation_identity(
-            agent_type.mode,
+            agent_mode,
             parsed_agent_id.phantom_id,
             idempotency_key,
             freshness_disposition,
@@ -2025,7 +2105,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let _retired_lifecycle =
             if let Some(worker) = deps.active_agents().try_get(owned_agent_id).await {
-                if let Some(status) = worker.state_actor.observe_attached_status().await? {
+                if let Some(status) = worker.state_actor.observe_status().await? {
                     let mut metadata = worker.get_initial_worker_metadata();
                     metadata.last_known_status = status.as_ref().clone();
                     return Ok(Some(metadata));
@@ -2253,7 +2333,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .shared();
                     *instance = WorkerInstance::Initializing(completion.clone());
                     let worker = self.clone();
-                    tokio::spawn(async move {
+                    let invocation_loops = self.active_agents().invocation_loops();
+                    let construction = async move {
                         let result = crate::worker::invocation::with_invocation_stack(build).await;
                         let published = result.as_ref().map(|_| ()).map_err(Clone::clone);
                         let mut instance = worker.instance.lock().await;
@@ -2276,7 +2357,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if resolved {
                             worker.retire_if_shard_left_during_construction().await;
                         }
-                    });
+                    };
+                    if !invocation_loops.spawn_construction(construction) {
+                        *instance = WorkerInstance::Unresolved;
+                        return (
+                            false,
+                            Err(WorkerExecutorError::runtime(
+                                "Worker initialization rejected because its executor is stopping",
+                            )),
+                        );
+                    }
                     (true, completion)
                 }
                 WorkerInstance::Initializing(completion) => (false, completion.clone()),
@@ -2519,6 +2609,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Arc::clone(&resource_entry),
             execution_status.clone(),
         ));
+        deps.active_agents()
+            .invocation_loops()
+            .register_owner_oplog(oplog.clone());
 
         let worker = ResolvedWorkerData {
             parsed_agent_id: owner_context.agent().cloned(),
@@ -2545,6 +2638,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupts: Arc::default(),
+            interrupt_establishment_tail: StdMutex::new(InterruptEstablishment::ready()),
+            pending_runtime_jump: Arc::new(Mutex::new(None)),
+            runtime_append_tasks: StdMutex::new(Arc::default()),
+            infrastructure_recovery_retry_config: deps.config().retry.clone(),
+            infrastructure_recovery_attempt: AtomicU32::new(0),
             execution_status,
             initial_worker_metadata,
             resource_entry,
@@ -2610,7 +2708,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     },
                 )
                 .await?;
-            let status = worker.state_actor.attached_status().await;
+            let status = worker.state_actor.status().await;
             // Returned rather than ignored: an agent created at an epoch another executor has
             // already claimed is refused here with `OplogFenced`, which its caller retries on the
             // shard's owner. Nothing is lost by returning early, since the next load repeats this
@@ -2839,6 +2937,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_agent_config,
                 None,
                 None,
+                None,
                 agent_effective_surface,
                 Some(owner_component_metadata),
             ),
@@ -2867,6 +2966,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn oom_retry_config(&self) -> &RetryConfig {
         &self.oom_retry_config
+    }
+
+    pub(crate) fn next_infrastructure_recovery_delay(&self) -> Duration {
+        let attempt = self
+            .infrastructure_recovery_attempt
+            .fetch_add(1, Ordering::AcqRel);
+        let capped_attempt = attempt.min(
+            self.infrastructure_recovery_retry_config
+                .max_attempts
+                .saturating_sub(1),
+        );
+        get_delay(&self.infrastructure_recovery_retry_config, capped_attempt)
+            .unwrap_or(self.infrastructure_recovery_retry_config.max_delay)
+    }
+
+    pub(crate) fn reset_infrastructure_recovery_backoff(&self) {
+        self.infrastructure_recovery_attempt
+            .store(0, Ordering::Release);
     }
 
     pub(crate) fn snapshot_policy(&self) -> &SnapshotPolicy {
@@ -2923,7 +3040,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         return Err(error);
                     }
                 };
-                let status = this.state_actor.attached_status().await;
+                let status = this.state_actor.status().await;
                 if this.agent_mode() == AgentMode::Durable
                     && status.status == AgentStatus::Interrupted
                     && status.current_idempotency_key.is_some()
@@ -2985,10 +3102,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// The `stopping` flag is only used to prevent re-entrance of the stopping sequence in case the invocation loop
     /// triggers a stop (in case of a failure - by the way it should not happen here because the worker is idle).
     pub async fn stop_if_idle(&self) -> bool {
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await;
+        let active_agent = self.active_agent_for_this_owner().await;
         let reopen_entity_generation = match active_agent.as_ref() {
             Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
                 Some(reopen_generation) => reopen_generation,
@@ -3061,23 +3175,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         drop(instance);
-        if self
+        let current_oplog_index = self
             .oplog_service()
-            .get_last_index(&self.owned_agent_id, self.agent_mode())
+            .try_get_last_index(&self.owned_agent_id, self.agent_mode())
             .await
-            != last_oplog_index
-        {
+            .map_err(WorkerExecutorError::runtime)?;
+        if !scheduled_archive_is_current(current_oplog_index, last_oplog_index) {
             return Ok(None);
         }
         let result = match wait {
             ArchiveWait::Queued => match MultiLayerOplog::try_archive(&self.oplog).await {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
             ArchiveWait::Finished => match MultiLayerOplog::try_archive_blocking(&self.oplog).await
             {
-                Some(more) => Some(more),
-                None => EphemeralOplog::try_archive_blocking(&self.oplog).await,
+                Ok(Some(more)) => Some(more),
+                Ok(None) => EphemeralOplog::try_archive_blocking(&self.oplog)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?,
+                Err(error) => return Err(WorkerExecutorError::runtime(error)),
             },
         };
         if result == Some(false) {
@@ -3195,7 +3315,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?;
             info!(agent_id = %self.owned_agent_id, "Fencing worker execution for deletion");
             self.set_interrupting_internal(interrupt_kind, false, UnloadReason::Deleting, true)
-                .await;
+                .await?;
             self.complete_deletion_stage(WorkerDeletionStage::ExecutionFenced)
                 .await;
         }
@@ -3592,14 +3712,19 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
         for (key, mapping) in dependencies.into_values() {
-            RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone())
-                .finalize_attachment(
-                    key,
-                    StreamAttachmentFinalizationReason::ConsumerDeleted,
-                    Timestamp::now_utc().to_millis(),
-                )
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+            let producer = OwnedAgentId::new(key.producer_environment_id, &key.producer);
+            let control = RoutedStreamAttachmentControl::new(self.rpc(), mapping, auth_ctx.clone());
+            tokio::time::timeout(
+                CONSUMER_DELETION_FINALIZATION_TIMEOUT,
+                control.finalize_deleted_consumer(key, Timestamp::now_utc().to_millis()),
+            )
+            .await
+            .map_err(|_| {
+                WorkerExecutorError::runtime(format!(
+                    "durable stream producer {producer} stayed unavailable while finalizing a deleted consumer's attachment"
+                ))
+            })?
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         }
         Ok(())
     }
@@ -3615,15 +3740,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    pub(crate) fn interrupt_current_execution(&self) {
-        let interrupt_signal = match &*self.execution_status.read().unwrap() {
+    pub(crate) fn current_execution_interrupt_signal(
+        &self,
+    ) -> Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>> {
+        match &*self.execution_status.read().unwrap() {
             ExecutionStatus::Running {
                 interrupt_signal, ..
             } => Some(interrupt_signal.clone()),
             _ => None,
-        };
-        if let Some(interrupt_signal) = interrupt_signal {
-            let _ = interrupt_signal.send(InterruptKind::Interrupt(Timestamp::now_utc()));
         }
     }
 
@@ -3691,11 +3815,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // The success marker is skipped for a retiring owner: for a lost shard its oplog belongs
         // to the new owner, which clears the recovery error itself when it starts the agent.
         if result.is_ok()
-            && self
-                .get_non_detached_last_known_status()
-                .await
-                .last_error_kind
-                == Some(OplogErrorKind::Recovery)
+            && self.get_last_known_status().await.last_error_kind == Some(OplogErrorKind::Recovery)
         {
             // Refused, the start is not a success: the caller stops it.
             result = self
@@ -3736,7 +3856,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return;
         }
 
-        let latest_status = self.get_non_detached_last_known_status().await;
+        let latest_status = self.get_last_known_status().await;
         let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
             Ctx::get_last_error_and_retry_count(
                 self.all(),
@@ -3748,9 +3868,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             None
         };
-        let retry_from = previous_error
-            .as_ref()
-            .map(|error| error.retry_from)
+        let retry_from = recovery_retry_from(error)
+            .or_else(|| previous_error.as_ref().map(|error| error.retry_from))
             .unwrap_or(self.oplog.current_oplog_index().await);
         let infrastructure_failure = is_infrastructure_recovery_error(error);
         let error = recovery_agent_error(error);
@@ -3778,7 +3897,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn get_latest_worker_metadata(&self) -> AgentMetadata {
-        let updated_status = self.state_actor.attached_status().await.as_ref().clone();
+        let updated_status = self.state_actor.status().await.as_ref().clone();
         let result = self.get_initial_worker_metadata();
         AgentMetadata {
             last_known_status: updated_status,
@@ -3786,33 +3905,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    /// Returns the published status as an `Arc` rather than a copy: the record is large and its
-    /// `invocation_results` grows with the invocations the agent has served, and every caller
-    /// here only reads a field or two out of it.
+    /// Returns the authoritative projection after preceding actor transactions complete, without
+    /// committing buffered entries. The immutable `Arc` avoids copying the large result index.
     pub async fn get_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        self.state_actor.attached_status().await
-    }
-
-    // Outside of reverts and updates, this will return the same status as get_latest_worker_metadata.
-    // This just has an additional assert built in for when decisions need to be sure that they are fully up to date on the oplog.
-    // _NEVER_ call this from outside the invocation loop, as that is the only place that can reason about whether the status is detached or not.
-    pub async fn get_non_detached_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        // Runs on the worker-state actor's status queue so the detached flag and the published
-        // status are observed consistently with any in-flight commit/reattach transaction.
-        self.state_actor.non_detached_status().await
-    }
-
-    /// Returns the authoritative status, reattaching it to the oplog first when necessary.
-    /// Unlike [`Self::get_non_detached_last_known_status`], this is safe for independent store
-    /// tasks that can overlap an invocation-loop jump or replay completion.
-    pub async fn get_attached_last_known_status(&self) -> Arc<AgentStatusRecord> {
-        self.state_actor.attached_status().await
+        self.state_actor.status().await
     }
 
     pub(crate) async fn get_export_fork_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        self.state_actor.try_attached_status().await
+        self.state_actor.try_status().await
     }
 
     pub(crate) async fn read_export_fork_candidate(
@@ -3849,7 +3951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.owner_retirement_requested.is_cancelled() || self.oplog.is_retired() {
             return Err(self.retirement_error());
         }
-        let status = self.state_actor.try_attached_status().await?;
+        let status = self.state_actor.try_status().await?;
         if candidate.export.source_fingerprint != self.initial_worker_metadata.fingerprint
             || status
                 .deleted_regions
@@ -3902,7 +4004,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// - `Suspend` means that the worker should be moved out of memory and stay in suspended state,
     ///   automatically resumed when the worker is needed again. This only works if the worker context
     ///   supports recovering workers.
-    pub async fn set_interrupting(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
+    pub async fn set_interrupting(
+        self: &Arc<Self>,
+        interrupt_kind: InterruptKind,
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         self.set_interrupting_internal(
             interrupt_kind,
             false,
@@ -3912,14 +4017,57 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .await
     }
 
-    async fn set_interrupting_internal(
+    /// Accepts a destructive replay cut without depending on the requesting Store future to
+    /// remain polled. The owner loop performs teardown and commits the cut before constructing the
+    /// replacement Store. Competing requests collapse to the earliest deleted index.
+    pub async fn request_runtime_jump(self: &Arc<Self>, first_deleted: OplogIndex) {
+        {
+            let mut pending = self.pending_runtime_jump.lock().await;
+            // Publish the stream fence in the same non-yielding section that accepts the cut. Its
+            // detached drain is joined by startup, so requester cancellation cannot reopen it.
+            let _recovery = self.durable_stream_producer.begin_recovery();
+            *pending = Some(pending.map_or(first_deleted, |current| current.min(first_deleted)));
+        }
+
+        let worker = Arc::clone(self);
+        tokio::spawn(async move {
+            // A delayed wakeup from an already committed proposal must not interrupt the
+            // replacement generation.
+            let pending = worker.pending_runtime_jump.lock().await;
+            let establishment = if pending.is_some() {
+                worker
+                    .queue_interrupt(InterruptKind::Jump, false, UnloadReason::Restart, false)
+                    .await
+            } else {
+                None
+            };
+            drop(pending);
+            if let Some(establishment) = establishment {
+                worker
+                    .establish_queued_interrupt(InterruptKind::Jump, establishment)
+                    .await;
+            }
+        });
+    }
+
+    pub fn runtime_append_tasks(&self) -> Arc<tasks::RuntimeAppendTasks> {
+        self.runtime_append_tasks.lock().unwrap().clone()
+    }
+
+    pub async fn runtime_jump_publication_gate(
         &self,
+    ) -> tokio::sync::MutexGuard<'_, Option<OplogIndex>> {
+        self.pending_runtime_jump.lock().await
+    }
+
+    async fn set_interrupting_internal(
+        self: &Arc<Self>,
         interrupt_kind: InterruptKind,
         reacquire_permits: bool,
         unload_reason: UnloadReason,
         allow_deleting: bool,
-    ) -> Option<Receiver<()>> {
-        if !self
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
+        let Some(establishment) = self
             .queue_interrupt(
                 interrupt_kind,
                 reacquire_permits,
@@ -3927,14 +4075,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 allow_deleting,
             )
             .await
-        {
-            return None;
-        }
+        else {
+            return Ok(None);
+        };
+        let worker = self.clone();
+        let result = tokio::spawn(async move {
+            worker
+                .establish_queued_interrupt(interrupt_kind, establishment)
+                .await
+        })
+        .await
+        .expect("worker interruption establishment task failed");
+        Ok(result)
+    }
+
+    async fn establish_queued_interrupt(
+        self: &Arc<Self>,
+        interrupt_kind: InterruptKind,
+        establishment: Arc<InterruptEstablishment>,
+    ) -> Option<Receiver<()>> {
+        establishment.wait_for_predecessor().await;
         let active_agent = self
             .active_agents()
             .try_get_active_agent(&self.owned_agent_id)
-            .await
-            .filter(|active_agent| std::ptr::eq(active_agent.primary().as_ref(), self));
+            .await;
+        let active_agent =
+            active_agent.filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), self));
         if let Some(active_agent) = &active_agent {
             debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Beginning entity fence for worker interruption");
             active_agent
@@ -3946,11 +4112,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             active_agent.drain_fenced_entity_bodies().await;
         }
         debug!(agent_id = %self.owned_agent_id, ?interrupt_kind, "Worker interruption entity drain completed");
+        establishment.complete();
         receiver
     }
 
     async fn notify_queued_interrupt(&self, interrupt_kind: InterruptKind) -> Option<Receiver<()>> {
-        let instance_guard = self.lock_non_stopping_worker().await;
+        // Establishment may be joined by the invocation loop itself. Do not wait for a concurrent
+        // stop to finish here: that stop joins the loop and would form a cycle.
+        let instance_guard = self.instance.lock().await;
         if let WorkerInstance::Running(running) = instance_guard.deletion_runtime() {
             let _ = running.sender.send(WorkerCommand::WorkAvailable);
         }
@@ -4005,17 +4174,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         reacquire_permits: bool,
         unload_reason: UnloadReason,
         allow_deleting: bool,
-    ) -> bool {
+    ) -> Option<Arc<InterruptEstablishment>> {
         loop {
             let lifecycle = self.instance.lock().await;
             if !allow_deleting && lifecycle.ensure_not_deleting().is_err() {
-                return false;
+                return None;
             }
-            if let Some(queued) = self.interrupts.try_queue(PendingWorkerInterrupt {
-                kind: interrupt_kind,
-                reacquire_permits,
-                unload_request: UnloadRequest::ordinary(unload_reason),
-            }) {
+            // The tail moves only when the request is queued, in the same step, so a later
+            // request and an entity admission see the establishment of this one.
+            let queued = {
+                let mut tail = self.interrupt_establishment_tail.lock().unwrap();
+                let establishment = Arc::new(InterruptEstablishment::new(tail.clone()));
+                self.interrupts
+                    .try_queue(PendingWorkerInterrupt {
+                        kind: interrupt_kind,
+                        reacquire_permits,
+                        unload_request: UnloadRequest::ordinary(unload_reason),
+                        establishment: establishment.clone(),
+                    })
+                    .map(|accepted| {
+                        accepted.then(|| {
+                            *tail = establishment.clone();
+                            establishment
+                        })
+                    })
+            };
+            if let Some(queued) = queued {
                 return queued;
             }
             drop(lifecycle);
@@ -4024,10 +4208,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn set_interrupting_for(
-        &self,
+        self: &Arc<Self>,
         interrupt_kind: InterruptKind,
         unload_reason: UnloadReason,
-    ) -> Option<Receiver<()>> {
+    ) -> Result<Option<Receiver<()>>, WorkerExecutorError> {
         self.set_interrupting_internal(interrupt_kind, false, unload_reason, false)
             .await
     }
@@ -4204,7 +4388,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // enqueue lock; using any other epoch could store stale data.
                 let captured = self
                     .enqueue_worker_invocation_with_effect(invocation, effect)
-                    .await?;
+                    .await?
+                    .0;
                 (ResultOrSubscription::Pending(subscription), captured)
             }
         };
@@ -4285,6 +4470,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 input,
                 false,
                 false,
+                false,
                 None,
                 invocation_context,
                 principal,
@@ -4302,6 +4488,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         input: TypedSchemaValue,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         expected_deployment_revision: Option<DeploymentRevision>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -4346,7 +4533,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // The resident component snapshot starts at the CREATE revision and is only refreshed by
             // instance startup. Admission can happen while the owner is cold, so resolve against the
             // revision folded from the authoritative oplog status instead.
-            let component_revision = self.state_actor.attached_status().await.component_revision;
+            let component_revision = self.state_actor.status().await.component_revision;
             let component = self
                 .component_service()
                 .get_metadata(self.owned_agent_id.component_id(), Some(component_revision))
@@ -4399,6 +4586,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             input: Box::new(input),
             stdin,
             stdout,
+            stderr,
             activation,
             invocation_context,
             principal,
@@ -4889,23 +5077,55 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
     /// it is going to affect how the worker is recovered next time.
-    pub async fn enqueue_update(
+    pub async fn enqueue_automatic_update(
+        &self,
+        target_revision: ComponentRevision,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        // Admission identity and execution strategy are separate. The first PendingUpdate only
+        // admits the request; the invocation loop durably selects full or snapshot-assisted replay
+        // when this request reaches the queue head.
+        let instance_guard = self.lock_non_stopping_worker().await;
+        instance_guard.ensure_not_deleting()?;
+        let status = self.state_actor.status().await;
+        if lifecycle::has_duplicate_pending_update(&status, target_revision) {
+            return Err(WorkerExecutorError::invalid_request(
+                "The same update is already in progress",
+            ));
+        }
+
+        self.bump_read_only_cache_epoch();
+        let entry =
+            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None);
+        let oplog_index = self
+            .add_and_commit_oplog_internal(
+                &instance_guard,
+                entry,
+                Some(WorkerCommand::WorkAvailable),
+            )
+            .await?;
+        drop(instance_guard);
+        Ok(oplog_index)
+    }
+
+    async fn enqueue_update_for_attempt(
         &self,
         update_description: UpdateDescription,
-    ) -> Result<(), WorkerExecutorError> {
+        update_attempt_index: Option<OplogIndex>,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         // Bump + commit under the same worker lifecycle lock.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         self.bump_read_only_cache_epoch();
-        let entry = OplogEntry::pending_update(update_description.clone());
-        self.add_and_commit_oplog_internal(
-            &instance_guard,
-            entry,
-            Some(WorkerCommand::WorkAvailable),
-        )
-        .await?;
+        let entry = OplogEntry::pending_update(update_description.clone(), update_attempt_index);
+        let oplog_index = self
+            .add_and_commit_oplog_internal(
+                &instance_guard,
+                entry,
+                Some(WorkerCommand::WorkAvailable),
+            )
+            .await?;
         drop(instance_guard);
-        Ok(())
+        Ok(oplog_index)
     }
 
     /// Enqueues a manual update.
@@ -4915,18 +5135,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_manual_update(
         &self,
         target_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         self.ensure_component_agent_ingress("manual update")?;
         self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
             .await
     }
 
     pub async fn pending_invocations(&self) -> Vec<PendingInvocationRef> {
-        self.state_actor
-            .attached_status()
-            .await
-            .pending_invocations
-            .clone()
+        self.state_actor.status().await.pending_invocations.clone()
     }
 
     /// Reserved constructor key, also used to recognize initialization before inspecting files.
@@ -5000,6 +5216,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 pending.oplog_index
             ))),
         }
+    }
+
+    async fn persist_automatic_update_strategy(
+        &self,
+        pending: &PendingUpdateRef,
+    ) -> Result<(), WorkerExecutorError> {
+        self.add_and_commit_oplog(OplogEntry::pending_update(
+            select_automatic_update_strategy(pending),
+            Some(pending.admission_index),
+        ))
+        .await?;
+        Ok(())
     }
 
     // should only be called from invocation loop
@@ -5137,15 +5365,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let current_revision = metadata.last_known_status.component_revision;
         let current_size = metadata.last_known_status.component_size;
 
-        // Mirror create_instance: a queued pending update is applied by loading
-        // its target revision, so charge against that revision rather than the
-        // last known one.
-        let pending_target = metadata
-            .last_known_status
-            .pending_updates
-            .front()
-            .map(|update| update.target_revision);
-        let component_revision = component_charge_revision(pending_target, current_revision);
+        // Mirror create_instance. Deterministically rejected assisted heads are failed without
+        // loading their targets, so charge the first remaining update that can reach a target
+        // load, or the current revision when every queued update is rejected.
+        let component_revision = startup_component_charge_revision(&metadata.last_known_status);
 
         // The currently-loaded revision's module size is already recorded in the
         // status; a pending-update target's size must be resolved from its
@@ -5526,8 +5749,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///   pending, or is not loaded. Never evicted.
     pub async fn eviction_class(&self) -> Option<EvictionClass> {
         if self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
+            .active_agent_for_this_owner()
             .await
             .is_some_and(|active_agent| {
                 active_agent
@@ -5595,10 +5817,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         expected_eligibility: Option<FilesystemPressureEligibility>,
         unload_request: UnloadRequest,
     ) -> EvictionStopOutcome {
-        let active_agent = self
-            .active_agents()
-            .try_get_active_agent(&self.owned_agent_id)
-            .await;
+        let active_agent = self.active_agent_for_this_owner().await;
         let reopen_entity_generation = match active_agent.as_ref() {
             Some(active_agent) => match active_agent.try_fence_idle_entity_bodies() {
                 Some(reopen_generation) => reopen_generation,
@@ -5768,6 +5987,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) -> Result<(), OplogError> {
         let done = {
             let mut growth = self.memory_growth.lock().unwrap();
@@ -5776,6 +5996,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 new_component_size,
                 Some(linear_memory.current_bytes()),
                 new_active_plugins,
+                snapshot_assisted_details,
             );
             *growth = Arc::new(PendingMemoryGrowth::default());
             self.state_actor
@@ -5881,13 +6102,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn enqueue_worker_invocation(
         &self,
         invocation: AgentInvocation,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         self.enqueue_worker_invocation_with_effect(
             invocation,
             read_only_cache::InvocationEffect::UnknownAssumeMutating,
         )
         .await
-        .map(|_| ())
+        .map(|(_, oplog_index)| {
+            oplog_index.expect("keyless manual update admission always appends an oplog entry")
+        })
     }
 
     async fn pending_invocation_entry(
@@ -5930,7 +6153,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
         read_only_cache_effect: read_only_cache::InvocationEffect,
-    ) -> Result<Option<u64>, WorkerExecutorError> {
+    ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
         // `idempotency_key` is what joins them. Left unset rather than empty when
@@ -5972,7 +6195,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if let Some(idempotency_key) = invocation.idempotency_key()
                 && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
             {
-                return Ok(None);
+                return Ok((None, None));
             }
 
             let (semantic_idempotency_key, entry) = self
@@ -5995,12 +6218,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
             let mut caller_instance_guard = Some(instance_guard);
-            if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
+            let admission_index = if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
-                    let status = self.state_actor.attached_status().await;
+                    let status = self.state_actor.status().await;
                     if self.lookup_invocation_result(idempotency_key).await != LookupResult::New {
-                        return Ok(None);
+                        return Ok((None, None));
                     }
                     let current = self.last_known_status.load();
                     if current.invocation_results.change_generation()
@@ -6035,14 +6258,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     break;
                 }
+                None
             } else {
-                self.add_and_commit_oplog_internal(
-                    caller_instance_guard.as_ref().unwrap(),
-                    entry,
-                    None,
+                Some(
+                    self.add_and_commit_oplog_internal(
+                        caller_instance_guard.as_ref().unwrap(),
+                        entry,
+                        None,
+                    )
+                    .await?,
                 )
-                .await?;
-            }
+            };
 
             if let Some(idempotency_key) = semantic_idempotency_key {
                 // Captured here, inside the producer span, because a consumer links
@@ -6068,7 +6294,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             drop(caller_instance_guard);
 
-            Ok(read_only_epoch_snapshot)
+            Ok((read_only_epoch_snapshot, admission_index))
         }
         .instrument(span)
         .await
@@ -6130,7 +6356,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return Err(err.clone());
         }
 
-        let status = self.state_actor.try_attached_status().await?;
+        let status = self.state_actor.try_status().await?;
         Self::ensure_not_failed(&self.deps, &self.owned_agent_id, self.agent_mode(), &status)
             .await?;
 
@@ -6179,7 +6405,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let mut wallet = receiver.await.unwrap()?;
         let revoked_cards = self
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .pending_card_events
             .iter()
@@ -6494,7 +6720,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .registrations
                     .iter()
                     .zip(&requested_handles)
-                    .filter(|((id, _), _)| roles[id] == SessionStreamRole::Input)
+                    .filter(|((id, _), _)| roles[id].direction() == SessionStreamRole::Input)
                     .map(|(_, handle)| handle.clone())
                     .collect()
             } else {
@@ -6865,7 +7091,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await
                 .map_err(|fence| self.retired_by(fence))?;
-            self.state_actor.notify_status_changed();
         }
         if !retained_acceptance && let WorkerInstance::Running(running) = &*instance_guard {
             running.sender.send(WorkerCommand::WorkAvailable).unwrap();
@@ -7050,7 +7275,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if matches!(binding.source, StreamRecordReference::Foreign(_))
                             && !producer.owns_handle_identity(&mapping.handle)
                         {
-                            if mapping.role == SessionStreamRole::Input
+                            if mapping.role.direction() == SessionStreamRole::Input
                                 && streams
                                     .has_journaled_consumer_terminal(mapping)
                                     .await
@@ -7159,7 +7384,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if matches!(binding.source, StreamRecordReference::Foreign(_))
                 && !producer.owns_handle_identity(&mapping.handle)
             {
-                if mapping.role == SessionStreamRole::Input
+                if mapping.role.direction() == SessionStreamRole::Input
                     && streams
                         .has_journaled_consumer_terminal(mapping)
                         .await
@@ -7329,7 +7554,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         idempotency_key: &IdempotencyKey,
     ) -> Result<Option<golem_common::model::DurableStreamSessionStatus>, WorkerExecutorError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         self.worker_service()
             .lookup_durable_stream_session(
                 &self.owned_agent_id,
@@ -7443,12 +7668,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         let encoded = prepared.attempt.invocation.invocation_value.as_slice();
-        let typed = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(encoded)
-            .map_err(|error| {
+        let typed = golem_schema::proto::golem::schema::TypedSchemaValue::decode(encoded).map_err(
+            |error| {
                 WorkerExecutorError::runtime(format!(
                     "failed to decode persisted durable invocation input: {error}"
                 ))
-            })?;
+            },
+        )?;
         let graph = typed
             .graph
             .ok_or_else(|| WorkerExecutorError::runtime("missing invocation input graph"))?
@@ -7585,7 +7811,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     async fn recover_finished_durable_streaming_sessions(&self) -> Result<(), WorkerExecutorError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         for (idempotency_key, session) in status.durable_stream_sessions.iter() {
             if session.prepared.is_none() || session.finished.is_some() {
                 continue;
@@ -7672,7 +7898,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Arc::new(move |committed| {
             let state_actor = state_actor.clone();
             Box::pin(async move {
-                let committed = if let Some(committed) = committed {
+                // Refusals reach the producer through the receipt; publication and retirement
+                // remain owned by the actor even if this producer disappears.
+                let _ = if let Some(committed) = committed {
                     state_actor
                         .commit_and_update_state_notifying(
                             CommitLevel::Always,
@@ -7684,11 +7912,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .commit_and_update_state(CommitLevel::Always)
                         .await
                 };
-                // A refusal reaches the producer through the receipt; the actor has started the
-                // retirement.
-                if let Ok((_, true)) = committed {
-                    state_actor.notify_status_changed();
-                }
             })
         })
     }
@@ -7817,7 +8040,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         retry_remote_cancellations: bool,
         session: Option<&StreamSessionKey>,
     ) -> Result<bool, WorkerExecutorError> {
-        if !self.has_durable_stream_history() {
+        let status = self.state_actor.try_status().await?;
+        if !self.durable_stream_producer.has_history() && !status.has_durable_stream_history {
             return Ok(false);
         }
         let cache = self.durable_topology_recovery.clone();
@@ -7826,7 +8050,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let owner = self.owned_agent_id.clone();
         let mode = self.agent_mode();
         let fingerprint = self.initial_worker_metadata.fingerprint;
-        let current = self.last_known_status.load().oplog_idx;
+        let current = status.oplog_idx;
         let session = session.cloned();
         let refresh = tokio::spawn(async move {
             let mut cache = cache.lock().await;
@@ -8030,11 +8254,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn control_durable_stream_attachment(
         &self,
         request: StreamAttachmentControlRequest,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<bool, DurableStreamRemoteError<WorkerExecutorError>> {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
                 "malformed durable stream attachment control request",
-            ));
+            )
+            .into());
         }
         let key = request.operation.key();
         if let StreamAttachmentControlOperation::SourceUnavailable {
@@ -8051,11 +8276,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             {
                 return Err(WorkerExecutorError::invalid_request(
                     "source-unavailable overlay does not match the consumer incarnation",
-                ));
+                )
+                .into());
             }
             return self
-                .durable_stream_producer()
-                .await?
+                .load_durable_stream_producer()
+                .await
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                })?
                 .commit_source_unavailable_overlay(
                     None,
                     key.clone(),
@@ -8064,7 +8293,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *consumer_read_ordinal,
                 )
                 .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime));
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                });
         }
         if key.producer_environment_id != self.owned_agent_id.environment_id
             || key.producer != self.owned_agent_id.agent_id
@@ -8072,7 +8303,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment does not match the producer incarnation",
-            ));
+            )
+            .into());
         }
         let mapping = request.mapping.as_ref().ok_or_else(|| {
             WorkerExecutorError::invalid_request(
@@ -8086,13 +8318,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment mapping does not match the producer key",
-            ));
+            )
+            .into());
         }
-        let producer = self.durable_stream_producer().await?;
+        let producer = self.load_durable_stream_producer().await.map_err(|error| {
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+        })?;
         producer
             .validate_handle(&mapping.handle)
             .await
-            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
+            .map_err(|error| {
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
+            })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
         let consumer_status = if let StreamAttachmentControlOperation::Cancel {
@@ -8140,7 +8377,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if !authorized {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "consumer durable topology does not authorize this attachment transition: {consumer_status:?}"
-            )));
+            )).into());
         }
         let producer_now_millis = Timestamp::now_utc().to_millis();
         let replayed = match request.operation {
@@ -8161,7 +8398,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 reason,
                 details,
             } => {
-                let role_matches = match mapping.role {
+                let role_matches = match mapping.role.direction() {
                     SessionStreamRole::Input => matches!(
                         role,
                         golem_common::model::durable_stream::StreamCancelRole::InputProducer
@@ -8172,11 +8409,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         golem_common::model::durable_stream::StreamCancelRole::OutputProducer
                             | golem_common::model::durable_stream::StreamCancelRole::OutputConsumer
                     ),
+                    SessionStreamRole::ToolStdin
+                    | SessionStreamRole::ToolStdout
+                    | SessionStreamRole::ToolStderr => unreachable!(),
                 };
                 if !role_matches {
                     return Err(WorkerExecutorError::invalid_request(
                         "durable stream cancellation role does not match its session mapping",
-                    ));
+                    )
+                    .into());
                 }
                 let source = &mapping.handle.source_invocation;
                 if matches!(
@@ -8190,8 +8431,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .registered_stream_role(&mapping.handle)
                         .await
                         .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            DurableStreamRemoteError::from_producer(
+                                error,
+                                WorkerExecutorError::runtime,
+                            )
                         })?
+                        .direction()
                         == SessionStreamRole::Output
                     && let Some(prepared) = self
                         .prepared_stream_session(&source.idempotency_key)
@@ -8207,7 +8452,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .await
                         .map(|outcome| outcome.replayed)
                         .map_err(|error| {
-                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                            DurableStreamRemoteError::from_producer(
+                                error,
+                                WorkerExecutorError::runtime,
+                            )
                         });
                 }
                 producer
@@ -8223,14 +8471,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 unreachable!("source-unavailable controls return before producer execution")
             }
         }
-        .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        .map_err(|error| {
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+        })?;
         Ok(replayed)
     }
 
     pub(crate) async fn read_durable_stream_by_handle(
         &self,
         request: golem_common::model::durable_stream::StreamHandleReadRequest,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerExecutorError>> {
         let handle = &request.handle;
         if handle.producer_environment_id != self.owned_agent_id.environment_id
             || handle.producer != self.owned_agent_id.agent_id
@@ -8245,12 +8495,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .load_durable_stream_producer()
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
             })?
             .read_by_handle(request)
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::invalid_request)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
             })?;
         golem_common::serialization::serialize(&result)
             .map_err(WorkerExecutorError::runtime)
@@ -8261,7 +8511,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn read_durable_stream_segment(
         &self,
         request: AttachedStreamSegmentRequest,
-    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamReadError<WorkerExecutorError>>
+    ) -> Result<Vec<CommittedProducerStreamEvent>, DurableStreamRemoteError<WorkerExecutorError>>
     {
         if !request.is_well_formed() {
             return Err(WorkerExecutorError::invalid_request(
@@ -8280,13 +8530,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .into());
         }
         let producer = self.load_durable_stream_producer().await.map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         producer
             .validate_handle(&request.mapping.handle)
             .await
             .map_err(|error| {
-                DurableStreamReadError::from_producer(error, WorkerExecutorError::invalid_request)
+                DurableStreamRemoteError::from_producer(error, WorkerExecutorError::invalid_request)
             })?;
         let probe =
             DbDirectStreamAttachmentConsumerProbe::new(self.worker_service(), self.oplog_service());
@@ -8331,12 +8581,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .activate_attachment(key.clone(), Timestamp::now_utc().to_millis())
                 .await
                 .map_err(|error| {
-                    DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
                 })?;
             events = read().await;
         }
         let events = events.map_err(|error| {
-            DurableStreamReadError::from_producer(error, WorkerExecutorError::runtime)
+            DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
         })?;
         if request.wait_for_events
             && probe
@@ -8511,18 +8761,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         commit_level: CommitLevel,
     ) -> Result<OplogIndex, OplogError> {
         match self.state_actor.commit_and_update_state(commit_level).await {
-            Ok((index, changed)) => {
-                if changed {
-                    // The notification goes through the worker-state actor's lifecycle queue so
-                    // that this method never waits on (or becomes a queued owner of) the worker
-                    // lifecycle lock. This method runs inside durable-call host futures polled by
-                    // wasmtime's store event loop and on store-keeping wasm fibers, neither of
-                    // which may block on locks shared with the other (see the `state_actor` module
-                    // docs).
-                    self.state_actor.notify_status_changed();
-                }
-                Ok(index)
-            }
+            Ok((index, _)) => Ok(index),
             Err(fence) => Err(self.retired_by(fence)),
         }
     }
@@ -8597,7 +8836,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         card_ids: &[CardId],
     ) -> Result<Vec<OplogIndex>, OplogError> {
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         let pending_revocations = status
             .pending_card_events
             .iter()
@@ -8650,7 +8889,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
 
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         if let Some(received) = status.received_card_transfers.get(&transfer_id) {
             return match received {
                 golem_common::model::ReceivedCardTransferState::Received {
@@ -8718,10 +8957,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
         let index = self.add_to_oplog(entry).await?;
-        // The caller already holds the worker lifecycle lock (and sends the wakeup itself below), so
-        // this must not enqueue a `NotifyStatusChanged` lifecycle job: the commit job is safe to
-        // await while holding the worker lifecycle lock precisely because the status task never takes
-        // that lock.
+        // The caller holds the lifecycle lock. The actor only enqueues its notification and never
+        // awaits that lock, so this commit and the caller's specific wakeup below cannot deadlock.
         let (_, changed) = self
             .state_actor
             .commit_and_update_state(CommitLevel::Always)
@@ -8881,7 +9118,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 return Err(WorkerExecutorError::runtime("Worker owner is retiring"));
             }
             worker.owner_retirement_requested.cancel();
-            worker.set_interrupting(InterruptKind::Restart).await;
+            worker.set_interrupting(InterruptKind::Restart).await?;
             worker.durable_stream_producer.fence();
             let forwarding = downcast_oplog::<ForwardingOplog>(&worker.oplog);
             let retirement = worker.retire_durable_stream_producer();
@@ -8955,7 +9192,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         }
         let region_start = last_oplog_index.next();
-        let last_known_status = self.get_attached_last_known_status().await;
+        let last_known_status = self.get_last_known_status().await;
         let dropped_region = OplogRegion {
             start: region_start,
             end: region_end,
@@ -9111,7 +9348,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // deletes no filesystem snapshot of the dropped region.
             self.commit_oplog_and_update_state(CommitLevel::Always)
                 .await?;
-            self.reattach_worker_status().await;
+            self.hydrated_invocation_results.write().await.clear();
             self.current_component.store(Arc::new(restored_component));
             Ok(reverted)
         }
@@ -9123,6 +9360,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
         let pending_update = status.pending_updates.front();
         let active_revision = pending_update
+            .filter(|update| {
+                !is_unselected_automatic_update(update)
+                    && snapshot_assisted_head_failure(status, update).is_none()
+            })
             .map(|update| update.target_revision)
             .unwrap_or(status.component_revision);
         let (_, active_component) = self
@@ -9146,15 +9387,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .await?
         };
 
-        if let Some(snapshot_index) = status.last_manual_update_snapshot_index {
-            self.preflight_snapshot_update_payload(snapshot_index)
+        if let Some(snapshot) = status.authoritative_snapshot {
+            self.preflight_snapshot_update_payload(snapshot.index)
                 .await?;
         }
-        if let Some(pending_update) = pending_update
-            && matches!(pending_update.kind, PendingUpdateKind::SnapshotBased { .. })
-            && Some(pending_update.oplog_index) != status.last_manual_update_snapshot_index
+        let pending_snapshot_index =
+            pending_update.and_then(|pending_update| match pending_update.kind {
+                PendingUpdateKind::SnapshotBased { .. } => Some(pending_update.oplog_index),
+                PendingUpdateKind::SnapshotAssistedAutomatic {
+                    selection: SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. },
+                    ..
+                } if snapshot_assisted_head_failure(status, pending_update).is_none() => {
+                    Some(snapshot_index)
+                }
+                PendingUpdateKind::Automatic
+                | PendingUpdateKind::SnapshotAssistedAutomatic { .. } => None,
+            });
+        if let Some(snapshot_index) = pending_snapshot_index
+            && Some(snapshot_index) != status.authoritative_snapshot.map(|snapshot| snapshot.index)
         {
-            self.preflight_snapshot_update_payload(pending_update.oplog_index)
+            self.preflight_snapshot_update_payload(snapshot_index)
                 .await?;
         }
 
@@ -9194,9 +9446,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
             }
+            OplogEntry::Snapshot { data, .. } => {
+                self.oplog
+                    .download_payload(data)
+                    .await
+                    .map_err(WorkerExecutorError::runtime)?;
+            }
             _ => {
                 return Err(WorkerExecutorError::runtime(format!(
-                    "Expected snapshot-based PendingUpdate at oplog index {snapshot_index}"
+                    "Expected snapshot payload at oplog index {snapshot_index}"
                 )));
             }
         }
@@ -9306,7 +9564,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // completion fold is published first. The record owns
         // `invocation_results`, which gains an entry per invocation, so deep-copying it to read
         // one key made each lookup cost more than the last.
-        let status = self.state_actor.attached_status().await;
+        let status = self.state_actor.status().await;
         let cached = self
             .hydrated_invocation_results
             .read()
@@ -9824,7 +10082,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut queue = self.queue.write().await;
         queue.retain(|invocation| !invocation.is_abandoned());
         if pending_live_invocations == PendingLiveInvocationDisposition::Fail && !queue.is_empty() {
-            let status = self.get_attached_last_known_status().await;
+            let status = self.get_last_known_status().await;
             let error = Self::ensure_not_failed(
                 &self.deps,
                 &self.owned_agent_id,
@@ -9867,7 +10125,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_fail_pending_invocations(&self) {
+        self.fail_pending_invocations(WorkerExecutorError::runtime("test stop failure"))
+            .await;
+    }
+
     async fn fail_pending_invocations(&self, error: WorkerExecutorError) {
+        // The early completion receipt does not join its fold. Wait before taking locks also
+        // needed by success publication, so cleanup cannot turn that receipt into a fold barrier.
+        let status = self
+            .state_actor
+            .observe_status()
+            .await
+            .unwrap_or_else(|error| panic!("Worker status observation failed: {error}"));
+        assert!(
+            status.is_some() || self.tasks.actors_stopping(),
+            "Worker status actor terminated unexpectedly"
+        );
         // A lost shard's pending invocations are not failed, they move: the shard's new owner
         // runs them. So their waiters are told to retry there, whatever stopped this generation,
         // and no result is cached. A cached failure would outlive the stop: a later lookup would
@@ -9882,14 +10158,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             error
         };
         let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
-        let mut origins = self.external_invocation_origins.write().await;
 
         // Publishing the provided initialization error to all queued internal operations
         for item in queued_items {
             item.fail(&error);
         }
 
-        let status = self.last_known_status.load_full();
+        // A stop continuation can resume after deletion has already drained and closed actors.
+        // Its resident waiters still need cleanup, but durable outcome publication is finished.
+        let Some(status) = status else {
+            return;
+        };
+        let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
 
         let mut invocation_results = self.hydrated_invocation_results.write().await;
@@ -10358,12 +10638,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    // TODO: should be private, exposed for the invocation loop for now.
-    pub async fn reattach_worker_status(&self) {
-        self.hydrated_invocation_results.write().await.clear();
-        self.state_actor.reattach_worker_status().await;
-    }
-
     async fn start_waiting_worker(
         this: Arc<Worker<Ctx>>,
         memory_grant: MemoryGrant,
@@ -10475,6 +10749,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             debug!("Forced status flush failed (will retry in background): {err}");
         }
     }
+}
+
+// A scheduled archive may outlive later commits. Archiving the current prefix preserves the
+// retry; an index behind the scheduled one indicates stale or recreated state.
+fn scheduled_archive_is_current(current: OplogIndex, scheduled: OplogIndex) -> bool {
+    current >= scheduled
 }
 
 #[derive(Debug)]
@@ -10704,11 +10984,60 @@ impl Drop for WaitingWorker {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Debug)]
+struct InterruptEstablishment {
+    predecessor: StdMutex<Option<Arc<InterruptEstablishment>>>,
+    complete: AtomicBool,
+    completed: tokio::sync::Notify,
+}
+
+impl InterruptEstablishment {
+    fn new(predecessor: Arc<Self>) -> Self {
+        Self {
+            predecessor: StdMutex::new(Some(predecessor)),
+            complete: AtomicBool::new(false),
+            completed: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn ready() -> Arc<Self> {
+        Arc::new(Self {
+            predecessor: StdMutex::new(None),
+            complete: AtomicBool::new(true),
+            completed: tokio::sync::Notify::new(),
+        })
+    }
+
+    fn complete(&self) {
+        self.complete.store(true, Ordering::Release);
+        self.completed.notify_waiters();
+    }
+
+    async fn wait(&self) {
+        while !self.complete.load(Ordering::Acquire) {
+            let notified = self.completed.notified();
+            if self.complete.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_for_predecessor(&self) {
+        let predecessor = self.predecessor.lock().unwrap().clone();
+        if let Some(predecessor) = predecessor {
+            predecessor.wait().await;
+            self.predecessor.lock().unwrap().take();
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct PendingWorkerInterrupt {
     kind: InterruptKind,
     reacquire_permits: bool,
     unload_request: UnloadRequest,
+    establishment: Arc<InterruptEstablishment>,
 }
 
 /// The shard epoch the agent's oplog is opened to assert, read from this executor's current
@@ -11376,9 +11705,22 @@ impl RunningWorker {
                     "Manual update failed with a conflict of the initial files"
                 );
                 // A write that fails ends the start with its error. A fenced write has already
-                // retired the agent, and the update stays pending for the shard's new owner.
+                // retired the agent, and the update stays pending for the shard's new owner. The
+                // failure names the admission of the pending update at the front of the queue.
+                let update_attempt_index = parent
+                    .get_last_known_status()
+                    .await
+                    .pending_updates
+                    .front()
+                    .filter(|pending| pending.target_revision == target)
+                    .map(|pending| pending.admission_index);
                 match parent
-                    .add_and_commit_oplog(OplogEntry::failed_update(target, Some(message.into())))
+                    .add_and_commit_oplog(OplogEntry::failed_update(
+                        target,
+                        Some(message.into()),
+                        None,
+                        update_attempt_index,
+                    ))
                     .await
                 {
                     Ok(_) => restart,
@@ -11414,15 +11756,50 @@ impl RunningWorker {
             .active_agents()
             .try_get_active_agent(&parent.owned_agent_id)
             .await
+            .filter(|active_agent| Arc::ptr_eq(&active_agent.primary(), &parent))
             .map(|active_agent| {
                 let generation = active_agent.entity_fence_generation();
                 (active_agent, generation)
             });
+        let Some(entity_generation) = entity_generation else {
+            return Err(CreateWorkerInstanceError {
+                error: WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::ShardLost,
+                },
+                filesystem_cleanup_failure: None,
+            });
+        };
 
-        // we might have detached the worker status during the last invocation loop. Make sure it's attached and we are fully up-to-date on the oplog
-        parent.reattach_worker_status().await;
+        // Transport-owned bodies and custom begin coordinators can outlive their Stores. Seal
+        // their old admission handle permanently before fixing the committed replay horizon.
+        parent.runtime_append_tasks().seal_and_wait().await;
+        *parent.runtime_append_tasks.lock().unwrap() = Arc::default();
+
+        if parent.durable_stream_producer.is_recovering() {
+            parent
+                .durable_stream_producer
+                .begin_recovery()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        }
+
+        // Drain buffered work from the previous runtime before constructing its replacement.
+        parent
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await
+            .map_err(WorkerExecutorError::from)?;
+        parent.hydrated_invocation_results.write().await.clear();
 
         let worker_metadata = parent.get_latest_worker_metadata().await;
+        let worker_metadata = if let Some(pending) =
+            worker_metadata.last_known_status.pending_updates.front()
+            && is_unselected_automatic_update(pending)
+        {
+            parent.persist_automatic_update_strategy(pending).await?;
+            parent.get_latest_worker_metadata().await
+        } else {
+            worker_metadata
+        };
         debug!("Creating instance with parent metadata {worker_metadata:?}");
 
         let (pending_update, component, component_metadata) = {
@@ -11432,6 +11809,33 @@ impl RunningWorker {
                 .front()
                 .cloned();
 
+            if let Some(pending_update_ref) = &pending_update_ref
+                && let Some(details) = snapshot_assisted_head_failure(
+                    &worker_metadata.last_known_status,
+                    pending_update_ref,
+                )
+            {
+                warn!(
+                    "Snapshot-assisted automatic update to revision {} failed before target fetch: {details}",
+                    pending_update_ref.target_revision
+                );
+                parent
+                    .add_and_commit_oplog(OplogEntry::failed_update(
+                        pending_update_ref.target_revision,
+                        Some(details),
+                        failed_snapshot_assisted_update_details(pending_update_ref),
+                        Some(pending_update_ref.admission_index),
+                    ))
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
+                return Box::pin(Self::create_instance(
+                    parent,
+                    concurrent_agent_permit,
+                    filesystem_snapshot_slot,
+                ))
+                .await;
+            }
+
             let component_revision = pending_update_ref.as_ref().map_or(
                 worker_metadata.last_known_status.component_revision,
                 |update| {
@@ -11440,6 +11844,9 @@ impl RunningWorker {
                         "Attempting {} update from {} to revision {target_revision}",
                         match update.kind {
                             PendingUpdateKind::Automatic => "automatic",
+                            PendingUpdateKind::SnapshotAssistedAutomatic { .. } => {
+                                "snapshot-assisted automatic"
+                            }
                             PendingUpdateKind::SnapshotBased { .. } => "snapshot based",
                         },
                         worker_metadata.last_known_status.component_revision
@@ -11454,6 +11861,39 @@ impl RunningWorker {
                 .await
             {
                 Ok((component, component_metadata)) => {
+                    if let Some(pending_update_ref) = &pending_update_ref
+                        && let Some(agent_id) = &parent.parsed_agent_id
+                        && let Some(target_agent_type) = component_metadata
+                            .metadata
+                            .find_agent_type_by_name_ref(&agent_id.agent_type)
+                        && target_agent_type.mode != worker_metadata.agent_mode
+                    {
+                        let details = format!(
+                            "Cannot update worker {} from {:?} to component revision {}: the agent type '{}' has mode {:?} in the target revision but the worker was created with mode {:?}. Changing an agent type's mode across revisions is not supported.",
+                            parent.owned_agent_id,
+                            worker_metadata.agent_mode,
+                            component_revision,
+                            agent_id.agent_type,
+                            target_agent_type.mode,
+                            worker_metadata.agent_mode,
+                        );
+                        parent
+                            .add_and_commit_oplog(OplogEntry::failed_update(
+                                component_revision,
+                                Some(details),
+                                failed_snapshot_assisted_update_details(pending_update_ref),
+                                Some(pending_update_ref.admission_index),
+                            ))
+                            .await
+                            .map_err(WorkerExecutorError::from)?;
+                        return Box::pin(Self::create_instance(
+                            parent,
+                            concurrent_agent_permit,
+                            filesystem_snapshot_slot,
+                        ))
+                        .await;
+                    }
+
                     // The status record only keeps a lightweight reference to the pending update;
                     // hydrate the full description (including any snapshot payload) from the oplog
                     // before handing it to the worker context.
@@ -11478,6 +11918,12 @@ impl RunningWorker {
                             .add_and_commit_oplog(OplogEntry::failed_update(
                                 component_revision,
                                 Some(error.to_string()),
+                                pending_update_ref.as_ref().and_then(|pending| {
+                                    failed_snapshot_assisted_update_details(pending)
+                                }),
+                                pending_update_ref
+                                    .as_ref()
+                                    .map(|pending| pending.admission_index),
                             ))
                             .await
                             .map_err(WorkerExecutorError::from)?;
@@ -11534,8 +11980,17 @@ impl RunningWorker {
         let mut skipped_regions = worker_metadata.last_known_status.skipped_regions;
         let mut last_snapshot_index = worker_metadata
             .last_known_status
-            .last_manual_update_snapshot_index;
-        let mut last_snapshot_source = last_snapshot_index.map(|_| SnapshotSource::ManualUpdate);
+            .authoritative_snapshot
+            .map(|snapshot| snapshot.index);
+        let mut last_snapshot_source = worker_metadata
+            .last_known_status
+            .authoritative_snapshot
+            .map(|snapshot| match snapshot.kind {
+                AuthoritativeSnapshotKind::ManualUpdate => SnapshotSource::ManualUpdate,
+                AuthoritativeSnapshotKind::SnapshotAssistedAutomatic => {
+                    SnapshotSource::SnapshotAssistedAutomatic
+                }
+            });
 
         // Only snapshots whose exact record index is not rejected, and that match the active
         // revision, are eligible. Pending updates temporarily ignore them so compatibility
@@ -11555,6 +12010,51 @@ impl RunningWorker {
 
             last_snapshot_index = Some(snapshot_idx);
             last_snapshot_source = Some(SnapshotSource::Automatic);
+        }
+
+        if parent.agent_mode() == AgentMode::Durable {
+            let mut pending_runtime_jump = parent.pending_runtime_jump.lock().await;
+            let region = crate::durable_host::replay_state::suffix_rollback_region(
+                &worker_metadata.last_known_status.atomic_rollback,
+                &skipped_regions,
+                worker_metadata.last_known_status.oplog_idx,
+                *pending_runtime_jump,
+            )?;
+            if let Some(region) = region {
+                if !parent.durable_stream_producer.is_recovering() {
+                    parent
+                        .durable_stream_producer
+                        .begin_recovery()
+                        .await
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                    // The first horizon was only a prediction. Commit every accepted stream
+                    // mutation, then reload metadata and plan the cut at the resulting fixed tip.
+                    parent
+                        .commit_oplog_and_update_state(CommitLevel::Always)
+                        .await
+                        .map_err(WorkerExecutorError::from)?;
+                    drop(pending_runtime_jump);
+                    return Box::pin(Self::create_instance(
+                        parent,
+                        concurrent_agent_permit,
+                        filesystem_snapshot_slot,
+                    ))
+                    .await;
+                }
+                parent
+                    .add_and_commit_oplog(OplogEntry::jump(None, region))
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
+                *pending_runtime_jump = None;
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                }
+                .into());
+            }
+            *pending_runtime_jump = None;
+            parent.durable_stream_producer.finish_recovery();
         }
 
         let filesystems = parent.active_agents().agent_filesystems();
@@ -11761,6 +12261,7 @@ impl RunningWorker {
                 worker_metadata.config,
                 last_snapshot_index,
                 last_snapshot_source,
+                None,
                 agent_effective_surface,
                 None,
             ),
@@ -11821,19 +12322,78 @@ impl RunningWorker {
         let (instance, mut store) = match runtime {
             Ok(runtime) => runtime,
             Err(error) => {
-                return Err(
-                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await,
+                let assisted_target_revision = assisted_instantiation_failure_target(
+                    worker_metadata.last_known_status.pending_updates.front(),
+                    &error,
                 );
+                let details = error.to_string();
+                let cleanup =
+                    cleanup_reconstructing_agent_filesystem(reconstructing, window, error).await;
+                if cleanup.filesystem_cleanup_failure.is_none()
+                    && let Some(target_revision) = assisted_target_revision
+                {
+                    parent
+                        .add_and_commit_oplog(OplogEntry::failed_update(
+                            target_revision,
+                            Some(format!(
+                                "Snapshot-assisted automatic update failed while instantiating the target: {details}"
+                            )),
+                            worker_metadata
+                                .last_known_status
+                                .pending_updates
+                                .front()
+                                .and_then(|pending| {
+                                    failed_snapshot_assisted_update_details(pending)
+                                }),
+                            worker_metadata
+                                .last_known_status
+                                .pending_updates
+                                .front()
+                                .map(|pending| pending.admission_index),
+                        ))
+                        .await
+                        .map_err(WorkerExecutorError::from)?;
+                    // The failed outcome makes the next loop iteration reconstruct the source.
+                    // Restart is an internal retry signal here; no interruption oplog entry is
+                    // recorded for it.
+                    return Err(CreateWorkerInstanceError {
+                        error: WorkerExecutorError::Interrupted {
+                            kind: InterruptKind::Restart,
+                        },
+                        filesystem_cleanup_failure: None,
+                    });
+                }
+                return Err(cleanup);
             }
         };
         if last_snapshot_index.is_some() {
             store.data_mut().end_call_snapshotting_function();
         }
-        if let Some((active_agent, generation)) = entity_generation {
-            parent
+        {
+            let (active_agent, generation) = entity_generation;
+            let establishment = parent.interrupt_establishment_tail.lock().unwrap().clone();
+            establishment.wait().await;
+            let reopened = parent
                 .interrupts
-                .when_idle(|| active_agent.reopen_entity_admission_if_generation(generation))
-                .await;
+                .when_idle(|| {
+                    Arc::ptr_eq(
+                        &establishment,
+                        &parent.interrupt_establishment_tail.lock().unwrap(),
+                    ) && active_agent.reopen_entity_admission_if_generation(generation)
+                })
+                .await
+                == Some(true);
+            if !reopened {
+                drop(store);
+                return Err(cleanup_reconstructing_agent_filesystem(
+                    reconstructing,
+                    window,
+                    WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Restart,
+                    },
+                )
+                .await);
+            }
         }
         let prepare_result =
             Ctx::prepare_instance(&parent.owned_agent_id.agent_id, &instance, &mut store).await;
@@ -12476,6 +13036,98 @@ fn lookup_result_from_cached_result(
     }
 }
 
+fn is_unselected_automatic_update(pending_update: &PendingUpdateRef) -> bool {
+    pending_update.kind == PendingUpdateKind::Automatic
+        && pending_update.oplog_index == pending_update.admission_index
+}
+
+/// The strategy entry of the automatic update `pending` at the front of the queue: a plain
+/// automatic update, which replays the whole history on the target revision.
+fn select_automatic_update_strategy(pending: &PendingUpdateRef) -> UpdateDescription {
+    UpdateDescription::Automatic {
+        target_revision: pending.target_revision,
+    }
+}
+
+fn snapshot_assisted_head_failure(
+    status: &AgentStatusRecord,
+    pending_update: &PendingUpdateRef,
+) -> Option<String> {
+    let PendingUpdateKind::SnapshotAssistedAutomatic {
+        source_component_revision,
+        source_revision_start_index,
+        selection,
+    } = pending_update.kind
+    else {
+        return None;
+    };
+
+    if status.component_revision != source_component_revision
+        || status.component_revision_start_index != source_revision_start_index
+    {
+        return Some(format!(
+            "Snapshot-assisted automatic update source became stale: expected revision {source_component_revision} at revision start index {source_revision_start_index}, found revision {} at revision start index {}",
+            status.component_revision, status.component_revision_start_index,
+        ));
+    }
+
+    if pending_update.target_revision <= source_component_revision {
+        return Some(format!(
+            "Snapshot-assisted automatic update from revision {source_component_revision} to revision {} is not an upgrade",
+            pending_update.target_revision,
+        ));
+    }
+
+    match selection {
+        SnapshotAssistedUpdateSelection::Selected { .. } => None,
+        SnapshotAssistedUpdateSelection::Ineligible(reason) => Some(format!(
+            "Snapshot-assisted automatic update has no eligible source snapshot: {reason:?}"
+        )),
+    }
+}
+
+fn failed_snapshot_assisted_update_details(
+    pending_update: &PendingUpdateRef,
+) -> Option<FailedSnapshotAssistedUpdateDetails> {
+    let PendingUpdateKind::SnapshotAssistedAutomatic {
+        source_component_revision,
+        source_revision_start_index,
+        selection,
+    } = pending_update.kind
+    else {
+        return None;
+    };
+    let (snapshot_index, ineligibility_reason) = match selection {
+        SnapshotAssistedUpdateSelection::Selected { snapshot_index, .. } => {
+            (Some(snapshot_index), None)
+        }
+        SnapshotAssistedUpdateSelection::Ineligible(reason) => (None, Some(format!("{reason:?}"))),
+    };
+    Some(FailedSnapshotAssistedUpdateDetails {
+        pending_update_index: pending_update.oplog_index,
+        source_component_revision,
+        source_revision_start_index,
+        snapshot_index,
+        ineligibility_reason,
+    })
+}
+
+fn assisted_instantiation_failure_target(
+    pending_update: Option<&PendingUpdateRef>,
+    error: &WorkerExecutorError,
+) -> Option<ComponentRevision> {
+    if matches!(error, WorkerExecutorError::Interrupted { .. }) {
+        return None;
+    }
+    pending_update.and_then(|update| {
+        matches!(
+            update.kind,
+            PendingUpdateKind::SnapshotAssistedAutomatic { .. }
+        )
+        .then_some(update.target_revision)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12532,6 +13184,164 @@ mod tests {
                 None,
                 None,
             ]
+        );
+    }
+
+    fn assisted_pending(
+        source_revision: ComponentRevision,
+        source_revision_start_index: OplogIndex,
+        target_revision: ComponentRevision,
+        selection: SnapshotAssistedUpdateSelection,
+    ) -> PendingUpdateRef {
+        PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(10),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision,
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic {
+                source_component_revision: source_revision,
+                source_revision_start_index,
+                selection,
+            },
+        }
+    }
+
+    #[test]
+    fn snapshot_assisted_head_validation_rejects_ineligible_stale_aba_and_downgrade() {
+        let source_revision = ComponentRevision::new(2).unwrap();
+        let source_revision_start_index = OplogIndex::from_u64(4);
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let selected = SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(7),
+            snapshot_revision: source_revision,
+        };
+        let mut status = AgentStatusRecord {
+            component_revision: source_revision,
+            component_revision_start_index: source_revision_start_index,
+            ..Default::default()
+        };
+
+        let valid = assisted_pending(
+            source_revision,
+            source_revision_start_index,
+            target_revision,
+            selected,
+        );
+        assert_eq!(snapshot_assisted_head_failure(&status, &valid), None);
+
+        let no_snapshot = assisted_pending(
+            source_revision,
+            source_revision_start_index,
+            target_revision,
+            SnapshotAssistedUpdateSelection::Ineligible(
+                golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
+            ),
+        );
+        assert!(snapshot_assisted_head_failure(&status, &no_snapshot).is_some());
+
+        let downgrade = assisted_pending(
+            source_revision,
+            source_revision_start_index,
+            ComponentRevision::new(1).unwrap(),
+            selected,
+        );
+        assert!(snapshot_assisted_head_failure(&status, &downgrade).is_some());
+
+        status.component_revision = target_revision;
+        status.component_revision_start_index = OplogIndex::from_u64(11);
+        assert!(snapshot_assisted_head_failure(&status, &valid).is_some());
+
+        status.component_revision = source_revision;
+        assert!(snapshot_assisted_head_failure(&status, &valid).is_some());
+    }
+
+    /// Every automatic update at the front of the queue gets a plain automatic strategy entry,
+    /// also when an automatic snapshot of the source revision follows its admission.
+    #[test]
+    fn automatic_strategy_is_a_plain_automatic_update_with_a_snapshot_after_admission() {
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let admission_index = OplogIndex::from_u64(6);
+        let pending = PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: admission_index,
+            admission_index,
+            target_revision,
+            kind: PendingUpdateKind::Automatic,
+        };
+
+        assert_eq!(
+            select_automatic_update_strategy(&pending),
+            UpdateDescription::Automatic { target_revision }
+        );
+    }
+
+    #[test]
+    fn startup_charge_skips_rejected_assisted_targets() {
+        let source_revision = ComponentRevision::new(2).unwrap();
+        let source_revision_start_index = OplogIndex::from_u64(4);
+        let rejected_target = ComponentRevision::new(3).unwrap();
+        let next_target = ComponentRevision::new(4).unwrap();
+        let mut status = AgentStatusRecord {
+            component_revision: source_revision,
+            component_revision_start_index: source_revision_start_index,
+            ..Default::default()
+        };
+        status.pending_updates.push_back(assisted_pending(
+            source_revision,
+            source_revision_start_index,
+            rejected_target,
+            SnapshotAssistedUpdateSelection::Ineligible(
+                golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
+            ),
+        ));
+
+        assert_eq!(startup_component_charge_revision(&status), source_revision);
+
+        status.pending_updates.push_back(PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(11),
+            admission_index: OplogIndex::from_u64(11),
+            target_revision: next_target,
+            kind: PendingUpdateKind::Automatic,
+        });
+        assert_eq!(startup_component_charge_revision(&status), next_target);
+    }
+
+    #[test]
+    fn assisted_instantiation_failure_is_terminal_but_interruption_is_not() {
+        let source_revision = ComponentRevision::new(2).unwrap();
+        let target_revision = ComponentRevision::new(3).unwrap();
+        let source_revision_start_index = OplogIndex::from_u64(4);
+        let mut status = AgentStatusRecord {
+            component_revision: source_revision,
+            component_revision_start_index: source_revision_start_index,
+            ..Default::default()
+        };
+        status.pending_updates.push_back(assisted_pending(
+            source_revision,
+            source_revision_start_index,
+            target_revision,
+            SnapshotAssistedUpdateSelection::Selected {
+                snapshot_index: OplogIndex::from_u64(7),
+                snapshot_revision: source_revision,
+            },
+        ));
+
+        assert_eq!(
+            assisted_instantiation_failure_target(
+                status.pending_updates.front(),
+                &WorkerExecutorError::runtime("target initializer trapped"),
+            ),
+            Some(target_revision)
+        );
+        assert_eq!(
+            assisted_instantiation_failure_target(
+                status.pending_updates.front(),
+                &WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Restart,
+                },
+            ),
+            None
         );
     }
 
@@ -12608,6 +13418,20 @@ mod tests {
         ));
         // An agent asserting nothing, such as one still being created, is judged by membership.
         assert!(!retired_by_assignment(Some(&at_epoch(1)), &agent, None));
+    }
+
+    #[test]
+    fn scheduled_archive_remains_valid_after_the_oplog_advances() {
+        let scheduled = OplogIndex::from_u64(10);
+        assert!(scheduled_archive_is_current(scheduled, scheduled));
+        assert!(scheduled_archive_is_current(
+            OplogIndex::from_u64(11),
+            scheduled
+        ));
+        assert!(!scheduled_archive_is_current(
+            OplogIndex::from_u64(9),
+            scheduled
+        ));
     }
 
     #[test]
@@ -12727,6 +13551,9 @@ mod tests {
         let component_id = ComponentId::new();
         assert!(is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentNotFound { component_id }
+        ));
+        assert!(is_infrastructure_recovery_error(
+            &WorkerExecutorError::recovery_required("payload backend unavailable")
         ));
         assert!(!is_infrastructure_recovery_error(
             &WorkerExecutorError::ComponentParseFailed {
@@ -12881,6 +13708,206 @@ mod tests {
                 kind: InterruptKind::Suspend(_)
             }
         ));
+    }
+
+    /// Characterizes the start error of today for every error of the agent filesystem: an agent
+    /// quota suspends the start, and every other error fails it with its message.
+    #[test]
+    fn reconstruction_startup_error_for_every_filesystem_error() {
+        use crate::services::agent_filesystem::{
+            AccessError, Error, FilesystemStorageError, InitialFileConflict, RestoreError,
+        };
+        let storage =
+            || FilesystemStorageError::verification("seed initial file", Path::new("<scripted>"));
+        let others = [
+            Error::Access(AccessError::Revoked),
+            Error::Sandbox(storage()),
+            Error::InitialFileConflict(Box::new(InitialFileConflict::occupied(Path::new("e/f")))),
+            Error::PhysicalCapacity(storage()),
+            Error::Baseline(Box::new(RestoreError {
+                retryable: true,
+                source: anyhow::anyhow!("restore failed"),
+            })),
+            Error::Baseline(Box::new(RestoreError {
+                retryable: false,
+                source: anyhow::anyhow!("restore failed"),
+            })),
+            Error::RuntimeInvalidated,
+        ];
+
+        assert!(matches!(
+            reconstruction_startup_error(Error::AgentQuota(storage())),
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(_)
+            }
+        ));
+        for error in others {
+            let message = error.to_string();
+            assert_eq!(
+                reconstruction_startup_error(error),
+                WorkerExecutorError::runtime(message)
+            );
+        }
+    }
+
+    fn head(kind: PendingUpdateKind, oplog_index: u64, admission_index: u64) -> PendingUpdateRef {
+        PendingUpdateRef {
+            timestamp: Timestamp::now_utc(),
+            oplog_index: OplogIndex::from_u64(oplog_index),
+            admission_index: OplogIndex::from_u64(admission_index),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind,
+        }
+    }
+
+    fn assisted_kind(selection: SnapshotAssistedUpdateSelection) -> PendingUpdateKind {
+        PendingUpdateKind::SnapshotAssistedAutomatic {
+            source_component_revision: ComponentRevision::new(2).unwrap(),
+            source_revision_start_index: OplogIndex::from_u64(4),
+            selection,
+        }
+    }
+
+    fn selected() -> SnapshotAssistedUpdateSelection {
+        SnapshotAssistedUpdateSelection::Selected {
+            snapshot_index: OplogIndex::from_u64(7),
+            snapshot_revision: ComponentRevision::new(2).unwrap(),
+        }
+    }
+
+    fn ineligible() -> SnapshotAssistedUpdateSelection {
+        SnapshotAssistedUpdateSelection::Ineligible(
+            golem_common::model::SnapshotAssistedUpdateIneligibilityReason::NoSnapshotSinceSourceRevisionStart,
+        )
+    }
+
+    /// Characterizes which queue head still needs its strategy entry: only an automatic
+    /// admission that no strategy entry refined.
+    #[test]
+    fn only_an_unrefined_automatic_admission_is_an_unselected_automatic_update() {
+        let snapshot_based = || PendingUpdateKind::SnapshotBased {
+            filesystem_snapshot: None,
+        };
+        assert_eq!(
+            [
+                is_unselected_automatic_update(&head(PendingUpdateKind::Automatic, 10, 10)),
+                is_unselected_automatic_update(&head(PendingUpdateKind::Automatic, 12, 10)),
+                is_unselected_automatic_update(&head(snapshot_based(), 10, 10)),
+                is_unselected_automatic_update(&head(snapshot_based(), 12, 10)),
+                is_unselected_automatic_update(&head(assisted_kind(selected()), 12, 10)),
+                is_unselected_automatic_update(&head(assisted_kind(ineligible()), 12, 10)),
+            ],
+            [true, false, false, false, false, false]
+        );
+    }
+
+    /// Characterizes the failure details of today for every queue head kind.
+    #[test]
+    fn failed_snapshot_assisted_update_details_for_every_head_kind() {
+        let details = |selection| FailedSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(12),
+            source_component_revision: ComponentRevision::new(2).unwrap(),
+            source_revision_start_index: OplogIndex::from_u64(4),
+            snapshot_index: selection,
+            ineligibility_reason: None,
+        };
+        assert_eq!(
+            failed_snapshot_assisted_update_details(&head(PendingUpdateKind::Automatic, 12, 10)),
+            None
+        );
+        assert_eq!(
+            failed_snapshot_assisted_update_details(&head(
+                PendingUpdateKind::SnapshotBased {
+                    filesystem_snapshot: Some(FilesystemSnapshotName::update()),
+                },
+                12,
+                12
+            )),
+            None
+        );
+        assert_eq!(
+            failed_snapshot_assisted_update_details(&head(assisted_kind(selected()), 12, 10)),
+            Some(details(Some(OplogIndex::from_u64(7))))
+        );
+        assert_eq!(
+            failed_snapshot_assisted_update_details(&head(assisted_kind(ineligible()), 12, 10)),
+            Some(FailedSnapshotAssistedUpdateDetails {
+                ineligibility_reason: Some("NoSnapshotSinceSourceRevisionStart".to_string()),
+                ..details(None)
+            })
+        );
+    }
+
+    /// Characterizes the head check of today: only a snapshot-assisted head can fail it.
+    #[test]
+    fn snapshot_assisted_head_failure_ignores_every_other_head_kind() {
+        let status = AgentStatusRecord {
+            component_revision: ComponentRevision::new(5).unwrap(),
+            component_revision_start_index: OplogIndex::from_u64(9),
+            ..Default::default()
+        };
+        assert_eq!(
+            snapshot_assisted_head_failure(&status, &head(PendingUpdateKind::Automatic, 10, 10)),
+            None
+        );
+        assert_eq!(
+            snapshot_assisted_head_failure(
+                &status,
+                &head(
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: None
+                    },
+                    10,
+                    10
+                )
+            ),
+            None
+        );
+        assert!(
+            snapshot_assisted_head_failure(&status, &head(assisted_kind(selected()), 12, 10))
+                .is_some()
+        );
+    }
+
+    /// Characterizes the instantiation failure of today for every queue head kind: only a
+    /// snapshot-assisted head names its target, and an interruption names none.
+    #[test]
+    fn assisted_instantiation_failure_target_for_every_head_kind_and_error() {
+        let runtime = WorkerExecutorError::runtime("target initializer trapped");
+        let interrupted = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart,
+        };
+        let heads = [
+            head(PendingUpdateKind::Automatic, 10, 10),
+            head(PendingUpdateKind::Automatic, 12, 10),
+            head(
+                PendingUpdateKind::SnapshotBased {
+                    filesystem_snapshot: None,
+                },
+                10,
+                10,
+            ),
+            head(assisted_kind(selected()), 12, 10),
+            head(assisted_kind(ineligible()), 12, 10),
+        ];
+        let target = Some(ComponentRevision::new(3).unwrap());
+
+        assert_eq!(
+            heads
+                .iter()
+                .map(|head| assisted_instantiation_failure_target(Some(head), &runtime))
+                .collect::<Vec<_>>(),
+            vec![None, None, None, target, target]
+        );
+        assert!(
+            heads
+                .iter()
+                .all(
+                    |head| assisted_instantiation_failure_target(Some(head), &interrupted)
+                        .is_none()
+                )
+        );
+        assert_eq!(assisted_instantiation_failure_target(None, &runtime), None);
     }
 
     #[test]
@@ -13704,6 +14731,7 @@ mod tests {
                 kind,
                 reacquire_permits,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .retry_decision()
         }
@@ -13763,6 +14791,7 @@ mod tests {
                 kind,
                 reacquire_permits: false,
                 unload_request: UnloadRequest::ordinary(UnloadReason::from_interrupt(kind)),
+                establishment: InterruptEstablishment::ready(),
             }
             .is_terminal()
         }
@@ -13775,18 +14804,32 @@ mod tests {
     }
 
     #[test]
+    async fn interrupt_establishment_serializes_successors() {
+        let pending_predecessor =
+            Arc::new(InterruptEstablishment::new(InterruptEstablishment::ready()));
+        let pending_successor = Arc::new(InterruptEstablishment::new(pending_predecessor.clone()));
+        let pending_wait = pending_successor.wait_for_predecessor();
+        tokio::pin!(pending_wait);
+        assert!(futures::poll!(pending_wait.as_mut()).is_pending());
+        pending_predecessor.complete();
+        pending_wait.await;
+    }
+
+    #[test]
     fn terminal_interrupt_claim_is_released_after_a_worker_generation() {
         let mut state = WorkerInterruptState::Idle;
         assert!(state.queue(PendingWorkerInterrupt {
             kind: InterruptKind::Suspend(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+            establishment: InterruptEstablishment::ready(),
         }));
         assert!(state.take().is_some());
         assert!(!state.queue(PendingWorkerInterrupt {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
 
         state.reset_terminal_for_new_generation();
@@ -13795,15 +14838,17 @@ mod tests {
             kind: InterruptKind::Restart,
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
+            establishment: InterruptEstablishment::ready(),
         }));
     }
 
     #[test]
-    fn terminal_interrupt_can_be_queued_for_a_resuming_claimed_generation() {
+    fn post_resident_claim_preserves_a_newer_terminal_before_the_final_claim() {
         let mut state = WorkerInterruptState::Pending(PendingWorkerInterrupt {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Interrupt),
+            establishment: InterruptEstablishment::ready(),
         });
         assert!(state.take().is_some());
         assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
@@ -13812,11 +14857,13 @@ mod tests {
             kind: InterruptKind::Interrupt(Timestamp::now_utc()),
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Deleting),
+            establishment: InterruptEstablishment::ready(),
         };
         assert!(state.queue(delete_interrupt));
         assert!(matches!(state, WorkerInterruptState::Pending(_)));
-        state.reset_terminal_for_new_generation();
-        assert!(matches!(state, WorkerInterruptState::Pending(_)));
+        let claimed = state.take().unwrap();
+        assert_eq!(claimed.unload_request.reason, UnloadReason::Deleting);
+        assert!(matches!(state, WorkerInterruptState::TerminalClaimed));
     }
 }
 

@@ -454,17 +454,22 @@ impl BlobStorageBackend for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
+        let directory = path.text()?;
         let query =
             sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
-                .bind(path.text()?);
+                .bind(directory.clone());
 
         let result = self
             .pool
             .with_ro(target_label, op_label)
             .fetch_all_as::<(String,), _>(query)
             .await
-            .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())?;
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|row| blob_child_path(&directory, &row.0).into())
+                    .collect()
+            })?;
 
         Ok(result)
     }

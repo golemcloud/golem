@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { Effect, Schema, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel } from "effect/ai"
 import { command, reflectedToolkit, typedToolkit } from "../src/Ai.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
@@ -13,7 +13,7 @@ const host = ToolClient.of({
   getTool: vi.fn(),
   createStdin: vi.fn() as never,
   createStdinFromStream: vi.fn() as never,
-  createStdout: vi.fn() as never,
+  createOutput: vi.fn() as never,
   rpc: vi.fn() as never,
   createRpc: vi.fn() as never,
 })

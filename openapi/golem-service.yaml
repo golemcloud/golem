@@ -1995,7 +1995,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       operationId: invoke_tool
       parameters:
@@ -16175,6 +16175,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -16587,6 +16592,39 @@ components:
       required:
       - key
       - description
+    ExternalBinaryValuePayload:
+      type: object
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+      required:
+      - bytes
+    ExternalDurationValuePayload:
+      type: object
+      properties:
+        nanoseconds:
+          type: string
+      required:
+      - nanoseconds
+    ExternalQuantityValue:
+      type: object
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
+      required:
+      - mantissa
+      - scale
+      - unit
     ExternalResultValuePayload:
       type: object
       oneOf:
@@ -16597,12 +16635,15 @@ components:
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
       - type: object
         properties:
           tag:
@@ -16610,12 +16651,15 @@ components:
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -16673,8 +16717,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
         required:
         - kind
         - value
@@ -16721,8 +16764,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
         required:
         - kind
         - value
@@ -16733,8 +16775,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -16745,8 +16797,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -16769,6 +16831,18 @@ components:
             - string
           value:
             type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
         required:
         - kind
         - value
@@ -16922,10 +16996,14 @@ components:
             type: object
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
                 - nullable: true
+                  type: object
+                  enum:
+                  - null
+            required:
+            - inner
         required:
         - kind
         - value
@@ -16947,7 +17025,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
         required:
         - kind
         - value
@@ -16958,7 +17036,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
         required:
         - kind
         - value
@@ -17018,7 +17096,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
         required:
         - kind
         - value
@@ -17029,7 +17107,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
         required:
         - kind
         - value
@@ -17044,6 +17122,15 @@ components:
         required:
         - kind
         - value
+    ExternalTextValuePayload:
+      type: object
+      properties:
+        text:
+          type: string
+        language:
+          type: string
+      required:
+      - text
     ExternalToolInvocationParameters:
       title: ExternalToolInvocationParameters
       type: object
@@ -17113,10 +17200,7 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - case
     FailedUpdate:
@@ -17131,9 +17215,17 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     FallibleResultParameters:
       title: FallibleResultParameters
       type: object
@@ -17848,9 +17940,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     PermissionCardSpec:
       type: object
       properties:
@@ -18404,6 +18504,28 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -19599,6 +19721,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      title: PublicSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
     PublicSnapshotData:
       discriminator:
         propertyName: type
@@ -19793,11 +19936,21 @@ components:
         declaresStdout:
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
           type: boolean
+        hasStderr:
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+          type: boolean
+        declaresStderr:
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+          type: boolean
       required:
       - commandPath
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
     PublicTypedAgentConfigEntry:
       title: PublicTypedAgentConfigEntry
       description: |-
@@ -19820,10 +19973,12 @@ components:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -19837,6 +19992,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotAssistedAutomatic
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -20708,6 +20875,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -21255,6 +21436,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -21531,6 +21724,30 @@ components:
         required:
         - type
         - value
+    SnapshotAssistedAutomaticUpdateParameters:
+      title: SnapshotAssistedAutomaticUpdateParameters
+      type: object
+    SnapshotAssistedUpdateMetadata:
+      title: SnapshotAssistedUpdateMetadata
+      type: object
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        ineligibilityReason:
+          type: string
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -21622,9 +21839,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     TailPositional:
       type: object
       properties:
@@ -21692,12 +21917,15 @@ components:
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
       required:
       - version
+      - requires_filesystem
       - commands
     ToolResultSpec:
       type: object
@@ -21840,6 +22068,12 @@ components:
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
+      required:
+      - updateAttemptIndex
     UrlRestrictions:
       type: object
       properties:
@@ -22525,6 +22759,11 @@ components:
           format: uint64
         details:
           type: string
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
@@ -22661,10 +22900,14 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object
@@ -22898,6 +23141,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
       required:
       - timestamp
       - targetRevision
@@ -23533,6 +23778,21 @@ components:
           type: string
       required:
       - currentRevision
+    AuthorizationCodePkceConfig:
+      title: AuthorizationCodePkceConfig
+      type: object
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+      required:
+      - redirectUris
+      - origins
     AutoInjectedKind:
       type: string
       enum:
@@ -26651,6 +26911,9 @@ components:
         storageLimit:
           type: integer
           format: uint64
+        blobStorageLimit:
+          type: integer
+          format: uint64
         monthlyGasLimit:
           type: integer
           format: uint64
@@ -26710,6 +26973,7 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
+      - blobStorageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
@@ -27376,6 +27640,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - name
       - providerType
@@ -27383,6 +27649,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
     SecuritySchemeDto:
       title: SecuritySchemeDto
       type: object
@@ -27408,6 +27675,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - id
       - revision
@@ -27417,6 +27686,41 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
+    SecuritySchemeLogin:
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AuthorizationCodePkce
+            type: string
+            enum:
+            - AuthorizationCodePkce
+        required:
+        - type
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cookie
+            type: string
+            enum:
+            - Cookie
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       title: SecuritySchemeUpdate
       type: object
@@ -27436,6 +27740,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - currentRevision
     SetMemoryLimit:

@@ -27,6 +27,7 @@ use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use typed_path::{Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
 
 pub mod fs;
 pub mod memory;
@@ -1115,6 +1116,17 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
             .await
     }
 
+    pub async fn list_blobs_below(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.record("list_blobs_below");
+        self.storage
+            .list_blobs_below(self.svc_name, self.api_name, namespace, path)
+            .await
+    }
+
     pub async fn delete_dir(
         &self,
         namespace: BlobStorageNamespace,
@@ -1391,7 +1403,7 @@ pub enum BlobNameError {
     NotRelative { path: PathBuf },
     /// The blob path has a `..` name in it. Such a name goes up from the name before it, so
     /// the path can name a blob above the root of its namespace. A `..` name is a name of the
-    /// path, which is `std::path::Component::ParentDir`.
+    /// path read as a Unix path, between two `/` separators, on every host.
     ///
     /// [`BlobNameError::DotSegment`] holds the neighbouring rule, which reads a name as MinIO
     /// reads an object key: at `\` as well as at `/`, and without the whitespace around a
@@ -1524,10 +1536,10 @@ pub(crate) fn check_blob_name(name: &str) -> Result<(), BlobNameError> {
 /// which names a drive, or `\\`, which starts the name of a server, of a device or of a
 /// verbatim path.
 ///
-/// Windows reads such a prefix as the start of a path that its own root holds, and
-/// `Path::components` gives it there as [`Component::Prefix`]. Unix has no such prefix, so
-/// `Path::components` gives the same text as a name of the path and nothing else refuses it.
-/// The rule reads the text, so the host that runs the process does not change the answer.
+/// Windows reads such a prefix as the start of a path that its own root holds. A blob path is
+/// read as a Unix path on every host (`normalized_blob_path`), and Unix has no such prefix, so
+/// the prefix is the text of a name there and nothing else refuses it. The rule reads the text,
+/// so the host that runs the process does not change the answer.
 ///
 /// The rule reads one letter and a `:` because that is what Windows reads: `C:x` names the
 /// place that the current directory of the drive `C` holds. A `:` after more than one letter,
@@ -1541,13 +1553,18 @@ pub(crate) fn blob_path_starts_with_windows_prefix(text: &str) -> bool {
 ///
 /// The field of [`NormalizedBlobPath`] is private to this module, and no backend is in it, so
 /// `normalized_blob_path` is the one way to make the type.
+///
+/// A blob path has the semantics of a Unix path on every host: `/` is the one separator, and `\`
+/// and a prefix of Windows are characters of a name. So the one form of a path, and the names
+/// that a backend reads from it, do not change with the host that runs the process.
 mod normalized_path {
     use super::{
         BlobNameError, blob_path_starts_with_windows_prefix, blob_path_to_string, check_blob_name,
     };
     use std::borrow::Cow;
     use std::ops::Deref;
-    use std::path::{Component, Path};
+    use std::path::{Path, PathBuf};
+    use typed_path::{UnixComponent, UnixPath, Utf8UnixComponent, Utf8UnixPath};
 
     /// The one form of a relative blob path (`normalized_blob_path`).
     ///
@@ -1561,6 +1578,10 @@ mod normalized_path {
     /// this form of such a path allocates nothing. The operation that follows still builds the
     /// key of its backend from the form.
     ///
+    /// The form is valid UTF-8 and its names are separated by `/` on every host. A backend reads
+    /// the names through `text`, `parent_text` and `file_name_text`, which split at `/` only, and
+    /// not through the `Path` that `Deref` gives, because `Path` splits at `\` on Windows.
+    ///
     /// The type gives the path itself to a caller that reads it, and that caller has a
     /// `&Path` (`Deref`). A caller that makes a key has to name the type, and the four
     /// backends do: `S3BlobStorage::key_of`, `FileSystemBlobStorage::path_of`,
@@ -1571,6 +1592,7 @@ mod normalized_path {
 
     impl NormalizedBlobPath<'static> {
         /// Gives the path at the root of a namespace, which has no name in it.
+        #[cfg(test)]
         pub(crate) fn root() -> Self {
             Self(Cow::Borrowed(Path::new("")))
         }
@@ -1580,12 +1602,10 @@ mod normalized_path {
         /// Tells if the path is at the root of a namespace.
         ///
         /// A path is at the root when it has no name in it. An empty path is at the root,
-        /// and so is a path that only has `.` in it, because the one form keeps no `.`.
+        /// and so is a path that only has `.` in it, because the one form keeps no `.`. So the
+        /// one form of a path at the root is the empty path.
         pub(crate) fn is_root(&self) -> bool {
-            !self
-                .0
-                .components()
-                .any(|component| matches!(component, Component::Normal(_)))
+            self.0.as_os_str().is_empty()
         }
 
         /// Gives [`BlobNameError::NoName`] if the path is at the root of a namespace.
@@ -1612,31 +1632,42 @@ mod normalized_path {
         ///
         /// The root of the namespace is the empty text.
         pub(crate) fn parent_text(&self) -> Result<String, BlobNameError> {
-            match self.0.parent() {
-                Some(parent) => blob_path_to_string(parent),
-                None => Ok(String::new()),
-            }
+            self.unix().map(|path| {
+                path.parent()
+                    .map(|parent| parent.as_str().to_string())
+                    .unwrap_or_default()
+            })
         }
 
         /// Gives the text of the last name of the path.
         ///
-        /// A path that is not valid UTF-8 gives the same [`BlobNameError`] as
-        /// `blob_path_to_string`, which `normalized_blob_path` has already refused. A path
-        /// with no name in it is at the root of its namespace (`is_root`) and gives
-        /// [`BlobNameError::NoName`]: a guest can pick two empty names, so the path is of the
-        /// guest and so is the error. The two errors are permanent.
+        /// A path that is not valid UTF-8 gives [`BlobNameError::NotUtf8`], which
+        /// `normalized_blob_path` has already refused. A path with no name in it is at the root
+        /// of its namespace (`is_root`) and gives [`BlobNameError::NoName`]: a guest can pick
+        /// two empty names, so the path is of the guest and so is the error. The two errors are
+        /// permanent.
         pub(crate) fn file_name_text(&self) -> Result<String, BlobNameError> {
-            self.0
+            self.unix()?
                 .file_name()
+                .map(|name| name.to_string())
                 .ok_or_else(|| BlobNameError::NoName {
                     path: self.0.to_path_buf(),
                 })
-                .and_then(|name| {
-                    name.to_str().map(|name| name.to_string()).ok_or_else(|| {
-                        BlobNameError::NotUtf8 {
-                            path: self.0.to_path_buf(),
-                        }
-                    })
+        }
+
+        /// Gives the names of the path, from the first to the last. The path at the root has
+        /// none.
+        pub(crate) fn names(&self) -> Result<impl Iterator<Item = &str>, BlobNameError> {
+            Ok(self.unix()?.iter())
+        }
+
+        /// Gives the path as a Unix path, whose one separator is `/` on every host.
+        fn unix(&self) -> Result<&Utf8UnixPath, BlobNameError> {
+            self.0
+                .to_str()
+                .map(Utf8UnixPath::new)
+                .ok_or_else(|| BlobNameError::NotUtf8 {
+                    path: self.0.to_path_buf(),
                 })
         }
     }
@@ -1657,8 +1688,9 @@ mod normalized_path {
 
     /// Gives the one form of a relative blob path, or an error.
     ///
-    /// The form holds the names of the path and one separator between two names. A `.` and
-    /// an extra separator are not names, so they go away, and a path at the root of a
+    /// The path is read as a Unix path on every host: `/` is the one separator, and `\` is a
+    /// character of a name. The form holds the names of the path and one `/` between two names.
+    /// A `.` and an extra separator are not names, so they go away, and a path at the root of a
     /// namespace becomes the empty path. Two paths that name the same blob get the same form.
     /// An absolute path, a path with `..` in it, and a path with a prefix of Windows give a
     /// [`BlobNameError`], which is permanent.
@@ -1667,67 +1699,79 @@ mod normalized_path {
     /// [`BlobNameError::NotUtf8`]. `blob_path_starts_with_windows_prefix` gives
     /// [`BlobNameError::NotRelative`] for a path that Windows holds outside the namespace,
     /// and `check_blob_name` gives the rule that the text breaks. The text is what a backend
-    /// stores, and the rules read `\` as a separator, which the names of the path do not
-    /// (`Path::components` reads `\` as a name on unix). [`BlobStorage`](super::BlobStorage)
-    /// calls this function for every path of every operation before a backend gets the path,
-    /// so every backend gives the same error for the same name, on every host.
+    /// stores, and the rules read `\` as a separator, which the names of the path do not.
+    /// [`BlobStorage`](super::BlobStorage) calls this function for every path of every operation
+    /// before a backend gets the path, so every backend gives the same error for the same name,
+    /// on every host.
     pub(crate) fn normalized_blob_path(
         path: &Path,
     ) -> Result<NormalizedBlobPath<'_>, BlobNameError> {
-        if path.is_absolute() {
-            return Err(BlobNameError::NotRelative {
-                path: path.to_path_buf(),
-            });
-        }
+        let unix = UnixPath::new(path.as_os_str().as_encoded_bytes());
 
-        let mut names_length = 0usize;
-        let mut names_count = 0usize;
-        for component in path.components() {
-            match component {
-                Component::Normal(name) => {
-                    names_length += name.len();
-                    names_count += 1;
-                }
-                Component::CurDir => {}
-                Component::ParentDir => {
-                    return Err(BlobNameError::ParentDir {
-                        path: path.to_path_buf(),
-                    });
-                }
-                Component::RootDir | Component::Prefix(_) => {
-                    return Err(BlobNameError::NotRelative {
-                        path: path.to_path_buf(),
-                    });
-                }
-            }
-        }
+        let (names_length, names_count) =
+            unix.components()
+                .try_fold(
+                    (0usize, 0usize),
+                    |(length, count), component| match component {
+                        UnixComponent::Normal(name) => Ok((length + name.len(), count + 1)),
+                        UnixComponent::CurDir => Ok((length, count)),
+                        UnixComponent::ParentDir => Err(BlobNameError::ParentDir {
+                            path: path.to_path_buf(),
+                        }),
+                        UnixComponent::RootDir => Err(BlobNameError::NotRelative {
+                            path: path.to_path_buf(),
+                        }),
+                    },
+                )?;
+
+        // The error names the path as the caller gave it, because the guest reads the message.
+        let text = path.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
+            path: path.to_path_buf(),
+        })?;
 
         // The path is already in its one form when its length is exactly its names plus the one
         // separator that sits between two names, so nothing has to be built.
-        let normalized = if names_length + names_count.saturating_sub(1) == path.as_os_str().len() {
-            Cow::Borrowed(path)
+        let normalized: Cow<'_, str> = if names_length + names_count.saturating_sub(1) == text.len()
+        {
+            Cow::Borrowed(text)
         } else {
-            Cow::Owned(
-                path.components()
-                    .filter(|component| matches!(component, Component::Normal(_)))
-                    .collect(),
-            )
+            Cow::Owned(joined_names(
+                text,
+                names_length + names_count.saturating_sub(1),
+            ))
         };
 
-        // The error names the path as the caller gave it, because the guest reads the message.
-        let text = normalized.to_str().ok_or_else(|| BlobNameError::NotUtf8 {
-            path: path.to_path_buf(),
-        })?;
         // The rule holds for the one form, so a path whose one form starts with a prefix of
         // Windows gets the error as well, and the one form of an accepted path is accepted.
-        if blob_path_starts_with_windows_prefix(text) {
+        if blob_path_starts_with_windows_prefix(&normalized) {
             return Err(BlobNameError::NotRelative {
                 path: path.to_path_buf(),
             });
         }
-        check_blob_name(text)?;
+        check_blob_name(&normalized)?;
 
-        Ok(NormalizedBlobPath(normalized))
+        Ok(NormalizedBlobPath(match normalized {
+            Cow::Borrowed(text) => Cow::Borrowed(Path::new(text)),
+            Cow::Owned(text) => Cow::Owned(PathBuf::from(text)),
+        }))
+    }
+
+    /// Gives the names of the Unix path `text` with one `/` between two names, in a string of
+    /// `length` bytes, which is the length of the result.
+    fn joined_names(text: &str, length: usize) -> String {
+        Utf8UnixPath::new(text)
+            .components()
+            .filter_map(|component| match component {
+                Utf8UnixComponent::Normal(name) => Some(name),
+                _ => None,
+            })
+            .fold(String::with_capacity(length), |mut joined, name| {
+                if !joined.is_empty() {
+                    joined.push('/');
+                }
+                joined.push_str(name);
+                joined
+            })
     }
 }
 
@@ -1761,6 +1805,25 @@ pub fn blob_path_is_root(path: &Path) -> bool {
     normalized_blob_path(path).is_ok_and(|path| path.is_root())
 }
 
+/// Gives the text of the one form of a blob path (`normalized_blob_path`), or the
+/// [`BlobNameError`] of the rule that the path breaks.
+///
+/// Two paths that name the same blob give the same text, so a caller can tell that two paths
+/// name one blob without a call to the storage. `golem_worker_executor::services::blob_store`
+/// reads it to count each blob of an operation one time.
+pub fn normalized_blob_path_text(path: &Path) -> Result<String, BlobNameError> {
+    normalized_blob_path(path)?.text()
+}
+
+/// Gives the last name of the one form of a blob path (`normalized_blob_path`), read with the
+/// rules of a Unix path on every host, or the [`BlobNameError`] of the rule that the path breaks.
+///
+/// A path at the root of its namespace has no name and gives [`BlobNameError::NoName`].
+/// `golem_worker_executor::services::blob_store` reads it for the names that it lists.
+pub fn blob_file_name_to_string(path: &Path) -> Result<String, BlobNameError> {
+    normalized_blob_path(path)?.file_name_text()
+}
+
 /// Gives the text of the path, or a [`BlobNameError`], which is permanent.
 pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, BlobNameError> {
     path.to_str()
@@ -1768,6 +1831,47 @@ pub(crate) fn blob_path_to_string(path: &Path) -> Result<String, BlobNameError> 
         .ok_or_else(|| BlobNameError::NotUtf8 {
             path: path.to_path_buf(),
         })
+}
+
+/// Joins two keys of blob storage with `/`, the separator of a blob path on every host.
+///
+/// The keys are text that the storage built itself, for example a prefix of the configuration
+/// and a name, so the function checks nothing.
+pub fn join_blob_key(parent: &str, child: &str) -> String {
+    let mut path = Utf8UnixPathBuf::from(parent);
+    path.push(child);
+    path.into_string()
+}
+
+/// Joins two segments of a blob path that a guest gives, with `/` as the separator on every
+/// host.
+///
+/// Both segments must be relative and hold no `..` name. A segment that is absolute gives
+/// [`BlobNameError::NotRelative`], and a segment with a `..` name gives
+/// [`BlobNameError::ParentDir`], so a child segment never replaces or leaves its parent. A
+/// prefix of Windows and a `\` stay characters of a name here; [`BlobStorage`] applies the
+/// rules of `normalized_blob_path` to the joined path.
+pub fn join_blob_path(parent: &str, child: &str) -> Result<PathBuf, BlobNameError> {
+    let parent = relative_blob_segment(parent)?;
+    let child = relative_blob_segment(child)?;
+    Ok(PathBuf::from(parent.join(child).into_string()))
+}
+
+/// Reads a segment of a blob path with the separator `/`, or gives the [`BlobNameError`] of an
+/// absolute segment or of a segment with a `..` name.
+fn relative_blob_segment(text: &str) -> Result<&Utf8UnixPath, BlobNameError> {
+    let path = Utf8UnixPath::new(text);
+    path.components()
+        .try_for_each(|component| match component {
+            Utf8UnixComponent::Normal(_) | Utf8UnixComponent::CurDir => Ok(()),
+            Utf8UnixComponent::ParentDir => Err(BlobNameError::ParentDir {
+                path: PathBuf::from(text),
+            }),
+            Utf8UnixComponent::RootDir => Err(BlobNameError::NotRelative {
+                path: PathBuf::from(text),
+            }),
+        })
+        .map(|()| path)
 }
 
 /// Makes the path of a blob from the path of its directory and its name.
@@ -1786,8 +1890,8 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobNameError, BlobRangeError, agent_path_segment, blob_path_to_string, blob_range,
-        normalized_blob_path,
+        BlobNameError, BlobRangeError, agent_path_segment, blob_file_name_to_string,
+        blob_path_to_string, blob_range, join_blob_path, normalized_blob_path,
     };
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
@@ -1871,9 +1975,9 @@ mod tests {
     }
 
     /// A path that starts with a prefix of Windows names a place outside the namespace on that
-    /// host: `C:` names a drive and `\\` names a server. Windows gives such a prefix as
-    /// `Component::Prefix` and unix gives it as a name of the path, so the rule reads the text
-    /// of the one form and both hosts give the same error for the same path.
+    /// host: `C:` names a drive and `\\` names a server. A blob path is a Unix path on every
+    /// host, where such a prefix is the text of a name, so the rule reads the text of the one
+    /// form and both hosts give the same error for the same path.
     #[test]
     fn a_path_that_starts_with_a_prefix_of_windows_is_not_relative() {
         let paths = [
@@ -2031,5 +2135,88 @@ mod tests {
     #[test]
     fn blob_path_to_string_gives_the_text_of_the_path() {
         assert_eq!(blob_path_to_string(Path::new("a/b")), Ok("a/b".to_string()));
+    }
+
+    #[test]
+    fn join_blob_path_uses_contract_separator() {
+        assert_eq!(
+            join_blob_path("photos", "animals/cat.png")
+                .unwrap()
+                .as_os_str(),
+            "photos/animals/cat.png"
+        );
+        assert_eq!(
+            join_blob_path("", "cat.png").unwrap().as_os_str(),
+            "cat.png"
+        );
+        assert_eq!(
+            join_blob_path("photos/", "cat.png").unwrap().as_os_str(),
+            "photos/cat.png"
+        );
+    }
+
+    #[test]
+    fn join_blob_path_does_not_replace_parent() {
+        let windows_absolute_name = join_blob_path("photos", r"C:\cats\kitten.png").unwrap();
+        assert_eq!(
+            windows_absolute_name.as_os_str(),
+            r"photos/C:\cats\kitten.png"
+        );
+        assert!(normalized_blob_path(&windows_absolute_name).is_ok());
+
+        assert!(join_blob_path("photos", "/cats/kitten.png").is_err());
+        assert!(join_blob_path("photos", "../kitten.png").is_err());
+    }
+
+    #[test]
+    fn blob_path_components_use_contract_separator() {
+        let path = normalized_blob_path(Path::new(r"photos/animals\cat.png")).unwrap();
+        assert_eq!(path.parent_text().unwrap(), "photos");
+        assert_eq!(path.file_name_text().unwrap(), r"animals\cat.png");
+    }
+
+    /// A blob path is a Unix path on every host: the one form splits only at `/` and joins its
+    /// names with `/`, and a `\` stays a character of a name.
+    #[test]
+    fn the_one_form_splits_and_joins_at_a_slash_only() {
+        let path = normalized_blob_path(Path::new(r"./a\b//c\d/./e")).unwrap();
+
+        assert_eq!(
+            (
+                path.text().unwrap(),
+                path.parent_text().unwrap(),
+                path.file_name_text().unwrap(),
+                path.names().unwrap().collect::<Vec<_>>(),
+            ),
+            (
+                r"a\b/c\d/e".to_string(),
+                r"a\b/c\d".to_string(),
+                "e".to_string(),
+                vec![r"a\b", r"c\d", "e"],
+            )
+        );
+    }
+
+    /// The last name of a listed blob splits only at `/`, and a path at the root has no name.
+    #[test]
+    fn the_file_name_of_a_blob_path_is_its_last_name_after_a_slash() {
+        assert_eq!(
+            (
+                blob_file_name_to_string(Path::new(r"photos/animals\cat.png")).unwrap(),
+                blob_file_name_to_string(Path::new("./")).is_err(),
+            ),
+            (r"animals\cat.png".to_string(), true)
+        );
+    }
+
+    #[test]
+    fn blob_path_identity_normalizes_current_directory_components() {
+        assert_eq!(
+            normalized_blob_path(Path::new("./photos/./cat.png"))
+                .unwrap()
+                .text()
+                .unwrap(),
+            "photos/cat.png"
+        );
     }
 }

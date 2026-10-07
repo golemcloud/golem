@@ -156,7 +156,7 @@ impl InMemoryBlobStorage {
         let dir = path.text()?;
         Ok(Self::entries_in_dir(data, namespace, &dir)
             .filter_map(|(key, _)| match &key.file {
-                Some(file) if key.dir == dir => Some(path.join(file)),
+                Some(file) if key.dir == dir => Some(blob_child_path(&dir, file).into()),
                 None if key.dir != dir => Some(PathBuf::from(&key.dir)),
                 _ => None,
             })

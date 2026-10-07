@@ -13,16 +13,15 @@
 // limitations under the License.
 
 import type { SchemaCodec } from '../../schema/codec';
+import { Uuid } from '../../uuid';
 import {
   assertSchemaValueRepresentable,
   cloneSchemaValue,
   deepEqual,
-  floatFromBits,
+  numericRestrictionsMatch,
   isQuantityValueRepresentable,
   mergeGraphDefs,
   quantityLessOrEqual,
-  type NumericBound,
-  type NumericRestrictions,
   type QuantityValue,
   type SchemaGraph,
   type SchemaType,
@@ -704,6 +703,8 @@ function schemaValueMatches(graph: SchemaGraph, type: SchemaType, value: SchemaV
       return value.tag === 'char' && isUnicodeScalar(value.value);
     case 'string':
       return value.tag === 'string' && typeof value.value === 'string';
+    case 'uuid':
+      return value.tag === 'uuid' && value.value instanceof Uuid;
     case 'path':
       return (
         value.tag === 'path' &&
@@ -929,28 +930,6 @@ function recordView(
 
 function integerInRange(value: number, min: bigint, max: bigint): boolean {
   return Number.isInteger(value) && BigInt(value) >= min && BigInt(value) <= max;
-}
-
-function numericRestrictionsMatch(
-  restrictions: NumericRestrictions | undefined,
-  value: number | bigint,
-): boolean {
-  if (!restrictions) return true;
-  const compare = (bound: NumericBound): number | undefined => {
-    if (typeof value === 'number') {
-      if (bound.tag !== 'float-bits') return undefined;
-      const decoded = floatFromBits(bound.val);
-      if (decoded === undefined || !Number.isFinite(decoded) || Number.isNaN(value)) {
-        return undefined;
-      }
-      return value < decoded ? -1 : value > decoded ? 1 : 0;
-    }
-    if (bound.tag === 'float-bits') return undefined;
-    return value < bound.val ? -1 : value > bound.val ? 1 : 0;
-  };
-  const min = restrictions.min ? compare(restrictions.min) : 0;
-  const max = restrictions.max ? compare(restrictions.max) : 0;
-  return min !== undefined && max !== undefined && min >= 0 && max <= 0;
 }
 
 function isUnicodeScalar(value: string): boolean {

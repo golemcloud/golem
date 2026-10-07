@@ -69,18 +69,12 @@ use tokio::runtime::Handle;
 use tokio_util::sync::CancellationToken;
 use wasmtime_wasi_http::HttpConnectionPool;
 
-#[derive(Clone)]
-pub struct NoAdditionalDeps {}
-
-impl Default for NoAdditionalDeps {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+#[derive(Clone, Default)]
+pub struct NoAdditionalDeps;
 
 impl NoAdditionalDeps {
     pub fn new() -> Self {
-        Self {}
+        Self
     }
 }
 

@@ -1,0 +1,76 @@
+name: "add-sqlite-effect"
+steps:
+  - id: "create-project"
+    only_if:
+      language: "effect"
+    create_project:
+      name: test-app
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-sqlite-agent"
+    only_if:
+      language: "effect"
+    prompt: >
+      In the Effect-based test-app, add a durable agent named SqliteNotes whose id has one string
+      field named name. Use SqliteClient from @golemcloud/effect-golem/sqlite with an in-memory
+      database. Declare the database as `notes` in Snapshot.define, expose it from the snapshot
+      strategy, and snapshot on every invocation. Add an `add` method taking one string named text
+      and returning the total row count, and a `list` method returning all texts in insertion order.
+      Use Effect SQL tagged-template parameters. Make sure the project builds and deploys.
+    expectedSkills:
+      - "golem-add-sqlite-effect"
+    verify:
+      build: true
+      deploy: true
+
+  - id: "add-first-note"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"first"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 1
+
+  - id: "add-second-note"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "add"
+      args: '"second"'
+    expect:
+      result_json:
+        - path: "$"
+          equals: 2
+
+  - id: "simulate-crash"
+    only_if:
+      language: "effect"
+    shell:
+      command: "golem"
+      args: ["agent", "simulate-crash", 'SqliteNotes("db-test")']
+      cwd: "test-app"
+    expect:
+      exit_code: 0
+
+  - id: "wait-for-recovery"
+    only_if:
+      language: "effect"
+    sleep: 2
+
+  - id: "verify-restored-database"
+    only_if:
+      language: "effect"
+    invoke_json:
+      agent: 'SqliteNotes("db-test")'
+      method: "list"
+    expect:
+      result_json:
+        - path: "$"
+          equals: ["first", "second"]

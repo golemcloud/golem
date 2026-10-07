@@ -496,8 +496,8 @@ static STRUCTURED_OUTPUT_TEST_REGISTRY: &[StructuredOutputTestEntry] = &[
     registry_entry!("SecretListView", "secret.list", arb_secret_list_result),
     registry_entry!(
         "SecretUpdateView",
-        "secret.update-value",
-        arb_secret_update_value_result
+        "secret.update",
+        arb_secret_update_result
     ),
 ];
 
@@ -995,6 +995,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
             golem_common::model::tool::ToolDeploymentMetadata {
                 definition: golem_common::schema::tool::Tool {
                     version: "1.0.0".to_string(),
+                    requires_filesystem: false,
                     commands: golem_common::schema::tool::CommandTree {
                         nodes: vec![golem_common::schema::tool::CommandNode {
                             name: "grep".to_string(),
@@ -1110,6 +1111,11 @@ fn sample_component_layer_properties() -> crate::model::app::ComponentLayerPrope
         golem_common::model::component::ComponentName("component".to_string()),
     );
     let mut properties = crate::model::app::ComponentLayerProperties::default();
+    properties.guest_language.apply_layer(
+        &layer,
+        None,
+        Some(crate::model::language::GuestLanguage::Effect),
+    );
     properties.config.apply_layer(
         &layer,
         None,
@@ -1264,7 +1270,10 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
 
     let outputs = vec![
         to_structured_output_value_masked(
-            crate::model::secret::SecretCreateView(secret.clone().into()),
+            crate::model::secret::SecretCreateView {
+                action: crate::model::create_action::CreateAction::Created,
+                secret: secret.clone().into(),
+            },
             MaskingConfig::hide_secrets(),
         )
         .expect("secret.create should serialize"),
@@ -1277,7 +1286,7 @@ fn cli_output_schema_validates_schema_native_secret_outputs() {
             crate::model::secret::SecretUpdateView(secret.clone().into()),
             MaskingConfig::hide_secrets(),
         )
-        .expect("secret.update-value should serialize"),
+        .expect("secret.update should serialize"),
         to_structured_output_value_masked(
             crate::model::secret::SecretListView {
                 secrets: vec![secret.into()],
@@ -1349,7 +1358,9 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
                         command_path: vec!["files".to_string(), "lookup".to_string()],
                         has_stdin: false,
                         has_stdout: true,
+                        has_stderr: false,
                         declares_stdout: true,
+                        declares_stderr: false,
                     },
                 )),
             },
@@ -2281,22 +2292,45 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(17),
             description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: vec![7, 8, 9],
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: Some("u-8e1a7f2c-4d3b-4e5f-9a6b-7c8d9e0f1a2b".to_string()),
             }),
         }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(18),
+            description: PublicUpdateDescription::Automatic(Empty {}),
+        }),
+        PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(2).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(19),
+            description: PublicUpdateDescription::SnapshotAssistedAutomatic(
+                SnapshotAssistedAutomaticUpdateParameters {},
+            ),
+        }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
             new_component_size: 30,
             new_active_plugins: BTreeSet::from_iter([plugin(1)]),
+            snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+                pending_update_index: OplogIndex::from_u64(3),
+                source_component_revision: ComponentRevision::new(1).unwrap(),
+                source_revision_start_index: OplogIndex::INITIAL,
+                snapshot_index: OplogIndex::from_u64(2),
+            }),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(3).unwrap(),
             details: None,
+            update_attempt_index: Some(OplogIndex::from_u64(20)),
+            snapshot_assisted_details: None,
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -2463,6 +2497,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(8).unwrap(),
+            update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
         }),
     ]
@@ -3171,17 +3206,40 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
 fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
     use golem_common::model::IdempotencyKey;
     use golem_common::model::invocation_session_public::{
-        PublicInvocationResult, PublicNativeToolTarget,
+        PublicInvocationResult, PublicNativeToolTarget, PublicTypedValue,
     };
+    use golem_common::schema::{SchemaGraph, SchemaType};
 
-    arb_small_string()
-        .prop_map(|key| {
+    (arb_small_string(), any::<bool>())
+        .prop_map(|(key, success)| {
+            let typed = PublicTypedValue {
+                graph: SchemaGraph::anonymous(if success {
+                    SchemaType::string()
+                } else {
+                    SchemaType::u8()
+                }),
+                value: if success {
+                    serde_json::json!({"kind": "string", "value": "done"})
+                } else {
+                    serde_json::json!({"kind": "u8", "value": 7})
+                },
+            };
             to_structured_output_value(crate::model::tool_invoke::ToolInvocationSessionView {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
                 idempotency_key: IdempotencyKey::new(key),
-                result: PublicInvocationResult::ToolSuccess { result: None },
+                result: if success {
+                    PublicInvocationResult::ToolSuccess {
+                        result: Some(typed),
+                    }
+                } else {
+                    PublicInvocationResult::ToolFailure {
+                        code: "custom-error".to_string(),
+                        message: Some("tool failed".to_string()),
+                        custom_error: Some(typed),
+                    }
+                },
             })
             .expect("generated tool invocation session result should serialize")
         })
@@ -3266,14 +3324,25 @@ fn arb_public_oplog_entry_attribution()
                     any::<bool>(),
                     any::<bool>(),
                     any::<bool>(),
+                    any::<bool>(),
+                    any::<bool>(),
                 )
                     .prop_map(
-                        |(command_path, has_stdin, has_stdout, declares_stdout)| {
+                        |(
+                            command_path,
+                            has_stdin,
+                            has_stdout,
+                            has_stderr,
+                            declares_stdout,
+                            declares_stderr,
+                        )| {
                             PublicEntityInvocationOperation::Tool(PublicToolInvocationOperation {
                                 command_path,
                                 has_stdin,
                                 has_stdout,
+                                has_stderr,
                                 declares_stdout,
+                                declares_stderr,
                             })
                         },
                     ),
@@ -3671,6 +3740,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3682,6 +3754,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         target_revision,
                     )
                     .expect("generated revision should be valid"),
+                    pending_update_index: None,
+                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                    snapshot_assisted_details: None,
                 },
             )
         }),
@@ -3699,6 +3774,9 @@ fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecor
                         )
                         .expect("generated revision should be valid"),
                         details,
+                        pending_update_index: None,
+                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        snapshot_assisted_details: None,
                     },
                 )
             }),
@@ -4455,11 +4533,21 @@ fn arb_http_api_deployment_agent_options()
         .boxed()
 }
 
+fn arb_created_or_updated() -> impl Strategy<Value = crate::model::create_action::CreateAction> {
+    use crate::model::create_action::CreateAction;
+
+    prop_oneof![Just(CreateAction::Created), Just(CreateAction::Updated)]
+}
+
 fn arb_api_security_scheme_create_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_security_scheme()
-            .prop_map(crate::model::http_api::security::HttpSecuritySchemeCreateView),
-    )
+    serialized_output((arb_created_or_updated(), arb_security_scheme()).prop_map(
+        |(action, security_scheme)| {
+            crate::model::http_api::security::HttpSecuritySchemeCreateView {
+                action,
+                security_scheme,
+            }
+        },
+    ))
 }
 
 fn arb_api_security_scheme_delete_result() -> OutputDocumentStrategy {
@@ -4499,6 +4587,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
         arb_small_string(),
         arb_url_string(),
         proptest::collection::vec(arb_small_string(), 0..5),
+        arb_security_scheme_login(),
     )
         .prop_map(
             |(
@@ -4510,6 +4599,7 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                 client_id,
                 redirect_url,
                 scopes,
+                login,
             )| {
                 golem_client::model::SecuritySchemeDto {
                     id: golem_common::model::security_scheme::SecuritySchemeId(id),
@@ -4523,10 +4613,38 @@ fn arb_security_scheme() -> BoxedStrategy<golem_client::model::SecuritySchemeDto
                     client_id,
                     redirect_url,
                     scopes,
+                    login,
                 }
             },
         )
         .boxed()
+}
+
+fn arb_security_scheme_login()
+-> BoxedStrategy<golem_common::model::security_scheme::SecuritySchemeLogin> {
+    prop_oneof![
+        Just(
+            golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {}
+            )
+        ),
+        (
+            proptest::collection::vec(arb_url_string(), 1..5),
+            proptest::collection::vec(
+                arb_small_string().prop_map(|subdomain| format!("https://{subdomain}.example.com")),
+                1..5,
+            ),
+        )
+            .prop_map(|(redirect_uris, origins)| {
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                    golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                        redirect_uris,
+                        origins,
+                    },
+                )
+            }),
+    ]
+    .boxed()
 }
 
 fn arb_security_scheme_provider() -> BoxedStrategy<golem_common::model::security_scheme::Provider> {
@@ -5464,6 +5582,41 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                     ),
                     filesystem_access: golem_common::model::tool::ToolFilesystemAccess::Allowed,
                 };
+                let middleware_binding =
+                    golem_common::model::diff::ToolMiddlewareBindingInput {
+                        config_keys_readable: golem_common::model::tool::ConfigKeyScope::All,
+                        secret_keys_readable: golem_common::model::tool::SecretKeyScope::All,
+                        secret_keys_revealable:
+                            golem_common::model::tool::SecretKeyScope::Keys(BTreeSet::new()),
+                        middleware: Some(vec![
+                            golem_common::model::tool_middleware::ToolMiddlewareInstallation {
+                                name: "audit".try_into().expect("valid middleware name"),
+                                version: Some("1.0.0".to_string()),
+                                parameters:
+                                    golem_common::model::json::NormalizedJsonValue::new(json!({
+                                        "level": "full"
+                                    })),
+                                account: Some(
+                                    golem_common::model::account::AccountEmail::new(
+                                        "middleware@example.com",
+                                    ),
+                                ),
+                                secret_keys_readable: Some(
+                                    golem_common::model::tool::SecretKeyScope::All,
+                                ),
+                                secret_keys_revealable: Some(
+                                    golem_common::model::tool::SecretKeyScope::Keys(
+                                        BTreeSet::new(),
+                                    ),
+                                ),
+                                filesystem_access:
+                                    golem_common::model::tool::ToolFilesystemAccess::Denied,
+                            },
+                        ]),
+                        middleware_merge_mode: Some(
+                            golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Replace,
+                        ),
+                    };
                 current.remote_tools.insert(
                     remote_tool_key.clone(),
                     golem_common::model::diff::HashOf::form_value(
@@ -5494,6 +5647,9 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding.clone(),
                             )]),
+                            environment_middleware_binding: Some(middleware_binding.clone()),
+                            component_middleware_bindings: BTreeMap::new(),
+                            agent_middleware_bindings: BTreeMap::new(),
                         },
                     ),
                 );
@@ -5526,6 +5682,17 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             bindings: BTreeMap::from_iter([(
                                 golem_common::model::agent::AgentTypeName("agent".to_string()),
                                 binding,
+                            )]),
+                            environment_middleware_binding: Some(middleware_binding.clone()),
+                            component_middleware_bindings: BTreeMap::from([(
+                                "component".to_string(),
+                                middleware_binding.clone(),
+                            )]),
+                            agent_middleware_bindings: BTreeMap::from([(
+                                golem_common::model::agent::AgentTypeName(
+                                    "agent".to_string(),
+                                ),
+                                middleware_binding,
                             )]),
                         },
                     ),
@@ -5656,7 +5823,7 @@ fn arb_environment_setup_plan() -> BoxedStrategy<crate::model::deploy::Environme
                         secret_value: json!("generated-secret"),
                     },
                 ],
-                skipped_existing_agent_secret_defaults: vec![
+                replaceable_agent_secret_defaults: vec![
                     golem_common::model::deployment::DeploymentAgentSecretDefault {
                         path: secret_path,
                         secret_value: json!("existing-secret"),
@@ -5780,7 +5947,30 @@ fn arb_environment_tool_grant_restore_result() -> OutputDocumentStrategy {
 
 fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
     use golem_common::model::tool_release::{ToolReleaseLifecycle, ToolReleaseOrigin};
-    use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use golem_common::schema::tool::{
+        CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, StreamSpec, Tool,
+    };
+
+    let stream = || StreamSpec {
+        doc: Doc::default(),
+        mime: vec!["application/octet-stream".to_string()],
+        required: false,
+    };
+    let body = |stdout: bool, stderr: bool| CommandBody {
+        positionals: Positionals {
+            fixed: Vec::new(),
+            tail: None,
+        },
+        options: Vec::new(),
+        flags: Vec::new(),
+        constraints: Vec::new(),
+        stdin: None,
+        stdout: stdout.then(stream),
+        stderr: stderr.then(stream),
+        result: None,
+        errors: Vec::new(),
+        annotations: None,
+    };
 
     let owner_account_id = golem_common::model::account::AccountId::new();
     golem_common::model::tool_release::ToolRelease {
@@ -5795,15 +5985,24 @@ fn sample_tool_release() -> golem_common::model::tool_release::ToolRelease {
         },
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
-                nodes: vec![CommandNode {
-                    name: "search".to_string(),
+                nodes: [
+                    ("neither", false, false),
+                    ("stdout", true, false),
+                    ("stderr", false, true),
+                    ("both", true, true),
+                ]
+                .into_iter()
+                .map(|(name, stdout, stderr)| CommandNode {
+                    name: name.to_string(),
                     aliases: Vec::new(),
                     doc: Doc::default(),
                     globals: Globals::default(),
                     subcommands: Vec::new(),
-                    body: None,
-                }],
+                    body: Some(body(stdout, stderr)),
+                })
+                .collect(),
             },
             schema: golem_common::schema::SchemaGraph::empty(),
         },
@@ -6328,8 +6527,14 @@ fn arb_profile_config_set_format_result() -> OutputDocumentStrategy {
 
 fn arb_resource_create_result() -> OutputDocumentStrategy {
     serialized_output(
-        arb_resource_definition()
-            .prop_map(crate::model::resource_definition::ResourceDefinitionCreateView),
+        (arb_created_or_updated(), arb_resource_definition()).prop_map(
+            |(action, resource_definition)| {
+                crate::model::resource_definition::ResourceDefinitionCreateView {
+                    action,
+                    resource_definition,
+                }
+            },
+        ),
     )
 }
 
@@ -6801,9 +7006,12 @@ fn arb_mcp_import_tools_result() -> OutputDocumentStrategy {
 }
 
 fn arb_retry_policy_create_result() -> OutputDocumentStrategy {
-    serialized_output(
-        arb_retry_policy().prop_map(crate::model::retry_policy::RetryPolicyCreateView),
-    )
+    serialized_output((arb_created_or_updated(), arb_retry_policy()).prop_map(
+        |(action, retry_policy)| crate::model::retry_policy::RetryPolicyCreateView {
+            action,
+            retry_policy,
+        },
+    ))
 }
 
 fn arb_retry_policy_delete_result() -> OutputDocumentStrategy {
@@ -6864,10 +7072,22 @@ fn arb_retry_policy() -> BoxedStrategy<golem_common::model::retry_policy::RetryP
 }
 
 fn arb_secret_create_result() -> OutputDocumentStrategy {
-    arb_secret()
-        .prop_map(|secret| {
+    use crate::model::create_action::CreateAction;
+
+    (
+        arb_secret(),
+        prop_oneof![
+            Just(CreateAction::Created),
+            Just(CreateAction::Updated),
+            Just(CreateAction::Replaced),
+        ],
+    )
+        .prop_map(|(secret, action)| {
             to_structured_output_value_masked(
-                crate::model::secret::SecretCreateView(secret.into()),
+                crate::model::secret::SecretCreateView {
+                    action,
+                    secret: secret.into(),
+                },
                 MaskingConfig::hide_secrets(),
             )
             .expect("generated secret create should serialize")
@@ -6901,7 +7121,7 @@ fn arb_secret_get_result() -> OutputDocumentStrategy {
         .boxed()
 }
 
-fn arb_secret_update_value_result() -> OutputDocumentStrategy {
+fn arb_secret_update_result() -> OutputDocumentStrategy {
     arb_secret()
         .prop_map(|secret| {
             to_structured_output_value_masked(

@@ -58,13 +58,15 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseSource, tool_middleware_metadata_digest,
 };
 use golem_common::model::tool_release::ToolReleaseId;
-use golem_common::schema::agent::reachable_defs;
+use golem_common::schema::agent::agent_secret_value_schema;
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::tool::validation::validate_tool;
 use golem_common::schema::validation::is_equivalent_cross_graph;
 use golem_common::schema::{AgentTypeSchema, RegisteredAgentTypeSchema};
-use golem_service_base::custom_api::SecuritySchemeDetails;
+use golem_service_base::custom_api::{
+    SecuritySchemeDetails, pkce_authorization_path, pkce_token_path,
+};
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::retry_policy::StoredRetryPolicy;
@@ -302,8 +304,13 @@ impl DeploymentContext {
         published_tool_middlewares: &[ToolMiddlewareName],
         universal_tool_middlewares: &[golem_common::model::tool_middleware::ToolMiddlewareInstallation],
         tool_compatibility_mode: golem_common::schema::tool::compatibility::ToolCompatibilityMode,
-        environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
-        agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
+        effective_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        effective_agent_tool_bindings: &BTreeMap<
+            AgentTypeName,
+            BTreeMap<ToolName, ToolBindingInput>,
+        >,
+        dynamic_environment_tool_bindings: &BTreeMap<ToolName, ToolBindingInput>,
+        dynamic_agent_tool_bindings: &BTreeMap<AgentTypeName, BTreeMap<ToolName, ToolBindingInput>>,
     ) -> Result<diff::Hash, diff::DiffError> {
         let published_tools = published_tools.iter().map(ToString::to_string).collect();
         let published_tool_middlewares = published_tool_middlewares
@@ -311,7 +318,10 @@ impl DeploymentContext {
             .map(ToString::to_string)
             .collect();
         let (environment_tool_middleware_bindings, agent_tool_middleware_bindings) =
-            diff::tool_middleware_binding_inputs(environment_tool_bindings, agent_tool_bindings);
+            diff::tool_middleware_binding_inputs(
+                dynamic_environment_tool_bindings,
+                dynamic_agent_tool_bindings,
+            );
         let diffable = diff::Deployment {
             components: self
                 .components
@@ -331,6 +341,8 @@ impl DeploymentContext {
             remote_tools: diff::remote_tool_deployments(
                 compiled_tools.registered_tools.clone(),
                 compiled_tools.agent_tool_bindings.clone(),
+                effective_environment_tool_bindings,
+                effective_agent_tool_bindings,
                 &self
                     .components
                     .values()
@@ -759,6 +771,22 @@ impl DeploymentContext {
             }
         }
 
+        for binding in &agent_tool_bindings {
+            if let Some(tool) = registered_tools.iter().find(|tool| {
+                tool.definition.name() == Some(binding.tool_name.as_str())
+                    && tool.deployment_revision == binding.deployment_revision
+            }) && let Err(error) = golem_common::model::tool::filesystem_capability(
+                binding.filesystem_access,
+                &tool.provision,
+                tool.definition.requires_filesystem,
+            ) {
+                errors.push(DeployValidationError::ToolFilesystemRequirement {
+                    tool_name: binding.tool_name.clone(),
+                    error,
+                });
+            }
+        }
+
         CompiledTools {
             registered_tools,
             agent_tool_bindings,
@@ -955,8 +983,9 @@ impl DeploymentContext {
                 &mut deployment_routes,
             );
 
-            validate_final_http_api_router(
+            validate_final_http_api_router_for_origin(
                 &deployment.domain,
+                &deployment.scheme.origin(&deployment.domain),
                 &deployment_routes,
                 security_schemes,
                 errors,
@@ -1589,45 +1618,10 @@ fn stored_agent_secret_schema(
     agent_graph: &SchemaGraph,
     config_type: &SchemaType,
 ) -> Result<SchemaGraph, DeployValidationError> {
-    let root = match resolve_schema_ref(agent_graph, config_type) {
-        SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-        SchemaType::Option { inner, .. } => match resolve_schema_ref(agent_graph, inner) {
-            SchemaType::Secret { spec, .. } => (*spec.inner).clone(),
-            _ => {
-                return Err(DeployValidationError::AgentSecretInvalidConfigType {
-                    path: path.clone(),
-                });
-            }
-        },
-        _ => {
-            return Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() });
-        }
-    };
-
-    let schema = SchemaGraph {
-        defs: reachable_defs(agent_graph, &root),
-        root,
-    };
-
-    if schema_contains_host_managed_capability(&schema) {
-        Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() })
-    } else {
-        Ok(schema)
+    match agent_secret_value_schema(agent_graph, config_type) {
+        Some(schema) if !schema_contains_host_managed_capability(&schema) => Ok(schema),
+        _ => Err(DeployValidationError::AgentSecretInvalidConfigType { path: path.clone() }),
     }
-}
-
-fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
-    let mut seen = std::collections::HashSet::new();
-    while let SchemaType::Ref { id, .. } = ty {
-        if !seen.insert(id.clone()) {
-            break;
-        }
-        match graph.lookup(id) {
-            Some(def) => ty = &def.body,
-            None => break,
-        }
-    }
-    ty
 }
 
 pub fn extract_registered_agent_types(
@@ -1709,13 +1703,31 @@ pub fn extract_registered_agent_types(
     Ok(agent_types)
 }
 
+#[cfg(test)]
 fn validate_final_http_api_router(
     domain: &Domain,
     compiled_routes: &[UnboundCompiledRoute],
     security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
     errors: &mut Vec<DeployValidationError>,
 ) {
+    validate_final_http_api_router_for_origin(
+        domain,
+        &golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https.origin(domain),
+        compiled_routes,
+        security_schemes,
+        errors,
+    );
+}
+
+pub(crate) fn validate_final_http_api_router_for_origin(
+    domain: &Domain,
+    public_origin: &str,
+    compiled_routes: &[UnboundCompiledRoute],
+    security_schemes: &HashMap<SecuritySchemeName, SecuritySchemeDetails>,
+    errors: &mut Vec<DeployValidationError>,
+) {
     use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteMatch};
+    let public_origin = url::Url::parse(public_origin).ok().map(|url| url.origin());
     let invalid =
         |path: &[PathSegment], error: &str| DeployValidationError::HttpApiDeploymentInvalidRoute {
             domain: domain.clone(),
@@ -1732,31 +1744,112 @@ fn validate_final_http_api_router(
         })
         .map(|route| (route.route_match.clone(), route.path.clone()))
         .collect::<Vec<_>>();
+    let mut add_reserved = |route_match: RouteMatch, path: Vec<PathSegment>| {
+        let overlaps = reserved.iter().any(|(existing_match, existing_path)| {
+            let same_method = match (existing_match, &route_match) {
+                (
+                    RouteMatch::Method {
+                        method: a,
+                        trailing_slash: a_slash,
+                    },
+                    RouteMatch::Method {
+                        method: b,
+                        trailing_slash: b_slash,
+                    },
+                ) => {
+                    a_slash == b_slash
+                        && super::route_compilation::render_http_method(a)
+                            == super::route_compilation::render_http_method(b)
+                }
+                _ => false,
+            };
+            same_method
+                && existing_path.len() == path.len()
+                && existing_path.iter().zip(&path).all(|(a, b)| match (a, b) {
+                    (PathSegment::Literal { value: a }, PathSegment::Literal { value: b }) => {
+                        a == b
+                    }
+                    (PathSegment::Variable { .. }, PathSegment::Variable { .. })
+                    | (PathSegment::Variable { .. }, PathSegment::Literal { .. })
+                    | (PathSegment::Literal { .. }, PathSegment::Variable { .. }) => true,
+                    _ => false,
+                })
+        });
+        reserved.push((route_match, path));
+        overlaps
+    };
     let used_schemes = compiled_routes
         .iter()
         .filter_map(UnboundCompiledRoute::security_scheme)
         .collect::<HashSet<_>>();
     for name in used_schemes {
         if let Some(scheme) = security_schemes.get(&name) {
+            if Some(scheme.redirect_url.url().origin()) != public_origin {
+                errors.push(invalid(
+                    &[],
+                    "OIDC callback origin must match the deployment public origin",
+                ));
+                continue;
+            }
             match golem_common::model::agent::http_files::HttpRequestTarget::parse(
                 scheme.redirect_url.url().path(),
             ) {
-                Ok(target) => reserved.push((
-                    RouteMatch::Method {
-                        method: golem_common::model::agent::HttpMethod::Get(
-                            golem_common::model::Empty {},
-                        ),
-                        trailing_slash: target.trailing_slash(),
-                    },
-                    target
+                Ok(target) => {
+                    let path = target
                         .segments()
                         .iter()
                         .map(|value| PathSegment::Literal {
                             value: value.clone(),
                         })
-                        .collect(),
-                )),
+                        .collect::<Vec<_>>();
+                    if add_reserved(
+                        RouteMatch::Method {
+                            method: golem_common::model::agent::HttpMethod::Get(
+                                golem_common::model::Empty {},
+                            ),
+                            trailing_slash: target.trailing_slash(),
+                        },
+                        path.clone(),
+                    ) {
+                        errors.push(invalid(
+                            &path,
+                            "Security endpoint collides with another reserved HTTP binding",
+                        ));
+                    }
+                }
                 _ => errors.push(invalid(&[], "Invalid OIDC callback path")),
+            }
+            if matches!(
+                scheme.login,
+                golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_)
+            ) {
+                for (method, path) in [
+                    (
+                        golem_common::model::agent::HttpMethod::Get(golem_common::model::Empty {}),
+                        pkce_authorization_path(&scheme.id),
+                    ),
+                    (
+                        golem_common::model::agent::HttpMethod::Post(golem_common::model::Empty {}),
+                        pkce_token_path(&scheme.id),
+                    ),
+                ] {
+                    let target =
+                        golem_common::model::agent::http_files::HttpRequestTarget::parse(&path)
+                            .expect("generated PKCE endpoint path must be valid");
+                    let path = target
+                        .segments()
+                        .iter()
+                        .map(|value| PathSegment::Literal {
+                            value: value.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    if add_reserved(method.into(), path.clone()) {
+                        errors.push(invalid(
+                            &path,
+                            "Security endpoint collides with another reserved HTTP binding",
+                        ));
+                    }
+                }
             }
         }
     }

@@ -1,6 +1,6 @@
 /** Optional Effect AI integration for explicitly selected Golem tools. @since 1.6.0 */
 import { Cause, Effect, Exit, Schema, SchemaAST, Stream } from "effect"
-import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/unstable/ai"
+import { Tool as EffectAiTool, Toolkit as EffectAiToolkit } from "effect/ai"
 import {
   Reflection as GolemReflection,
   Tool as GolemTool,
@@ -15,8 +15,8 @@ export interface AiStdin {
   readonly encoding: "utf8" | "base64"
 }
 
-/** Bounded stdout returned to the model after the stream is fully drained. @since 1.6.0 @category models */
-export interface CapturedStdout {
+/** Bounded tool output returned to the model after the stream is fully drained. @since 1.6.0 @category models */
+export interface CapturedOutput {
   readonly data: string
   readonly encoding: "utf8" | "base64"
   readonly truncated: boolean
@@ -28,7 +28,8 @@ export type GolemAiToolResult =
   | {
       readonly status: "success"
       readonly result?: JsonValue
-      readonly stdout?: CapturedStdout
+      readonly stdout?: CapturedOutput
+      readonly stderr?: CapturedOutput
     }
   | {
       readonly status: "error"
@@ -36,7 +37,8 @@ export type GolemAiToolResult =
         readonly name: string
         readonly value?: JsonValue
       }
-      readonly stdout?: CapturedStdout
+      readonly stdout?: CapturedOutput
+      readonly stderr?: CapturedOutput
     }
 
 /** Approval policy forwarded to Effect AI tool definitions. @since 1.6.0 @category models */
@@ -51,6 +53,7 @@ export type NeedsApproval =
 export interface CommandOptions {
   readonly name?: string
   readonly maxStdoutBytes?: number
+  readonly maxStderrBytes?: number
   readonly needsApproval?: NeedsApproval
 }
 
@@ -129,6 +132,11 @@ const validateCommandOptions = (options: CommandOptions): void => {
     (!Number.isSafeInteger(options.maxStdoutBytes) || options.maxStdoutBytes < 0)
   )
     throw new TypeError("maxStdoutBytes must be a non-negative safe integer")
+  if (
+    options.maxStderrBytes !== undefined &&
+    (!Number.isSafeInteger(options.maxStderrBytes) || options.maxStderrBytes < 0)
+  )
+    throw new TypeError("maxStderrBytes must be a non-negative safe integer")
 }
 
 /** Resolve deterministic AI names and reject collisions before model invocation. @since 1.6.0 @category constructors */
@@ -156,6 +164,7 @@ export const commandDescription = (
   doc: Documentation | undefined,
   stdin?: StreamDocumentation,
   stdout?: StreamDocumentation,
+  stderr?: StreamDocumentation,
 ): string | undefined => {
   const sections = documentationLines(doc)
   if (stdin) {
@@ -168,6 +177,12 @@ export const commandDescription = (
     sections.push(
       `Stdout is returned as bounded captured bytes after the stream is fully drained.${mimeHint(stdout)}`,
       ...documentationLines(stdout.doc),
+    )
+  }
+  if (stderr) {
+    sections.push(
+      `Stderr is returned as bounded captured bytes after the stream is fully drained.${mimeHint(stderr)}`,
+      ...documentationLines(stderr.doc),
     )
   }
   return sections.length === 0 ? undefined : sections.join("\n\n")
@@ -241,6 +256,8 @@ export function typedToolkit<D extends ToolDefinition>(
       )
     if (body.stdout && selection.options.maxStdoutBytes === undefined)
       throw new TypeError(`AI command '${selection.name}' requires maxStdoutBytes`)
+    if (body.stderr && selection.options.maxStderrBytes === undefined)
+      throw new TypeError(`AI command '${selection.name}' requires maxStderrBytes`)
 
     const encodeResult = body.output
       ? compileJson(body.output, `${selection.name} result`).encode
@@ -256,6 +273,7 @@ export function typedToolkit<D extends ToolDefinition>(
         normalizeDoc(model.doc),
         body.stdin ? normalizeStream(body.stdin) : undefined,
         body.stdout ? normalizeStream(body.stdout) : undefined,
+        body.stderr ? normalizeStream(body.stderr) : undefined,
       ),
       parameters: omitOptionalRequirements(parameterCodec.jsonSchema, optionalParameters) as never,
       success: Schema.Unknown,
@@ -274,6 +292,7 @@ export function typedToolkit<D extends ToolDefinition>(
             body,
             decoded as Record<string, unknown>,
             selection.options.maxStdoutBytes,
+            selection.options.maxStderrBytes,
             encodeResult,
             encodeErrors,
           ),
@@ -351,6 +370,8 @@ export function reflectedToolkit(
         assertReflectedJson(error.payload, `${selection.modelName} error '${error.name}'`)
     if (reflected.stdout && selection.options.maxStdoutBytes === undefined)
       throw new TypeError(`AI command '${selection.modelName}' requires maxStdoutBytes`)
+    if (reflected.stderr && selection.options.maxStderrBytes === undefined)
+      throw new TypeError(`AI command '${selection.modelName}' requires maxStderrBytes`)
 
     const optional = reflected.arguments.filter((argument) => !argument.required)
     const optionalNames = optional.map((argument) => argument.name)
@@ -374,6 +395,7 @@ export function reflectedToolkit(
         normalizeReflectedDoc(reflected.doc),
         reflected.stdin ? normalizeReflectedStream(reflected.stdin) : undefined,
         reflected.stdout ? normalizeReflectedStream(reflected.stdout) : undefined,
+        reflected.stderr ? normalizeReflectedStream(reflected.stderr) : undefined,
       ),
       parameters: parameterSchema as never,
       success: Schema.Unknown,
@@ -387,6 +409,7 @@ export function reflectedToolkit(
         reflected,
         normalizeReflectedParameters(parameters, defaults),
         selection.options.maxStdoutBytes,
+        selection.options.maxStderrBytes,
       )
   }
 
@@ -632,6 +655,7 @@ const invokeReflected = (
   command: GolemReflection.ToolCommand,
   parameters: JsonValue,
   maxStdoutBytes: number | undefined,
+  maxStderrBytes: number | undefined,
 ): Effect.Effect<unknown, unknown, GolemTool.ToolClient> =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -650,23 +674,42 @@ const invokeReflected = (
       if (command.stdin && typeof input === "object" && input !== null && !Array.isArray(input))
         delete (input as Record<string, JsonValue>)._stdin
       const started = yield* command.startJson(input, stdin)
-      let captured: CapturedStdout | undefined = command.stdout
-        ? {
-            data: "",
-            encoding: textualMime(command.stdout.mime) ? "utf8" : "base64",
-            truncated: false,
-            totalBytes: 0,
-          }
-        : undefined
-      const stdout = command.stdout
-        ? captureStdout(started.stdout, maxStdoutBytes!, command.stdout.mime).pipe(
-            Effect.tap((value) => Effect.sync(() => (captured = value))),
-            Effect.tapError(() => Effect.sync(() => (captured = undefined))),
-            Effect.asVoid,
-          )
-        : Effect.void
-      const [resultExit, stdoutExit] = yield* Effect.all(
-        [Effect.exit(started.result), Effect.exit(stdout)] as const,
+      let capturedStdout: CapturedOutput | undefined =
+        command.stdout && started.stdout
+          ? {
+              data: "",
+              encoding: textualMime(command.stdout.mime) ? "utf8" : "base64",
+              truncated: false,
+              totalBytes: 0,
+            }
+          : undefined
+      const stdout =
+        command.stdout && started.stdout
+          ? captureOutput(started.stdout, maxStdoutBytes!, command.stdout.mime).pipe(
+              Effect.tap((value) => Effect.sync(() => (capturedStdout = value))),
+              Effect.tapError(() => Effect.sync(() => (capturedStdout = undefined))),
+              Effect.asVoid,
+            )
+          : Effect.void
+      let capturedStderr: CapturedOutput | undefined =
+        command.stderr && started.stderr
+          ? {
+              data: "",
+              encoding: textualMime(command.stderr.mime) ? "utf8" : "base64",
+              truncated: false,
+              totalBytes: 0,
+            }
+          : undefined
+      const stderr =
+        command.stderr && started.stderr
+          ? captureOutput(started.stderr, maxStderrBytes!, command.stderr.mime).pipe(
+              Effect.tap((value) => Effect.sync(() => (capturedStderr = value))),
+              Effect.tapError(() => Effect.sync(() => (capturedStderr = undefined))),
+              Effect.asVoid,
+            )
+          : Effect.void
+      const [resultExit, stdoutExit, stderrExit] = yield* Effect.all(
+        [Effect.exit(started.result), Effect.exit(stdout), Effect.exit(stderr)] as const,
         { concurrency: "unbounded" },
       )
       if (Exit.isFailure(resultExit)) {
@@ -678,15 +721,18 @@ const invokeReflected = (
               name: failure.name,
               ...(Object.hasOwn(failure, "value") ? { value: failure.value } : {}),
             },
-            ...(captured ? { stdout: captured } : {}),
+            ...(capturedStdout ? { stdout: capturedStdout } : {}),
+            ...(capturedStderr ? { stderr: capturedStderr } : {}),
           }
         return yield* Effect.failCause(resultExit.cause)
       }
       if (Exit.isFailure(stdoutExit)) return yield* Effect.failCause(stdoutExit.cause)
+      if (Exit.isFailure(stderrExit)) return yield* Effect.failCause(stderrExit.cause)
       return {
         status: "success" as const,
         ...(command.result ? { result: resultExit.value } : {}),
-        ...(command.stdout ? { stdout: captured! } : {}),
+        ...(command.stdout ? { stdout: capturedStdout! } : {}),
+        ...(command.stderr ? { stderr: capturedStderr! } : {}),
       }
     }),
   )
@@ -710,6 +756,7 @@ const invokeTyped = (
   body: BodyModel,
   parameters: Record<string, unknown>,
   maxStdoutBytes: number | undefined,
+  maxStderrBytes: number | undefined,
   encodeResult: ((value: unknown) => Effect.Effect<JsonValue, unknown, unknown>) | undefined,
   encodeErrors: ReadonlyMap<string, (value: unknown) => Effect.Effect<JsonValue, unknown, unknown>>,
 ): Effect.Effect<unknown, unknown, unknown> => {
@@ -725,10 +772,18 @@ const invokeTyped = (
       cause instanceof Error ? cause : new TypeError(`invalid stdin: ${String(cause)}`),
   }).pipe(
     Effect.flatMap((stdin) => {
-      let captured: CapturedStdout | undefined = body.stdout
+      let capturedStdout: CapturedOutput | undefined = body.stdout
         ? {
             data: "",
             encoding: textualMime(body.stdout.mime) ? "utf8" : "base64",
+            truncated: false,
+            totalBytes: 0,
+          }
+        : undefined
+      let capturedStderr: CapturedOutput | undefined = body.stderr
+        ? {
+            data: "",
+            encoding: textualMime(body.stderr.mime) ? "utf8" : "base64",
             truncated: false,
             totalBytes: 0,
           }
@@ -738,9 +793,19 @@ const invokeTyped = (
         ...(body.stdout
           ? {
               stdout: (source: Stream.Stream<Uint8Array, GolemTool.ToolClientError>) =>
-                captureStdout(source, maxStdoutBytes!, body.stdout!.mime).pipe(
-                  Effect.tap((value) => Effect.sync(() => (captured = value))),
-                  Effect.tapError(() => Effect.sync(() => (captured = undefined))),
+                captureOutput(source, maxStdoutBytes!, body.stdout!.mime).pipe(
+                  Effect.tap((value) => Effect.sync(() => (capturedStdout = value))),
+                  Effect.tapError(() => Effect.sync(() => (capturedStdout = undefined))),
+                  Effect.asVoid,
+                ),
+            }
+          : {}),
+        ...(body.stderr
+          ? {
+              stderr: (source: Stream.Stream<Uint8Array, GolemTool.ToolClientError>) =>
+                captureOutput(source, maxStderrBytes!, body.stderr!.mime).pipe(
+                  Effect.tap((value) => Effect.sync(() => (capturedStderr = value))),
+                  Effect.tapError(() => Effect.sync(() => (capturedStderr = undefined))),
                   Effect.asVoid,
                 ),
             }
@@ -753,7 +818,8 @@ const invokeTyped = (
         Effect.map((result) => ({
           status: "success" as const,
           ...(encodeResult ? { result } : {}),
-          ...(body.stdout ? { stdout: captured! } : {}),
+          ...(body.stdout ? { stdout: capturedStdout! } : {}),
+          ...(body.stderr ? { stderr: capturedStderr! } : {}),
         })),
         Effect.catchIf(isDeclaredFailure, (failure) => {
           const encode = encodeErrors.get(failure.name)!
@@ -761,7 +827,8 @@ const invokeTyped = (
             Effect.map((value) => ({
               status: "error" as const,
               error: { name: failure.name, value },
-              ...(captured ? { stdout: captured } : {}),
+              ...(capturedStdout ? { stdout: capturedStdout } : {}),
+              ...(capturedStderr ? { stderr: capturedStderr } : {}),
             })),
           )
         }),
@@ -813,11 +880,11 @@ const decodeBase64 = (value: string): Uint8Array => {
   return Uint8Array.from(decoded, (character) => character.charCodeAt(0))
 }
 
-const captureStdout = <E>(
+const captureOutput = <E>(
   source: Stream.Stream<Uint8Array, E>,
   limit: number,
   mime: ReadonlyArray<string> | undefined,
-): Effect.Effect<CapturedStdout, E> =>
+): Effect.Effect<CapturedOutput, E> =>
   Effect.gen(function* () {
     const retained: Uint8Array[] = []
     let retainedBytes = 0

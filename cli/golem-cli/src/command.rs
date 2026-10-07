@@ -722,6 +722,12 @@ pub enum GolemCliSubcommand {
         /// for manual inspection or for vendoring into another project.
         #[clap(long)]
         output_dir: Option<PathBuf>,
+        /// Adds derives to matching final Rust type names (`<regex>=Trait,Trait`).
+        #[clap(long)]
+        derive_rule: Vec<String>,
+        /// Adds a Cargo TOML dependency assignment to generated Rust crates.
+        #[clap(long)]
+        rust_dependency: Vec<String>,
     },
     /// Start REPL for a selected component. This is an interactive command; the global `--format` flag is ignored.
     #[command(after_help = crate::command_examples::REPL)]
@@ -798,8 +804,8 @@ pub enum GolemCliSubcommand {
         /// version label. Versions are user-defined strings attached to
         /// deployments; if more than one deployment shares the same version,
         /// this command will refuse and ask you to use `--revision` instead.
-        /// List existing deployments with `golem-cli api deployment list`.
-        /// Mutually exclusive with `--revision`.
+        /// If no deployment has the given version, the available deployments
+        /// are listed. Mutually exclusive with `--revision`.
         #[arg(long, conflicts_with_all = ["force_build", "revision", "stage", "approve_staging_steps"])]
         version: Option<String>,
         /// Roll the environment back to the deployment with this revision id.
@@ -1352,14 +1358,20 @@ pub mod tool {
         /// Write raw stdout to a file instead of process stdout
         #[arg(long, requires = "stdout")]
         pub output: Option<std::path::PathBuf>,
+        /// Request raw tool stderr
+        #[arg(long)]
+        pub stderr: bool,
+        /// Write raw stderr to a file instead of process stderr
+        #[arg(long, requires = "stderr")]
+        pub stderr_output: Option<std::path::PathBuf>,
         /// Enqueue without waiting
-        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
         /// Look up an existing invocation without starting execution or input
-        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output"])]
+        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
-        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output"])]
+        #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
         /// Idempotency key; `-` generates a fresh key
         #[arg(long, short)]
@@ -1564,7 +1576,7 @@ pub mod worker {
             /// The effective key (whether explicit or auto-generated) is always echoed
             /// back: in `--format text` mode as a `Using ... idempotency key:` log
             /// line on stderr, and in `--format json/yaml/toon` mode as the
-            /// `idempotency_key` field of the result document on stdout.
+            /// `idempotencyKey` field of the result document on stdout.
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
@@ -1621,12 +1633,14 @@ pub mod worker {
 
             /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Supported properties: `name`, `version`, `status`, `mode`, `env.<KEY>`.
+            /// Supported properties: `name`, `revision`, `status`, `mode`, `created_at`,
+            /// `env.<KEY>`, `config.<PATH>`.
             /// Supported operators: `==`/`=`, `!=`, `>=`, `>`, `<=`, `<`
             /// (string properties additionally support `like`, `notlike`, `startswith`).
-            /// Operator and value are case-insensitive; spaces around the operator are required.
+            /// Operator and value are case-insensitive; spaces around the operator are required
+            /// and the value itself must not contain spaces.
             ///
-            /// Filter examples: `name == my-agent(1, 2, 3)`, `version >= 0`,
+            /// Filter examples: `name == CounterAgent("c1")`, `revision >= 0`,
             /// `status == Running`, `env.var1 == value`, `name like %worker%`.
             /// Can be used multiple times (AND condition is applied between them).
             #[arg(long)]
@@ -2033,15 +2047,30 @@ pub mod api {
                 /// languages are tried as a fallback. There is no separate JSON
                 /// schema for this field; it is always a type expression in one of
                 /// the supported source languages.
-                #[arg(long)]
+                #[arg(long = "type")]
                 secret_type: String,
-                /// Value of the secret. Must match `--secret-type` and is parsed
-                /// using the project's source language syntax (e.g. `"my-key"` for
-                /// strings, `42` for integers, `true` for booleans). If omitted,
-                /// the secret is created without a value and must later be set with
-                /// `golem-cli secret update-value`.
+                /// Value of the secret. Must match `--type` and is parsed using the
+                /// project's source language syntax (e.g. `"my-key"` for strings,
+                /// `42` for integers, `true` for booleans). When no value option is
+                /// given, the value is prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "no_value"])]
+                value: Option<String>,
+                /// Read the value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "no_value"])]
+                value_stdin: bool,
+                /// Create the secret without a value
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                no_value: bool,
+                /// If a secret already exists at the path, update its value instead of failing.
+                /// Fails if the existing secret has a different type, unless
+                /// `--replace-on-type-change` is also given.
                 #[arg(long)]
-                secret_value: Option<String>,
+                update_existing: bool,
+                /// With `--update-existing`: if the existing secret has a different type, delete it
+                /// and create it again with the new type and value (asks for confirmation, use
+                /// `-Y/--yes` to skip). The replacement is not atomic and changes the secret ID.
+                #[arg(long, requires = "update_existing")]
+                replace_on_type_change: bool,
             },
 
             /// Get Secret by path or ID
@@ -2056,17 +2085,25 @@ pub mod api {
             },
 
             /// Update Secret value
-            #[command(after_help = crate::command_examples::SECRET_UPDATE_VALUE)]
-            UpdateValue {
+            #[command(after_help = crate::command_examples::SECRET_UPDATE)]
+            Update {
                 /// Path of the secret (dot-separated). Mutually exclusive with `--id`.
                 #[arg(value_parser = parse_secret_path, required_unless_present = "id", conflicts_with = "id")]
                 path: Option<AgentSecretPath>,
                 /// ID of the secret (alternative to path). Mutually exclusive with the positional `<PATH>`.
                 #[arg(long, required_unless_present = "path", conflicts_with = "path")]
                 id: Option<AgentSecretId>,
-                /// Value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the project's language syntax or JSON
-                #[arg(long)]
-                secret_value: Option<String>,
+                /// New value of the secret (e.g. "my-key" for strings, 42 for numbers). Uses the
+                /// project's language syntax or JSON. When no value option is given, the value is
+                /// prompted for with hidden input.
+                #[arg(long, conflicts_with_all = ["value_stdin", "unset"])]
+                value: Option<String>,
+                /// Read the new value of the secret from STDIN (one trailing newline is removed)
+                #[arg(long, conflicts_with_all = ["value", "unset"])]
+                value_stdin: bool,
+                /// Remove the value of the secret
+                #[arg(long, conflicts_with_all = ["value", "value_stdin"])]
+                unset: bool,
             },
 
             /// DESTRUCTIVE: Permanently deletes the secret. Any agent or API binding referencing it will start failing. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
@@ -2102,6 +2139,13 @@ pub mod api {
             Microsoft,
             Gitlab,
             Custom,
+        }
+
+        #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+        #[clap(rename_all = "kebab-case")]
+        pub enum LoginModeArg {
+            Cookie,
+            AuthorizationCodePkce,
         }
 
         impl From<ProviderKindArg> for ProviderKind {
@@ -2148,6 +2192,19 @@ pub mod api {
                 #[arg(long)]
                 /// Security Scheme redirect URL
                 redirect_url: String,
+                /// If a security scheme with the same name already exists, update it with the
+                /// given values instead of failing
+                #[arg(long)]
+                update_existing: bool,
+                /// Login mode used by protected HTTP APIs
+                #[arg(long, value_enum, default_value = "cookie")]
+                login_mode: LoginModeArg,
+                /// Exact allowed frontend redirect URI (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; PKCE mode only)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Get HTTP API Security Scheme
@@ -2187,6 +2244,15 @@ pub mod api {
                 /// Security Scheme redirect URL
                 #[arg(long)]
                 redirect_url: Option<String>,
+                /// Replace the complete login-mode configuration
+                #[arg(long, value_enum)]
+                login_mode: Option<LoginModeArg>,
+                /// Exact allowed frontend redirect URI (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_redirect_uri: Vec<String>,
+                /// Exact allowed frontend origin (repeatable; requires --login-mode)
+                #[arg(long)]
+                frontend_origin: Vec<String>,
             },
 
             /// Delete HTTP API Security Scheme
@@ -2320,6 +2386,10 @@ pub mod resource_definition {
             /// Plural unit label (e.g. "tokens")
             #[arg(long, default_value = "units")]
             units: String,
+            /// If a resource definition with the same name already exists, update it with the
+            /// given values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// Update an existing quota resource definition
@@ -2405,6 +2475,10 @@ pub mod retry_policy {
                 verbatim_doc_comment,
             )]
             policy: String,
+            /// If a retry policy with the same name already exists, update it with the given
+            /// values instead of failing
+            #[arg(long)]
+            update_existing: bool,
         },
 
         /// List retry policies in the environment
@@ -3065,6 +3139,8 @@ fn help_target_to_subcommand_names(target: ShowClapHelpTarget) -> Vec<&'static s
     match target {
         ShowClapHelpTarget::AppNew => vec!["new"],
         ShowClapHelpTarget::ProfileNew => vec!["profile", "new"],
+        ShowClapHelpTarget::SecretCreate => vec!["secret", "create"],
+        ShowClapHelpTarget::SecretUpdate => vec!["secret", "update"],
     }
 }
 
@@ -3097,6 +3173,35 @@ mod test {
     use std::collections::{BTreeMap, BTreeSet};
     use strum::IntoEnumIterator;
     use test_r::test;
+
+    #[test]
+    fn generate_bridge_parses_repeated_rust_configuration_options() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "generate-bridge",
+            "--language",
+            "rust",
+            "--derive-rule",
+            "^Order=serde::Serialize",
+            "--derive-rule",
+            "Result$=Eq,Hash",
+            "--rust-dependency",
+            "serde_with = { version = \"3\", features = [\"macros\"] }",
+            "--rust-dependency",
+            "local = { path = \"../local\", package = \"actual\" }",
+        ])
+        .unwrap();
+        let GolemCliSubcommand::GenerateBridge {
+            derive_rule,
+            rust_dependency,
+            ..
+        } = command.subcommand
+        else {
+            panic!("expected generate-bridge command");
+        };
+        assert_eq!(derive_rule.len(), 2);
+        assert_eq!(rust_dependency.len(), 2);
+    }
 
     #[test]
     fn agent_stream_ping_interval_rejects_zero_duration() {
@@ -3175,8 +3280,12 @@ mod test {
         for suffix in [
             &["--trigger", "--stdin", "-"][..],
             &["--trigger", "--stdout"][..],
+            &["--trigger", "--stderr"][..],
             &["--lookup", "--input", "{}"][..],
             &["--lookup", "--stdin", "-"][..],
+            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--output", "result.bin"][..],
+            &["--stderr-output", "errors.bin"][..],
         ] {
             assert!(
                 GolemCliCommand::try_parse_from(base.into_iter().chain(suffix.iter().copied()))
@@ -3190,8 +3299,59 @@ mod test {
                 "-",
                 "--stdout",
                 "--output",
-                "result.bin"
+                "result.bin",
+                "--stderr",
+                "--stderr-output",
+                "errors.bin"
             ]))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn secret_value_options_are_mutually_exclusive() {
+        let create = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        let update = ["golem", "secret", "update", "apiKey"];
+        for (base, options) in [
+            (&create[..], ["--value=x", "--value-stdin", "--no-value"]),
+            (&update[..], ["--value=x", "--value-stdin", "--unset"]),
+        ] {
+            assert!(
+                GolemCliCommand::try_parse_from(base.iter().copied()).is_ok(),
+                "unexpectedly rejected {base:?} without a value option"
+            );
+            for option in options {
+                assert!(
+                    GolemCliCommand::try_parse_from(base.iter().copied().chain([option])).is_ok(),
+                    "unexpectedly rejected {base:?} with {option}"
+                );
+            }
+            for (i, first) in options.iter().enumerate() {
+                for second in &options[i + 1..] {
+                    assert!(
+                        GolemCliCommand::try_parse_from(
+                            base.iter().copied().chain([*first, *second])
+                        )
+                        .is_err(),
+                        "unexpectedly accepted {base:?} with {first} and {second}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn secret_create_replace_on_type_change_requires_update_existing() {
+        let base = ["golem", "secret", "create", "apiKey", "--type", "String"];
+        assert!(
+            GolemCliCommand::try_parse_from(base.into_iter().chain(["--replace-on-type-change"]))
+                .is_err()
+        );
+        assert!(
+            GolemCliCommand::try_parse_from(
+                base.into_iter()
+                    .chain(["--update-existing", "--replace-on-type-change"])
+            )
             .is_ok()
         );
     }

@@ -53,11 +53,11 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, HostResponse, HostResponseEntityInvocation,
+    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponse, HostResponseEntityInvocation,
     HostResponseP3HttpClientConsumeBodyChunk, OplogEntry, OplogPayload, PayloadId, RawOplogPayload,
-    TimestampedUpdateDescription, host_functions::HostFunctionName, types::ObjectMetadata,
-    types::SerializableEntityBodyExecution, types::SerializableP3HttpBodyChunk,
-    types::SerializableToolOperationTerminal,
+    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription, host_functions::HostFunctionName,
+    types::ObjectMetadata, types::SerializableEntityBodyExecution,
+    types::SerializableP3HttpBodyChunk, types::SerializableToolOperationTerminal,
 };
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -112,7 +112,7 @@ use golem_worker_executor::services::active_agents::{ActiveAgents, InvocationLoo
 use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::agent_webhooks::AgentWebhooksService;
 use golem_worker_executor::services::blob_store::{
-    BlobStoreError, BlobStoreService, DefaultBlobStoreService,
+    BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{CardService, CardState, NoopCardService};
 use golem_worker_executor::services::card_interest::CardInterestIndex;
@@ -124,17 +124,20 @@ use golem_worker_executor::services::environment_state::EnvironmentStateService;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig,
-    EnvironmentStateServiceConfig, FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig,
-    FilesystemStorageMode, GolemConfig, GrpcApiConfig, HttpClientConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig, KeyValueStorageConfig,
-    KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig, MemoryConfig, OplogConfig,
-    ResourceLimitsConfig, ResourceLimitsDisabledConfig, ResourceUsageMeteringConfig,
-    SchedulerStorageConfig, SnapshotPolicy,
+    EnvironmentStateServiceConfig, GolemConfig, GrpcApiConfig, HttpClientConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, IndexedStorageKVStoreSqliteConfig,
+    KeyValueStorageConfig, KeyValueStorageInnerConfig, KeyValueStorageNamespaceRoutedConfig,
+    MemoryConfig, OplogConfig, ResourceLimitsConfig, ResourceLimitsDisabledConfig,
+    ResourceUsageMeteringConfig, SchedulerStorageConfig, SnapshotPolicy,
+};
+#[cfg(target_os = "linux")]
+use golem_worker_executor::services::golem_config::{
+    FilesystemObjectLimitPolicyConfig, FilesystemPressureConfig, FilesystemStorageMode,
 };
 use golem_worker_executor::services::key_value::{DefaultKeyValueService, KeyValueService};
 use golem_worker_executor::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog, OplogAddReceipt,
-    OplogService, OrderedOplogStart,
+    OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
 };
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::quota::QuotaService;
@@ -189,7 +192,7 @@ use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 use tower::ServiceBuilder;
-use tracing::{Level, debug, info, warn};
+use tracing::{Level, debug, info};
 use uuid::{Uuid, uuid};
 use wasmtime::component::{HasSelf, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{Engine, MemoryKind, ResourceLimiterAsync, Store};
@@ -676,7 +679,8 @@ impl TestWorkerExecutor {
             self._run_details.invocation_loops.wait_for_exit(),
         )
         .await
-        .map_err(|_| anyhow!("executor invocation loops did not retire within 10s"))
+        .map_err(|_| anyhow!("executor tasks did not retire within 10s"))?
+        .map_err(anyhow::Error::msg)
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
@@ -787,16 +791,17 @@ impl TestWorkerExecutor {
         agent_id: &AgentId,
     ) -> anyhow::Result<golem_common::model::ExportForkAdmissions> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let worker = Worker::find_durable_stream_worker(
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
             self.services
                 .as_ref()
                 .expect("test service graph is captured"),
             &owned_agent_id,
         )
-        .await?
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
         .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
         Ok(worker
-            .get_attached_last_known_status()
+            .get_last_known_status()
             .await
             .export_fork_admissions
             .clone())
@@ -903,7 +908,7 @@ impl TestWorkerExecutor {
             .try_get_worker(&owned_agent_id)
             .await
             .ok_or_else(|| anyhow!("worker is not loaded: {owned_agent_id}"))?;
-        let status = worker.get_non_detached_last_known_status().await;
+        let status = worker.get_last_known_status().await;
         worker_service
             .reject_periodic_snapshots(
                 &owned_agent_id,
@@ -918,6 +923,104 @@ impl TestWorkerExecutor {
     pub fn fail_next_oplog_download(&self, agent_id: &AgentId) {
         self.additional_test_deps
             .fail_next_oplog_download(agent_id.clone());
+    }
+
+    pub fn set_oplog_download_outage(&self, agent_id: &AgentId, active: bool) {
+        self.additional_test_deps
+            .set_oplog_download_outage(agent_id.clone(), active);
+    }
+
+    pub fn set_oplog_download_outage_for_payload(&self, agent_id: &AgentId, payload_id: PayloadId) {
+        self.additional_test_deps
+            .set_oplog_download_outage_for_payload(agent_id.clone(), payload_id);
+    }
+
+    pub fn set_oplog_download_corruption(&self, agent_id: &AgentId, payload_id: PayloadId) {
+        self.additional_test_deps
+            .set_oplog_download_corruption(agent_id.clone(), payload_id);
+    }
+
+    pub fn oplog_download_outage_hits(&self, agent_id: &AgentId) -> Vec<PayloadId> {
+        self.additional_test_deps
+            .oplog_download_outage_hits(agent_id)
+    }
+
+    pub fn instance_load_count(&self, agent_id: &AgentId) -> usize {
+        self.additional_test_deps.instance_load_count(agent_id)
+    }
+
+    pub fn probe_runtime_disposal(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<usize> {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.additional_test_deps
+            .runtime_disposal_probes
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone(), sender);
+        receiver
+    }
+
+    pub fn probe_http_body_read_starts(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<OplogIndex> {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.additional_test_deps
+            .http_body_read_start_probes
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone(), sender);
+        receiver
+    }
+
+    pub async fn attached_agent_status(
+        &self,
+        agent_id: &AgentId,
+    ) -> anyhow::Result<AgentStatusRecord> {
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(
+            self.services
+                .as_ref()
+                .expect("test service graph is captured"),
+            &owned_agent_id,
+        )
+        .await
+        .map_err(|error| anyhow!("{error:?}"))?
+        .ok_or_else(|| anyhow!("worker does not exist: {owned_agent_id}"))?;
+        Ok((*worker.get_last_known_status().await).clone())
+    }
+
+    pub async fn external_end_payload_id(
+        &self,
+        agent_id: &AgentId,
+        end_index: OplogIndex,
+    ) -> anyhow::Result<PayloadId> {
+        use golem_worker_executor::services::HasOplogService;
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let oplog = self
+            .services
+            .as_ref()
+            .expect("test service graph is captured")
+            .oplog_service();
+        let entries = oplog
+            .read_exact(&owned_agent_id, AgentMode::Durable, end_index, 1)
+            .await;
+        match entries.get(&end_index) {
+            Some(OplogEntry::End {
+                response:
+                    Some(OplogPayload::External {
+                        payload_id,
+                        cached: None,
+                        ..
+                    }),
+                ..
+            }) => Ok(payload_id.clone()),
+            entry => Err(anyhow!(
+                "expected uncached external End payload at {end_index}, got {entry:?}"
+            )),
+        }
     }
 
     pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
@@ -1321,6 +1424,14 @@ impl TestWorkerExecutor {
         Ok(worker.stop_if_idle().await)
     }
 
+    /// Returns this executor's websocket connection pool if a worker context
+    /// has been created on this executor, `None` otherwise.
+    pub fn websocket_connection_pool(
+        &self,
+    ) -> Option<golem_worker_executor::durable_host::websocket::WebSocketConnectionPool> {
+        self.additional_test_deps.websocket_connection_pool()
+    }
+
     /// Returns the current eviction classification for the worker shell
     /// registered in `ActiveAgents`, or `None` if the worker is missing or
     /// non-evictable. Used by tests to wait until the worker is `LoadedIdle`
@@ -1433,6 +1544,20 @@ impl TestWorkerExecutor {
     ) -> EntityReconstructionBodyGateHandle {
         self.additional_test_deps
             .gate_next_completed_entity_reconstruction(agent_id.clone())
+    }
+
+    /// Reports destruction of this agent's entity Store contexts, keyed by durable Start.
+    pub fn probe_entity_store_disposal(
+        &self,
+        agent_id: &AgentId,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<OplogIndex> {
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        self.additional_test_deps
+            .entity_store_disposal_probes
+            .lock()
+            .unwrap()
+            .insert(agent_id.clone(), sender);
+        receiver
     }
 
     /// Pauses the next live entity body after its guest export returns but before its durable
@@ -1903,28 +2028,26 @@ impl TestContext {
 
     /// Waits until the workers of every shut-down executor previously started on this context
     /// stopped executing. Executors that are still running are left alone.
-    async fn wait_for_shut_down_executors(&self) {
-        let previous = std::mem::take(&mut *self.executor_invocation_loops.lock().unwrap());
-        let mut still_running = Vec::new();
-        for loops in previous {
+    async fn wait_for_shut_down_executors(&self) -> anyhow::Result<()> {
+        let previous = self.executor_invocation_loops.lock().unwrap().clone();
+        let mut drained = Vec::new();
+        for loops in &previous {
             if !loops.is_shut_down() {
-                still_running.push(loops);
                 continue;
             }
-            if tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
+            let result = tokio::time::timeout(Duration::from_secs(10), loops.wait_for_exit())
                 .await
-                .is_err()
-            {
-                warn!(
-                    "Invocation loops of a previous executor did not exit within 10s; \
-                     starting the next executor over the same storage anyway"
-                );
-            }
+                .map_err(|_| anyhow!(
+                    "Executor tasks did not exit within 10s; refusing to start a replacement over the same storage"
+                ))?;
+            result.map_err(anyhow::Error::msg)?;
+            drained.push(loops.clone());
         }
         self.executor_invocation_loops
             .lock()
             .unwrap()
-            .extend(still_running);
+            .retain(|loops| !drained.iter().any(|drained| loops.same_executor(drained)));
+        Ok(())
     }
 
     fn register_executor(&self, invocation_loops: InvocationLoops) {
@@ -2248,7 +2371,7 @@ async fn start_executor_with_config(
     let additional_test_deps = AdditionalTestDeps::new();
     let services = Arc::new(Mutex::new(None));
 
-    context.wait_for_shut_down_executors().await;
+    context.wait_for_shut_down_executors().await?;
     // The future of an executor start is large. It lives on the heap, so a test that starts
     // several executors keeps a small stack.
     let details = Box::pin(run(
@@ -2382,6 +2505,31 @@ pub struct TestWorkerCtx {
     durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
     additional_test_deps: AdditionalTestDeps,
     agent_id: AgentId,
+    // Last so the durable context and its resources are destroyed before the receipts are sent.
+    entity_disposal: EntityDisposalReceipt,
+    _runtime_disposal: RuntimeDisposalReceipt,
+}
+
+#[derive(Default)]
+struct EntityDisposalReceipt(Option<(tokio::sync::mpsc::UnboundedSender<OplogIndex>, OplogIndex)>);
+
+impl Drop for EntityDisposalReceipt {
+    fn drop(&mut self) {
+        if let Some((sender, start)) = self.0.take() {
+            let _ = sender.send(start);
+        }
+    }
+}
+
+#[derive(Default)]
+struct RuntimeDisposalReceipt(Option<(tokio::sync::mpsc::UnboundedSender<usize>, usize)>);
+
+impl Drop for RuntimeDisposalReceipt {
+    fn drop(&mut self) {
+        if let Some((sender, generation)) = self.0.take() {
+            let _ = sender.send(generation);
+        }
+    }
 }
 
 #[golem_native_tool::tool_definition(version = "1.0.0")]
@@ -2404,13 +2552,15 @@ impl NativeDurableHelper for NativeDurableHelperImpl {
 
 #[golem_native_tool::tool_definition(version = "1.0.0")]
 trait NativeTestTool {
+    #[arg(stderr, channel = "stderr")]
     async fn run(
         &self,
         context: &mut TestWorkerCtx,
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
         stdin: Option<golem_native_tool::NativeToolStdin>,
-        stdout: Option<golem_native_tool::NativeToolStdout>,
+        stdout: Option<golem_native_tool::NativeToolOutput>,
+        stderr: Option<golem_native_tool::NativeToolOutput>,
         principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()>;
 }
@@ -2425,11 +2575,30 @@ impl NativeTestTool for NativeTestToolImpl {
         mode: String,
         cancellation: golem_native_tool::NativeToolCancellation,
         mut stdin: Option<golem_native_tool::NativeToolStdin>,
-        mut stdout: Option<golem_native_tool::NativeToolStdout>,
+        mut stdout: Option<golem_native_tool::NativeToolOutput>,
+        mut stderr: Option<golem_native_tool::NativeToolOutput>,
         _principal: golem_native_tool::Principal,
     ) -> golem_native_tool::HostResult<()> {
-        if mode != "read-counter" && ctx.is_live() {
+        let wait_for_count = mode
+            .strip_prefix("wait-counter:")
+            .map(str::parse::<usize>)
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        let reads_counter = mode == "read-counter" || wait_for_count.is_some();
+        let is_live = ctx.is_live();
+
+        if !reads_counter && is_live {
             self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        if is_live && let Some(expected) = wait_for_count {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while self.0.load(Ordering::SeqCst) < expected {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow!("native effect counter did not reach {expected}"))?;
         }
 
         if mode == "wait-cancel" {
@@ -2439,14 +2608,29 @@ impl NativeTestTool for NativeTestToolImpl {
                     .await
                     .map_err(anyhow::Error::msg)?;
             }
+            if let Some(stderr) = &mut stderr {
+                stderr
+                    .write(b"diagnostic:started".to_vec())
+                    .await
+                    .map_err(anyhow::Error::msg)?;
+            }
             cancellation.cancelled().await;
             return Ok(());
         }
 
+        if let Some(mut stderr) = stderr {
+            stderr
+                .write(format!("diagnostic:{mode}").into_bytes())
+                .await
+                .map_err(anyhow::Error::msg)?;
+            stderr.finish().map_err(anyhow::Error::msg)?;
+        }
+
         if let Some(mut stdout) = stdout {
-            if mode == "read-counter" {
+            if reads_counter {
+                let count = wait_for_count.unwrap_or_else(|| self.0.load(Ordering::SeqCst));
                 stdout
-                    .write(self.0.load(Ordering::SeqCst).to_string().into_bytes())
+                    .write(count.to_string().into_bytes())
                     .await
                     .map_err(anyhow::Error::msg)?;
             } else {
@@ -2764,9 +2948,16 @@ impl UpdateManagement for TestWorkerCtx {
         &self,
         target_revision: ComponentRevision,
         details: Option<String>,
+        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
+        update_attempt_index: Option<OplogIndex>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(target_revision, details)
+            .on_worker_update_failed(
+                target_revision,
+                details,
+                snapshot_assisted_details,
+                update_attempt_index,
+            )
             .await
     }
 
@@ -2775,9 +2966,15 @@ impl UpdateManagement for TestWorkerCtx {
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_succeeded(target_revision, new_component_size, new_active_plugins)
+            .on_worker_update_succeeded(
+                target_revision,
+                new_component_size,
+                new_active_plugins,
+                snapshot_assisted_details,
+            )
             .await
     }
 }
@@ -2876,7 +3073,14 @@ impl WorkerCtx for TestWorkerCtx {
         // it, so test helpers (e.g. `worker_is_loaded`) can observe worker
         // shells under memory-pressure eviction (#3393 T5).
         extra_deps.set_active_agents(active_agents.clone());
+        // Capture the executor's websocket connection pool before it is moved
+        // into the worker context, so test helpers can hold pool permits and
+        // exercise pool saturation for any worker on this executor.
+        extra_deps.set_websocket_connection_pool(websocket_connection_pool.clone());
         let worker_agent_id = owned_agent_id.agent_id.clone();
+        let runtime_generation = entity_execution_mode
+            .is_none()
+            .then(|| extra_deps.record_instance_load(&worker_agent_id));
 
         let entity_reconstruction_claim_hook =
             extra_deps.entity_reconstruction_claim_hook(worker_agent_id.clone());
@@ -2937,10 +3141,21 @@ impl WorkerCtx for TestWorkerCtx {
             entity_activation,
         )
         .await?;
+        let runtime_disposal = RuntimeDisposalReceipt(runtime_generation.and_then(|generation| {
+            extra_deps
+                .runtime_disposal_probes
+                .lock()
+                .unwrap()
+                .get(&worker_agent_id)
+                .cloned()
+                .map(|sender| (sender, generation))
+        }));
         Ok(Self {
             durable_ctx,
             additional_test_deps: extra_deps,
             agent_id: worker_agent_id,
+            entity_disposal: EntityDisposalReceipt::default(),
+            _runtime_disposal: runtime_disposal,
         })
     }
 
@@ -3036,7 +3251,21 @@ impl EntityInvocationManagement for TestWorkerCtx {
         &mut self,
         scope: Option<EntityInvocationScope>,
     ) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_entity_invocation_scope(scope)
+        let start = scope
+            .as_ref()
+            .map(|scope| scope.invocation_id().start_index());
+        self.durable_ctx.set_entity_invocation_scope(scope)?;
+        if let Some(start) = start {
+            self.entity_disposal.0 = self
+                .additional_test_deps
+                .entity_store_disposal_probes
+                .lock()
+                .unwrap()
+                .get(&self.agent_id)
+                .cloned()
+                .map(|sender| (sender, start));
+        }
+        Ok(())
     }
 
     fn entity_invocation_scope(&self) -> Option<&EntityInvocationScope> {
@@ -3490,10 +3719,12 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
     active_agents: Arc<
         std::sync::OnceLock<Arc<ActiveAgents<golem_worker_executor::workerctx::default::Context>>>,
     >,
+    additional_deps: NoAdditionalDeps,
     oplog: Arc<std::sync::OnceLock<Arc<dyn golem_worker_executor::services::oplog::OplogService>>>,
 }
 
@@ -3598,12 +3829,17 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         _registry_service: Arc<dyn RegistryService>,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        Arc::new(ComponentServiceLocalFileSystem::new(
+        let service = Arc::new(ComponentServiceLocalFileSystem::new(
             &self.component_service_directory,
             10000,
             Duration::from_secs(3600),
             Arc::new(DefaultCompiledComponentService::new(blob_storage)),
-        ))
+        ));
+        if let Some(wrap) = &self.wrap_component_service {
+            wrap(service)
+        } else {
+            service
+        }
     }
 
     fn create_card_service(
@@ -3634,7 +3870,7 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> NoAdditionalDeps {
-        NoAdditionalDeps {}
+        self.additional_deps.clone()
     }
 
     fn create_direct_invocation_auth_service(
@@ -3797,13 +4033,17 @@ async fn run_production_context_bootstrap(
     let mut join_set = tokio::task::JoinSet::new();
 
     let active_agents = Arc::new(std::sync::OnceLock::new());
+    let additional_deps = NoAdditionalDeps::new();
     let oplog = Arc::new(std::sync::OnceLock::new());
+    context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            wrap_component_service: overrides.wrap_component_service,
             wrap_rpc: overrides.wrap_rpc,
             active_agents: active_agents.clone(),
+            additional_deps: additional_deps.clone(),
             oplog: oplog.clone(),
         },
         config,
@@ -3813,6 +4053,7 @@ async fn run_production_context_bootstrap(
         false,
     )
     .await?;
+    context.register_executor(details.invocation_loops.clone());
 
     let grpc_port = details.grpc_port;
     let leak_detector = details.leak_detector.clone();
@@ -4569,6 +4810,25 @@ impl TestOplog {
         }
     }
 
+    fn observe_http_body_read_start(&self, index: OplogIndex, entry: &OplogEntry) {
+        if matches!(
+            entry,
+            OplogEntry::Start {
+                function_name: HostFunctionName::HttpTypesIncomingBodyStreamRead
+                    | HostFunctionName::HttpTypesIncomingBodyStreamBlockingRead,
+                ..
+            }
+        ) && let Some(sender) = self
+            .additional_test_deps
+            .http_body_read_start_probes
+            .lock()
+            .unwrap()
+            .get(&self.owned_agent_id.agent_id)
+        {
+            let _ = sender.send(index);
+        }
+    }
+
     fn new(
         owned_agent_id: OwnedAgentId,
         oplog: Arc<dyn Oplog>,
@@ -4812,6 +5072,12 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    fn executor_shutdown_handle(
+        &self,
+    ) -> golem_worker_executor::services::oplog::OplogShutdownHandle {
+        self.oplog.executor_shutdown_handle()
+    }
+
     fn retire(&self) {
         self.oplog.retire();
     }
@@ -5091,6 +5357,16 @@ impl Oplog for TestOplog {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String> {
+        self.download_raw_payload_classified(payload_id, md5_hash)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
         {
             let mut failures = self
                 .additional_test_deps
@@ -5102,16 +5378,44 @@ impl Oplog for TestOplog {
                 .find_map(|(key, id)| (id == &payload_id).then(|| key.clone()));
             if let Some(key) = key {
                 failures.remove(&key);
-                return Err("injected snapshot payload download failure".to_string());
+                return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
+                    "injected snapshot payload download failure"
+                )));
             }
+        }
+        if self
+            .additional_test_deps
+            .has_oplog_download_outage(&self.owned_agent_id.agent_id, &payload_id)
+        {
+            self.additional_test_deps.record_oplog_download_outage_hit(
+                &self.owned_agent_id.agent_id,
+                payload_id.clone(),
+            );
+            return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
+                "injected oplog payload download failure"
+            )));
+        }
+        if self
+            .additional_test_deps
+            .has_oplog_download_corruption(&self.owned_agent_id.agent_id, &payload_id)
+        {
+            self.additional_test_deps.record_oplog_download_outage_hit(
+                &self.owned_agent_id.agent_id,
+                payload_id.clone(),
+            );
+            return Err(RawOplogPayloadDownloadError::Missing(payload_id));
         }
         if self
             .additional_test_deps
             .take_oplog_download_failure(&self.owned_agent_id.agent_id)
         {
-            return Err("injected oplog payload download failure".to_string());
+            return Err(RawOplogPayloadDownloadError::Backend(anyhow::anyhow!(
+                "injected oplog payload download failure"
+            )));
         }
-        self.oplog.download_raw_payload(payload_id, md5_hash).await
+        self.oplog
+            .download_raw_payload_classified(payload_id, md5_hash)
+            .await
     }
 
     async fn add_start_with_reserved_raw_payload(
@@ -5123,6 +5427,7 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_reserved_raw_payload(serialized_request, build_start)
             .await?;
+        self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -5154,6 +5459,7 @@ impl Oplog for TestOplog {
             .oplog
             .add_start_with_indexed_reserved_raw_payload(build_request)
             .await?;
+        self.observe_http_body_read_start(ordered.index, &ordered.entry);
         self.observe_rpc_memory_boundary(ordered.index, &ordered.entry);
         self.pause_after_rpc_checkpoint(ordered.index, &ordered.entry)
             .await;
@@ -5445,6 +5751,15 @@ pub struct AdditionalTestDeps {
     oplog_failures: Arc<scc::HashMap<AgentId, scc::HashMap<String, usize>>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+    oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
+    oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
+    oplog_download_corruptions: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
+    oplog_download_outage_hits: Arc<std::sync::Mutex<HashMap<AgentId, Vec<PayloadId>>>>,
+    instance_load_counts: Arc<std::sync::Mutex<HashMap<AgentId, usize>>>,
+    runtime_disposal_probes:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<usize>>>>,
+    http_body_read_start_probes:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     snapshot_download_failures: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), PayloadId>>>,
     empty_snapshot_payloads: Arc<std::sync::Mutex<HashSet<(AgentId, OplogIndex)>>>,
     no_op_oplog_reads: Arc<std::sync::Mutex<HashMap<(AgentId, OplogIndex), usize>>>,
@@ -5467,6 +5782,8 @@ pub struct AdditionalTestDeps {
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
     entity_body_start_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionBodyGate>>>>,
+    entity_store_disposal_probes:
+        Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
@@ -5474,7 +5791,7 @@ pub struct AdditionalTestDeps {
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
     /// resolution.
-    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    replay_admission_gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     direct_replay_wait_signals:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
     agent_invocation_success_gates:
@@ -5486,6 +5803,14 @@ pub struct AdditionalTestDeps {
     /// live `Worker` state for the memory-pressure-driven eviction test
     /// (issue #3393 T5).
     active_agents: Arc<std::sync::OnceLock<Arc<ActiveAgents<TestWorkerCtx>>>>,
+    /// Captured once on first call to [`TestWorkerCtx::create`], before the
+    /// pool is moved into `DurableWorkerCtx::create`. Lets tests hold pool
+    /// permits and exercise pool saturation for any worker on this executor.
+    websocket_connection_pool: Arc<
+        std::sync::OnceLock<
+            golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+        >,
+    >,
 }
 
 impl Default for AdditionalTestDeps {
@@ -5505,6 +5830,13 @@ impl AdditionalTestDeps {
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
+            oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_download_corruptions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_download_outage_hits: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            instance_load_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            runtime_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            http_body_read_start_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             snapshot_download_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             empty_snapshot_payloads: Arc::new(std::sync::Mutex::new(HashSet::new())),
             no_op_oplog_reads: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -5519,6 +5851,7 @@ impl AdditionalTestDeps {
             consume_body_reply_defer_gates: Arc::new(scc::HashMap::new()),
             entity_reconstruction_body_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             entity_body_start_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -5526,6 +5859,7 @@ impl AdditionalTestDeps {
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
+            websocket_connection_pool: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -5717,7 +6051,9 @@ impl AdditionalTestDeps {
         self.replay_admission_gates
             .lock()
             .unwrap()
-            .insert(agent_id, gate.clone());
+            .entry(agent_id)
+            .or_default()
+            .push(gate.clone());
         ReplayAdmissionGateHandle { entered_rx, gate }
     }
 
@@ -6014,6 +6350,88 @@ impl AdditionalTestDeps {
             .remove(agent_id)
     }
 
+    fn set_oplog_download_outage(&self, agent_id: AgentId, active: bool) {
+        let mut outages = self.oplog_download_outages.lock().unwrap();
+        if active {
+            outages.insert(agent_id);
+        } else {
+            outages.remove(&agent_id);
+            self.oplog_download_outage_targets
+                .lock()
+                .unwrap()
+                .remove(&agent_id);
+        }
+    }
+
+    fn set_oplog_download_outage_for_payload(&self, agent_id: AgentId, payload_id: PayloadId) {
+        self.oplog_download_outage_targets
+            .lock()
+            .unwrap()
+            .insert(agent_id, payload_id);
+    }
+
+    fn has_oplog_download_outage(&self, agent_id: &AgentId, payload_id: &PayloadId) -> bool {
+        self.oplog_download_outages
+            .lock()
+            .unwrap()
+            .contains(agent_id)
+            || self
+                .oplog_download_outage_targets
+                .lock()
+                .unwrap()
+                .get(agent_id)
+                .is_some_and(|target| target == payload_id)
+    }
+
+    fn set_oplog_download_corruption(&self, agent_id: AgentId, payload_id: PayloadId) {
+        self.oplog_download_corruptions
+            .lock()
+            .unwrap()
+            .insert(agent_id, payload_id);
+    }
+
+    fn has_oplog_download_corruption(&self, agent_id: &AgentId, payload_id: &PayloadId) -> bool {
+        self.oplog_download_corruptions
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .is_some_and(|target| target == payload_id)
+    }
+
+    fn record_oplog_download_outage_hit(&self, agent_id: &AgentId, payload_id: PayloadId) {
+        self.oplog_download_outage_hits
+            .lock()
+            .unwrap()
+            .entry(agent_id.clone())
+            .or_default()
+            .push(payload_id);
+    }
+
+    fn oplog_download_outage_hits(&self, agent_id: &AgentId) -> Vec<PayloadId> {
+        self.oplog_download_outage_hits
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn record_instance_load(&self, agent_id: &AgentId) -> usize {
+        let mut counts = self.instance_load_counts.lock().unwrap();
+        let count = counts.entry(agent_id.clone()).or_default();
+        *count += 1;
+        *count
+    }
+
+    fn instance_load_count(&self, agent_id: &AgentId) -> usize {
+        self.instance_load_counts
+            .lock()
+            .unwrap()
+            .get(agent_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn return_no_op_after_oplog_reads(
         &self,
         agent_id: AgentId,
@@ -6046,6 +6464,23 @@ impl AdditionalTestDeps {
     /// calls are no-ops because they all carry the same `Arc`.
     pub(crate) fn set_active_agents(&self, agents: Arc<ActiveAgents<TestWorkerCtx>>) {
         let _ = self.active_agents.set(agents);
+    }
+
+    /// Stores the executor's websocket connection pool on first call (before it
+    /// is moved into the worker context).
+    pub(crate) fn set_websocket_connection_pool(
+        &self,
+        pool: golem_worker_executor::durable_host::websocket::WebSocketConnectionPool,
+    ) {
+        let _ = self.websocket_connection_pool.set(pool.clone());
+    }
+
+    /// Returns the executor's websocket connection pool if a worker context has
+    /// been created on this executor (captured pool), `None` otherwise.
+    pub(crate) fn websocket_connection_pool(
+        &self,
+    ) -> Option<golem_worker_executor::durable_host::websocket::WebSocketConnectionPool> {
+        self.websocket_connection_pool.get().cloned()
     }
 
     /// Look up a `Worker` shell currently registered in `ActiveAgents`.
@@ -6326,7 +6761,7 @@ impl DirectReplayWaitSignalHandle {
 
 struct TestReplayAdmissionHook {
     agent_id: AgentId,
-    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<ReplayAdmissionGate>>>>,
+    gates: Arc<std::sync::Mutex<HashMap<AgentId, Vec<Arc<ReplayAdmissionGate>>>>>,
     signals: Arc<std::sync::Mutex<HashMap<AgentId, Arc<DirectReplayWaitSignal>>>>,
 }
 
@@ -6339,10 +6774,19 @@ impl golem_worker_executor::workerctx::ReplayAdmissionHook for TestReplayAdmissi
     ) {
         let gate = {
             let mut gates = self.gates.lock().unwrap();
-            let matches = gates.get(&self.agent_id).is_some_and(|gate| {
-                gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
-            });
-            matches.then(|| gates.remove(&self.agent_id)).flatten()
+            gates.get_mut(&self.agent_id).and_then(|gates| {
+                gates.retain(|gate| {
+                    gate.entered_tx
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|sender| !sender.is_closed())
+                });
+                let pos = gates.iter().position(|gate| {
+                    gate.stage == stage && function.ends_with(gate.function_suffix.as_str())
+                })?;
+                Some(gates.remove(pos))
+            })
         };
         if let Some(gate) = gate {
             if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
@@ -6379,6 +6823,57 @@ impl TestReplayAdmissionHook {
         {
             let _ = fired_tx.send((name.to_string(), start_index));
         }
+    }
+}
+
+#[cfg(test)]
+mod replay_admission_gate_tests {
+    use super::*;
+    use golem_worker_executor::workerctx::ReplayAdmissionHook;
+    use test_r::test;
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn dropped_gate_does_not_steal_rearmed_matching_gate() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: "gate-test".to_string(),
+        };
+        let gates = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let signals = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let deps = AdditionalTestDeps {
+            replay_admission_gates: gates.clone(),
+            direct_replay_wait_signals: signals.clone(),
+            ..Default::default()
+        };
+
+        let stale = deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            "monotonic-clock::now".to_string(),
+            ReplayAdmissionStage::BeforeDeferredStart,
+        );
+        drop(stale);
+        let mut current = deps.gate_next_replay_access_admission(
+            agent_id.clone(),
+            "monotonic-clock::now".to_string(),
+            ReplayAdmissionStage::BeforeDeferredStart,
+        );
+        let hook = TestReplayAdmissionHook {
+            agent_id,
+            gates,
+            signals,
+        };
+
+        tokio::join!(
+            hook.before_replay_access_start(
+                "golem:api/monotonic-clock::now",
+                ReplayAdmissionStage::BeforeDeferredStart,
+            ),
+            async {
+                current.entered().await;
+                current.release();
+            }
+        );
     }
 }
 
@@ -7095,10 +7590,13 @@ impl FailingBlobStoreService {
 impl BlobStoreService for FailingBlobStoreService {
     async fn clear(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
-        self.inner.clear(environment_id, container_name).await
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
+        self.inner
+            .clear(resource_limits, environment_id, container_name)
+            .await
     }
 
     async fn container_exists(
@@ -7113,14 +7611,16 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn copy_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .copy_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,
@@ -7134,7 +7634,7 @@ impl BlobStoreService for FailingBlobStoreService {
         &self,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .create_container(environment_id, container_name)
             .await
@@ -7142,31 +7642,34 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn delete_container(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_container(environment_id, container_name)
+            .delete_container(resource_limits, environment_id, container_name)
             .await
     }
 
     async fn delete_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: String,
         object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
-            .delete_object(environment_id, container_name, object_name)
+            .delete_object(resource_limits, environment_id, container_name, object_name)
             .await
     }
 
     async fn delete_objects(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_names: &[String],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::DeleteObjects {
                 environment_id,
@@ -7184,7 +7687,12 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .delete_objects(environment_id, container_name, object_names)
+                .delete_objects(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_names,
+                )
                 .await
         }
     }
@@ -7245,14 +7753,16 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn move_object(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         source_container_name: String,
         source_object_name: String,
         destination_container_name: String,
         destination_object_name: String,
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         self.inner
             .move_object(
+                resource_limits,
                 environment_id,
                 source_container_name,
                 source_object_name,
@@ -7275,11 +7785,12 @@ impl BlobStoreService for FailingBlobStoreService {
 
     async fn write_data(
         &self,
+        resource_limits: Arc<AtomicResourceEntry>,
         environment_id: EnvironmentId,
         container_name: &str,
         object_name: &str,
         data: &[u8],
-    ) -> Result<(), BlobStoreError> {
+    ) -> Result<BlobStoreMutation, BlobStoreError> {
         if let Some(recorder) = &self.mutation_recorder {
             recorder.record(BlobStoreMutationCall::WriteData {
                 environment_id,
@@ -7298,7 +7809,13 @@ impl BlobStoreService for FailingBlobStoreService {
             ))
         } else {
             self.inner
-                .write_data(environment_id, container_name, object_name, data)
+                .write_data(
+                    resource_limits,
+                    environment_id,
+                    container_name,
+                    object_name,
+                    data,
+                )
                 .await
         }
     }

@@ -21,11 +21,12 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
+use crate::model::cascade::error::StoreGetValueError;
 use crate::model::cascade::layer::Layer;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
-use crate::model::cascade::property::optional::OptionalProperty;
+use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
@@ -379,6 +380,7 @@ pub struct BridgeSdkTarget {
     pub target_language: GuestLanguage,
     pub bridge_mode: BridgeMode,
     pub output_dir: PathBuf,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -508,6 +510,252 @@ pub struct CustomBridgeSdkTarget {
     pub agent_type_names: HashSet<AgentTypeName>,
     pub target_language: Option<GuestLanguage>,
     pub output_dir: Option<PathBuf>,
+    pub rust_config: crate::bridge_gen::rust::RustBridgeGeneratorConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct BridgeSdks {
+    targets: BTreeMap<(GuestLanguage, BridgeMode), BridgeSdkTargets>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BridgeSdkTargets {
+    pub agents: app_raw::LenientTokenList,
+    pub tools: Option<app_raw::LenientTokenList>,
+    pub output_dir: Option<PathBuf>,
+    pub generator_config: BridgeGeneratorConfig,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum BridgeGeneratorConfig {
+    #[default]
+    None,
+    Rust(crate::bridge_gen::rust::RustBridgeGeneratorConfig),
+}
+
+impl BridgeGeneratorConfig {
+    pub fn rust(&self) -> Option<&crate::bridge_gen::rust::RustBridgeGeneratorConfig> {
+        match self {
+            Self::None => None,
+            Self::Rust(config) => Some(config),
+        }
+    }
+
+    fn is_configured(&self) -> bool {
+        self.rust().is_some_and(|config| config.is_configured())
+    }
+}
+
+impl BridgeSdks {
+    pub fn get(&self, language: GuestLanguage, mode: BridgeMode) -> Option<&BridgeSdkTargets> {
+        self.targets.get(&(language, mode))
+    }
+
+    pub fn for_all_used_modes(
+        &self,
+    ) -> impl Iterator<Item = (GuestLanguage, BridgeMode, &BridgeSdkTargets)> {
+        self.targets
+            .iter()
+            .filter_map(|((language, mode), targets)| {
+                (!targets.agents.is_empty()
+                    || targets
+                        .tools
+                        .as_ref()
+                        .is_some_and(|tools| !tools.is_empty()))
+                .then_some((*language, *mode, targets))
+            })
+    }
+
+    fn from_raw(
+        raw: app_raw::BridgeSdks,
+        source_dir: &Path,
+        validation: &mut ValidationBuilder,
+    ) -> Self {
+        let mut result = Self::default();
+        for (language, targets) in [
+            (GuestLanguage::TypeScript, raw.ts),
+            (GuestLanguage::Effect, raw.effect),
+            (GuestLanguage::Scala, raw.scala),
+            (GuestLanguage::MoonBit, raw.moonbit),
+        ] {
+            let Some(targets) = targets else {
+                continue;
+            };
+            if let Some(external) = targets.external {
+                result.add_targets(
+                    language,
+                    BridgeMode::External,
+                    external.agents,
+                    None,
+                    external.output_dir,
+                    BridgeGeneratorConfig::None,
+                    source_dir,
+                    validation,
+                );
+            }
+            if let Some(internal) = targets.internal {
+                result.add_targets(
+                    language,
+                    BridgeMode::Guest,
+                    internal.agents,
+                    Some(internal.tools),
+                    internal.output_dir,
+                    BridgeGeneratorConfig::None,
+                    source_dir,
+                    validation,
+                );
+            }
+        }
+
+        if let Some(targets) = raw.rust {
+            if let Some(external) = targets.external {
+                let config = result.normalize_rust_config(
+                    &external.additional_derives,
+                    external.additional_dependencies,
+                    source_dir,
+                    BridgeMode::External,
+                    validation,
+                );
+                result.add_targets(
+                    GuestLanguage::Rust,
+                    BridgeMode::External,
+                    external.common.agents,
+                    None,
+                    external.common.output_dir,
+                    BridgeGeneratorConfig::Rust(config),
+                    source_dir,
+                    validation,
+                );
+            }
+            if let Some(internal) = targets.internal {
+                let config = result.normalize_rust_config(
+                    &internal.additional_derives,
+                    internal.additional_dependencies,
+                    source_dir,
+                    BridgeMode::Guest,
+                    validation,
+                );
+                result.add_targets(
+                    GuestLanguage::Rust,
+                    BridgeMode::Guest,
+                    internal.common.agents,
+                    Some(internal.common.tools),
+                    internal.common.output_dir,
+                    BridgeGeneratorConfig::Rust(config),
+                    source_dir,
+                    validation,
+                );
+            }
+        }
+
+        result
+    }
+
+    fn normalize_rust_config(
+        &self,
+        derive_rules: &[String],
+        dependencies: BTreeMap<String, app_raw::RustBridgeDependency>,
+        source_dir: &Path,
+        mode: BridgeMode,
+        validation: &mut ValidationBuilder,
+    ) -> crate::bridge_gen::rust::RustBridgeGeneratorConfig {
+        match crate::bridge_gen::rust::RustBridgeGeneratorConfig::from_manifest(
+            derive_rules,
+            dependencies,
+            source_dir,
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                validation.with_context(
+                    vec![
+                        ("bridge SDK language", GuestLanguage::Rust.to_string()),
+                        ("bridge SDK mode", mode.to_string()),
+                    ],
+                    |validation| validation.add_error(format!("{error:#}")),
+                );
+                Default::default()
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_targets(
+        &mut self,
+        language: GuestLanguage,
+        mode: BridgeMode,
+        agents: app_raw::LenientTokenList,
+        tools: Option<app_raw::LenientTokenList>,
+        output_dir: Option<String>,
+        generator_config: BridgeGeneratorConfig,
+        source_dir: &Path,
+        validation: &mut ValidationBuilder,
+    ) {
+        let agent_targets = agents.clone().into_vec();
+        let non_unique_targets = agent_targets
+            .iter()
+            .counts()
+            .into_iter()
+            .filter(|(_, count)| *count > 1)
+            .collect::<Vec<_>>();
+
+        validation.with_context(
+            vec![
+                ("bridge SDK language", language.to_string()),
+                ("bridge SDK mode", mode.to_string()),
+            ],
+            |validation| {
+                if !non_unique_targets.is_empty() {
+                    validation.add_error(format!(
+                        "Duplicated bridge SDK agent targets: {}",
+                        non_unique_targets
+                            .iter()
+                            .map(|(target, _)| target.log_color_error_highlight())
+                            .join(", ")
+                    ));
+                }
+                if agent_targets.len() > 1 && agent_targets.iter().any(|target| target == "*") {
+                    validation.add_warn(format!(
+                        "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
+                        agent_targets
+                            .iter()
+                            .map(|target| target.log_color_highlight())
+                            .join(", ")
+                    ));
+                }
+                if generator_config.is_configured() && agents.is_empty() {
+                    validation.add_error(format!(
+                        "Rust {} bridge additionalDerives/additionalDependencies require an agent selection",
+                        match mode {
+                            BridgeMode::External => "external",
+                            BridgeMode::Guest => "internal",
+                        }
+                    ));
+                }
+                if !agents.is_empty()
+                    && let Some(error) = BridgeSdkTargetKind::Agent.support_error(mode, language)
+                {
+                    validation.add_error(error);
+                }
+                if tools.as_ref().is_some_and(|tools| !tools.is_empty())
+                    && let Some(error) = BridgeSdkTargetKind::Tool.support_error(mode, language)
+                {
+                    validation.add_error(error);
+                }
+            },
+        );
+
+        self.targets.insert(
+            (language, mode),
+            BridgeSdkTargets {
+                agents,
+                tools,
+                output_dir: output_dir.map(|output_dir| {
+                    fs::absolute_lexical_path_from_base_dir(Path::new(&output_dir), source_dir)
+                }),
+                generator_config,
+            },
+        );
+    }
 }
 
 pub fn includes_from_yaml_file(source: &Path) -> Vec<String> {
@@ -633,7 +881,7 @@ pub struct Application {
         BTreeMap<EnvironmentName, BTreeMap<String, WithSource<DeploymentRetryPolicyDefault>>>,
     resource_definition_defaults:
         BTreeMap<EnvironmentName, BTreeMap<ResourceName, WithSource<ResourceDefinitionCreation>>>,
-    bridge_sdks: WithSource<app_raw::BridgeSdks>,
+    bridge_sdks: WithSource<BridgeSdks>,
 }
 
 /// Resolves the cargo target directory for the cargo project rooted at `manifest_dir`.
@@ -719,25 +967,47 @@ impl Application {
         build_application_preload(apps)
     }
 
-    pub fn language_templates_from_raw_apps(
+    /// Names of all component templates referenced by the raw applications, used for selecting
+    /// the built-in templates that have to be loaded. Tool and tool middleware declarations are
+    /// parsed leniently, as their errors are reported when the application is built.
+    pub fn referenced_template_names_from_raw_apps(
         apps: &[app_raw::ApplicationWithSource],
-    ) -> HashSet<GuestLanguage> {
-        apps.iter()
-            .flat_map(|app| {
-                app.application
-                    .component_templates
-                    .values()
-                    .map(|template| &template.templates)
-                    .chain(
-                        app.application
-                            .components
-                            .values()
-                            .map(|component| &component.templates),
-                    )
-                    .flat_map(|templates| templates.clone().into_vec())
-                    .filter_map(GuestLanguage::from_component_template_name)
-            })
-            .collect()
+    ) -> BTreeSet<String> {
+        let mut names = BTreeSet::new();
+        for app in apps {
+            let application = &app.application;
+            for templates in application
+                .component_templates
+                .values()
+                .map(|template| &template.templates)
+                .chain(
+                    application
+                        .components
+                        .values()
+                        .map(|component| &component.templates),
+                )
+                .chain(application.agents.values().map(|agent| &agent.templates))
+            {
+                names.extend(templates.clone().into_vec());
+            }
+
+            let (tools, middlewares) = application.tools.clone().into_tools_and_middleware();
+            for tool in tools.into_values() {
+                if let Ok(declaration) = serde_json::from_value::<app_raw::ToolDeclaration>(tool) {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+            if let Some(middlewares) = middlewares
+                && let Ok(declarations) = serde_json::from_value::<
+                    IndexMap<String, app_raw::ToolMiddlewareDeclaration>,
+                >(middlewares)
+            {
+                for declaration in declarations.into_values() {
+                    names.extend(declaration.templates.into_vec());
+                }
+            }
+        }
+        names
     }
 
     pub fn application_name(&self) -> &ApplicationName {
@@ -908,6 +1178,7 @@ impl Application {
             .any(|(_, _, targets)| {
                 let matchers = targets
                     .tools
+                    .as_ref()
                     .map(|tools| tools.clone().into_set())
                     .unwrap_or_default();
                 (matchers.contains("*") && !remote_release_names.is_empty())
@@ -949,6 +1220,7 @@ impl Application {
             for (_, _, targets) in self.bridge_sdks().for_all_used_modes() {
                 for matcher in targets
                     .tools
+                    .as_ref()
                     .map(|tools| tools.clone().into_set())
                     .unwrap_or_default()
                 {
@@ -1102,8 +1374,15 @@ impl Application {
                         .map(|component_dir| self.cargo_manifest_dir_for(component_dir)),
                 );
 
+                let template_names = agent.templates.clone().into_vec();
+                check_template_list_ancestry(
+                    &self.component_layer_store,
+                    &format!("agent {}", agent_type_name.0),
+                    &template_names,
+                )?;
+
                 let mut latest_parent_id = base_component_id.clone();
-                for template_name in agent.templates.clone().into_vec() {
+                for template_name in template_names {
                     let template_layer_id =
                         ComponentLayerId::TemplateCustomPresets(template_name.clone());
                     let template_layer_props = self
@@ -1320,7 +1599,14 @@ impl Application {
             ),
         };
 
-        for template_name in declaration.value.templates.clone().into_vec() {
+        let template_names = declaration.value.templates.clone().into_vec();
+        check_template_list_ancestry(
+            &self.component_layer_store,
+            &format!("tool {tool_name}"),
+            &template_names,
+        )?;
+
+        for template_name in template_names {
             let component_template_id =
                 ComponentLayerId::TemplateCustomPresets(template_name.clone());
             let template = self
@@ -1492,7 +1778,7 @@ impl Application {
             .unwrap_or_default()
     }
 
-    pub fn bridge_sdks(&self) -> &app_raw::BridgeSdks {
+    pub fn bridge_sdks(&self) -> &BridgeSdks {
         &self.bridge_sdks.value
     }
 
@@ -1506,27 +1792,16 @@ impl Application {
         language: GuestLanguage,
         mode: BridgeMode,
     ) -> PathBuf {
-        let output_dir = match mode {
-            BridgeMode::External => self
-                .bridge_sdks
-                .value
-                .for_language(language)
-                .and_then(|sdk| sdk.external.as_ref())
-                .and_then(|sdk| sdk.output_dir.as_ref()),
-            BridgeMode::Guest => self
-                .bridge_sdks
-                .value
-                .for_language(language)
-                .and_then(|sdk| sdk.internal.as_ref())
-                .and_then(|sdk| sdk.output_dir.as_ref()),
-        };
+        let output_dir = self
+            .bridge_sdks
+            .value
+            .get(language, mode)
+            .and_then(|targets| targets.output_dir.as_ref());
 
         match output_dir {
-            Some(output_dir) => self
-                .bridge_sdks
-                .source
-                .join(output_dir)
-                .join(bridge_client_directory_name(agent_type_name, mode)),
+            Some(output_dir) => {
+                output_dir.join(bridge_client_directory_name(agent_type_name, mode))
+            }
             None => match mode {
                 BridgeMode::External => {
                     self.temp_dir().join("bridge-sdk").join(language.id()).join(
@@ -1564,16 +1839,11 @@ impl Application {
         let output_dir = self
             .bridge_sdks
             .value
-            .for_language(language)
-            .and_then(|sdk| sdk.internal.as_ref())
-            .and_then(|sdk| sdk.output_dir.as_ref());
+            .get(language, BridgeMode::Guest)
+            .and_then(|targets| targets.output_dir.as_ref());
 
         match output_dir {
-            Some(output_dir) => self
-                .bridge_sdks
-                .source
-                .join(output_dir)
-                .join(tool_bridge_client_directory_name(tool_name)),
+            Some(output_dir) => output_dir.join(tool_bridge_client_directory_name(tool_name)),
             None => self.dependency_tool_bridge_sdk_dir(tool_name, language),
         }
     }
@@ -2167,6 +2437,33 @@ impl Layer for ComponentLayer {
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
 
+            if let (Some(current), Some(declared)) = (
+                value.guest_language.value(),
+                properties.guest_language.value(),
+            ) && current != declared
+            {
+                let current_declared_by = value
+                    .guest_language
+                    .trace()
+                    .iter()
+                    .rev()
+                    .find_map(|elem| match elem {
+                        OptionalPropertyTraceElem::Override { id, .. } => Some(id.to_string()),
+                        OptionalPropertyTraceElem::Skip { .. } => None,
+                    })
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Conflicting guest languages: {} declares {}, but {} already declares {}",
+                    id.to_string().log_color_highlight(),
+                    declared.id().log_color_highlight(),
+                    current_declared_by.log_color_highlight(),
+                    current.id().log_color_highlight(),
+                ));
+            }
+            value
+                .guest_language
+                .apply_layer(id, selection, *properties.guest_language.value());
+
             value.component_wasm.apply_layer(
                 id,
                 selection,
@@ -2399,12 +2696,9 @@ impl<'a> Component<'a> {
         self.component_name
     }
 
-    // Guesses the language from the language-prefixed applied templates.
-    pub fn guess_language(&self) -> Option<GuestLanguage> {
-        self.applied_layers().iter().find_map(|(id, _)| {
-            id.template_name()
-                .and_then(GuestLanguage::from_component_template_name)
-        })
+    // The guest language declared by the applied component templates.
+    pub fn guest_language(&self) -> Option<GuestLanguage> {
+        *self.layer_properties().guest_language.value()
     }
 
     pub fn source(&self) -> &Path {
@@ -2560,6 +2854,7 @@ pub struct ComponentLayerProperties {
     )]
     pub applied_layers: Vec<(ComponentLayerId, Option<String>)>,
 
+    pub guest_language: OptionalProperty<ComponentLayer, GuestLanguage>,
     pub component_wasm: OptionalProperty<ComponentLayer, String>,
     pub output_wasm: OptionalProperty<ComponentLayer, String>,
     pub dependency_agents: VecProperty<ComponentLayer, app_raw::ComponentDependencyReference>,
@@ -2600,6 +2895,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
         });
         Self {
             applied_layers: vec![],
+            guest_language: value.guest_language.into(),
             component_wasm: value.component_wasm.into(),
             output_wasm: value.output_wasm.into(),
             dependency_agents: value.dependencies.agents.into(),
@@ -2626,6 +2922,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
 
 impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
+        self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
         self.output_wasm.compact_trace();
         self.dependency_agents.compact_trace();
@@ -3313,11 +3610,10 @@ impl ComponentProperties {
             initial_card: merged.initial_card.value().clone(),
         };
 
-        let (name, value) = ("componentWasm", &properties.component_wasm);
-        if value.is_empty() {
+        if properties.component_wasm.is_empty() {
             validation.add_error(format!(
                 "Property {} is empty or undefined",
-                name.log_color_highlight()
+                "componentWasm".log_color_highlight()
             ));
         }
 
@@ -3597,23 +3893,73 @@ impl PluginInstallation {
     }
 }
 
+/// Error message for a template inherited through multiple template paths by `consumer`.
+fn multiple_template_paths_error(
+    consumer: &str,
+    layer: &ComponentLayerId,
+    first_path: &[ComponentLayerId],
+    second_path: &[ComponentLayerId],
+) -> String {
+    let render_path = |path: &[ComponentLayerId]| {
+        path.iter()
+            .filter_map(|id| id.template_name())
+            .dedup()
+            .join(" -> ")
+    };
+    format!(
+        "Template {} is inherited by {} through multiple paths: {} and {}. Remove one of the references.",
+        layer.name().log_color_highlight(),
+        consumer.log_color_highlight(),
+        render_path(first_path).log_color_highlight(),
+        render_path(second_path).log_color_highlight(),
+    )
+}
+
+/// Checks that the templates listed by an agent or a tool do not inherit a template through
+/// multiple paths, as it is required for components.
+fn check_template_list_ancestry(
+    component_layer_store: &Store<ComponentLayer>,
+    consumer: &str,
+    template_names: &[String],
+) -> anyhow::Result<()> {
+    let roots = template_names
+        .iter()
+        .map(|name| ComponentLayerId::TemplateCustomPresets(name.clone()))
+        .collect::<Vec<_>>();
+    match component_layer_store.check_single_path_ancestry(&roots) {
+        Ok(()) => Ok(()),
+        Err(StoreGetValueError::MultipleParentPaths {
+            layer,
+            first_path,
+            second_path,
+        }) => Err(anyhow!(multiple_template_paths_error(
+            consumer,
+            &layer,
+            &first_path,
+            &second_path
+        ))),
+        Err(err) => Err(anyhow!(err.to_string())),
+    }
+}
+
 mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
     use super::{
         ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
-        add_tool_issues,
+        add_tool_issues, multiple_template_paths_error,
     };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::app::{
-        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdkTargetKind,
-        ComponentDependency, ComponentLayer, ComponentLayerApplyContext, ComponentLayerId,
-        ComponentLayerProperties, ComponentLayerPropertiesKind, ComponentPresetSelector,
-        ComponentProperties, PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
+        APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdks, ComponentDependency,
+        ComponentLayer, ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
+        ComponentLayerPropertiesKind, ComponentPresetSelector, ComponentProperties,
+        PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::error::StoreGetValueError;
     use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
@@ -4026,7 +4372,7 @@ mod app_builder {
             WithSource<Vec<golem_common::model::mcp_import::McpImportDeployment>>,
         >,
 
-        bridge_sdks: WithSource<app_raw::BridgeSdks>,
+        bridge_sdks: WithSource<BridgeSdks>,
 
         agent_secret_defaults: BTreeMap<EnvironmentName, WithSource<app_raw::JsonObject>>,
 
@@ -4260,8 +4606,6 @@ mod app_builder {
                     }
 
                     for (agent_type_name, agent_properties) in app.application.agents {
-                        // TODO: atl: resolve and store effective agent properties here using
-                        // agent templates/presets and flattened component fallback layers.
                         let unique_key = UniqueSourceCheckedEntityKey::Agent(agent_type_name.clone());
                         if self.add_entity_source(unique_key, &app.source) {
                             self.record_selectable_presets(agent_properties.presets.keys());
@@ -4563,65 +4907,10 @@ mod app_builder {
                         && self
                             .add_entity_source(UniqueSourceCheckedEntityKey::Bridge, app_source_dir)
                         {
-                            self.bridge_sdks =
-                                WithSource::new(app_source_dir.to_path_buf(), bridge);
-
-                            for (target_language, bridge_mode, sdk_targets) in
-                                self.bridge_sdks.value.for_all_used_modes()
-                            {
-                                let agent_targets = sdk_targets.agents.clone().into_vec();
-                                let non_unique_targets = agent_targets.iter()
-                                    .counts()
-                                    .into_iter()
-                                    .filter(|(_, count)| *count > 1)
-                                    .collect::<Vec<_>>();
-
-                                validation.with_context(
-                                    vec![
-                                        ("bridge SDK language", target_language.to_string()),
-                                        ("bridge SDK mode", bridge_mode.to_string()),
-                                    ],
-                                    |validation| {
-                                        if !non_unique_targets.is_empty() {
-                                            validation.add_error(format!(
-                                                "Duplicated bridge SDK agent targets: {}",
-                                                non_unique_targets
-                                                    .iter()
-                                                    .map(|(target, _)| target
-                                                        .log_color_error_highlight())
-                                                    .join(", ")
-                                            ));
-                                        }
-
-                                        if agent_targets.len() > 1 && agent_targets.iter().any(|t| t == "*") {
-                                            validation.add_warn(format!(
-                                                "Including \"*\" as language target will match all agents, no need for adding other targets: {}",
-                                                agent_targets
-                                                    .iter()
-                                                    .map(|target| target.log_color_highlight())
-                                                    .join(", ")
-                                            ));
-                                        }
-
-                                        if !agent_targets.is_empty()
-                                            && let Some(error) = BridgeSdkTargetKind::Agent
-                                                .support_error(bridge_mode, target_language)
-                                        {
-                                            validation.add_error(error);
-                                        }
-
-                                        if sdk_targets
-                                            .tools
-                                            .is_some_and(|tools| !tools.is_empty())
-                                            && let Some(error) = BridgeSdkTargetKind::Tool
-                                                .support_error(bridge_mode, target_language)
-                                        {
-                                            validation.add_error(error);
-                                        }
-
-                                    },
-                                );
-                            }
+                            self.bridge_sdks = WithSource::new(
+                                app_source_dir.to_path_buf(),
+                                BridgeSdks::from_raw(bridge, app_source_dir, validation),
+                            );
                         }
                 });
         }
@@ -5340,6 +5629,16 @@ mod app_builder {
                         WithSource::new(source, (component_properties, component_layer_properties)),
                     );
                 }
+                Err(StoreGetValueError::MultipleParentPaths {
+                    layer,
+                    first_path,
+                    second_path,
+                }) => validation.add_error(multiple_template_paths_error(
+                    component_name.as_str(),
+                    &layer,
+                    &first_path,
+                    &second_path,
+                )),
                 Err(err) => validation.add_error(format!("Failed to resolve component: {err}")),
             }
         }
@@ -5602,6 +5901,7 @@ mod test {
     };
     use crate::model::app_raw;
     use crate::model::cascade::property::Property;
+    use crate::model::language::GuestLanguage;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
@@ -6358,6 +6658,197 @@ mod test {
     }
 
     #[test]
+    fn test_component_guest_language_comes_from_templates() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                guestLanguage: ts
+                componentWasm: base.wasm
+              derived:
+                templates: base
+              same-language:
+                guestLanguage: ts
+              rust-helpers:
+                componentWasm: helpers.wasm
+
+            components:
+              app:direct:
+                templates: base
+              app:inherited:
+                templates: derived
+              app:same-language-twice:
+                templates: [base, same-language]
+              app:no-language:
+                templates: rust-helpers
+        "# };
+
+        let (app, _app_tmp_dir) = load_app_for_env(source, "local", &[]);
+
+        for (component_name, expected) in [
+            ("app:direct", Some(GuestLanguage::TypeScript)),
+            ("app:inherited", Some(GuestLanguage::TypeScript)),
+            ("app:same-language-twice", Some(GuestLanguage::TypeScript)),
+            ("app:no-language", None),
+        ] {
+            let component_name = parse_component_name(component_name);
+            assert_eq!(
+                app.component(&component_name).guest_language(),
+                expected,
+                "{component_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_component_templates_with_conflicting_guest_languages_are_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              ts-template:
+                guestLanguage: ts
+                componentWasm: main.wasm
+              rust-template:
+                guestLanguage: rust
+
+            components:
+              app:main:
+                templates: [ts-template, rust-template]
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:#?}");
+        assert!(
+            errors[0].contains("Conflicting guest languages"),
+            "unexpected error: {}",
+            errors[0]
+        );
+        assert!(errors[0].contains("template:rust-template:common"));
+        assert!(errors[0].contains("template:ts-template:common"));
+    }
+
+    #[test]
+    fn test_component_templates_with_shared_parent_are_rejected() {
+        let errors = load_app_errors(indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                componentWasm: base.wasm
+              template-a:
+                templates: base
+              template-b:
+                templates: base
+
+            components:
+              app:main:
+                templates: [template-a, template-b]
+        "# });
+
+        assert_eq!(errors.len(), 1, "unexpected errors: {errors:#?}");
+        assert!(
+            errors[0].contains(
+                "Template base is inherited by app:main through multiple paths: \
+                 template-a -> base and template-b -> base"
+            ),
+            "unexpected error: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn test_agent_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            agents:
+              FooAgent:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = resolve_agents_for(&app, "app:main", "FooAgent").unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by agent FooAgent through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_tool_templates_with_shared_parent_are_rejected() {
+        let source = indoc! { r#"
+            app: hello-app
+
+            environments:
+              local:
+                server: local
+
+            componentTemplates:
+              base:
+                env:
+                  BASE: base
+              derived:
+                templates: base
+
+            components:
+              app:main:
+                componentWasm: main.wasm
+
+            tools:
+              grep:
+                templates: [base, derived]
+        "# };
+
+        let (app, _tmp_dir) = load_app_for_env(source, "local", &[]);
+        let err = app
+            .resolve_tool_provision(
+                &ToolName::try_from("grep").unwrap(),
+                &parse_component_name("app:main"),
+            )
+            .unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains(
+                "Template base is inherited by tool grep through multiple paths: \
+                 base and derived -> base"
+            ),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
     fn test_root_level_agents_are_accepted() {
         let source = indoc! { r#"
             app: hello-app
@@ -6559,10 +7050,120 @@ mod test {
             )
         );
 
-        let used_modes = app.bridge_sdks().for_all_used_modes();
+        let used_modes = app.bridge_sdks().for_all_used_modes().collect::<Vec<_>>();
         assert_eq!(used_modes.len(), 1);
         assert_eq!(used_modes[0].0, crate::model::language::GuestLanguage::Rust);
         assert_eq!(used_modes[0].1, BridgeMode::Guest);
+    }
+
+    #[test]
+    fn rust_bridge_configuration_requires_agents_for_both_modes() {
+        for mode in ["external", "internal"] {
+            let errors = load_app_errors(&format!(
+                r#"
+app: configured-{mode}
+environments:
+  local:
+    server: local
+components:
+  app:main:
+    componentWasm: main.wasm
+bridge:
+  rust:
+    {mode}:
+      additionalDerives: [".*=Clone"]
+"#,
+            ));
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.contains("require an agent selection")),
+                "{mode}: {errors:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_bridge_manifest_is_normalized_during_application_ingestion() {
+        let (app, app_tmp_dir) = load_app_for_env(
+            indoc! {r#"
+                app: normalized-rust-bridge
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                bridge:
+                  rust:
+                    external:
+                      agents: [Counter]
+                      outputDir: generated/rust
+                      additionalDerives: ["^Counter=Eq"]
+                      additionalDependencies:
+                        custom-derive: { path: derive-fixture }
+            "#},
+            "local",
+            &[],
+        );
+        let targets = app
+            .bridge_sdks()
+            .get(GuestLanguage::Rust, BridgeMode::External)
+            .unwrap();
+        let expected_output_dir = app_tmp_dir.path().join("generated/rust");
+
+        assert_eq!(
+            targets.output_dir.as_deref(),
+            Some(expected_output_dir.as_path())
+        );
+        let config = serde_json::to_string(targets.generator_config.rust().unwrap()).unwrap();
+        assert!(config.contains("^Counter"), "{config}");
+        let expected_dependency = app_tmp_dir
+            .path()
+            .join("derive-fixture")
+            .to_string_lossy()
+            .into_owned();
+        assert!(config.contains(&expected_dependency), "{config}");
+    }
+
+    #[test]
+    fn output_only_bridge_entry_is_retained_as_a_custom_generation_default() {
+        let (app, app_tmp_dir) = load_app_for_env(
+            indoc! {r#"
+                app: output-only-rust-bridge
+                environments:
+                  local:
+                    server: local
+                components:
+                  app:main:
+                    componentWasm: main.wasm
+                bridge:
+                  rust:
+                    external:
+                      outputDir: generated/rust
+            "#},
+            "local",
+            &[],
+        );
+        let targets = app
+            .bridge_sdks()
+            .get(GuestLanguage::Rust, BridgeMode::External)
+            .unwrap();
+        let expected_output_dir = app_tmp_dir.path().join("generated/rust");
+        assert_eq!(
+            targets.output_dir.as_deref(),
+            Some(expected_output_dir.as_path())
+        );
+        assert_eq!(app.bridge_sdks().for_all_used_modes().count(), 0);
+
+        let agent_name = AgentTypeName("ShoppingCart".into());
+        assert_eq!(
+            app.bridge_sdk_dir(&agent_name, GuestLanguage::Rust, BridgeMode::External),
+            expected_output_dir.join(bridge_client_directory_name(
+                &agent_name,
+                BridgeMode::External,
+            ))
+        );
     }
 
     #[test]
@@ -6595,7 +7196,7 @@ mod test {
             )
         );
 
-        let used_modes = app.bridge_sdks().for_all_used_modes();
+        let used_modes = app.bridge_sdks().for_all_used_modes().collect::<Vec<_>>();
         assert_eq!(used_modes.len(), 1);
         assert_eq!(
             used_modes[0].0,
@@ -7916,12 +8517,10 @@ mod test {
         let err = resolve_agents_for(&app, "app:main", "test-agent").unwrap_err();
         let message = format!("{err:#}");
         assert!(
-            message.contains("Layer already exists") || message.contains("already exists"),
-            "error should mention duplicate layer: {message}"
-        );
-        assert!(
-            message.contains("shared-template"),
-            "error should mention duplicate template name: {message}"
+            message.contains(
+                "Template shared-template is inherited by agent test-agent through multiple paths"
+            ),
+            "error should mention the duplicate template: {message}"
         );
     }
 

@@ -2,10 +2,13 @@ use super::*;
 use crate::repo::model::deployment::{CompiledMcpData, DeploymentCompiledMcpRecord};
 use golem_common::model::Empty;
 use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
-use golem_common::model::agent::{AgentMode, Snapshotting};
+use golem_common::model::agent::{AgentFileContentHash, AgentMode, Snapshotting};
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretPath, AgentSecretRevision};
 use golem_common::model::application::{ApplicationId, ApplicationName};
-use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
+use golem_common::model::component::{
+    AgentFilePath, AgentFilePermissions, ComponentId, ComponentName, ComponentRevision,
+    InitialAgentFile,
+};
 use golem_common::model::component_metadata::{ComponentMetadata, KnownExports};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName, EnvironmentRevision};
 use golem_common::model::json::NormalizedJsonValue;
@@ -13,7 +16,9 @@ use golem_common::model::mcp_deployment::{
     McpDeployment, McpDeploymentAgentOptions, McpDeploymentId, McpDeploymentRevision,
     McpDeploymentToolOptions,
 };
-use golem_common::model::tool::{RemoteToolDeployment, SecretKeyScope, ToolProvisionConfig};
+use golem_common::model::tool::{
+    RemoteToolDeployment, SecretKeyScope, ToolFilesystemAccess, ToolProvisionConfig,
+};
 use golem_common::model::tool_middleware::ToolMiddlewareMergeMode;
 use golem_common::model::tool_release::{
     ToolRelease, ToolReleaseById, ToolReleaseId, ToolReleaseLifecycle, ToolReleaseOrigin,
@@ -56,6 +61,7 @@ fn test_environment() -> Environment {
 fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
     SecuritySchemeDetails {
         id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+        revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
         name,
         provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
         client_id: openidconnect::ClientId::new("test-client".into()),
@@ -65,6 +71,7 @@ fn test_security_scheme(name: SecuritySchemeName) -> SecuritySchemeDetails {
         )
         .unwrap(),
         scopes: vec![],
+        login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
     }
 }
 
@@ -676,6 +683,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         let name = SecuritySchemeName("login".into());
         let scheme = SecuritySchemeDetails {
             id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+            revision: golem_common::model::security_scheme::SecuritySchemeRevision::INITIAL,
             name: name.clone(),
             provider_type: golem_common::model::security_scheme::Provider::Google(Empty {}),
             client_id: openidconnect::ClientId::new("test-client".into()),
@@ -683,6 +691,7 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
             redirect_url: openidconnect::RedirectUrl::new(format!("https://example.com{callback}"))
                 .unwrap(),
             scopes: vec![],
+            login: golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(Empty {}),
         };
         let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
         let typed = routes
@@ -712,10 +721,160 @@ fn http_mount_compilation_typed_filesystem_overlap_and_reserved_bindings() {
         validate_final_http_api_router(
             &Domain("example.com".into()),
             &routes,
-            &HashMap::from([(name, scheme)]),
+            &HashMap::from([(name.clone(), scheme.clone())]),
             &mut errors,
         );
         assert_eq!(errors.is_empty(), accepted, "{callback}: {errors:?}");
+
+        if callback == "/auth/callback" && post {
+            let assert_origin = |callback_url: &str, public_origin: &str, accepted: bool| {
+                let mut candidate = scheme.clone();
+                candidate.redirect_url =
+                    openidconnect::RedirectUrl::new(callback_url.to_string()).unwrap();
+                let mut origin_errors = vec![];
+                validate_final_http_api_router_for_origin(
+                    &Domain("example.com".into()),
+                    public_origin,
+                    &routes,
+                    &HashMap::from([(name.clone(), candidate)]),
+                    &mut origin_errors,
+                );
+                assert_eq!(
+                    origin_errors.is_empty(),
+                    accepted,
+                    "callback={callback_url}, public_origin={public_origin}: {origin_errors:?}"
+                );
+            };
+            assert_origin(
+                "https://example.com/auth/callback",
+                "https://example.com:443",
+                true,
+            );
+            assert_origin(
+                "http://localhost/auth/callback",
+                "http://localhost:80",
+                true,
+            );
+            assert_origin(
+                "https://example.com/auth/callback",
+                "http://example.com",
+                false,
+            );
+            assert_origin(
+                "https://example.com/auth/callback",
+                "https://example.com:8443",
+                false,
+            );
+        }
+
+        let mut wrong_origin = scheme;
+        wrong_origin.redirect_url =
+            openidconnect::RedirectUrl::new("https://other.example/auth/callback".to_string())
+                .unwrap();
+        let mut origin_errors = vec![];
+        validate_final_http_api_router_for_origin(
+            &Domain("example.com".into()),
+            "https://example.com",
+            &routes,
+            &HashMap::from([(name, wrong_origin)]),
+            &mut origin_errors,
+        );
+        assert!(
+            origin_errors
+                .iter()
+                .any(|error| format!("{error:?}").contains("callback origin")),
+            "{origin_errors:?}"
+        );
+    }
+
+    {
+        let first_name = SecuritySchemeName("first-login".into());
+        let second_name = SecuritySchemeName("second-login".into());
+        let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
+        let typed = routes
+            .iter_mut()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
+            .unwrap();
+        typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: first_name.clone(),
+            },
+        );
+        let typed_bytes = desert_rust::serialize_to_byte_vec(&*typed).unwrap();
+        let mut second: UnboundCompiledRoute = desert_rust::deserialize(&typed_bytes).unwrap();
+        second.route_id = 100;
+        second.path = vec![PathSegment::Literal {
+            value: "second".into(),
+        }];
+        second.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: second_name.clone(),
+            },
+        );
+        routes.push(second);
+        let mut errors = vec![];
+        validate_final_http_api_router(
+            &Domain("example.com".into()),
+            &routes,
+            &HashMap::from([
+                (first_name.clone(), test_security_scheme(first_name)),
+                (second_name.clone(), test_security_scheme(second_name)),
+            ]),
+            &mut errors,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| format!("{error:?}").contains("Security endpoint collides")),
+            "{errors:?}"
+        );
+    }
+
+    {
+        let name = SecuritySchemeName("pkce-login".into());
+        let mut scheme = test_security_scheme(name.clone());
+        scheme.login =
+            golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(
+                golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                    redirect_uris: vec!["https://frontend.example/callback".into()],
+                    origins: vec!["https://frontend.example".into()],
+                },
+            );
+        let endpoint = golem_common::model::agent::http_files::HttpRequestTarget::parse(
+            &golem_service_base::custom_api::pkce_authorization_path(&scheme.id),
+        )
+        .unwrap();
+        let mut routes: Vec<UnboundCompiledRoute> = desert_rust::deserialize(&encoded).unwrap();
+        let typed = routes
+            .iter_mut()
+            .find(|route| matches!(route.behaviour, RouteBehaviour::CallAgent(_)))
+            .unwrap();
+        typed.path = endpoint
+            .segments()
+            .iter()
+            .map(|value| PathSegment::Literal {
+                value: value.clone(),
+            })
+            .collect();
+        typed.route_match = HttpMethod::Get(Empty {}).into();
+        typed.security = crate::model::api_definition::UnboundRouteSecurity::SecurityScheme(
+            crate::model::api_definition::UnboundSecuritySchemeRouteSecurity {
+                security_scheme: name.clone(),
+            },
+        );
+        let mut errors = vec![];
+        validate_final_http_api_router(
+            &Domain("example.com".into()),
+            &routes,
+            &HashMap::from([(name, scheme)]),
+            &mut errors,
+        );
+        assert!(
+            errors.iter().any(|error| {
+                format!("{error:?}").contains("Typed endpoint collides with a reserved")
+            }),
+            "{errors:?}"
+        );
     }
 }
 
@@ -872,6 +1031,7 @@ fn stored_agent_secret(
 fn test_tool(name: &str) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -902,12 +1062,14 @@ fn executable_test_tool(root: &str, command: &str) -> Tool {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 node(root, vec![CommandIndex(1)], None),
@@ -1750,6 +1912,164 @@ fn compile_tools_validates_remote_component_bindings_without_agent_bindings() {
 }
 
 #[test]
+fn compile_tools_enforces_filesystem_requirements_for_every_source_and_owner() {
+    #[derive(Clone, Copy, Debug)]
+    enum Source {
+        Local,
+        Remote,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Owner {
+        Agent,
+        ComponentBaseline,
+    }
+
+    let file = || InitialAgentFile {
+        content_hash: AgentFileContentHash(diff::Hash::empty()),
+        path: AgentFilePath::from_rel_str("fixture.txt").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: 0,
+    };
+    let cases = [
+        ("allowed", ToolFilesystemAccess::Allowed, false, true, false),
+        (
+            "unset-with-files",
+            ToolFilesystemAccess::Unset,
+            true,
+            true,
+            false,
+        ),
+        (
+            "fileless-unset",
+            ToolFilesystemAccess::Unset,
+            false,
+            false,
+            false,
+        ),
+        (
+            "required-fileless-unset",
+            ToolFilesystemAccess::Unset,
+            false,
+            true,
+            true,
+        ),
+        (
+            "denied-fileless",
+            ToolFilesystemAccess::Denied,
+            false,
+            true,
+            true,
+        ),
+        (
+            "denied-with-files",
+            ToolFilesystemAccess::Denied,
+            true,
+            true,
+            true,
+        ),
+    ];
+
+    for source in [Source::Local, Source::Remote] {
+        for owner in [Owner::Agent, Owner::ComponentBaseline] {
+            for (case, access, with_files, requires_filesystem, rejected) in cases {
+                let (agent_name, agent) = test_registered_agent_type("AgentA");
+                let consumer = test_tool_component("consumer", BTreeMap::new());
+                let binding = ToolBindingInput {
+                    filesystem_access: access,
+                    ..ToolBindingInput::default()
+                };
+                let (agent_bindings, component_bindings) = match owner {
+                    Owner::Agent => (
+                        BTreeMap::from([(agent_name.clone(), binding)]),
+                        BTreeMap::new(),
+                    ),
+                    Owner::ComponentBaseline => (
+                        BTreeMap::new(),
+                        BTreeMap::from([(consumer.component_name.clone(), binding)]),
+                    ),
+                };
+                let context = DeploymentContext {
+                    environment: test_environment(),
+                    components: BTreeMap::from([(consumer.component_name.clone(), consumer)]),
+                    http_api_deployments: BTreeMap::new(),
+                    mcp_deployments: BTreeMap::new(),
+                    registered_agent_types: HashMap::from([(agent_name, agent)]),
+                };
+                let mut errors = Vec::new();
+
+                match source {
+                    Source::Local => {
+                        let tool_name = ToolName::try_from("grep").unwrap();
+                        let mut definition = test_tool(tool_name.as_str());
+                        definition.requires_filesystem = requires_filesystem;
+                        let provider = test_tool_component(
+                            "provider",
+                            BTreeMap::from([(
+                                tool_name,
+                                ToolDeploymentMetadata {
+                                    definition,
+                                    provision: ToolProvisionConfig {
+                                        files: with_files.then(file).into_iter().collect(),
+                                        ..ToolProvisionConfig::default()
+                                    },
+                                    environment_binding: None,
+                                    component_bindings,
+                                    agent_bindings,
+                                },
+                            )]),
+                        );
+                        let mut context = context;
+                        context
+                            .components
+                            .insert(provider.component_name.clone(), provider);
+                        context.compile_tools(
+                            golem_common::model::deployment::DeploymentRevision::INITIAL,
+                            &mut errors,
+                            &mut Vec::new(),
+                        );
+                    }
+                    Source::Remote => {
+                        let mut remote = test_remote_tool("grep", None, agent_bindings);
+                        remote.0.component_bindings = component_bindings;
+                        remote.0.provision.files = with_files.then(file).into_iter().collect();
+                        let release = &mut remote.1.as_mut().unwrap().release;
+                        release.definition.requires_filesystem = requires_filesystem;
+                        release.metadata_digest =
+                            golem_common::model::tool_release::tool_metadata_digest(
+                                &release.metadata_version,
+                                &release.definition,
+                            )
+                            .unwrap();
+                        context.compile_tools_with_remote(
+                            golem_common::model::deployment::DeploymentRevision::INITIAL,
+                            &[remote],
+                            &mut errors,
+                            &mut Vec::new(),
+                        );
+                    }
+                }
+
+                let filesystem_errors = errors
+                    .iter()
+                    .filter(|error| {
+                        matches!(
+                            error,
+                            DeployValidationError::ToolFilesystemRequirement { .. }
+                        )
+                    })
+                    .count();
+                assert_eq!(
+                    filesystem_errors,
+                    usize::from(rejected),
+                    "source={source:?}, owner={owner:?}, case={case}, errors={errors:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_cli() {
     let component = test_tool_component("consumer", BTreeMap::new());
     let context = DeploymentContext {
@@ -1794,6 +2114,11 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                 &[],
                 &[],
                 Default::default(),
+                &BTreeMap::from([(
+                    ToolName::try_from("grep").unwrap(),
+                    environment_binding.clone(),
+                )]),
+                &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
             )
@@ -1826,6 +2151,12 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                         effective,
                     )]),
                     bindings: BTreeMap::new(),
+                    environment_middleware_binding: Some((&environment_binding).into()),
+                    component_middleware_bindings: BTreeMap::from([(
+                        component.component_name.0.clone(),
+                        (&component_binding).into(),
+                    )]),
+                    agent_middleware_bindings: BTreeMap::new(),
                 }
                 .into(),
             )]),
@@ -2710,7 +3041,11 @@ fn optional_secret_default_creation_stores_plaintext_inner_schema_not_option_sch
         creations[0].secret_value,
         Some(SchemaValue::String("s3cr3t".to_string()))
     );
-    match resolve_schema_ref(&creations[0].secret_type, &creations[0].secret_type.root) {
+    match creations[0]
+        .secret_type
+        .resolve_ref(&creations[0].secret_type.root)
+        .unwrap()
+    {
         SchemaType::String { .. } => {}
         other => {
             panic!("deployment-created agent secrets must be stored as plaintext T, not {other:?}")

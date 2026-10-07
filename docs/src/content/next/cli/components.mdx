@@ -4,14 +4,14 @@ import { Callout } from "nextra/components"
 
 Golem components are WASM components deployed to Golem for execution.
 
-To create, list, build and deploy components you can use `golem component` command.
+Components are created with `golem new`, built with `golem build` and deployed with `golem deploy`. To inspect deployed components and manage their agents you can use the `golem component` command.
 
 ## Creating a new component
 
 To create a new component in an existing application directory (previously created with `golem new`) use the `golem new` command with the `--component-name` option from within the application directory:
 
 ```shell copy
-golem new --template <template-name> --component-name <component-name>
+golem new --template <template-name> --component-name <component-name> .
 ```
 
 List available templates with `golem templates`, or filter them by language, for example `golem templates rust`.

@@ -86,7 +86,9 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
 something from the right column to survive a restart is wrong. Sockets and other OS resources are
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
-must tolerate reconnect. Durable liveness also needs *rediscovery*: a timed wait schedules its
+must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
+coordination gate so concurrent calls cannot reconnect one handle twice (see
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
 wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
@@ -147,11 +149,12 @@ effect runs — an idempotent `WriteRemote`, which opens no committed scope — 
 executor that has just lost the shard; its commit is then refused and the new owner runs it
 again, the same window as a crash before that commit. Non-idempotent, batched and transactional
 calls commit their scope `Start` first, so a refusal stops them before the effect. Oplogs that
-assert no epoch are never refused: ephemeral agents' oplogs (their archive layer appends without
-one), a handle opened before this executor has an assignment, fork stages and their publication,
-and compressed archive chunks. Nor do two writes a primary oplog makes outside its entries: the
-prefix it drops once the archive transfer has copied it (`drop_prefix` takes no epoch, and a
-latched fence does not stop the transfer), and blob uploads of large payloads.
+assert no epoch are never refused: a handle opened before this executor has an assignment, and
+fork stages and their publication. The archive transfer is fenced like the primary oplog (see
+"Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
+which writes only through the compressed archive levels. Two writes stay outside the fence: the
+blob archive layer, because blob storage has no conditional write, and blob uploads of large
+payloads.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
@@ -220,6 +223,31 @@ worker that is executing or holds non-durable in-memory work. Ephemeral agents a
 `reconstructed_ephemeral` rebuilds only for observation and result lookup, "but the instance must
 never be started again" (`worker/mod.rs`, `INACTIVE_EPHEMERAL_AGENT_ERROR`).
 
+The primary Store and every current entity Store are one resident lifecycle unit. Establishing a
+lifecycle event queues it behind earlier establishment, fences the matching owner's entity
+admission and runtime resources, signals the primary Store, drains the fenced entity bodies, then
+completes establishment. The outer loop takes any pending event and waits for that establishment
+before creating another Store. This check is unconditional: a loop that retained its
+concurrent-agent permit must not skip it. Restart and suspend therefore discard the complete unit,
+and reconstruction recreates entity Stores from the owner's oplog rather than carrying resident
+entity state across generations.
+
+Three identities at this boundary are deliberately different:
+
+- `AgentFingerprint` is the persistent `Create` identity and namespaces durable derived state.
+- The cached `Arc<Worker>` identifies the concrete owner shell in `ActiveAgents`; stale shell A
+  can remove or fence only itself, never replacement B cached under the same `AgentId`.
+- `ActiveAgent::entity_fence_generation` identifies a resident entity-admission epoch within that
+  shell. Reopening admission succeeds only for the generation that was fenced.
+
+An oplog shutdown handle is a fourth, narrower capability: it targets the captured open-oplog
+generation. It is not a worker identity or entity-fence generation, and ordinary worker retirement
+may reuse the same open oplog. Executor shutdown fences every registered oplog generation before
+cancelling executor-owned task execution, abandons transient entity work without semantic
+finalization, joins Store destruction and retained callbacks, then joins those captured oplog
+layers. These distinctions prevent an old owner from removing, reopening, or writing lifecycle
+state for its replacement without adding a second recovery path.
+
 Explicit interruption retires the cached owner and fences its replacement startup. Automatic
 shard-assignment recovery leaves `Interrupted` workers stopped, even with queued invocations or
 updates; an executor restart or shard move is not a request to resume them. If the worker
@@ -233,6 +261,14 @@ or failed invocation is not overwritten. Test:
 turns a simulated crash of a parked worker into a permanent interruption. If no invocation loop
 remains, the existing promise, scheduler or permit wakeup starts reconstruction; the queued
 restart does not fail the invocation waiter or append `Interrupted`.
+
+When a trap chooses `RetryDecision::Delayed`, the invocation loop snapshots the finite command
+prefix already queued before teardown. Duplicate `WorkAvailable` edges in that prefix collapse to
+one resident-work hint; commands arriving after the snapshot remain queued and can shorten the
+delay. `ResumeReplay` is retained separately and applied after successful unload even if a newer
+restart or jump changes the retry decision. This preserves replay requests and lifecycle-control
+semantics without treating every edge notification as independent work or claiming blanket FIFO
+ordering between coalesced hints and replay requests.
 
 Environment and application deletion invalidate component metadata, environment state and agent
 type caches before awaiting owner retirement. New metadata lookups then observe deletion instead
@@ -258,6 +294,24 @@ forwarding wrapper may be reused by the next worker, so ordinary retirement does
 task admission or forwarding. Deletion claims ownership under the same owner-cleanup lock, then
 drains the resident stream producer before running maintenance on a private producer. Failed
 maintenance is drained before a retry; only deletion closes the oplog generation permanently.
+Archive transfers append and verify the destination before dropping the source. Archive storage
+failures therefore fail only that maintenance attempt: they are logged, never fail the agent,
+the authoritative source remains intact, and threshold, scheduled or sweep maintenance retries
+with per-agent backoff. A scheduled retry remains valid when later commits advance the oplog tip.
+An archive read needed for replay still fails recovery rather than being treated as absent data.
+A write the shard-epoch fence refuses is not a storage failure: it ends the transfer as
+`OplogError::Fenced`, latches the oplog's fence and is never retried, because the oplog now
+belongs to the shard's new owner (see "Resharding, revocation and the oplog epoch fence").
+
+Producer-targeted attachment controls (consumer-side finalization, activation, refresh) reach the
+producer's executor through `Rpc::control_durable_stream_attachment`, which returns
+`DurableStreamRemoteError` like slot reads. A producer that is recovering, fenced, or being deleted
+answers `Unavailable`; the caller retries with backoff instead of failing. A producer that no longer
+exists answers not-found, and consumer-side finalization treats that as success because the
+producer's own deletion cascade already dropped the attachment. Consumer deletion bounds each
+producer finalization with a timeout so a producer that never becomes reachable fails the deletion
+attempt instead of hanging it; the attempt can be retried. Producer deletion never waits for
+consumer cooperation.
 
 Cold acquisition reserves one unresolved `Worker` in `ActiveAgents`. `initialize_with` owns one
 shared attempt independently of request cancellation. `finish_construction` prepares resolved data
@@ -326,7 +380,10 @@ lifecycle lock is taken for individual stream items, oplog reads, or replay step
 `Oplog::stop_and_wait` closes admission and joins work associated with the actual open oplog
 generation, including tasks belonging to older worker shells removed from the active cache.
 Transport roots are cancelled and their children joined without waiting for client IO. Invocation
-loops are joined, not cancelled: their final commits, state destruction, and panic cleanup must finish.
+loops on this ordinary oplog-stop path are joined, not cancelled: their final commits, state
+destruction, and panic cleanup must finish. Executor shutdown is different: it first fences the
+captured oplog generations, then cancels executor-owned invocation and entity tasks as described
+above, and joins their destruction before closing those generations.
 Already-spawned metadata loads and attachment queries finish independently, so a suspended Store
 cannot retain their locks; registration occurs once per spawned task, never on cached no-spawn
 queries. Attachment queries may spawn every time. Worker-state actors register once at construction
@@ -343,8 +400,9 @@ underlying classification. Infrastructure failures do not advance the agent's se
 they remain `Retrying` without a limit and retry on the next demand (invoke, resume, scheduler
 activation, or shard reassignment), rather than keeping an executor resident for a scheduled retry.
 Invalid components, exports, snapshot baselines, replay divergence, and other permanent failures are terminal.
-An authoritative manual-update snapshot that cannot be loaded is terminal even when the immediate
-cause is a payload download failure, because recovery has no compatible replay fallback. The
+An authoritative manual-update or promoted snapshot-assisted baseline that cannot be loaded is
+terminal even when the immediate cause is a payload download failure, because recovery has no
+compatible replay fallback. The
 ordinary invocation trap path commits `Error { kind: Invocation, .. }`. The status fold exposes the
 kind with the failed/retrying status, so metadata and invocation admission agree after unload or
 reassignment. A later startup appends `RecoverySucceeded` only when it fully completes
@@ -394,6 +452,27 @@ owner leaves by:
   retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
   released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
   one retirement that fails the waiters and drops it.
+- **Archive transfer.** Opening the layered oplog records the owner's epoch on every compressed
+  archive level's own key (`services/oplog/compressed.rs::CompressedOplogArchive::opened`) before
+  the archive watermark is read, so an older owner's transfer either landed before the record,
+  and the watermark covers it, or is refused after it. Each level asserts the epoch on its
+  appends, trims and delete-when-empty, and the primary oplog asserts it on the trim that follows
+  archiving (the `expected_epoch` of `IndexedStorage::drop_prefix`). A refused step ends the transfer
+  (`multilayer.rs::BackgroundTransfer::run`): an append the storage turned away is not verified,
+  so the new owner's history does not trip fail-stop validation, and a source whose entries were
+  not archived is not trimmed. The refusal latches on the archive handle, `Oplog::fence` reports
+  it for the whole layered oplog, and `archive` stops asking for more work. An open refused at the
+  primary oplog, or at an ephemeral oplog's first level, records nothing on the remaining levels:
+  the handle is finished and never writes them. An emptied level is
+  removed with `delete_empty_with_epoch`, which keeps its epoch record: the owner keeps writing
+  the level, and an older owner is still refused. A fully archived ephemeral oplog's emptied
+  levels keep their records too: removing one would leave nothing that remembers the newest
+  owner, and any older handle could claim the level again. Deleting the agent removes the
+  records with it, so a transfer still in flight on an older owner cannot write the deleted
+  agent's archive back. An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
+  it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
+  replaces a primary one. The blob archive layer has no conditional write and stays outside the
+  fence.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and
@@ -563,11 +642,12 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   retained map: claimed, adopted into a custom subtree, folded into the abandoned tolerance, or
   released at the live invocation end (`release_retained_starts_at_live_invocation_end`).
 - A recovery Jump abandons the attempt it deletes, including any `Start`s retained from it.
-  Every recovery-time Jump (incomplete batched-write and remote-transaction retries on the
-  direct and accessor paths, atomic-region rollbacks on the primary and entity Stores) goes
-  through `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
+  Incomplete batched-write and remote-transaction retries on the direct and accessor paths use
+  `commit_replay_jumps` (`durable_host/mod.rs`), which appends the Jump entries,
   registers the deleted regions with the cursor (`register_replay_jump`) and prunes the retained
   `Start`s inside them, so the re-executed attempt cannot claim the abandoned attempt's history.
+  Ordinary atomic recovery instead commits a full suffix Jump before Store construction and
+  reloads startup metadata; no replay claims exist when that cut is applied.
 - Positional reads through the shared cursor are attributed per Store (`get_oplog_entry(scope)`,
   `OplogEntry::entity_attribution()`): the primary agent consumes only entries with no entity
   parent, an entity body only entries recorded under its own invocation `Start`. A read that
@@ -750,7 +830,10 @@ agent never has an automatic record: `resolve_agent_properties` gives it
 `SnapshotPolicy::Disabled`, because a start from a snapshot record skips the initialization that
 the replay of an ephemeral agent needs, and that replay then fails. No automatic
 record is used while an update is pending. Without a selected record, the last manual-update
-snapshot is the baseline, else `OplogIndex::INITIAL`. `prepare_instance` (`durable_host/mod.rs`)
+snapshot is the baseline, else `OplogIndex::INITIAL`. The status also keeps
+`authoritative_snapshot`, the snapshot that a successful update established (a manual-update
+payload, or the periodic snapshot that a successful snapshot-assisted automatic update selected),
+and the start passes its index as the last snapshot of the replay. `prepare_instance` (`durable_host/mod.rs`)
 then branches on `PendingUpdate`:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
@@ -761,6 +844,14 @@ then branches on `PendingUpdate`:
   `RetryDecision::Immediate` so the worker rebuilds on the old revision. An install of the initial
   files of the new revision that fails at the end of the replay puts the update back as pending,
   so it takes the same path.
+- Public `Automatic` admission `P` records only the requested target and its exact attempt
+  identity. When that request reaches the queue head, `create_instance` appends a second correlated
+  `PendingUpdate` (`Worker::persist_automatic_update_strategy`) that freezes the strategy, so
+  reconstruction never recomputes the choice. `select_automatic_update_strategy` always gives a
+  plain `Automatic` strategy, which replays the whole history on the target. The status fold
+  refines the queue head with the second entry instead of adding an update. The oplog and the
+  durable host also know the `SnapshotAssistedAutomatic` strategy (a selected periodic snapshot
+  `S` loaded before the tail replays), but the executor never selects it.
 - No pending update — `try_load_snapshot`; an automatic snapshot load failure or divergent replay
   suffix rejects the exact index of that record (`Worker::reject_periodic`, which applies
   `SnapshotExclusions::rejecting`) and returns
@@ -904,12 +995,14 @@ revision-scoped and ignored once the revision changes.
 Resetting a cursor is not recreating an instance: component metadata, revision and plugin context
 come from instance creation. When history or provenance changes, go through the outer loop.
 
-A revert may cross a completed snapshot-based update only when its cut is before that update's
-`PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted together. The
-status fold then removes that migration's skipped-history contribution and derives the surviving
-component revision and snapshot baseline normally. A cut that keeps `PendingUpdate` but deletes
-its outcome is rejected. A pending update without an outcome may be either retained or removed
-entirely; when retained, its component and snapshot payload are included in preflight. Revert
+A revert may cross a completed manual snapshot-based update only when its cut is before that
+update's `PendingUpdate`, so both the pending record and its `SuccessfulUpdate` are deleted
+together. Assisted automatic updates follow automatic-update semantics instead: deleting a
+successful or failed outcome while retaining `P` leaves the same frozen request pending and
+retryable. A cut retaining assisted `U` retains promoted `S`; removing `U` removes only that
+promotion contribution. A pending update without an outcome may be either retained or removed
+entirely; when retained, its component and required snapshot payload are included in preflight.
+Revert
 validation reconstructs skip provenance: removing a migration
 baseline must not remove overlapping `Jump` or earlier `Revert` regions, and the resulting mask is
 also used to detect durable constructs spanning the cut. Before committing, the executor verifies
@@ -918,6 +1011,23 @@ are available. This is input preflight, not speculative replay; a later replay f
 undo the committed `Revert`. After the `Revert` entry commits, the revert deletes the filesystem
 snapshot names of the dropped region that no live record outside it uses
 (`reverted_snapshot_names`, `RevertHold::delete_snapshots`). A refused commit deletes nothing.
+
+Filesystem metadata has one deliberately deterministic exception to ordinary durable host-call
+recording. P2/P3 `stat` and `stat-at` of Golem's file at the exact path of a **read-only** component
+or pinned entity-activation initial file still execute the sandbox stat, but clear access and
+modification timestamps and return without an oplog `Start`/`End`. Type, size, and link count
+therefore come from the reconstructed filesystem, while the only volatile fields are removed. The
+agent can delete or rename a read-only initial file and put its own file at the path, so the check
+reads the object that the stat reads: it passes only when that object is a regular file without
+write bits whose content equals the declaration (the file that an install recorded passes without a
+read of its content, through the same `InstalledFile` identity and `initial_file_match` that the
+initial-file rule uses). The answer depends only on the tree and the declarations, so a replay
+chooses the same oplog shape. Mutable paths, aliases, a deleted initial file, and a file of the
+agent at the path retain the ordinary `ReadLocal` durable path. An unexpected failure of the check,
+or of the stat of an object classified as immutable, traps the invocation so a retry cannot choose
+a different oplog shape. The host-call observation counter is still incremented on the successful
+fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
+the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 ## Concurrency and guest completion delivery
 
@@ -941,6 +1051,39 @@ the existing non-span cancellation behavior stay with their original owners.
 
 Spawned tasks may park across invocation settlement at guest-driven waits or passive markerless replay-tail waits after durable finalization.
 Cursor operations and recorded-marker waits stay active; durable `Start`/`End` work must precede `AgentInvocationFinished` (`tail_work.rs`).
+
+A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
+use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
+per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
+handle goes through `ensure_websocket_connection_live` (direct) or
+`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
+re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
+still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
+publish `Live` in a single store window re-verified against the current entry. A queued peer
+therefore re-reads the entry instead of independently reconnecting: a `Live` entry published by
+the leader means it uses that entry and takes no permit, and a `Terminal` entry fails with the
+recorded error. The handle's calls borrow the resource, so the guest cannot drop the handle while
+one of its calls queues on the gate, and a fresh table after reconstruction discards the queued
+call — a call holding the gate can only ever see its own replay incarnation in the entry, so a
+different incarnation is the `InconsistentReplayGate` invariant violation, never a reconnect. A
+failed handshake publishes its terminal through the same re-verified window
+(`mark_websocket_reconnect_failure_terminal`): it only terminally closes the handle when the
+entry still carries the same replay incarnation the failed attempt gated on, so a replayed
+response that terminally closed the handle, or a concurrent call's live publication, owns the
+entry's outcome and is never superseded. Without the gate, two accessors can each snapshot
+`Replay`, each acquire a pool permit, and the leader's published `Live` connection then retains
+the only permit while the follower waits on the pool forever; the gate bounds reconnection to one
+in-flight attempt per handle without changing pool capacity or timeouts. An unpublished
+`LiveWebSocketConnection` is dropped, releasing the permit and socket it held. Gate and pool waits
+race against interruption, so a reconnecting peer never blocks suspension or explicit
+interruption. Tests:
+`tests/websocket.rs::websocket_reconnect_concurrent_receives_complete_after_reconstruction`,
+`websocket_reconnect_coordination_{admits_one_accessor_reconnect,after_executor_restart,with_spare_pool_permits,is_per_handle}`,
+`websocket_reconnect_coordination_is_interruptible_{while_pending_on_pool_permit,while_pending_on_handshake}`,
+`websocket_reconnect_{direct_send_is_interruptible_and_continues,direct_close_reconnects_and_terminalizes}`,
+`websocket_reconnect_failure_publishes_terminal_outcome`,
+`websocket_closed_connection_stays_terminal_after_replay`.
 
 ## Streaming invocations
 
@@ -978,7 +1121,10 @@ records.
 The primary remains `ExecutionStatus::Running` after the guest returns while owned output
 streams drain and invocation/session completion runs. `materialize_streaming_result`
 (`worker/invocation.rs`) publishes the early result and preserves typed traps during production
-and settlement. Suspension belongs to the outer live invocation or replay boundary, not the
+and settlement. Both live execution and replay retain invocation-owned context spans until
+materialization finishes, so output producers can read the current context and create child spans
+after the guest export returns. Resident span cleanup still runs if materialization fails.
+Suspension belongs to the outer live invocation or replay boundary, not the
 guest-result boundary; interruption must still reach a producer that no longer writes to its
 stream. Snapshot calls retain their own settled suspension boundary.
 
@@ -1078,8 +1224,33 @@ cursor (`OwnerExecution`, `worker/instance.rs`).
   resumed caller.
   Store or executor loss stops resident drains without recording EOF; reconstruction resumes
   from durable input offsets. Normal settlement finalizes the session and cancels unread inputs.
-- Incomplete entity recovery installs rollback for that entity's abandoned atomic regions before
-  body or descendant claims, without removing unrelated ownership entries.
+- Startup normalizes incomplete primary/entity atomic regions before constructing any Store.
+  The complete suffix is abandoned, including sibling work influenced by raw output and any
+  transaction commits within it. Crossing atomic regions move the cut backward; the surviving
+  Begin resumes without another destructive Jump. Entity admission does not modify history.
+- Rollback planning reads `AgentStatusRecord.atomic_rollback`, never scans the oplog. The fold
+  retains atomic Begin/End intervals, open batched/transaction scope Starts, and the last visible
+  work index. Only an invocation finish with no open atomic regions or recovery scopes retires
+  completed intervals; an End alone cannot retire history an accepted cut may still cross.
+  A cut into retired history errors instead of scanning. Snapshot selection masks a prefix
+  without mutating the summary. Jump/Revert and removed snapshot overrides use ordinary status
+  baseline validation; losing all usable baselines requires rebuilding status, not a separate
+  rollback scan. Summary size follows the unfinished recovery window, not total worker history.
+- Incomplete batched-write and remote-transaction recovery also requests a Worker-owned suffix
+  cut and returns a typed Jump instead of editing history inside the resident Store. Cut acceptance
+  is serialized with final invocation-success publication and survives cancellation of the
+  requester. Startup combines the earliest request with atomic normalization at a fixed committed
+  horizon; retained HTTP scope Starts resume, while an empty retained transaction scope records a
+  fresh Begin before running its replacement transaction.
+- Startup seals deferred append admission for the old runtime and waits for accepted HTTP frame
+  recordings and custom-call initiation coordinators. A transport-held old body cannot append
+  after sealing. Destructive cuts also fence and drain the durable-stream producer, then reload
+  it from repaired history. Tool failure election keeps driving Store tasks across secondary
+  task errors until cancellation selections and lane drainage finish.
+- The status actor retains the committed prefix preceding the current invocation in memory.
+  Detached repair tries it through ordinary baseline validation before the persisted checkpoint;
+  Jump/Revert invalidation or a missed receipt falls back without changing correctness. Retention
+  adds no storage write or foreground wait; existing snapshot checkpoints remain unchanged.
 
 Detailed mechanics, including scheduling and memory admission: `reference/tools.md`.
 

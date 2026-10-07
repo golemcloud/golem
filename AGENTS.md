@@ -164,8 +164,10 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `db-migration-scripts` | Writing PostgreSQL and SQLite migration scripts under a `db/migration/` root |
 | `logging` | Adding or reviewing `tracing` statements and following the structured logging conventions |
-| `modifying-builtin-plugins` | Changing built-in plugin source, committed WASM, descriptors, versions, or provisioning |
-| `creating-new-builtin-plugins` | Adding a new built-in WASM plugin embedded in and provisioned by the registry service |
+| `modifying-builtin-plugins` | Changing built-in plugin source, release artifacts, descriptors, versions, or provisioning |
+| `creating-new-builtin-plugins` | Adding a new externally released built-in WASM plugin provisioned by the registry service |
+| `developing-builtin-tools` | Creating or modifying externally released component-backed built-in tools |
+| `publishing-builtin-artifacts` | Publishing immutable built-in tool/plugin WASMs and updating their pinned URLs and checksums |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
@@ -187,6 +189,8 @@ Load these skills for guided workflows on complex tasks:
 ## Before Submitting a PR
 
 Validate the smallest dependency and behavior scope that fully covers the change. Use package-scoped, non-mutating format, lint, build, and test commands by default. Broaden checks when shared contracts, workspace configuration, generated artifacts, or multiple subsystems are affected.
+
+When changing SDK code generation, guest bridge generation, canonical ABI wrappers, runtime retention, or release profiles, run `cargo make component-size-report`. It builds representative fixtures and writes `tmp/component-size-report/report.md` plus machine-readable details. Compare reports only when the toolchain, lockfile, Cargo configuration, and environment are identical. This is a local analysis capability, not a CI size gate.
 
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 

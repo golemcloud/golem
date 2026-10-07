@@ -77,7 +77,7 @@ full = [
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
-golem-schema = { workspace = true }
+golem-schema = { workspace = true, features = ["rich-validation"] }
 golem-schema-derive = { workspace = true }
 proptest = { workspace = true, optional = true }
 
@@ -169,6 +169,10 @@ harness = false
 name = "component_introspection_metadata"
 harness = false
 
+[[test]]
+name = "poem_telemetry"
+harness = false
+
 [[bench]]
 name = "structural_format"
 harness = false
@@ -186,6 +190,7 @@ golem-schema = { workspace = true, features = ["proptest"] }
 goldenfile = { workspace = true }
 indoc = { workspace = true }
 jsonschema = { workspace = true }
+opentelemetry-prometheus-text-exporter = { workspace = true }
 pretty_assertions = { workspace = true, features = ["unstable"] }
 proptest = { workspace = true }
 test-r = { workspace = true }

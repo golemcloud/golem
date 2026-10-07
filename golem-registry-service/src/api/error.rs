@@ -235,7 +235,8 @@ fn deployment_validation_subcode(error: &DeployValidationError) -> &'static str 
             api::error_code::deployment_validation::TOOL_DEFINITION_NAME_MISMATCH
         }
         DeployValidationError::InvalidTool { .. }
-        | DeployValidationError::ToolMetadataSerialization { .. } => {
+        | DeployValidationError::ToolMetadataSerialization { .. }
+        | DeployValidationError::ToolFilesystemRequirement { .. } => {
             api::error_code::deployment_validation::INVALID_TOOL
         }
         DeployValidationError::DuplicateToolImplementation { .. } => {
@@ -1278,6 +1279,9 @@ impl From<SecuritySchemeError> for ApiError {
 
             SecuritySchemeError::InvalidRedirectUrl => {
                 Self::bad_request(api::error_code::INVALID_REDIRECT_URL, error)
+            }
+            SecuritySchemeError::InvalidLoginConfiguration(_) => {
+                Self::bad_request(api::error_code::INVALID_SECURITY_SCHEME_LOGIN, error)
             }
             SecuritySchemeError::InvalidCustomProviderIssuerUrl(_) => {
                 Self::bad_request(api::error_code::INVALID_CUSTOM_PROVIDER_ISSUER_URL, error)

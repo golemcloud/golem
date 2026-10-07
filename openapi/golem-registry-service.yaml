@@ -13372,6 +13372,21 @@ components:
           format: uint64
         name:
           type: string
+    AuthorizationCodePkceConfig:
+      type: object
+      title: AuthorizationCodePkceConfig
+      required:
+      - redirectUris
+      - origins
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
     AutoInjectedKind:
       type: string
       enum:
@@ -13717,6 +13732,11 @@ components:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
         stdout:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
+        stderr:
           nullable: true
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
@@ -15652,35 +15672,74 @@ components:
           type: string
         body:
           type: string
+    ExternalBinaryValuePayload:
+      type: object
+      required:
+      - bytes
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+    ExternalDurationValuePayload:
+      type: object
+      required:
+      - nanoseconds
+      properties:
+        nanoseconds:
+          type: string
+    ExternalQuantityValue:
+      type: object
+      required:
+      - mantissa
+      - scale
+      - unit
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
     ExternalResultValuePayload:
       type: object
       oneOf:
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -15741,8 +15800,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
       - type: object
         required:
         - kind
@@ -15789,8 +15847,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
       - type: object
         required:
         - kind
@@ -15801,8 +15858,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -15813,8 +15880,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -15837,6 +15914,18 @@ components:
             - string
           value:
             type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
       - type: object
         required:
         - kind
@@ -15988,12 +16077,16 @@ components:
             - option
           value:
             type: object
+            required:
+            - inner
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
-                - nullable: true
+                - type: object
+                  enum:
+                  - null
+                  nullable: true
       - type: object
         required:
         - kind
@@ -16015,7 +16108,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
       - type: object
         required:
         - kind
@@ -16026,7 +16119,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
       - type: object
         required:
         - kind
@@ -16086,7 +16179,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
       - type: object
         required:
         - kind
@@ -16097,7 +16190,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
       - type: object
         required:
         - kind
@@ -16109,6 +16202,15 @@ components:
             - union
           value:
             $ref: '#/components/schemas/ExternalUnionValuePayload'
+    ExternalTextValuePayload:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        language:
+          type: string
     ExternalUnionValuePayload:
       type: object
       required:
@@ -16128,10 +16230,7 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
     FieldDiscriminator:
       type: object
       required:
@@ -17945,6 +18044,7 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
+      - blobStorageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
@@ -17982,6 +18082,9 @@ components:
           type: integer
           format: uint64
         storageLimit:
+          type: integer
+          format: uint64
+        blobStorageLimit:
           type: integer
           format: uint64
         monthlyGasLimit:
@@ -19493,6 +19596,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -20040,6 +20157,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -20195,6 +20324,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
       properties:
         name:
           type: string
@@ -20210,6 +20340,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
     SecuritySchemeDto:
       type: object
       title: SecuritySchemeDto
@@ -20222,6 +20354,7 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
       properties:
         id:
           type: string
@@ -20244,6 +20377,42 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
+    SecuritySchemeLogin:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AuthorizationCodePkce
+            example: AuthorizationCodePkce
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Cookie
+            example: Cookie
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       type: object
       title: SecuritySchemeUpdate
@@ -20265,6 +20434,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
     SetMemoryLimit:
       type: object
       title: SetMemoryLimit
@@ -20635,10 +20806,13 @@ components:
       type: object
       required:
       - version
+      - requires_filesystem
       - commands
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:

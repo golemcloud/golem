@@ -1,13 +1,14 @@
 use bytes::Bytes;
-use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
-use golem_rust::bindings::golem::api::context::start_span;
+use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::bindings::wasi::config::store as wasi_config;
 use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
 use golem_rust::{
-    FromSchema, IntoSchema, PromiseId, SchemaValue, Uuid, agent_definition, agent_implementation,
-    encode_schema_value, mark_atomic_operation, oplog_commit,
+    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, Uuid,
+    WireSchema, agent_definition, agent_implementation, encode_schema_value, mark_atomic_operation,
+    oplog_commit,
 };
 use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,13 +24,13 @@ fn encode_single_parameter<T: IntoSchema>(
     .expect("failed to encode RPC parameter")
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum State {
     Initial,
     Ongoing,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct Payload {
     pub field1: String,
     pub field2: Uuid,
@@ -248,7 +249,7 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
     }
 }
 
-fn agent_stream<T: IntoSchema + FromSchema + 'static>(values: Vec<T>) -> AgentStream<T> {
+fn agent_stream<T: IntoWire + FromWire + 'static>(values: Vec<T>) -> AgentStream<T> {
     let (mut writer, stream) = AgentStream::new();
     spawn_local(async move {
         let _ = writer.write_all(values).await;
@@ -274,19 +275,19 @@ fn agent_error_stream() -> AgentStream<u32> {
     AgentStream::from_raw(output)
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamInput {
     pub labels: AgentStream<String>,
     pub values: Option<AgentStream<u32>>,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct NestedStreamItem {
     pub label: String,
     pub values: AgentStream<u32>,
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingRpcReport {
     pub input_only: Vec<u32>,
     pub output_only: Vec<u32>,
@@ -300,6 +301,36 @@ pub struct StreamingRpcReport {
     pub after_consumer_drop: u64,
 }
 
+#[derive(ConfigSchema)]
+pub struct ConfiguredRpcTargetConfig {
+    pub label: String,
+    pub count: u32,
+}
+
+#[agent_definition]
+pub trait ConfiguredRpcTarget {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self;
+
+    fn describe(&self) -> (String, String, u32);
+}
+
+struct ConfiguredRpcTargetImpl {
+    name: String,
+    config: Config<ConfiguredRpcTargetConfig>,
+}
+
+#[agent_implementation]
+impl ConfiguredRpcTarget for ConfiguredRpcTargetImpl {
+    fn new(name: String, #[agent_config] config: Config<ConfiguredRpcTargetConfig>) -> Self {
+        Self { name, config }
+    }
+
+    fn describe(&self) -> (String, String, u32) {
+        let config = self.config.get().expect("config access should be allowed");
+        (self.name.clone(), config.label.clone(), config.count)
+    }
+}
+
 #[agent_definition]
 pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
@@ -310,6 +341,7 @@ pub trait StreamingRpcTarget {
     async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)>;
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
     fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
@@ -401,6 +433,28 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
 
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32> {
         agent_stream(values)
+    }
+
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)> {
+        let snapshot = || {
+            let context = current_context();
+            let Some(AttributeValue::String(name)) = context.get_attribute("name", false) else {
+                panic!("current span has no name");
+            };
+            (context.trace_id(), context.span_id(), name)
+        };
+        let before_return = snapshot();
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(before_return).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_one(snapshot()).await.unwrap();
+            let span = start_span("stream-child");
+            writer.write_one(snapshot()).await.unwrap();
+            span.finish();
+            writer.write_one(snapshot()).await.unwrap();
+        });
+        output
     }
 
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes> {
@@ -796,10 +850,11 @@ pub trait StreamingRpcCaller {
     );
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingRpcBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
@@ -814,6 +869,15 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
+        StreamingRpcTargetClient::get(self.name.clone())
+            .produce_context_stream(gate)
+            .await
+            .collect()
+            .await
+            .expect("failed to collect invocation context stream")
     }
 
     async fn benchmark_producer(
@@ -1137,7 +1201,7 @@ impl RpcCounter for RpcCounterImpl {
     }
 }
 
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum TimelineNode {
     Leaf,
 }
@@ -1364,7 +1428,7 @@ impl RpcBlockingCounter for RpcBlockingCounterImpl {
 
 /// Mirror of the WIT `rpc-error` variant so it can be returned from an agent
 /// method and pattern-matched in integration tests.
-#[derive(Debug, Clone, IntoSchema, FromSchema)]
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub enum RpcCallOutcome {
     Ok,
     Denied { details: String },

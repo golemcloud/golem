@@ -41,6 +41,18 @@ jobs:
           sed -i "s/^version = \".*\"$/version = \"$VERSION\"/" moon.mod
           test "$(grep -Fxc "version = \"$VERSION\"" moon.mod)" -eq 1
 
+      - name: Update MoonBit workspace dependencies
+        run: moon update
+        working-directory: sdks/moonbit
+
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate and verify MoonBit WIT bindings
+        run: ./scripts/check-generated-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
@@ -48,10 +60,6 @@ jobs:
       - name: Test SDK
         run: ./scripts/run-sdk-tests.sh
         working-directory: sdks/moonbit/golem_sdk
-
-      - name: Install tools dependencies
-        run: moon update
-        working-directory: sdks/moonbit/golem_sdk_tools
 
       - name: Check tools
         run: moon check cmd lib
@@ -68,10 +76,16 @@ jobs:
           mkdir -p ~/.moon
           echo "{\"username\":\"golemcloud\",\"token\":\"$MOONCAKES_TOKEN\"}" > ~/.moon/credentials.json
 
+      # Publish each module on its own: `moon publish` checks the whole moon.work workspace,
+      # which includes example modules that only compile with generated code.
       - name: Publish golem_sdk
         working-directory: sdks/moonbit/golem_sdk
+        env:
+          MOON_WORK: "off"
         run: moon publish
 
       - name: Publish golem_sdk_tools
         working-directory: sdks/moonbit/golem_sdk_tools
+        env:
+          MOON_WORK: "off"
         run: moon publish

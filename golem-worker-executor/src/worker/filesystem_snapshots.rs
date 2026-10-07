@@ -542,7 +542,9 @@ pub(crate) async fn periodic_snapshot<Host: PeriodicSnapshotHost>(
                     error = %error,
                     "The periodic snapshot record was not written: the shard of the agent moved"
                 ),
-                PeriodicFailure::Write(error @ OplogError::Payload(_)) => {
+                PeriodicFailure::Write(
+                    error @ (OplogError::Payload(_) | OplogError::Maintenance(_)),
+                ) => {
                     tracing::warn!(error = %error, "Failed to append the periodic snapshot record")
                 }
             }
@@ -1420,6 +1422,8 @@ mod tests {
                 target_revision: ComponentRevision::new(revision).unwrap(),
                 oplog_index: OplogIndex::from_u64(index),
                 filesystem_snapshot: None,
+                pending_update: None,
+                snapshot_assisted_details: None,
             };
         // The update to revision 3 applies the pending record at index 7 on an executor whose
         // clock is behind: its timestamp is earlier than the pending record, and its index is
@@ -1598,6 +1602,102 @@ mod tests {
                 BaselineFailure::Reconstruction,
             ]
         );
+    }
+
+    /// Characterizes the decision of today for every baseline kind, every error of the agent
+    /// filesystem and both shard states. The table is the expected answer, cell by cell.
+    #[test]
+    async fn a_failed_baseline_decision_for_every_kind_error_and_shard_state() {
+        use crate::services::agent_filesystem::{
+            AccessError, Error, FilesystemStorageError, InitialFileConflict, RestoreError,
+        };
+        let storage = || FilesystemStorageError::verification("seed initial file", Path::new("a"));
+        let restore = |retryable| {
+            Error::Baseline(Box::new(RestoreError {
+                retryable,
+                source: anyhow::anyhow!("restore failed"),
+            }))
+        };
+        let conflict = InitialFileConflict::occupied(Path::new("e/f"));
+        let errors = |label: &str| match label {
+            "access" => Error::Access(AccessError::Revoked),
+            "sandbox" => Error::Sandbox(storage()),
+            "conflict" => Error::InitialFileConflict(Box::new(conflict.clone())),
+            "quota" => Error::AgentQuota(storage()),
+            "capacity" => Error::PhysicalCapacity(storage()),
+            "restore-retryable" => restore(true),
+            "restore-fixed" => restore(false),
+            "invalidated" => Error::RuntimeInvalidated,
+            other => panic!("unknown error {other}"),
+        };
+        let kinds = |label: &str| match label {
+            "initial" => BaselineKind::InitialFiles,
+            "periodic" => BaselineKind::Periodic {
+                index: OplogIndex::from_u64(10),
+                name: Some(FilesystemSnapshotName::periodic()),
+            },
+            "manual-pending" => manual_kind(Some(&FilesystemSnapshotName::update()), true),
+            "manual-promoted" => manual_kind(Some(&FilesystemSnapshotName::update()), false),
+            other => panic!("unknown kind {other}"),
+        };
+        let skip = || BaselineFailure::SkipPeriodic(OplogIndex::from_u64(10));
+        let record = || BaselineFailure::RecordFailedUpdate {
+            target: ComponentRevision::new(3).unwrap(),
+            message: conflict.to_string().into_boxed_str(),
+        };
+        let visibly = || BaselineFailure::FailVisibly(restore(false).to_string().into_boxed_str());
+        let rebuild = || BaselineFailure::Reconstruction;
+        // (kind, error, without a lost shard, with a lost shard)
+        let table = [
+            ("initial", "access", rebuild(), rebuild()),
+            ("initial", "sandbox", rebuild(), rebuild()),
+            ("initial", "conflict", rebuild(), rebuild()),
+            ("initial", "quota", rebuild(), rebuild()),
+            ("initial", "capacity", rebuild(), rebuild()),
+            ("initial", "restore-retryable", rebuild(), rebuild()),
+            ("initial", "restore-fixed", rebuild(), rebuild()),
+            ("initial", "invalidated", rebuild(), rebuild()),
+            ("periodic", "access", rebuild(), rebuild()),
+            ("periodic", "sandbox", rebuild(), rebuild()),
+            ("periodic", "conflict", rebuild(), rebuild()),
+            ("periodic", "quota", rebuild(), rebuild()),
+            ("periodic", "capacity", rebuild(), rebuild()),
+            ("periodic", "restore-retryable", skip(), skip()),
+            ("periodic", "restore-fixed", skip(), skip()),
+            ("periodic", "invalidated", rebuild(), rebuild()),
+            ("manual-pending", "access", rebuild(), rebuild()),
+            ("manual-pending", "sandbox", rebuild(), rebuild()),
+            (
+                "manual-pending",
+                "conflict",
+                record(),
+                BaselineFailure::ShardLost,
+            ),
+            ("manual-pending", "quota", rebuild(), rebuild()),
+            ("manual-pending", "capacity", rebuild(), rebuild()),
+            ("manual-pending", "restore-retryable", rebuild(), rebuild()),
+            ("manual-pending", "restore-fixed", visibly(), visibly()),
+            ("manual-pending", "invalidated", rebuild(), rebuild()),
+            ("manual-promoted", "access", rebuild(), rebuild()),
+            ("manual-promoted", "sandbox", rebuild(), rebuild()),
+            ("manual-promoted", "conflict", rebuild(), rebuild()),
+            ("manual-promoted", "quota", rebuild(), rebuild()),
+            ("manual-promoted", "capacity", rebuild(), rebuild()),
+            ("manual-promoted", "restore-retryable", rebuild(), rebuild()),
+            ("manual-promoted", "restore-fixed", visibly(), visibly()),
+            ("manual-promoted", "invalidated", rebuild(), rebuild()),
+        ];
+
+        for (kind, error, without_lost_shard, with_lost_shard) in table {
+            assert_eq!(
+                (
+                    classify_baseline_failure(&kinds(kind), &errors(error), false),
+                    classify_baseline_failure(&kinds(kind), &errors(error), true),
+                ),
+                (without_lost_shard, with_lost_shard),
+                "{kind} with {error}"
+            );
+        }
     }
 
     #[test]
@@ -2644,12 +2744,15 @@ mod tests {
 
     /// A snapshot-based update record with the filesystem snapshot `name`.
     fn update_record(name: &FilesystemSnapshotName) -> OplogEntry {
-        OplogEntry::pending_update(UpdateDescription::SnapshotBased {
-            target_revision: ComponentRevision::INITIAL,
-            payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
-            mime_type: "application/octet-stream".to_string(),
-            filesystem_snapshot: Some(name.clone()),
-        })
+        OplogEntry::pending_update(
+            UpdateDescription::SnapshotBased {
+                target_revision: ComponentRevision::INITIAL,
+                payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(vec![])),
+                mime_type: "application/octet-stream".to_string(),
+                filesystem_snapshot: Some(name.clone()),
+            },
+            None,
+        )
     }
 
     fn region(start: u64, end: u64) -> golem_common::model::regions::OplogRegion {

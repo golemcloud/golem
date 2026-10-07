@@ -879,6 +879,170 @@ async fn initial_file_materialization_without_storage_metering_needs_no_billing_
     drop(loader);
 }
 
+/// Gives the answer of the check of the stat fast path for a stat of the root-relative `path`
+/// that does not follow a final symlink: `None` when no read-only declaration has the path.
+async fn stat_reads_golems_file<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    path: &str,
+) -> Option<bool> {
+    let target = PathTarget::at_root(generation_handle, path).unwrap();
+    match is_immutable_initial_file(
+        generation_handle,
+        Path::new(path),
+        Target::Path(&target, Follow::No),
+    )
+    .unwrap()
+    {
+        Some(check) => Some(check.await.unwrap()),
+        None => None,
+    }
+}
+
+/// A read-only initial file has the semantics of 1.5.x: the agent can delete it and write its
+/// own file at its path. The check of the stat fast path gives `true` for the file that the
+/// install put at the path, `false` for the path after the delete, and `false` for the file of
+/// the agent, so a stat of that file takes the durable path and reports its timestamps.
+#[test]
+#[timeout("5s")]
+async fn a_file_that_the_agent_writes_at_the_path_of_a_deleted_read_only_initial_file_is_not_golems_file()
+ {
+    let id = agent_id();
+    let service = Arc::new(InitialAgentFilesService::new(Arc::new(
+        InMemoryBlobStorage::new(),
+    )));
+    let content = b"initial file".to_vec();
+    let content_hash = service
+        .put_if_not_exists(
+            id.environment_id,
+            content
+                .clone()
+                .map_error(widen_infallible::<anyhow::Error>)
+                .map_item(|item| item.map_err(widen_infallible::<anyhow::Error>)),
+        )
+        .await
+        .unwrap();
+    let loader = Arc::new(FileLoader::new(service, initial_files_directory().await));
+    let files = [InitialAgentFile {
+        content_hash,
+        path: AgentFilePath::from_abs_str("/read-only").unwrap(),
+        permissions: AgentFilePermissions::ReadOnly,
+        size: content.len() as u64,
+    }];
+    let prepared = prepare_initial_files(Arc::clone(&loader), id.environment_id, &files)
+        .await
+        .unwrap();
+    let (filesystem, control, entry) =
+        bound_reconstructing_with_recovery(ResolvedStorageLimits::Unlimited, None).await;
+    let installed = SandboxAttributes {
+        size: content.len() as u64,
+        read_only: true,
+        object: SandboxObjectId::scripted(1),
+        ..sandbox_attributes(SandboxObjectKind::File)
+    };
+    control.push_seed(Ok(()));
+    control.push_get_attributes(Ok(installed.clone()));
+    let filesystem = materialize_baseline(filesystem, prepared, None::<std::convert::Infallible>)
+        .await
+        .unwrap();
+    let filesystem = finish_replay(filesystem).await.unwrap();
+    control.push_observe_allocation(Err(unsupported_allocation()));
+    let filesystem = finish_reconstruction(filesystem).await.unwrap();
+    let window = open_resource_usage_window(&filesystem, permit(&entry).await)
+        .await
+        .unwrap();
+    let generation_handle = resident_generation_handle(&filesystem);
+    let at_path = || PathTarget::at_root(&generation_handle, "read-only").unwrap();
+
+    control.push_get_attributes(Ok(installed.clone()));
+    let before_delete = stat_reads_golems_file(&generation_handle, "read-only").await;
+
+    control.push_get_attributes(Ok(installed));
+    control.push_unlink_file(Ok(()));
+    edit_namespace(
+        &generation_handle,
+        NamespaceEdit::Remove {
+            target: at_path(),
+            expected: ObjectKind::File,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    control.push_get_attributes(Err(missing("stat of the deleted initial file")));
+    let after_delete = stat_reads_golems_file(&generation_handle, "read-only").await;
+
+    control.push_open(Ok(SandboxOpened::scripted_file(2)));
+    let opened = open(
+        &generation_handle,
+        at_path(),
+        OpenOptions::File {
+            access: AccessMode::ReadWrite,
+            disposition: FileDisposition::CreateExclusive,
+            follow: Follow::No,
+        },
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let OpenNode::File(file) = &opened.node else {
+        panic!("scripted open returned a directory")
+    };
+    control.push_write(Ok(SandboxWriteAttempt::completed(5)));
+    write(
+        &generation_handle,
+        file,
+        WritePlacement::At(0),
+        Bytes::from_static(b"agent"),
+    )
+    .unwrap()
+    .await
+    .unwrap();
+    let written_at = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    let agents_file = SandboxAttributes {
+        size: 5,
+        accessed: Some(written_at),
+        modified: Some(written_at),
+        read_only: false,
+        object: SandboxObjectId::scripted(2),
+        ..sandbox_attributes(SandboxObjectKind::File)
+    };
+    control.push_get_attributes(Ok(agents_file.clone()));
+    let agents_file_check = stat_reads_golems_file(&generation_handle, "read-only").await;
+    control.push_get_attributes(Ok(agents_file));
+    let stat = attributes(&generation_handle, Target::Path(&at_path(), Follow::No))
+        .unwrap()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            before_delete,
+            after_delete,
+            agents_file_check,
+            stat.accessed,
+            stat.modified
+        ),
+        (
+            Some(true),
+            Some(false),
+            Some(false),
+            Some(written_at),
+            Some(written_at)
+        )
+    );
+    // The check of the file of the agent decides from its attributes and reads nothing more.
+    assert_eq!(call_count(&control, "get_path_attributes("), 6);
+
+    control.push_close(Ok(()));
+    close(opened.node).await.unwrap();
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+    drop(loader);
+}
+
 #[test]
 async fn initial_files_are_seeded_as_one_file_entry_each_that_creates_a_new_path() {
     let id = agent_id();
@@ -5964,6 +6128,14 @@ async fn unmanaged_reconstruction_materializes_initial_files_with_declared_permi
             .unwrap()
             .permissions()
             .readonly()
+    );
+    assert_eq!(
+        (
+            stat_reads_golems_file(&generation_handle, "replacement-read-only").await,
+            stat_reads_golems_file(&generation_handle, "read-write").await,
+            stat_reads_golems_file(&generation_handle, "entity-provisioned").await,
+        ),
+        (Some(true), None, Some(true))
     );
     close_window(window, Instant::now() + Duration::from_secs(1))
         .await

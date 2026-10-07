@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::bridge_gen::BridgeMode;
 use crate::log::LogColorize;
 use crate::model::cascade::property::map::MapMergeMode;
 use crate::model::cascade::property::vec::VecMergeMode;
@@ -38,6 +37,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+#[cfg(test)]
 use strum::IntoEnumIterator;
 use url::Url;
 
@@ -865,6 +865,12 @@ impl ComponentDependencies {
 pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "LenientTokenList::is_empty")]
     pub templates: LenientTokenList,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::model::language::manifest_guest_language"
+    )]
+    pub guest_language: Option<GuestLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_wasm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -908,6 +914,7 @@ pub struct ComponentTemplate {
 impl ComponentTemplate {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: self.guest_language,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -982,6 +989,7 @@ pub struct Component {
 impl Component {
     pub fn component_layer_properties(&self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm.clone(),
             output_wasm: self.output_wasm.clone(),
             dependencies: self.dependencies.clone(),
@@ -1052,6 +1060,7 @@ pub struct ComponentPreset {
 impl ComponentPreset {
     pub fn into_component_layer_properties(self) -> ComponentLayerProperties {
         ComponentLayerProperties {
+            guest_language: None,
             component_wasm: self.component_wasm,
             output_wasm: self.output_wasm,
             dependencies: self.dependencies,
@@ -1669,6 +1678,8 @@ pub struct ManifestInitialCardBound {
 // strict unknown-field checks on manifest-facing structs that use deny_unknown_fields.
 #[derive(Clone, Debug)]
 pub struct ComponentLayerProperties {
+    // Only component templates declare a guest language.
+    pub guest_language: Option<GuestLanguage>,
     pub component_wasm: Option<String>,
     pub output_wasm: Option<String>,
     pub dependencies: ComponentDependencies,
@@ -1825,84 +1836,11 @@ pub struct BridgeSdks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rust: Option<BridgeSdkLanguageTargets>,
+    pub rust: Option<RustBridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scala: Option<BridgeSdkLanguageTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moonbit: Option<BridgeSdkLanguageTargets>,
-}
-
-impl BridgeSdks {
-    pub fn for_language(&self, language: GuestLanguage) -> Option<&BridgeSdkLanguageTargets> {
-        match language {
-            GuestLanguage::Rust => self.rust.as_ref(),
-            GuestLanguage::TypeScript => self.ts.as_ref(),
-            GuestLanguage::Effect => self.effect.as_ref(),
-            GuestLanguage::Scala => self.scala.as_ref(),
-            GuestLanguage::MoonBit => self.moonbit.as_ref(),
-        }
-    }
-
-    pub fn for_all_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, Option<&BridgeSdkLanguageTargets>)> {
-        GuestLanguage::iter().map(|lang| (lang, self.for_language(lang)))
-    }
-
-    pub fn for_all_used_languages(
-        &self,
-    ) -> impl Iterator<Item = (GuestLanguage, &BridgeSdkLanguageTargets)> {
-        self.for_all_languages().filter_map(|(lang, targets)| {
-            targets.and_then(|targets| {
-                (targets
-                    .external
-                    .as_ref()
-                    .is_some_and(|external| !external.agents.is_empty())
-                    || targets
-                        .internal
-                        .as_ref()
-                        .is_some_and(|guest| !guest.agents.is_empty() || !guest.tools.is_empty()))
-                .then_some((lang, targets))
-            })
-        })
-    }
-
-    pub fn for_all_used_modes(
-        &self,
-    ) -> Vec<(GuestLanguage, BridgeMode, BridgeSdkInternalTargetsRef<'_>)> {
-        let mut result = Vec::new();
-        for (language, targets) in self.for_all_languages() {
-            if let Some(targets) = targets {
-                if let Some(external) = &targets.external
-                    && !external.agents.is_empty()
-                {
-                    result.push((
-                        language,
-                        BridgeMode::External,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &external.agents,
-                            tools: None,
-                            output_dir: external.output_dir.as_ref(),
-                        },
-                    ));
-                }
-                if let Some(guest) = &targets.internal
-                    && (!guest.agents.is_empty() || !guest.tools.is_empty())
-                {
-                    result.push((
-                        language,
-                        BridgeMode::Guest,
-                        BridgeSdkInternalTargetsRef {
-                            agents: &guest.agents,
-                            tools: Some(&guest.tools),
-                            output_dir: guest.output_dir.as_ref(),
-                        },
-                    ));
-                }
-            }
-        }
-        result
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1912,6 +1850,15 @@ pub struct BridgeSdkLanguageTargets {
     pub external: Option<BridgeSdkExternalTargets>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internal: Option<BridgeSdkInternalTargets>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkLanguageTargets {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<RustBridgeSdkExternalTargets>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal: Option<RustBridgeSdkInternalTargets>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1934,11 +1881,60 @@ pub struct BridgeSdkInternalTargets {
     pub output_dir: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BridgeSdkInternalTargetsRef<'a> {
-    pub agents: &'a LenientTokenList,
-    pub tools: Option<&'a LenientTokenList>,
-    pub output_dir: Option<&'a String>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkExternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkExternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeSdkInternalTargets {
+    #[serde(flatten)]
+    pub common: BridgeSdkInternalTargets,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_derives: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub additional_dependencies: BTreeMap<String, RustBridgeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RustBridgeDependency {
+    Version(String),
+    Detailed(RustBridgeDependencyDetails),
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RustBridgeDependencyDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_features: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

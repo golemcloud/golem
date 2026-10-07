@@ -87,7 +87,9 @@ Public REST, CLI and native invocation sessions address either an exact, already
 owner or a component target for which the executor creates an ephemeral virtual owner. They never
 silently create a named real owner. The typed input and success/custom-error result carry
 materialized scalar schemas and values only: streams cannot be nested recursively in those values.
-The only streaming tool attachments are optional byte `stdin` and byte `stdout` roots.
+The only streaming tool attachments are optional byte `stdin`, byte `stdout`, and byte `stderr`
+roots. Stdout and stderr have independent stream identities, cursors, terminals, cancellation, and
+reconstruction; stderr bytes do not imply that the structured result failed.
 
 MCP exports use the same native session path, always with a fresh component-backed ephemeral
 owner. The authenticated compiled MCP definition supplies an expected deployment revision;
@@ -95,8 +97,8 @@ owner. The authenticated compiled MCP definition supplies an expected deployment
 The check also applies to an already accepted activation and scalar scheduling. A stale listing
 cannot select historical activation state or reinterpret its input against a newer deployment.
 MCP authenticates before dispatch and grants only Invoke on the exact fresh owner, not System
-authority. Its finite stream adapter buffers at most 16 MiB per direction while draining stdout
-concurrently with stdin.
+authority. Its finite stream adapter buffers at most 16 MiB independently for stdin, stdout, and
+stderr while draining both outputs concurrently with stdin.
 
 `worker/invocation.rs` drives `invoke_external_tool` through a registered `NativeToolTask` under
 the same invocation start, deadline, principal/scope, tail settlement and committed completion as
@@ -105,12 +107,12 @@ idle-store deadlock. Native dispatch uses the same entity boundary without an ou
 `Start`; its root result is delivered directly, with no guest completion marker. Replay runs the
 dispatcher again using the activation pinned when the invocation was accepted and reconstructs
 completed bodies before checking the invocation result. Internal input/result envelopes carry
-stdin/stdout as ordinary schema-value streams. The Prepared Output mapping starts generic pumping
-before the result exists; `materialize_result` later binds the same handle, without re-registering
-or starting a second pump. The shared byte drain compares historical bytes and terminals rather
-than republishing them. Execution and draining run together with `try_join!`; only after both
-complete is the structured outcome recorded inside the result envelope in the session journal.
-Replaying changed bytes, terminals or structured results is rejected.
+stdin/stdout/stderr as ordinary schema-value streams. Each Prepared Output mapping starts generic
+pumping before the result exists; `materialize_result` later binds the same handles, without
+re-registering or starting second pumps. The shared byte drains compare each channel's historical
+bytes and terminal rather than republishing them. Execution and both drains run concurrently; only
+after all complete is the structured outcome recorded inside the result envelope in the session
+journal. Replaying changed bytes, terminals, channel identities, or structured results is rejected.
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 
@@ -196,6 +198,15 @@ a handler is not operation cancellation (`tool/operation/mod.rs`). The entity `E
 completion, not full descendant settlement. A forward-only parent may record its `End` first to
 release nested filesystem work; its resources and admitted children remain retained.
 
+The selected failure's cleanup runs in an owner-retained task, not a Store-spawned task.
+Destroying a healthy ancestor Store may drop its result observer but cannot drop the global
+settlement wait or primary wakeup. Replay-generation reset and owner retirement join the retained
+result. Ordinary cleanup errors still wait for the other operations before waking the primary;
+they prevent generation reuse without replacing the selected trap. A cleanup panic retains a
+failed join but does not authorize primary completion. Wakeups use the original execution's
+channel, and host waits subscribe before checking the settled-failure latch so a late subscriber
+cannot miss completion. None of this invents entity terminals or changes oplog recovery.
+
 ### Native bodies
 
 Native tools use the same owner-oplog entity boundary with a retained worker context instead of
@@ -241,7 +252,12 @@ Replay chooses one of three `InvocationExecutionMode`s (`golem-common/src/model/
   guest call at all (`tests/tool_streaming.rs::incomplete_tool_replay_persists_attachment_upgrade_rejection`).
 - `ReplayingIncomplete` — a `Start` without terminal switches the body to live and completes it
   under the *original* `Start` index; `enter_incomplete_live_repair_before_body_access` avoids
-  deadlocking the primary's own transition.
+  deadlocking the primary's own transition. For a filesystem-incapable asynchronous invocation,
+  startup with recorded scope descendants does not return its execution handle until the
+  reconstructed body has started or the operation has settled without a body. A completed parent
+  can therefore finish without leaving an admitted child body that has reconstruction work but
+  has not started it. An empty replay-visible scope stays asynchronous: waiting for its replay-tail
+  resolution here could depend on later caller work that admission itself must allow to proceed.
 - `Live` — ordinary recording.
 
 ### Fences and admission
@@ -258,9 +274,18 @@ pressure (`completed_tool_replay_bypasses_current_attachment_memory_pressure`,
 `incomplete_tool_replay_persists_attachment_upgrade_rejection`). Attachments
 (`tool/attachment.rs`) are in-memory stdin/stdout endpoints and are recreated, never preserved.
 
-For an incomplete entity, `entity.rs` finds that entity's abandoned atomic regions, commits their
-`Jump`s, and registers the rollback before its body or descendants can claim history. The rollback
-is scoped to those regions; unrelated ownership entries remain available to their owners.
+Before constructing any Store, `RunningWorker::create_instance` normalizes incomplete atomic
+regions against a fixed committed horizon and the effective snapshot/skipped prefix. It preserves
+the earliest unmatched Begin and deletes the complete suffix, moving the boundary backward across
+crossing atomic regions whose Ends would otherwise disappear. It commits one Jump and restarts
+initialization to reload status and snapshot selection. No entity body claims history before this
+cut. Entity admission only classifies the surviving Start as completed or incomplete.
+
+Ownership is not causal isolation: raw stdout can influence sibling work before the producer's
+atomic region completes. That sibling's records must disappear with the abandoned suffix too.
+Transaction commits within the suffix may execute again; rollback does not undo external effects.
+Existing durable RPC and peer idempotency contracts still apply. Recovery/lifecycle markers alone
+do not trigger another Jump, but stream data and completion markers do count as new attempt work.
 
 `AcceptedToolCall::attachment_counterparty` separates two attachment protocols. A guest
 counterparty shares the body's causal lane: filesystem-capable guest tools retain EOF stdin

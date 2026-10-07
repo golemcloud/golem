@@ -87,12 +87,8 @@ fn effect_external_all_schema_streaming_consumer_compiles() {
     let transport =
         std::fs::read_to_string(target.join("internal/transport/guest-streaming-agent-client.ts"))
             .unwrap();
-    assert!(transport.contains(
-        "if(v.$case === 'inline') return base.UnstructuredText.fromInline(v.value.text, v.value.language)"
-    ));
-    assert!(transport.contains(
-        "if(v.$case === 'inline') return base.UnstructuredBinary.fromInline(Uint8Array.from(Buffer.from(v.value.bytes, 'base64url')), v.value.mimeType)"
-    ));
+    assert!(transport.contains("base.UnstructuredText.fromSchemaValue"));
+    assert!(transport.contains("base.UnstructuredBinary.fromSchemaValue"));
     std::fs::write(
         target.join("consumer.ts"),
         r#"import { Effect, Fiber, Scope, Stream } from "effect"

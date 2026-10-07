@@ -29,7 +29,7 @@ async function initiate(name: string): Promise<Resolved> {
   (globalThis as any).currentAgentId = `${name}(${JSON.stringify(schemaValueToWit(idValue))})`;
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
-  const res = await initiator.initiate(idValue as never, { tag: 'anonymous' });
+  const res = await initiator.initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
   if (res.tag !== 'ok') throw new Error(`initiate failed: ${JSON.stringify(res.val)}`);
   return res.val as unknown as Resolved;
 }
@@ -40,7 +40,7 @@ async function restore(name: string, data: Uint8Array): Promise<Resolved> {
   const initiator = AgentInitiatorRegistry.lookup(name);
   if (!initiator) throw new Error(`${name} not registered`);
   const res = await initiator.loadSnapshot(
-    idValue as never,
+    schemaValueToWit(idValue),
     { tag: 'anonymous' },
     data,
     'application/json',
@@ -454,7 +454,7 @@ async function isolate() {
     select(name);
     const result = await isolatedInitiators
       .lookup(name)!
-      .initiate(idValue as never, { tag: 'anonymous' });
+      .initiate(schemaValueToWit(idValue), { tag: 'anonymous' });
     if (result.tag === 'err') throw result.val;
     return result.val as unknown as {
       saveSnapshot(): Promise<SavedAgentSnapshot>;

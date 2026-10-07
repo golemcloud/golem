@@ -546,7 +546,7 @@ impl TestDsl for TestWorkerExecutor {
         let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         self.invoke_agent_session(InvocationStart {
@@ -593,7 +593,7 @@ impl TestDsl for TestWorkerExecutor {
         let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         let result = self
@@ -635,7 +635,7 @@ impl TestDsl for TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value))
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -925,6 +925,41 @@ impl TestDsl for TestWorkerExecutor {
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .update_worker(UpdateWorkerRequest {
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                target_revision: target_revision.into(),
+                mode: UpdateMode::Automatic.into(),
+                auth_ctx: Some(self.auth_ctx().into()),
+                disable_wakeup,
+                principal: None,
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(update_worker_response::Result::Success(_)) => Ok(()),
+            Some(update_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to update worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to update worker: unknown error")),
+        }
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,

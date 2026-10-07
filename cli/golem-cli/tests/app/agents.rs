@@ -71,6 +71,7 @@ async fn streaming_invocation_context() -> TestContext {
 
             componentTemplates:
               rust-streaming-test:
+                guestLanguage: rust
                 build:
                 - command: cargo build --target wasm32-wasip2 --release
                   sources:
@@ -1073,22 +1074,27 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
     for language in ["rust", "typescript", "scala", "moonbit"] {
         let bridge_root = ctx.cwd_path_join(format!("{language}-streaming-bridge"));
-        let output = ctx
-            .cli([
-                cmd::GENERATE_BRIDGE,
-                flag::LANGUAGE,
-                language,
-                flag::AGENT_TYPE_NAME,
-                "StreamingRpcTarget",
-                flag::OUTPUT_DIR,
-                bridge_root.to_str().unwrap(),
-            ])
-            .await;
-        assert!(output.success_or_dump());
-        assert!(
-            bridge_root.join("streaming-rpc-target-client").exists(),
-            "generated {language} streaming bridge is missing"
-        );
+        for (agent_type, package) in [
+            ("StreamingRpcTarget", "streaming-rpc-target-client"),
+            ("ConfiguredRpcTarget", "configured-rpc-target-client"),
+        ] {
+            let output = ctx
+                .cli([
+                    cmd::GENERATE_BRIDGE,
+                    flag::LANGUAGE,
+                    language,
+                    flag::AGENT_TYPE_NAME,
+                    agent_type,
+                    flag::OUTPUT_DIR,
+                    bridge_root.to_str().unwrap(),
+                ])
+                .await;
+            assert!(output.success_or_dump());
+            assert!(
+                bridge_root.join(package).exists(),
+                "generated {language} {agent_type} bridge is missing"
+            );
+        }
     }
 
     let worker_service_url = ctx.worker_service_url();
@@ -1108,8 +1114,8 @@ async fn test_generated_streaming_bridges_end_to_end() {
         start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let rust_driver = formatdoc! {r#"
         use futures_util::{{stream, StreamExt, TryStreamExt}};
-        use golem_client::invocation_session::{{AgentBinary, AgentStream}};
-        use streaming_rpc_target_client::{{configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
+        use golem_client::invocation_session::AgentStream;
+        use streaming_rpc_target_client::{{AgentBinary, configure, GolemServer, NestedStreamInput, StreamingRpcTarget}};
 
         fn input<T: Send + 'static>(values: Vec<T>) -> AgentStream<T> {{
             AgentStream::input(stream::iter(values.into_iter().map(Ok::<_, std::io::Error>)))
@@ -1197,6 +1203,59 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "Rust driver did not reach post-acceptance reconnect coverage"
     );
 
+    let rust_config_client =
+        ctx.cwd_path_join("rust-streaming-bridge/configured-rpc-target-client");
+    let mut rust_config_manifest = std::fs::OpenOptions::new()
+        .append(true)
+        .open(rust_config_client.join("Cargo.toml"))
+        .unwrap();
+    writeln!(
+        rust_config_manifest,
+        "\n[dev-dependencies]\ntokio = {{ version = \"1\", features = [\"macros\", \"rt-multi-thread\"] }}"
+    )
+    .unwrap();
+    let rust_config_driver = formatdoc! {r#"
+        use configured_rpc_target_client::{{configure, ConfiguredRpcTarget, GolemServer}};
+
+        #[tokio::main]
+        async fn main() -> Result<(), Box<dyn std::error::Error>> {{
+            configure(
+                GolemServer::Custom {{
+                    url: "{worker_service_url}".parse()?,
+                    token: "{token}".to_string(),
+                }},
+                "streaming-invocation",
+                "local",
+            );
+            let agent = ConfiguredRpcTarget::get_with_config(
+                "rust-configured".to_string(),
+                Some(7),
+                Some("rust-label".to_string()),
+            ).await?;
+            assert_eq!(
+                agent.describe().await?,
+                ("rust-configured".to_string(), "rust-label".to_string(), 7),
+            );
+            println!("RUST_CONFIG_BRIDGE_E2E_OK");
+            Ok(())
+        }}
+        "#};
+    std::fs::create_dir_all(rust_config_client.join("examples")).unwrap();
+    std::fs::write(
+        rust_config_client.join("examples/e2e.rs"),
+        rust_config_driver,
+    )
+    .unwrap();
+    let mut rust_config_command = std::process::Command::new("cargo");
+    rust_config_command
+        .args(["run", "--quiet", "--example", "e2e"])
+        .current_dir(&rust_config_client);
+    assert_generated_driver(
+        run_generated_driver(rust_config_command).await,
+        "Rust config",
+        "RUST_CONFIG_BRIDGE_E2E_OK",
+    );
+
     let typescript_client =
         ctx.cwd_path_join("typescript-streaming-bridge/streaming-rpc-target-client");
     let (typescript_proxy, typescript_interrupted, typescript_proxy_task) =
@@ -1245,6 +1304,9 @@ async fn test_generated_streaming_bridges_end_to_end() {
         assert.deepEqual(Array.from(binaryResult[0].bytes), Array.from(binary.bytes))
         assert.equal(binaryResult[0].mimeType, undefined)
 
+        const transformedBytes = await collect(await agent.transformBytes(input([0, 1, 127, 128, 255])))
+        assert.deepEqual(transformedBytes, [0, 1, 127, 128, 255])
+
         const affine = await agent.produce([8, 9])
         const firstConsumer = affine[Symbol.asyncIterator]()
         assert.throws(() => affine[Symbol.asyncIterator](), /only be iterated once/)
@@ -1260,7 +1322,7 @@ async fn test_generated_streaming_bridges_end_to_end() {
     std::fs::write(typescript_client.join("e2e.ts"), typescript_driver).unwrap();
     let mut typescript_install = std::process::Command::new("pnpm");
     typescript_install
-        .args(["install", "--ignore-workspace"])
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
         .current_dir(&typescript_client);
     assert_generated_driver(
         run_generated_driver(typescript_install).await,
@@ -1283,12 +1345,55 @@ async fn test_generated_streaming_bridges_end_to_end() {
         "TypeScript driver did not reach post-acceptance reconnect coverage"
     );
 
+    let typescript_config_client =
+        ctx.cwd_path_join("typescript-streaming-bridge/configured-rpc-target-client");
+    let typescript_config_driver = formatdoc! {r#"
+        import assert from 'node:assert/strict'
+        import {{ configure, ConfiguredRpcTarget }} from './configured-rpc-target-client.js'
+
+        configure({{
+          server: {{ type: 'custom', url: '{worker_service_url}', token: '{token}' }},
+          application: 'streaming-invocation',
+          environment: 'local',
+        }})
+        const agent = await ConfiguredRpcTarget.getWithConfig(
+          'typescript-configured',
+          7,
+          'typescript-label',
+        )
+        assert.deepEqual(await agent.describe(), ['typescript-configured', 'typescript-label', 7])
+        console.log('TYPESCRIPT_CONFIG_BRIDGE_E2E_OK')
+        "#};
+    std::fs::write(
+        typescript_config_client.join("e2e.ts"),
+        typescript_config_driver,
+    )
+    .unwrap();
+    let mut typescript_config_install = std::process::Command::new("pnpm");
+    typescript_config_install
+        .args(["install", "--ignore-workspace", "--ignore-scripts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_install).await,
+        "TypeScript config install",
+        "",
+    );
+    let mut typescript_config_command = std::process::Command::new("pnpm");
+    typescript_config_command
+        .args(["exec", "tsx", "e2e.ts"])
+        .current_dir(&typescript_config_client);
+    assert_generated_driver(
+        run_generated_driver(typescript_config_command).await,
+        "TypeScript config",
+        "TYPESCRIPT_CONFIG_BRIDGE_E2E_OK",
+    );
+
     let scala_client = ctx.cwd_path_join("scala-streaming-bridge/streaming-rpc-target-client");
     let (scala_proxy, scala_interrupted, scala_proxy_task) =
         start_interrupting_websocket_proxy(&worker_service_url, false).await;
     let scala_driver = formatdoc! {r#"
         import golem.bridge.client.streaming_rpc_target.{{NestedStreamInput, StreamingRpcTargetClient}}
-        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UInt}}
+        import golem.bridge.runtime.{{AgentBinary, AgentStream, AgentStreamStep, GolemServer, UByte, UInt}}
         import scala.collection.mutable.ListBuffer
         import scala.concurrent.{{Await, ExecutionContext, Future}}
         import scala.concurrent.duration.*
@@ -1342,6 +1447,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
 
             val binary = AgentBinary(Vector[Byte](0, 1, 2, -3, -2, -1), None)
             assert(collect(Await.result(agent.transformBinary(input(List(binary))), timeout)) == List(binary))
+            assert(
+              collect(Await.result(agent.transformBytes(input(List(UByte(0), UByte(1), UByte(127), UByte(128), UByte(255)))), timeout))
+                .map(_.value) == List(0, 1, 127, 128, 255)
+            )
 
             val affine = Await.result(agent.produce(List(UInt(8), UInt(9))), timeout)
             val firstConsumer = Await.result(affine.consume(), timeout)
@@ -1369,6 +1478,53 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert!(
         scala_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "Scala driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let scala_config_client =
+        ctx.cwd_path_join("scala-streaming-bridge/configured-rpc-target-client");
+    let scala_config_driver = formatdoc! {r#"
+        import golem.bridge.client.configured_rpc_target.ConfiguredRpcTargetClient
+        import golem.bridge.runtime.{{GolemServer, UInt}}
+        import scala.concurrent.{{Await, ExecutionContext}}
+        import scala.concurrent.duration.*
+
+        object Main {{
+          given ExecutionContext = ExecutionContext.global
+
+          def main(args: Array[String]): Unit = {{
+            ConfiguredRpcTargetClient.configure(
+              GolemServer.Custom("{worker_service_url}", "{token}"),
+              "streaming-invocation",
+              "local",
+            )
+            val timeout = 90.seconds
+            val agent = Await.result(
+              ConfiguredRpcTargetClient.getWithConfig(
+                "scala-configured",
+                Some(UInt(7)),
+                Some("scala-label"),
+              ),
+              timeout,
+            )
+            assert(Await.result(agent.describe(), timeout) == ("scala-configured", "scala-label", UInt(7)))
+            println("SCALA_CONFIG_BRIDGE_E2E_OK")
+          }}
+        }}
+        "#};
+    let scala_config_main_dir = scala_config_client.join("src/main/scala");
+    std::fs::write(
+        scala_config_main_dir.join("Main.scala"),
+        scala_config_driver,
+    )
+    .unwrap();
+    let mut scala_config_command = std::process::Command::new("sbt");
+    scala_config_command
+        .args(["--batch", "runMain Main"])
+        .current_dir(&scala_config_client);
+    assert_generated_driver(
+        run_generated_driver(scala_config_command).await,
+        "Scala config",
+        "SCALA_CONFIG_BRIDGE_E2E_OK",
     );
 
     let moonbit_client = ctx.cwd_path_join("moonbit-streaming-bridge/streaming-rpc-target-client");
@@ -1427,7 +1583,24 @@ async fn test_generated_streaming_bridges_end_to_end() {
           }})
         }}
 
+        fn byte_input(values : Array[Byte]) -> @runtime.AgentStream[Byte] {{
+          @runtime.AgentStream::from_next(fn() {{
+            if values.is_empty() {{ None }} else {{ Some(values.remove(0)) }}
+          }})
+        }}
+
         async fn collect_uint(stream : @runtime.AgentStream[UInt]) -> Array[UInt] raise {{
+          let result = []
+          while true {{
+            match stream.next() {{
+              Some(value) => result.push(value)
+              None => break
+            }}
+          }}
+          result
+        }}
+
+        async fn collect_byte(stream : @runtime.AgentStream[Byte]) -> Array[Byte] raise {{
           let result = []
           while true {{
             match stream.next() {{
@@ -1469,6 +1642,10 @@ async fn test_generated_streaming_bridges_end_to_end() {
           let transformed_binary = agent.transform_binary(binary_input([binary]))
           assert_true(transformed_binary.next() == Some(binary))
           assert_true(transformed_binary.next() is None)
+          assert_eq(
+            collect_byte(agent.transform_bytes(byte_input([0, 1, 127, 128, 255]))),
+            [0, 1, 127, 128, 255],
+          )
 
           let affine = agent.produce([8, 9])
           assert_eq(affine.next(), Some(8))
@@ -1499,6 +1676,62 @@ async fn test_generated_streaming_bridges_end_to_end() {
     assert!(
         moonbit_interrupted.load(std::sync::atomic::Ordering::SeqCst),
         "MoonBit driver did not reach post-acceptance reconnect coverage"
+    );
+
+    let moonbit_config_client =
+        ctx.cwd_path_join("moonbit-streaming-bridge/configured-rpc-target-client");
+    let moonbit_config_manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(moonbit_config_client.join("moon.mod.json")).unwrap(),
+    )
+    .unwrap();
+    let moonbit_config_module = moonbit_config_manifest["name"].as_str().unwrap();
+    let moonbit_config_main_pkg = formatdoc! {r#"
+        import {{
+          "moonbitlang/async",
+          "{moonbit_config_module}/client" @client,
+          "{moonbit_config_module}/runtime" @runtime,
+        }}
+
+        options(
+          "is-main": true,
+        )
+        "#};
+    let moonbit_config_driver = formatdoc! {r#"
+        async fn main {{
+          @client.ConfiguredRpcTarget::configure(
+            @runtime.Custom("{worker_service_url}", "{token}"),
+            "streaming-invocation",
+            "local",
+          )
+          let agent = @client.ConfiguredRpcTarget::get_with_config(
+            "moonbit-configured",
+            Some(7),
+            Some("moonbit-label"),
+          )
+          assert_eq(agent.describe(), ("moonbit-configured", "moonbit-label", 7))
+          println("MOONBIT_CONFIG_BRIDGE_E2E_OK")
+        }}
+        "#};
+    let moonbit_config_main_dir = moonbit_config_client.join("main");
+    std::fs::create_dir_all(&moonbit_config_main_dir).unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("moon.pkg"),
+        moonbit_config_main_pkg,
+    )
+    .unwrap();
+    std::fs::write(
+        moonbit_config_main_dir.join("main.mbt"),
+        moonbit_config_driver,
+    )
+    .unwrap();
+    let mut moonbit_config_command = std::process::Command::new("moon");
+    moonbit_config_command
+        .args(["run", "--target", "native", "--deny-warn", "main"])
+        .current_dir(&moonbit_config_client);
+    assert_generated_driver(
+        run_generated_driver(moonbit_config_command).await,
+        "MoonBit config",
+        "MOONBIT_CONFIG_BRIDGE_E2E_OK",
     );
 }
 
@@ -4525,7 +4758,6 @@ async fn test_naming_extremes() {
         ])
         .await;
     assert!(outputs.success_or_dump());
-
     let outputs = ctx
         .cli([
             cmd::AGENT,
@@ -4899,6 +5131,431 @@ async fn test_agent_list_mode_filter_in_ts_repl() {
         },
     )
     .await;
+}
+
+fn write_update_await_agent(
+    ctx: &TestContext,
+    revision_marker: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    fs::write_str(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        formatdoc! { r#"
+            use golem_rust::{{agent_definition, agent_implementation}};
+
+            const REVISION_MARKER: u64 = {revision_marker};
+            const PING_PREFIX: &str = "{ping_prefix}";
+            const REJECT_SNAPSHOT: bool = {reject_snapshot};
+
+            #[agent_definition(snapshotting = "enabled")]
+            pub trait UpdateAwaitAgent {{
+                fn new(id: String) -> Self;
+                fn ping(&self) -> String;
+                fn revision_marker(&self) -> u64;
+            }}
+
+            struct UpdateAwaitAgentImpl {{
+                id: String,
+            }}
+
+            #[agent_implementation]
+            impl UpdateAwaitAgent for UpdateAwaitAgentImpl {{
+                fn new(id: String) -> Self {{
+                    Self {{ id }}
+                }}
+
+                fn ping(&self) -> String {{
+                    format!("{{}}:{{}}", PING_PREFIX, self.id)
+                }}
+
+                fn revision_marker(&self) -> u64 {{
+                    REVISION_MARKER
+                }}
+
+                async fn save_snapshot(&self) -> Result<Vec<u8>, String> {{
+                    Ok(self.id.as_bytes().to_vec())
+                }}
+
+                async fn load_snapshot(
+                    bytes: Vec<u8>,
+                    _context: golem_rust::agentic::SnapshotRestoreContext,
+                ) -> Result<Self, String> {{
+                    if REJECT_SNAPSHOT {{
+                        Err("manual snapshot rejected".to_string())
+                    }} else {{
+                        String::from_utf8(bytes)
+                            .map(|id| Self {{ id }})
+                            .map_err(|error| error.to_string())
+                    }}
+                }}
+            }}
+        "# },
+    )
+    .unwrap();
+}
+
+async fn build_and_deploy_update_await_agent(
+    ctx: &TestContext,
+    component_name: &str,
+    expected_revision: u64,
+    ping_prefix: &str,
+    reject_snapshot: bool,
+) {
+    write_update_await_agent(ctx, expected_revision, ping_prefix, reject_snapshot);
+
+    let outputs = ctx.cli([cmd::BUILD]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success_or_dump());
+
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::GET,
+            component_name,
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let component = outputs
+        .stdout_json::<UpdateAwaitComponentView>()
+        .into_iter()
+        .next()
+        .expect("component get must produce structured output");
+    assert_eq!(component.component_revision, expected_revision);
+}
+
+async fn invoke_update_await_agent(ctx: &TestContext, id: &str, ping_prefix: &str) {
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!(r#"UpdateAwaitAgent("{id}")"#),
+            "ping",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert!(outputs.stdout_contains(format!("{ping_prefix}:{id}")));
+}
+
+async fn get_update_await_metadata(ctx: &TestContext, agent: &str) -> UpdateAwaitAgentMetadata {
+    let outputs = ctx
+        .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    outputs
+        .stdout_json::<UpdateAwaitAgentGetView>()
+        .into_iter()
+        .next()
+        .expect("agent get must produce structured output")
+        .metadata
+}
+
+async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &str) {
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::LIST,
+            "UpdateAwaitAgent",
+            flag::FORMAT,
+            "json",
+            "--max-count",
+            "10",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let listed_agent = outputs
+        .stdout_json::<UpdateAwaitAgentListView>()
+        .into_iter()
+        .next()
+        .expect("agent list must produce structured output")
+        .agents
+        .into_iter()
+        .find(|listed| listed.agent_id == agent)
+        .expect("queued agent must be listed");
+    assert!(listed_agent.updates.is_empty());
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "oplog", agent, flag::FORMAT, "json"])
+        .await;
+    assert!(outputs.success_or_dump());
+    let has_queued_manual_update =
+        outputs
+            .stdout_json::<serde_json::Value>()
+            .into_iter()
+            .any(|entry| {
+                entry
+                    .pointer("/entry/type")
+                    .and_then(|value| value.as_str())
+                    == Some("PendingAgentInvocation")
+                    && entry
+                        .pointer("/entry/invocation/type")
+                        .and_then(|value| value.as_str())
+                        == Some("ManualUpdate")
+                    && entry
+                        .pointer("/entry/invocation/targetRevision")
+                        .and_then(|value| value.as_u64())
+                        == Some(1)
+            });
+    assert!(has_queued_manual_update);
+}
+
+fn output_contains(outputs: &crate::app::Output, expected: &str) -> bool {
+    outputs.stdout_contains(expected) || outputs.stderr_contains(expected)
+}
+
+#[test]
+#[timeout("20 minutes")]
+async fn test_agent_update_await_correlates_exact_admitted_attempts() {
+    let mut ctx = TestContext::new();
+    let app_name = "agent-update-await-correlation";
+    let component_name = "agent-update-await-correlation:rust-main";
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([flag::YES, cmd::NEW, app_name, flag::TEMPLATE, "rust"])
+        .await;
+    assert!(outputs.success_or_dump());
+    ctx.cd(app_name);
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! { r#"
+            manifestVersion: {MANIFEST_VERSION}
+
+            app: {app_name}
+
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+
+            components:
+              {app_name}:rust-main:
+                templates: rust
+        "#, MANIFEST_VERSION = versions::sdk::MANIFEST },
+    )
+    .unwrap();
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 0, "stable", false).await;
+    for id in ["queued", "bulk", "automatic"] {
+        invoke_update_await_agent(&ctx, id, "stable").await;
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 1, "stable", false).await;
+
+    let queued_agent = r#"UpdateAwaitAgent("queued")"#;
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.start_server().await;
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            queued_agent,
+            "manual",
+            "1",
+            "--disable-wakeup",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    assert_queued_manual_update_before_pending(&ctx, queued_agent).await;
+
+    let outputs = ctx
+        .cli([cmd::AGENT, "update", queued_agent, "manual", "1", "--await"])
+        .await;
+    assert!(!outputs.success());
+    assert!(output_contains(
+        &outputs,
+        "The same update is already in progress"
+    ));
+
+    let automatic_agent = r#"UpdateAwaitAgent("automatic")"#;
+    invoke_update_await_agent(&ctx, "automatic", "stable").await;
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            automatic_agent,
+            "automatic",
+            "1",
+            "--await",
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let automatic_attempts_before_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(automatic_attempts_before_bulk, 1);
+
+    let outputs = ctx
+        .cli([
+            "update-agents",
+            "--update-mode",
+            "manual",
+            "--await",
+            flag::FORMAT,
+            "json",
+        ])
+        .await;
+    assert!(!outputs.success());
+    let bulk_result = outputs
+        .stdout_json::<UpdateAwaitBulkResult>()
+        .into_iter()
+        .next()
+        .expect("bulk update must produce structured output");
+    let bulk_agent_ids = bulk_result
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"bulk\")"));
+    assert!(bulk_agent_ids.contains("UpdateAwaitAgent(\"queued\")"));
+    assert!(!bulk_agent_ids.contains("UpdateAwaitAgent(\"automatic\")"));
+    assert_eq!(bulk_agent_ids.len(), 2);
+    assert_eq!(bulk_result.errors.len(), 1);
+    assert_eq!(
+        bulk_result.errors[0].agent_id,
+        "UpdateAwaitAgent(\"queued\")"
+    );
+    assert!(
+        bulk_result.errors[0]
+            .error
+            .contains("The same update is already in progress")
+    );
+    let bulk_agent = r#"UpdateAwaitAgent("bulk")"#;
+    let bulk_metadata = get_update_await_metadata(&ctx, bulk_agent).await;
+    assert!(bulk_metadata.updates.iter().any(|update| {
+        update.kind == "SuccessfulUpdate" && update.target_revision == 1 && update.mode == "manual"
+    }));
+    let automatic_attempts_after_bulk = get_update_await_metadata(&ctx, automatic_agent)
+        .await
+        .updates
+        .into_iter()
+        .filter(|update| update.target_revision == 1 && update.mode == "automatic")
+        .count();
+    assert_eq!(
+        automatic_attempts_after_bulk,
+        automatic_attempts_before_bulk
+    );
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 2, "stable", false).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        let outputs = ctx
+            .cli([cmd::AGENT, "update", agent, mode, "2", "--await"])
+            .await;
+        assert!(outputs.success_or_dump());
+    }
+
+    build_and_deploy_update_await_agent(&ctx, component_name, 3, "changed", true).await;
+
+    for (agent, mode) in [(bulk_agent, "manual"), (automatic_agent, "automatic")] {
+        for expected_failure_count in 1..=2 {
+            let outputs = ctx
+                .cli([cmd::AGENT, "update", agent, mode, "3", "--await"])
+                .await;
+            assert!(!outputs.success());
+
+            let metadata = get_update_await_metadata(&ctx, agent).await;
+            let failures = metadata
+                .updates
+                .iter()
+                .filter(|update| {
+                    update.kind == "FailedUpdate"
+                        && update.target_revision == 3
+                        && update.mode == mode
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(failures.len(), expected_failure_count);
+            let indexes = failures
+                .iter()
+                .map(|failure| {
+                    failure
+                        .pending_update_index
+                        .expect("an admitted update must have an attempt index")
+                })
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(indexes.len(), expected_failure_count);
+            let selected_failure = failures
+                .iter()
+                .max_by_key(|failure| failure.pending_update_index)
+                .unwrap();
+            assert!(
+                output_contains(&outputs, &selected_failure.timestamp),
+                "{mode} update did not report the newly admitted attempt's failure"
+            );
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitComponentView {
+    component_revision: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentGetView {
+    metadata: UpdateAwaitAgentMetadata,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UpdateAwaitAgentListView {
+    agents: Vec<UpdateAwaitListedAgent>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitListedAgent {
+    agent_id: String,
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitAgentMetadata {
+    updates: Vec<UpdateAwaitRecord>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitRecord {
+    #[serde(rename = "type")]
+    kind: String,
+    timestamp: String,
+    target_revision: u64,
+    pending_update_index: Option<u64>,
+    mode: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkResult {
+    agents: Vec<UpdateAwaitBulkAgent>,
+    errors: Vec<UpdateAwaitBulkError>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkAgent {
+    agent_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAwaitBulkError {
+    agent_id: String,
+    error: String,
 }
 
 // JSON view of the `agent list` structured output. We only need the `agents`

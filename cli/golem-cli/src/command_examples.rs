@@ -78,7 +78,7 @@ pub const REPL: &str = "Examples:
   # Pick a specific component and language
   golem-cli repl my-component --language ts
 
-  # Run a script and exit (script is in the component's language)
+  # Run a TypeScript script and exit
   golem-cli repl --script-file test.ts --yes
 
   # Run a one-liner script
@@ -136,7 +136,7 @@ pub const REDEPLOY_AGENTS: &str = "Examples:
   golem-cli redeploy-agents my-component";
 
 pub const EXEC: &str = "Examples:
-  # Custom commands are defined under `commands:` in the application's golem.yaml.
+  # Custom commands are defined under `customCommands:` in the application's golem.yaml.
   # Discover what is available by running --help inside an application directory:
   golem-cli exec --help
 
@@ -209,7 +209,7 @@ pub const AGENT_INVOKE: &str = "Examples:
   golem-cli agent invoke -i - 'MyAgent()' do_work
 
   # Schedule for the future (RFC 3339 / ISO 8601, UTC)
-  golem-cli agent invoke --schedule-at 2026-03-15T10:30:00Z 'Reporter()' send_report
+  golem-cli agent invoke --trigger --schedule-at 2027-03-15T10:30:00Z 'Reporter()' send_report
 
   # Stream only log entries, no invocation markers
   golem-cli agent invoke --logs-only 'MyAgent()' run
@@ -483,7 +483,15 @@ pub const API_SECURITY_SCHEME_CREATE: &str = "Examples:
     --custom-issuer-url https://issuer.example.com \\
     --client-id my-client-id \\
     --client-secret my-client-secret \\
-    --redirect-url https://api.example.com/auth/callback";
+    --redirect-url https://api.example.com/auth/callback
+
+  # Create the security scheme, or update it if it already exists
+  golem-cli api security-scheme create my-oidc \\
+    --provider-type google \\
+    --client-id my-client-id \\
+    --client-secret my-client-secret \\
+    --redirect-url https://api.example.com/auth/callback \\
+    --update-existing";
 
 pub const API_SECURITY_SCHEME_GET: &str = "Examples:
   # Show details of a security scheme
@@ -695,27 +703,28 @@ pub const ACCOUNT_PERMISSION_SHARE_GET_BY_NAME: &str = "Examples:
 
 pub const ACCOUNT_PERMISSION_SHARE_NEW: &str = "Examples:
   # Share permissions with another account
-  golem-cli account permission-share new target@example.com staging-access \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-    --lower-positive 'component(my-account/my-app/staging) @ target@example.com : view : *'
+  # (owners are <account-email>/<app>/<env>[/<component>], the recipient is the target account)
+  golem-cli account permission-share new target@example.com staging-access \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \\
+    --lower-positive 'component(owner@example.com/my-app/staging/*) @ target@example.com : view : *'
 
   # Add a lower negative grant by repeating the flag
-  golem-cli account permission-share new target@example.com staging-access \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging' \
-    --lower-negative 'component(my-account/my-app/staging) @ target@example.com : delete : *'
+  golem-cli account permission-share new target@example.com staging-access \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *' \\
+    --lower-negative 'component(owner@example.com/my-app/staging/*) @ target@example.com : delete : *'
 
   # Create the share for an explicitly selected owner
   golem-cli account permission-share new target@example.com staging-access --account owner@example.com";
 
 pub const ACCOUNT_PERMISSION_SHARE_UPDATE: &str = "Examples:
   # Replace lower permission grants on an existing share
-  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *'
 
   # Rename while replacing grants
-  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \
-    --name staging-access-v2 \
-    --lower-positive 'environment(my-account/my-app) @ target@example.com : view : staging'";
+  golem-cli account permission-share update 8fd5e4a2-9cab-4f8e-9d3a-1c2e4f567890 \\
+    --name staging-access-v2 \\
+    --lower-positive 'environment(owner@example.com/my-app/staging) @ target@example.com : view : *'";
 
 pub const ACCOUNT_PERMISSION_SHARE_DELETE: &str = "Examples:
   # Delete a permission share by ID
@@ -773,15 +782,27 @@ pub const API_TOKEN_DELETE: &str = "Examples:
 // Secret commands ----------------------------------------------------------------------------------
 
 pub const SECRET_CREATE: &str = "Examples:
-  # Create a string secret in the current environment
-  golem-cli secret create apiKey --secret-type String --secret-value 'sk-abc123'
+  # Create a string secret, prompting for the value (hidden input)
+  golem-cli secret create apiKey --type String
 
   # Nested path (paths are dot-separated; casing is normalized)
-  golem-cli secret create db.password --secret-type String --secret-value 's3cret'
+  golem-cli secret create db.password --type String --value 's3cret'
+
+  # Read the value from STDIN
+  printenv DB_PASSWORD | golem-cli secret create db.password --type String --value-stdin
+
+  # Create the secret without a value
+  golem-cli secret create apiKey --type String --no-value
+
+  # Create the secret, or update its value if it already exists
+  golem-cli secret create apiKey --type String --value 'sk-abc123' --update-existing
+
+  # Also replace an existing secret that has a different type (asks for confirmation)
+  golem-cli secret create retries --type u32 --value 3 --update-existing --replace-on-type-change
 
   # Type and value use the project's language syntax (or JSON):
-  #   --secret-type String   for Rust
-  #   --secret-type string   for TypeScript";
+  #   --type String   for Rust
+  #   --type string   for TypeScript";
 
 pub const SECRET_GET: &str = "Examples:
   # Get a secret by path
@@ -790,15 +811,27 @@ pub const SECRET_GET: &str = "Examples:
   # Get a secret by ID
   golem-cli secret get --id sec-12345";
 
-pub const SECRET_UPDATE_VALUE: &str = "Examples:
+pub const SECRET_UPDATE: &str = "Examples:
   # Update a secret's value (path or --id)
-  golem-cli secret update-value apiKey --secret-value 'new-value'
-  golem-cli secret update-value --id sec-12345 --secret-value 'new-value'";
+  golem-cli secret update apiKey --value 'new-value'
+  golem-cli secret update --id sec-12345 --value 'new-value'
+
+  # Prompt for the new value (hidden input)
+  golem-cli secret update apiKey
+
+  # Read the new value from STDIN
+  printenv API_KEY | golem-cli secret update apiKey --value-stdin
+
+  # Remove the value of a secret
+  golem-cli secret update apiKey --unset";
 
 pub const SECRET_DELETE: &str = "Examples:
-  # Delete a secret by path or by ID
+  # Delete a secret by path or by ID (asks for confirmation)
   golem-cli secret delete apiKey
-  golem-cli secret delete --id sec-12345";
+  golem-cli secret delete --id sec-12345
+
+  # Delete without confirmation
+  golem-cli secret delete apiKey --yes";
 
 pub const SECRET_LIST: &str = "Examples:
   # List secrets in the current environment
@@ -814,7 +847,14 @@ pub const RETRY_POLICY_CREATE: &str = "Examples:
   golem-cli retry-policy create http-transient \\
     --priority 10 \\
     --predicate '{ \"propIn\": { \"property\": \"status-code\", \"values\": [502, 503, 504] } }' \\
-    --policy '{ \"countBox\": { \"maxRetries\": 5, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }'";
+    --policy '{ \"countBox\": { \"maxRetries\": 5, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }'
+
+  # Create the retry policy, or update it if it already exists
+  golem-cli retry-policy create http-transient \\
+    --priority 20 \\
+    --predicate '{ \"propIn\": { \"property\": \"status-code\", \"values\": [502, 503, 504] } }' \\
+    --policy '{ \"countBox\": { \"maxRetries\": 3, \"inner\": { \"exponential\": { \"baseDelay\": \"200ms\", \"factor\": 2.0 } } } }' \\
+    --update-existing";
 
 pub const RETRY_POLICY_LIST: &str = "Examples:
   # List retry policies in the current environment
@@ -844,19 +884,23 @@ pub const RETRY_POLICY_DELETE: &str = "Examples:
 pub const RESOURCE_CREATE: &str = "Examples:
   # A rate-based quota: 100 calls per minute, capped at 1000
   golem-cli resource create api-calls \\
-    --limit '{\"type\":\"rate\",\"value\":100,\"period\":\"minute\",\"max\":1000}'
+    --limit '{\"type\":\"Rate\",\"value\":100,\"period\":\"minute\",\"max\":1000}'
 
   # A capacity-based quota with a custom unit label
   golem-cli resource create tokens \\
-    --limit '{\"type\":\"capacity\",\"value\":500000}' --unit token --units tokens
+    --limit '{\"type\":\"Capacity\",\"value\":500000}' --unit token --units tokens
 
   # A concurrency cap that rejects extra requests instead of throttling them
   golem-cli resource create concurrent-jobs \\
-    --limit '{\"type\":\"concurrency\",\"value\":4}' --enforcement-action reject";
+    --limit '{\"type\":\"Concurrency\",\"value\":4}' --enforcement-action reject
+
+  # Create the resource definition, or update it if it already exists
+  golem-cli resource create concurrent-jobs \\
+    --limit '{\"type\":\"Concurrency\",\"value\":8}' --update-existing";
 
 pub const RESOURCE_UPDATE: &str = "Examples:
   # Raise the limit on an existing rate quota
-  golem-cli resource update api-calls --limit '{\"type\":\"rate\",\"value\":200,\"period\":\"minute\",\"max\":2000}'
+  golem-cli resource update api-calls --limit '{\"type\":\"Rate\",\"value\":200,\"period\":\"minute\",\"max\":2000}'
 
   # Switch the enforcement action
   golem-cli resource update api-calls --enforcement-action terminate";
@@ -933,3 +977,33 @@ pub const TOOL_RELEASE_DE_PUBLISH: &str = "Examples:
 pub const TOOL_RELEASE_RESTORE: &str = "Examples:
   # Make a de-published release available again
   golem-cli tool release restore 00000000-0000-0000-0000-000000000001";
+
+#[cfg(test)]
+mod tests {
+    use super::{ACCOUNT_PERMISSION_SHARE_NEW, ACCOUNT_PERMISSION_SHARE_UPDATE};
+    use golem_common::model::card::parse_permission_grant;
+    use test_r::test;
+
+    #[test]
+    fn permission_share_example_grants_parse() {
+        for examples in [
+            ACCOUNT_PERMISSION_SHARE_NEW,
+            ACCOUNT_PERMISSION_SHARE_UPDATE,
+        ] {
+            let grants = examples
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    line.strip_prefix("--lower-positive ")
+                        .or_else(|| line.strip_prefix("--lower-negative "))
+                })
+                .map(|grant| grant.trim_end_matches(['\\', ' ']).trim_matches('\''))
+                .collect::<Vec<_>>();
+            assert!(!grants.is_empty());
+            for grant in grants {
+                parse_permission_grant(grant)
+                    .unwrap_or_else(|err| panic!("example grant {grant:?} does not parse: {err}"));
+            }
+        }
+    }
+}

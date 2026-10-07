@@ -16,6 +16,7 @@
 
 package golem.schema.validation
 
+import golem.Uuid
 import golem.schema._
 import golem.schema.SchemaTypeBody._
 import golem.schema.SchemaValue._
@@ -87,6 +88,12 @@ object ValueValidationSpec extends ZIOSpecDefault {
     test("numeric below min is rejected") {
       val ty = SchemaType(U32Type(NumericRestrictions(min = Some(NumericBound.Unsigned(1))).normalize));
       assertTrue(validate(ty, U32Value(0)).left.exists(_.exists(_.isInstanceOf[NumericOutOfRange])))
+    },
+    test("uuid halves outside the unsigned 64-bit range are rejected") {
+      assertTrue(
+        validate(t.uuid, UuidValue(Uuid(-1, 0))).isLeft,
+        validate(t.uuid, UuidValue(Uuid(0, BigInt(1) << 64))).isLeft
+      )
     },
     test("permission-card values match only permission-card schema types") {
       val handle   = GuestPermissionCardHandle.fromRaw("card-1")

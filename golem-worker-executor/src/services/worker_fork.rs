@@ -71,13 +71,13 @@ use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
+    UpdateDescription,
 };
 use golem_common::model::{AgentFingerprint, AgentMetadata, PendingUpdateKind, Timestamp};
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::runtime::Handle;
@@ -891,9 +891,9 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let oplog_range = OplogIndexRange::new(OplogIndex::INITIAL.next(), oplog_index_cut_off);
         for oplog_index in fork_update_indices(oplog_range, &deleted_regions) {
             let entry = read_source(oplog_index).await;
-            updates = updates.after(&entry);
+            updates = updates.after(oplog_index, &entry);
         }
-        let (pending_update_revisions, baseline) = updates.into_parts();
+        let (pending_updates, baseline) = updates.into_parts();
 
         // The marker precedes every target-authored cancellation or synthetic result.
         let now = Timestamp::now_utc();
@@ -939,7 +939,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 .await?;
         }
 
-        for target_revision in pending_update_revisions {
+        for (target_revision, update_attempt_index) in pending_updates {
             tracing::debug!(
                 "Cancelling pending update to revision {target_revision} in forked worker"
             );
@@ -948,6 +948,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                     timestamp: now,
                     target_revision,
                     details: Some("cancelled by fork".to_string()),
+                    snapshot_assisted_details: None,
+                    update_attempt_index: Some(update_attempt_index),
                 })
                 .await?;
         }
@@ -1306,46 +1308,94 @@ pub(crate) fn fork_update_indices(
 
 /// The updates of the copied prefix of a fork, in the order of the oplog and outside the deleted
 /// regions: the pending updates that no outcome follows, which the fork cancels, and the
-/// filesystem snapshot name of the manual-update baseline of the target. The fold pairs a pending
-/// update with its outcome as the status does.
+/// filesystem snapshot name of the manual-update baseline of the target.
 #[derive(Debug, Default)]
 pub(crate) struct ForkUpdates {
-    /// The pending updates without an outcome, each with its kind.
-    pending: VecDeque<(ComponentRevision, PendingUpdateKind)>,
+    /// The pending updates without an outcome: the target revision, the admission index and
+    /// the kind.
+    pending: Vec<(ComponentRevision, OplogIndex, PendingUpdateKind)>,
     baseline: Option<FilesystemSnapshotName>,
 }
 
 impl ForkUpdates {
-    /// The updates after `entry`. A successful snapshot-based update makes its filesystem
-    /// snapshot the baseline, also when it has none; a successful automatic update keeps the
-    /// baseline.
-    pub(crate) fn after(mut self, entry: &OplogEntry) -> Self {
-        let (pending, applied) = crate::worker::status::pair_update(
-            std::mem::take(&mut self.pending),
-            entry,
-            |description| {
-                (
-                    *description.target_revision(),
-                    PendingUpdateKind::of(description),
-                )
-            },
-        );
-        self.pending = pending;
-        if let Some((_, kind)) = applied
-            && matches!(kind, PendingUpdateKind::SnapshotBased { .. })
-        {
-            self.baseline = kind.filesystem_snapshot().cloned();
+    /// The updates after `entry` at `oplog_index`. A `PendingUpdate` whose attempt index names
+    /// the automatic update at the front is its strategy entry and adds no update. A
+    /// `SuccessfulUpdate` ends the front update; a successful snapshot-based update makes its
+    /// filesystem snapshot the baseline, also when it has none, and a successful automatic update
+    /// keeps the baseline. A `FailedUpdate` ends the update that its attempt index names, at any
+    /// position, or without an attempt index the front update when the target revision matches.
+    pub(crate) fn after(mut self, oplog_index: OplogIndex, entry: &OplogEntry) -> Self {
+        match entry {
+            OplogEntry::PendingUpdate {
+                description,
+                update_attempt_index,
+                ..
+            } => {
+                let target_revision = *description.target_revision();
+                let admission_index = update_attempt_index.unwrap_or(oplog_index);
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && self.pending.first().is_some_and(
+                        |(pending_target, pending_admission, _)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if refines_automatic_admission {
+                    if let Some((_, _, kind)) = self.pending.first_mut() {
+                        *kind = PendingUpdateKind::of(description);
+                    }
+                } else {
+                    self.pending.push((
+                        target_revision,
+                        admission_index,
+                        PendingUpdateKind::of(description),
+                    ));
+                }
+            }
+            OplogEntry::SuccessfulUpdate { .. } if !self.pending.is_empty() => {
+                let (_, _, kind) = self.pending.remove(0);
+                if matches!(kind, PendingUpdateKind::SnapshotBased { .. }) {
+                    self.baseline = kind.filesystem_snapshot().cloned();
+                }
+            }
+            OplogEntry::FailedUpdate {
+                target_revision,
+                update_attempt_index,
+                ..
+            } => {
+                let position = match update_attempt_index {
+                    Some(attempt_index) => self
+                        .pending
+                        .iter()
+                        .position(|(_, index, _)| index == attempt_index),
+                    None => self
+                        .pending
+                        .first()
+                        .is_some_and(|(pending_target, _, _)| pending_target == target_revision)
+                        .then_some(0),
+                };
+                if let Some(position) = position {
+                    self.pending.remove(position);
+                }
+            }
+            _ => {}
         }
         self
     }
 
-    /// The target revisions of the pending updates that the fork cancels, in the order of the
-    /// oplog, and the name of the baseline.
-    pub(crate) fn into_parts(self) -> (Vec<ComponentRevision>, Option<FilesystemSnapshotName>) {
+    /// The pending updates that the fork cancels, in the order of the oplog, each as its target
+    /// revision and admission index, and the name of the baseline.
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<(ComponentRevision, OplogIndex)>,
+        Option<FilesystemSnapshotName>,
+    ) {
         (
             self.pending
                 .into_iter()
-                .map(|(revision, _)| revision)
+                .map(|(revision, admission_index, _)| (revision, admission_index))
                 .collect(),
             self.baseline,
         )
@@ -1445,5 +1495,29 @@ mod tests {
             }
             other => panic!("expected transfer start, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn early_manual_failure_does_not_consume_automatic_fork_update() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let automatic_admission = OplogIndex::from_u64(2);
+        let manual_admission = OplogIndex::from_u64(3);
+
+        let (pending_updates, _) = ForkUpdates::default()
+            .after(
+                automatic_admission,
+                &OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None),
+            )
+            .after(
+                OplogIndex::from_u64(4),
+                &OplogEntry::failed_update(target_revision, None, None, Some(manual_admission)),
+            )
+            .into_parts();
+
+        assert_eq!(
+            pending_updates,
+            vec![(target_revision, automatic_admission)],
+            "the fork must retain the Automatic request so it receives its own cancellation"
+        );
     }
 }

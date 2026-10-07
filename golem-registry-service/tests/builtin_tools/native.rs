@@ -66,7 +66,9 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
     let owner = config.initial_accounts["builtin_tool_owner"].clone();
     let consumer = config.initial_accounts["root"].id;
     let mut join_set = JoinSet::new();
-    let services = Services::new(&config, &mut join_set).await.unwrap();
+    let services = Services::new_without_component_builtins(&config, &mut join_set)
+        .await
+        .unwrap();
     let auth = AuthCtx::system();
     let user_auth = services
         .auth_service
@@ -401,7 +403,7 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
             ))
     ));
 
-    services
+    let first_deployment = services
         .deployment_write_service
         .create_deployment(
             env.id,
@@ -426,6 +428,69 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
         )
         .await
         .unwrap();
+
+    let next_plan = services
+        .deployment_service
+        .get_current_deployment_plan(env.id, &auth)
+        .await
+        .unwrap();
+    assert_eq!(next_plan.deployment_hash, first_deployment.deployment_hash);
+    let first_remote_hash = next_plan.remote_tools[0].hash;
+    let changed_agent_overrides = BTreeMap::from([(
+        caller_agent_name.clone(),
+        ToolBindingInput {
+            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+            middleware: Some(Vec::new()),
+            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
+            ..Default::default()
+        },
+    )]);
+    let changed_request = ambient_deployment_request(
+        &next_plan,
+        std::slice::from_ref(&caller_agent_name),
+        &changed_agent_overrides,
+        &component_overrides,
+    );
+    assert_ne!(changed_request.0, first_deployment.deployment_hash);
+
+    let changed_deployment = services
+        .deployment_write_service
+        .create_deployment(
+            env.id,
+            DeploymentCreation {
+                mcp_imports: Vec::new(),
+                current_revision: next_plan.current_revision,
+                expected_deployment_hash: changed_request.0,
+                version: DeploymentVersion("middleware-binding-changed".into()),
+                publish_tools: vec![],
+                remote_tools: changed_request.1,
+                publish_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                universal_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
+                agent_secret_defaults: vec![],
+                quota_resource_defaults: vec![],
+                retry_policy_defaults: vec![],
+                replace_incompatible_agent_secrets: false,
+            },
+            &auth,
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed_deployment.deployment_hash, changed_request.0);
+
+    let changed_summary = services
+        .deployment_service
+        .get_deployment_summary(env.id, changed_deployment.revision, &auth)
+        .await
+        .unwrap();
+    assert_eq!(changed_summary.deployment_hash, changed_request.0);
+    assert_eq!(
+        changed_summary.to_diffable().hash().unwrap(),
+        changed_request.0
+    );
+    assert_ne!(changed_summary.remote_tools[0].hash, first_remote_hash);
 }
 
 async fn provision_test_native(
@@ -505,32 +570,5 @@ fn ambient_deployment_request(
             }
         })
         .collect::<Vec<_>>();
-    let environment_bindings = remote_tools
-        .iter()
-        .filter_map(|remote| {
-            remote
-                .environment_binding
-                .clone()
-                .map(|binding| (remote.name.clone(), binding))
-        })
-        .collect();
-    let agent_bindings = remote_tools
-        .iter()
-        .fold(BTreeMap::new(), |mut result, remote| {
-            for (agent, binding) in &remote.agent_bindings {
-                result
-                    .entry(agent.clone())
-                    .or_insert_with(BTreeMap::new)
-                    .insert(remote.name.clone(), binding.clone());
-            }
-            result
-        });
-    (
-        target.environment_tool_middleware_bindings,
-        target.agent_tool_middleware_bindings,
-    ) = golem_common::model::diff::tool_middleware_binding_inputs(
-        &environment_bindings,
-        &agent_bindings,
-    );
     (target.hash().unwrap(), remote_tools)
 }

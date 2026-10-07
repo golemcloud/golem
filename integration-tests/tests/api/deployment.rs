@@ -18,6 +18,8 @@ use golem_client::api::{
 };
 use golem_client::model::AgentSecretCreation;
 use golem_client::model::DeploymentCreation;
+use golem_common::model::AgentId;
+use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
 use golem_common::model::component::{
@@ -27,9 +29,10 @@ use golem_common::model::component::{
 use golem_common::model::deployment::{
     DeploymentAgentSecretDefault, DeploymentPlan, DeploymentRollback, DeploymentVersion,
 };
+use golem_common::model::diff::RemoteToolMiddlewareDeployment as DiffRemoteToolMiddlewareDeployment;
 use golem_common::model::diff::{
     Deployment as DiffDeployment, EffectiveToolBinding,
-    RemoteToolDeployment as DiffRemoteToolDeployment, tool_middleware_binding_inputs,
+    RemoteToolDeployment as DiffRemoteToolDeployment, ToolMiddlewareBindingInput,
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
@@ -38,14 +41,27 @@ use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion, EnvironmentToolGrantWithDetails,
 };
+use golem_common::model::environment_tool_middleware_grant::{
+    EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantWithDetails,
+};
 use golem_common::model::http_api_deployment::{
     HttpApiDeploymentAgentOptions, HttpApiDeploymentCreation,
 };
 use golem_common::model::json::NormalizedJsonValue;
+use golem_common::model::oplog::{
+    OplogIndex, PublicAgentEntityKind, PublicOplogEntry, PublicOplogEntryAttribution,
+    PublicOplogEntryWithIndex,
+};
 use golem_common::model::optional_field_update::OptionalFieldUpdate;
 use golem_common::model::tool::{
     RemoteToolDeployment, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
+};
+use golem_common::model::tool_middleware::{
+    RemoteToolMiddlewareDeployment, ToolMiddlewareInstallation, ToolMiddlewareName,
+};
+use golem_common::model::tool_middleware_release::{
+    ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
 };
 use golem_common::model::tool_release::{
     ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseLifecycle, ToolReleaseReference,
@@ -54,7 +70,7 @@ use golem_common::schema::tool::{
     CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool,
 };
 use golem_common::schema::validation::is_equivalent_cross_graph;
-use golem_common::schema::{ExternalSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+use golem_common::schema::{ExternalSchemaValue, FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
@@ -69,6 +85,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 fn cross_account_tool(version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: "search".to_string(),
@@ -83,6 +100,7 @@ fn cross_account_tool(version: &str) -> Tool {
                     constraints: Vec::new(),
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: None,
                     errors: Vec::new(),
                     annotations: None,
@@ -171,6 +189,20 @@ fn remote_tool_hash_input(
     } else {
         BTreeMap::new()
     };
+    let agent_middleware_bindings = if bind_to_host_api {
+        BTreeMap::from([(
+            AgentTypeName("GolemHostApi".to_string()),
+            ToolMiddlewareBindingInput {
+                config_keys_readable: Default::default(),
+                secret_keys_readable: consumer_secret_scope(),
+                secret_keys_revealable: consumer_secret_scope(),
+                middleware: None,
+                middleware_merge_mode: None,
+            },
+        )])
+    } else {
+        BTreeMap::new()
+    };
     DiffRemoteToolDeployment {
         release_id: grant.release.id,
         version: grant.release.version.clone(),
@@ -187,6 +219,9 @@ fn remote_tool_hash_input(
         },
         component_bindings: BTreeMap::new(),
         bindings,
+        environment_middleware_binding: None,
+        component_middleware_bindings: BTreeMap::new(),
+        agent_middleware_bindings,
     }
 }
 
@@ -198,34 +233,140 @@ fn add_remote_tool_hash_input(
     deployment
         .remote_tools
         .insert(remote.name.to_string(), hash_input.into());
+}
 
-    let environment_bindings = remote
-        .environment_binding
+fn filesystem_remote_tool(
+    grant: &EnvironmentToolGrantWithDetails,
+) -> (RemoteToolDeployment, DiffRemoteToolDeployment) {
+    let agent_type = AgentTypeName("ToolStreamingCaller".to_string());
+    let binding = ToolBindingInput {
+        filesystem_access: ToolFilesystemAccess::Allowed,
+        ..Default::default()
+    };
+    let request = RemoteToolDeployment {
+        name: grant.release.name.clone(),
+        release: ToolReleaseReference::ById(ToolReleaseById {
+            release_id: grant.release.id,
+        }),
+        provision: ToolProvisionConfig::default(),
+        environment_binding: None,
+        component_bindings: BTreeMap::new(),
+        agent_bindings: BTreeMap::from([(agent_type.clone(), binding.clone())]),
+    };
+    let hash_input = DiffRemoteToolDeployment {
+        release_id: grant.release.id,
+        version: grant.release.version.clone(),
+        source_digest: grant.release.source_digest,
+        owner_account_id: grant.release_owner.id,
+        owner_account_email: grant.release_owner.email.clone(),
+        metadata_version: grant.release.metadata_version.clone(),
+        metadata_digest: grant.release.metadata_digest,
+        provision: ToolProvisionConfig::default(),
+        component_bindings: BTreeMap::new(),
+        bindings: BTreeMap::from([(
+            agent_type.clone(),
+            EffectiveToolBinding {
+                parameters: binding.parameters.clone(),
+                config_keys_readable: binding.config_keys_readable.clone(),
+                secret_keys_readable: binding.secret_keys_readable.clone(),
+                secret_keys_revealable: binding.secret_keys_revealable.clone(),
+                filesystem_access: binding.filesystem_access,
+            },
+        )]),
+        environment_middleware_binding: None,
+        component_middleware_bindings: BTreeMap::new(),
+        agent_middleware_bindings: BTreeMap::from([(
+            agent_type,
+            ToolMiddlewareBindingInput {
+                config_keys_readable: binding.config_keys_readable,
+                secret_keys_readable: binding.secret_keys_readable,
+                secret_keys_revealable: binding.secret_keys_revealable,
+                middleware: binding.middleware,
+                middleware_merge_mode: binding.middleware_merge_mode,
+            },
+        )]),
+    };
+    (request, hash_input)
+}
+
+fn path_policy_remote_middleware(
+    grant: &EnvironmentToolMiddlewareGrantWithDetails,
+) -> (
+    RemoteToolMiddlewareDeployment,
+    DiffRemoteToolMiddlewareDeployment,
+) {
+    let provision = ToolProvisionConfig::default();
+    (
+        RemoteToolMiddlewareDeployment {
+            name: grant.release.name.clone(),
+            release: ToolMiddlewareReleaseReference::ById(ToolMiddlewareReleaseById {
+                release_id: grant.release.id,
+            }),
+            provision: provision.clone(),
+        },
+        DiffRemoteToolMiddlewareDeployment::from_metadata(
+            &grant.release,
+            grant.release_owner.id,
+            grant.release_owner.email.clone(),
+            provision,
+        ),
+    )
+}
+
+fn entity_start_count(
+    oplog: &[PublicOplogEntryWithIndex],
+    kind: PublicAgentEntityKind,
+    name: &str,
+) -> usize {
+    oplog
         .iter()
-        .map(|binding| (remote.name.clone(), binding.clone()))
-        .collect();
-    let agent_bindings = remote
-        .agent_bindings
-        .iter()
-        .map(|(agent, binding)| {
-            (
-                agent.clone(),
-                BTreeMap::from([(remote.name.clone(), binding.clone())]),
+        .filter(|entry| {
+            matches!(
+                &entry.entry,
+                PublicOplogEntry::Start(parameters)
+                    if parameters.function_name == "golem::entity::invoke"
+            ) && matches!(
+                &entry.attribution,
+                PublicOplogEntryAttribution::Entity(entity)
+                    if entity.invocation.entity.kind == kind
+                        && entity.invocation.entity.name == name
             )
         })
-        .collect();
-    let (environment_bindings, agent_bindings) =
-        tool_middleware_binding_inputs(&environment_bindings, &agent_bindings);
-    deployment
-        .environment_tool_middleware_bindings
-        .extend(environment_bindings);
-    for (agent, bindings) in agent_bindings {
-        deployment
-            .agent_tool_middleware_bindings
-            .entry(agent)
-            .or_default()
-            .extend(bindings);
-    }
+        .count()
+}
+
+fn entity_start_has_immediate_ancestor(
+    oplog: &[PublicOplogEntryWithIndex],
+    kind: PublicAgentEntityKind,
+    name: &str,
+    ancestor_kind: PublicAgentEntityKind,
+    ancestor_name: &str,
+) -> bool {
+    oplog.iter().any(|entry| {
+        matches!(
+            &entry.entry,
+            PublicOplogEntry::Start(parameters)
+                if parameters.function_name == "golem::entity::invoke"
+        ) && matches!(
+            &entry.attribution,
+            PublicOplogEntryAttribution::Entity(entity)
+                if entity.invocation.entity.kind == kind
+                    && entity.invocation.entity.name == name
+                    && entity.ancestors.last().is_some_and(|ancestor|
+                        ancestor.entity.kind == ancestor_kind
+                            && ancestor.entity.name == ancestor_name
+                    )
+        )
+    })
+}
+
+#[derive(Debug, FromSchema)]
+struct StreamEvidence {
+    output: Vec<u8>,
+    chunks_read: u32,
+    bytes_read: u64,
+    output_closed: bool,
+    completion: String,
 }
 
 fn deployment_creation(
@@ -329,6 +470,29 @@ async fn deploy_environment(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
         assert_eq!(fetched_deployment.deployment_hash, plan.deployment_hash);
         assert_eq!(fetched_deployment.components, plan.components);
     }
+
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn deploys_newly_staged_provider_with_tool_binding(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+
+    user.component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("golem-it:tool-streaming-rust-caller")
+        .store()
+        .await?;
+
+    user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("golem-it:tool-streaming-rust-provider")
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
 
     Ok(())
 }
@@ -1638,6 +1802,324 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             .iter()
             .any(|grant| grant.release.id == release_v13.id),
         "restoring a release must make its preserved grants active again"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[timeout("12m")]
+#[tracing::instrument]
+async fn built_in_path_policy_enforces_a_real_deployed_filesystem_chain(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?.with_auto_deploy(false);
+    let client = user.registry_service_client().await;
+    let (_, env) = user.app_and_env().await?;
+    let caller = user
+        .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("golem-it:path-policy-caller")
+        .unique()
+        .store()
+        .await?;
+    user.component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("golem-it:path-policy-streaming-provider")
+        .unique()
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
+    let builtin_account = AccountEmail::new("builtin-tool-owner@golem.cloud");
+
+    let mut remote_tools = Vec::new();
+    let mut remote_tool_hash_inputs = Vec::new();
+    for name in ["read-file", "write-file"] {
+        let grant = client
+            .create_environment_tool_grant(
+                &env.id.0,
+                &EnvironmentToolGrantCreation {
+                    release: ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+                        account: builtin_account.clone(),
+                        name: ToolName::try_from(name).unwrap(),
+                        version: "0.4.0".to_string(),
+                    }),
+                    automatic: false,
+                },
+            )
+            .await?;
+        let (request, hash_input) = filesystem_remote_tool(&grant);
+        remote_tools.push(request);
+        remote_tool_hash_inputs.push(hash_input);
+    }
+
+    let middleware_grant = client
+        .create_environment_tool_middleware_grant(
+            &env.id.0,
+            &EnvironmentToolMiddlewareGrantCreation {
+                release: ToolMiddlewareReleaseReference::ByCoordinates(
+                    ToolMiddlewareReleaseByCoordinates {
+                        account: builtin_account.clone(),
+                        name: ToolMiddlewareName::try_from("path-policy").unwrap(),
+                        version: "0.1.0".to_string(),
+                    },
+                ),
+                automatic: false,
+            },
+        )
+        .await?;
+    let (remote_middleware, remote_middleware_hash_input) =
+        path_policy_remote_middleware(&middleware_grant);
+    let installation = ToolMiddlewareInstallation {
+        name: ToolMiddlewareName::try_from("path-policy").unwrap(),
+        version: Some("0.1.0".to_string()),
+        parameters: NormalizedJsonValue::new(json!({
+            "base": "/",
+            "allowed_roots": [{
+                "path": "workspace/path-policy",
+                "operations": ["read", "write"]
+            }]
+        })),
+        account: Some(builtin_account),
+        secret_keys_readable: None,
+        secret_keys_revealable: None,
+        filesystem_access: ToolFilesystemAccess::Allowed,
+    };
+
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+    let mut hash_input = plan.to_diffable();
+    for (request, remote_hash_input) in remote_tools.iter().zip(remote_tool_hash_inputs) {
+        add_remote_tool_hash_input(&mut hash_input, request, remote_hash_input);
+    }
+    hash_input.remote_tool_middleware_deployments.insert(
+        remote_middleware.name.to_string(),
+        remote_middleware_hash_input.into(),
+    );
+    hash_input
+        .universal_tool_middlewares
+        .push(installation.clone());
+    let deployment = client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: plan.current_revision,
+                expected_deployment_hash: hash_input.hash()?,
+                version: DeploymentVersion("path-policy-e2e".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                publish_tools: Vec::new(),
+                remote_tools: remote_tools.clone(),
+                mcp_imports: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: vec![remote_middleware.clone()],
+                universal_tool_middlewares: vec![installation.clone()],
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
+                replace_incompatible_agent_secrets: false,
+            },
+        )
+        .await?;
+    let summary = client
+        .get_deployment_summary(&env.id.0, deployment.revision.into())
+        .await?;
+    assert_eq!(summary.remote_tools.len(), 2);
+    assert_eq!(summary.remote_tool_middlewares.len(), 1);
+    assert_eq!(summary.universal_tool_middlewares.len(), 1);
+
+    let allowed_path = "workspace/path-policy/agent-a.txt";
+    let content = "agent-a-content";
+    let agent_a = agent_id!("ToolStreamingCaller", "path-policy-a");
+    user.start_agent(&caller.id, agent_a.clone()).await?;
+    let allowed = user
+        .invoke_and_await_agent(
+            &caller,
+            &agent_a,
+            "filesystem_policy_write_read",
+            data_value!(allowed_path, content),
+        )
+        .await?
+        .into_typed::<Result<Vec<String>, String>>()?;
+    assert_eq!(
+        allowed,
+        Ok(vec![
+            "created".to_string(),
+            content.len().to_string(),
+            content.to_string(),
+            "1".to_string(),
+            "1".to_string(),
+            "none".to_string(),
+        ])
+    );
+
+    let stream_input = vec![0, 1, 255, 2, 3, 128, 4];
+    let streamed = user
+        .invoke_and_await_agent(
+            &caller,
+            &agent_a,
+            "collect",
+            data_value!("echo", stream_input.clone(), 3_u32),
+        )
+        .await?
+        .into_typed::<StreamEvidence>()?;
+    assert_eq!(streamed.output, stream_input);
+    assert_eq!(streamed.chunks_read, 3);
+    assert_eq!(streamed.bytes_read, 7);
+    assert!(!streamed.output_closed);
+    assert_eq!(streamed.completion, "ok");
+
+    let worker_a = AgentId::from_agent_id(caller.id, &agent_a).map_err(anyhow::Error::msg)?;
+    let before_denial = user.get_oplog(&worker_a, OplogIndex::INITIAL).await?;
+    let write_starts_before =
+        entity_start_count(&before_denial, PublicAgentEntityKind::Tool, "write-file");
+    let middleware_starts_before = entity_start_count(
+        &before_denial,
+        PublicAgentEntityKind::ToolMiddleware,
+        "path-policy",
+    );
+    assert_eq!(write_starts_before, 1);
+    assert_eq!(
+        entity_start_count(&before_denial, PublicAgentEntityKind::Tool, "streaming"),
+        1,
+        "the shipped path-policy middleware must pass streams through to the leaf"
+    );
+    assert!(
+        entity_start_has_immediate_ancestor(
+            &before_denial,
+            PublicAgentEntityKind::Tool,
+            "streaming",
+            PublicAgentEntityKind::ToolMiddleware,
+            "path-policy",
+        ),
+        "the streaming leaf must be attributed to the shipped path-policy middleware"
+    );
+
+    let denied = user
+        .invoke_and_await_agent(
+            &caller,
+            &agent_a,
+            "filesystem_policy_write_read",
+            data_value!("workspace-other/denied.txt", "denied"),
+        )
+        .await?
+        .into_typed::<Result<Vec<String>, String>>()?;
+    assert_eq!(
+        denied,
+        Err(concat!(
+            "path-policy-denied|write|path|workspace-other/denied.txt|",
+            "/workspace-other/denied.txt|workspace/path-policy|",
+            "resolved path is outside every root allowed for this operation"
+        )
+        .to_string()),
+        "outside-root write must preserve and decode the structured policy denial"
+    );
+    let after_denial = user.get_oplog(&worker_a, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_start_count(&after_denial, PublicAgentEntityKind::Tool, "write-file"),
+        write_starts_before,
+        "denial must happen before leaf dispatch"
+    );
+    assert_eq!(
+        entity_start_count(
+            &after_denial,
+            PublicAgentEntityKind::ToolMiddleware,
+            "path-policy"
+        ),
+        middleware_starts_before + 1
+    );
+
+    let agent_b = agent_id!("ToolStreamingCaller", "path-policy-b");
+    user.start_agent(&caller.id, agent_b.clone()).await?;
+    let isolated_read = user
+        .invoke_and_await_agent(
+            &caller,
+            &agent_b,
+            "filesystem_policy_read",
+            data_value!(allowed_path),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert!(
+        isolated_read
+            .as_ref()
+            .is_err_and(|error| error.contains("not-found")),
+        "a second agent must not see the first agent's allowed file: {isolated_read:?}"
+    );
+    let worker_b = AgentId::from_agent_id(caller.id, &agent_b).map_err(anyhow::Error::msg)?;
+    let agent_b_oplog = user.get_oplog(&worker_b, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_start_count(&agent_b_oplog, PublicAgentEntityKind::Tool, "read-file"),
+        1
+    );
+    assert_eq!(
+        entity_start_count(
+            &agent_b_oplog,
+            PublicAgentEntityKind::ToolMiddleware,
+            "path-policy"
+        ),
+        1
+    );
+
+    let mut incapable_installation = installation;
+    incapable_installation.filesystem_access = ToolFilesystemAccess::Unset;
+    let plan = client.get_environment_deployment_plan(&env.id.0).await?;
+    let mut hash_input = plan.to_diffable();
+    hash_input.universal_tool_middlewares = vec![incapable_installation.clone()];
+    client
+        .deploy_environment(
+            &env.id.0,
+            &DeploymentCreation {
+                current_revision: plan.current_revision,
+                expected_deployment_hash: hash_input.hash()?,
+                version: DeploymentVersion("path-policy-no-filesystem".to_string()),
+                agent_secret_defaults: Vec::new(),
+                quota_resource_defaults: Vec::new(),
+                retry_policy_defaults: Vec::new(),
+                publish_tools: Vec::new(),
+                remote_tools,
+                mcp_imports: Vec::new(),
+                publish_tool_middlewares: Vec::new(),
+                remote_tool_middlewares: vec![remote_middleware],
+                universal_tool_middlewares: vec![incapable_installation],
+                environment_tool_middleware_bindings: Default::default(),
+                agent_tool_middleware_bindings: Default::default(),
+                replace_incompatible_agent_secrets: false,
+            },
+        )
+        .await?;
+
+    let agent_c = agent_id!("ToolStreamingCaller", "path-policy-no-filesystem");
+    user.start_agent(&caller.id, agent_c.clone()).await?;
+    let missing_access = user
+        .invoke_and_await_agent(
+            &caller,
+            &agent_c,
+            "filesystem_policy_write_read",
+            data_value!("workspace/path-policy/no-access.txt", "denied"),
+        )
+        .await?
+        .into_typed::<Result<Vec<String>, String>>()?;
+    assert!(
+        missing_access.as_ref().is_err_and(|error| {
+            error.starts_with(concat!(
+                "path-policy-denied|write|path|workspace/path-policy/no-access.txt|",
+                "/workspace/path-policy/no-access.txt|workspace/path-policy|"
+            )) && error.contains("failed to inspect owner-filesystem root '/'")
+        }),
+        "missing middleware filesystem access must return a structured policy denial: {missing_access:?}"
+    );
+    let worker_c = AgentId::from_agent_id(caller.id, &agent_c).map_err(anyhow::Error::msg)?;
+    let agent_c_oplog = user.get_oplog(&worker_c, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        entity_start_count(&agent_c_oplog, PublicAgentEntityKind::Tool, "write-file"),
+        0,
+        "missing middleware filesystem access must deny before leaf dispatch"
+    );
+    assert_eq!(
+        entity_start_count(
+            &agent_c_oplog,
+            PublicAgentEntityKind::ToolMiddleware,
+            "path-policy"
+        ),
+        1
     );
 
     Ok(())

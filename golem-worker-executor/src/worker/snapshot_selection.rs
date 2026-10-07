@@ -317,8 +317,9 @@ pub(crate) fn update_names_in_use(status: &AgentStatusRecord) -> Box<[Filesystem
 }
 
 /// Gives the component revision at the start of the replay: the revision of the selected
-/// automatic snapshot entry, else the target of a pending snapshot-based update, else the revision
-/// of the manual-update baseline.
+/// automatic snapshot entry, else the target of a pending snapshot-based update, else the source
+/// revision of a pending snapshot-assisted automatic update, else the revision of the
+/// manual-update baseline.
 fn component_revision_for_replay(
     status: &AgentStatusRecord,
     filter: AutomaticSnapshotFilter<'_>,
@@ -330,6 +331,10 @@ fn component_revision_for_replay(
                 .front()
                 .and_then(|update| match update.kind {
                     PendingUpdateKind::SnapshotBased { .. } => Some(update.target_revision),
+                    PendingUpdateKind::SnapshotAssistedAutomatic {
+                        source_component_revision,
+                        ..
+                    } => Some(source_component_revision),
                     PendingUpdateKind::Automatic => None,
                 })
                 .unwrap_or(status.component_revision_for_replay)
@@ -572,6 +577,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(11),
+            admission_index: OplogIndex::from_u64(11),
             target_revision: revision(4),
             kind: PendingUpdateKind::SnapshotBased {
                 filesystem_snapshot: None,
@@ -649,6 +655,8 @@ mod tests {
             target_revision: revision(2),
             oplog_index: OplogIndex::from_u64(index),
             filesystem_snapshot,
+            pending_update: None,
+            snapshot_assisted_details: None,
         }
     }
 
@@ -656,6 +664,7 @@ mod tests {
         PendingUpdateRef {
             timestamp: Timestamp::from(1_000),
             oplog_index: OplogIndex::from_u64(index),
+            admission_index: OplogIndex::from_u64(index),
             target_revision: revision(3),
             kind,
         }
@@ -904,6 +913,7 @@ mod tests {
         pending.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::from_u64(11),
+            admission_index: OplogIndex::from_u64(11),
             target_revision: revision(4),
             kind: PendingUpdateKind::Automatic,
         });

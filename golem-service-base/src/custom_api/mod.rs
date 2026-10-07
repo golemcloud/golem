@@ -26,6 +26,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
+use golem_common::model::security_scheme::{SecuritySchemeLogin, SecuritySchemeRevision};
 use golem_common::model::{AgentId, OplogIndex, PromiseId};
 use golem_common::schema::{InputSchema, MetadataEnvelope, OutputSchema, SchemaGraph, SchemaType};
 use hmac::{Hmac, Mac};
@@ -80,6 +81,7 @@ pub enum PathSegmentType {
     U8,
     S8,
     Bool,
+    Uuid,
     Enum(Vec<String>),
 }
 
@@ -130,6 +132,7 @@ impl From<&PathSegmentType> for SchemaType {
                 metadata,
             },
             PathSegmentType::Bool => SchemaType::Bool { metadata },
+            PathSegmentType::Uuid => SchemaType::Uuid { metadata },
             PathSegmentType::Enum(cases) => SchemaType::Enum {
                 cases: cases.clone(),
                 metadata,
@@ -156,6 +159,7 @@ impl TryFrom<SchemaType> for PathSegmentType {
             SchemaType::U8 { .. } => Ok(PathSegmentType::U8),
             SchemaType::S8 { .. } => Ok(PathSegmentType::S8),
             SchemaType::Bool { .. } => Ok(PathSegmentType::Bool),
+            SchemaType::Uuid { .. } => Ok(PathSegmentType::Uuid),
             SchemaType::Enum { cases, .. } => Ok(PathSegmentType::Enum(cases)),
             _ => Err("Unsupported schema type for path segment".into()),
         }
@@ -737,12 +741,24 @@ pub struct SecuritySchemeRouteSecurity {
 #[derive(Debug, Clone)]
 pub struct SecuritySchemeDetails {
     pub id: SecuritySchemeId,
+    pub revision: SecuritySchemeRevision,
     pub name: SecuritySchemeName,
     pub provider_type: Provider,
     pub client_id: ClientId,
     pub client_secret: ClientSecret,
     pub redirect_url: RedirectUrl,
     pub scopes: Vec<Scope>,
+    pub login: SecuritySchemeLogin,
+}
+
+pub const PKCE_ENDPOINT_PREFIX: &str = "/.golem/oidc";
+
+pub fn pkce_authorization_path(security_scheme_id: &SecuritySchemeId) -> String {
+    format!("{PKCE_ENDPOINT_PREFIX}/{security_scheme_id}/authorize")
+}
+
+pub fn pkce_token_path(security_scheme_id: &SecuritySchemeId) -> String {
+    format!("{PKCE_ENDPOINT_PREFIX}/{security_scheme_id}/token")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, BinaryCodec)]

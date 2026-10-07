@@ -12,7 +12,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_RQUICKJS_VERSION: "0.4.4"
+  WASM_RQUICKJS_VERSION: "0.4.6"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
 
@@ -42,7 +42,7 @@ jobs:
           install-cargo-component: 'true'
 
       - name: Update npm
-        run: npm install -g npm@latest
+        run: npm install -g npm@11
 
       - name: Extract version from tag
         id: get_version
@@ -79,6 +79,12 @@ jobs:
 
       - name: Publish all packages
         working-directory: sdks/ts
-        run: pnpm -r publish --access public --no-git-checks
+        run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          case "$VERSION" in
+            *-*) DIST_TAG=next ;;
+            *) DIST_TAG=latest ;;
+          esac
+          pnpm -r publish --access public --no-git-checks --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

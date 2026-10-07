@@ -814,6 +814,8 @@ pub struct ToolInvocationDescriptor {
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
+    pub has_stderr: bool,
+    pub declares_stderr: bool,
     pub output_contract: ToolOutputContract,
 }
 
@@ -859,6 +861,7 @@ pub struct ToolInvocationDescriptorIdentity {
     pub command_path: Vec<String>,
     pub has_stdin: bool,
     pub has_stdout: bool,
+    pub has_stderr: bool,
 }
 
 /// Stable invocation-attempt identity used while replay has not yet determined whether the live
@@ -893,6 +896,7 @@ pub struct ToolInvocationRejectedIdentity {
     pub input_decode_failure: Option<ToolInputDecodeFailure>,
     pub has_stdin: bool,
     pub has_stdout: bool,
+    pub has_stderr: bool,
     pub call_mode: EntityCallMode,
 }
 
@@ -932,6 +936,7 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
             command_path: value.command_path.clone(),
             has_stdin: value.has_stdin,
             has_stdout: value.has_stdout,
+            has_stderr: value.has_stderr,
         }
     }
 }
@@ -1155,7 +1160,7 @@ impl From<OwnerRuntime> for golem_api_grpc::proto::golem::worker::OwnerRuntime {
         use golem_api_grpc::proto::golem::worker::owner_runtime::Value;
 
         let value = match value {
-            OwnerRuntime::Agent => Value::Agent(golem_api_grpc::proto::golem::common::Empty {}),
+            OwnerRuntime::Agent => Value::Agent(golem_schema::proto::golem::common::Empty {}),
             OwnerRuntime::Entity(entity) => Value::Entity(entity.into()),
         };
         Self { value: Some(value) }

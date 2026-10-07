@@ -942,7 +942,6 @@ async fn auto_update_on_idle_via_host_function(
         .start_agent(&host_api_component.id, host_api_agent_id.clone())
         .await?;
 
-    let (high_bits, low_bits) = agent_id.component_id.0.as_u64_pair();
     user.invoke_and_await_agent(&host_api_component, &host_api_agent_id, "update_worker", {
         use golem_common::schema::{
             SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, build_input_record,
@@ -960,9 +959,7 @@ async fn auto_update_on_idle_via_host_function(
             ph(SchemaValue::Record {
                 fields: vec![
                     SchemaValue::Record {
-                        fields: vec![SchemaValue::Record {
-                            fields: vec![SchemaValue::U64(high_bits), SchemaValue::U64(low_bits)],
-                        }],
+                        fields: vec![SchemaValue::Uuid(agent_id.component_id.0)],
                     },
                     SchemaValue::String(parsed_agent_id.to_string()),
                 ],

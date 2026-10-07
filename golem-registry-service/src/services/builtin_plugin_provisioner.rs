@@ -16,6 +16,7 @@ use crate::config::BuiltinPluginsConfig;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::{ApplicationError, ApplicationService};
 use crate::services::auth::AuthService;
+use crate::services::builtin_artifact::BuiltinArtifactResolver;
 use crate::services::component::{ComponentError, ComponentService, ComponentWriteService};
 use crate::services::deployment::{DeploymentService, DeploymentWriteService};
 use crate::services::environment::{EnvironmentError, EnvironmentService};
@@ -46,10 +47,10 @@ const SYSTEM_ENV_NAME: &str = "builtin-plugins";
 
 struct BuiltinPluginDescriptor {
     component_name: &'static str,
+    artifact_id: &'static str,
     plugin_name: &'static str,
     version: &'static str,
     description: &'static str,
-    wasm_bytes: &'static [u8],
 }
 
 impl BuiltinPluginDescriptor {
@@ -61,17 +62,17 @@ impl BuiltinPluginDescriptor {
     }
 }
 
-// Build with `cargo make build-plugins` first to ensure the WASM files exist.
 static BUILTIN_PLUGINS: &[BuiltinPluginDescriptor] = &[BuiltinPluginDescriptor {
     component_name: "otlp:exporter",
+    artifact_id: "otlp_exporter",
     plugin_name: "golem-otlp-exporter",
-    version: "1.5.3",
+    version: "1.5.4",
     description: "Built-in OTLP exporter oplog processor plugin",
-    wasm_bytes: include_bytes!("../../../plugins/otlp-exporter.wasm"),
 }];
 
 pub async fn provision_builtin_plugins(
     config: &BuiltinPluginsConfig,
+    artifact_resolver: &BuiltinArtifactResolver,
     builtin_plugin_owner_account_id: AccountId,
     plugin_repo: &Arc<dyn PluginRepo>,
     auth_service: &Arc<AuthService>,
@@ -86,6 +87,14 @@ pub async fn provision_builtin_plugins(
     if !config.enabled() {
         return Ok(());
     }
+
+    let artifacts = artifact_resolver
+        .resolve_many(
+            BUILTIN_PLUGINS
+                .iter()
+                .map(|descriptor| descriptor.artifact_id),
+        )
+        .await?;
 
     let auth = auth_service
         .builtin_owner_auth(builtin_plugin_owner_account_id)
@@ -109,12 +118,15 @@ pub async fn provision_builtin_plugins(
 
     let mut components = Vec::new();
     for descriptor in BUILTIN_PLUGINS {
+        let wasm_bytes = artifacts
+            .get(descriptor.artifact_id)
+            .expect("all built-in plugin artifacts were resolved");
         let component = upload_or_update_component(
             component_service,
             component_write_service,
             env.id,
             &ComponentName(descriptor.component_name.to_string()),
-            descriptor.wasm_bytes,
+            wasm_bytes,
             &auth,
         )
         .await?;
@@ -231,7 +243,7 @@ async fn upload_or_update_component(
     wasm_bytes: &[u8],
     auth: &AuthCtx,
 ) -> anyhow::Result<Component> {
-    let embedded_wasm_hash = diff::Hash::new(blake3::hash(wasm_bytes));
+    let artifact_wasm_hash = diff::Hash::new(blake3::hash(wasm_bytes));
 
     match component_write_service
         .create(
@@ -262,7 +274,7 @@ async fn upload_or_update_component(
                     anyhow::anyhow!("Failed to get existing component '{component_name}': {e}")
                 })?;
 
-            if existing.wasm_hash == embedded_wasm_hash {
+            if existing.wasm_hash == artifact_wasm_hash {
                 tracing::info!(
                     "Component '{component_name}' is already up to date, skipping update"
                 );

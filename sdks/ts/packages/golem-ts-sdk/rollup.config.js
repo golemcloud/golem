@@ -12,6 +12,7 @@ import path from 'path';
 // the wasm runtime), plus generated guest worlds, `node:sqlite` and `node:fs`. Externalize them
 // all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
+  id === 'user' ||
   id === 'agent-guest' ||
   id === 'node:sqlite' ||
   id === 'node:fs' ||
@@ -81,20 +82,55 @@ function declarations(input, output) {
   };
 }
 
-export default defineConfig([
-  javascript('src/index.ts', 'dist/index.mjs'),
-  javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
-  javascript('src/schema/public.ts', 'dist/schema.mjs'),
-  javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript(
-    'src/middleware-entry.mjs',
-    'dist/middleware.mjs',
-    (id) => id === '@golemcloud/golem-ts-sdk' || external(id),
-  ),
-  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
-  declarations('src/index.ts', 'dist/index.d.mts'),
-  declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
-  declarations('src/schema/public.ts', 'dist/schema.d.mts'),
-  declarations('src/reflection.ts', 'dist/reflection.d.mts'),
-  declarations('src/middleware.ts', 'dist/middleware.d.mts'),
-]);
+export default (args) =>
+  defineConfig(
+    [
+      {
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        external: (id) => external(id) || id.startsWith('@noble/hashes'),
+        input: {
+          index: 'src/index.ts',
+          emptyGuest: 'src/emptyGuest.ts',
+          middleware: 'src/middleware.ts',
+          'schema/public': 'src/schema/public.ts',
+          reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouterContract.ts',
+          toolClient: 'src/toolClient.ts',
+          'internal/tool/compiled': 'src/internal/tool/compiled.ts',
+          'internal/compiledAgent': 'src/internal/compiledAgent.ts',
+        },
+        output: {
+          dir: 'dist/runtime',
+          format: 'esm',
+          preserveModules: true,
+          preserveModulesRoot: 'src',
+          entryFileNames: '[name].mjs',
+        },
+        plugins: javascript('src/index.ts', 'dist/index.mjs').plugins.slice(0, -1),
+      },
+      {
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        plugins: [
+          ...javascript('src/index.ts', 'dist/index.mjs').plugins,
+          {
+            name: 'component-build',
+            writeBundle() {
+              fs.copyFileSync('scripts/component.mjs', 'dist/component.mjs');
+              fs.copyFileSync('scripts/static-tools.mjs', 'dist/static-tools.mjs');
+            },
+          },
+        ],
+      },
+      javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
+      javascript('src/wrapper.ts', 'dist/wrapper.mjs'),
+      javascript('src/schema/public.ts', 'dist/schema.mjs'),
+      javascript('src/reflection.ts', 'dist/reflection.mjs'),
+      javascript('src/middleware.ts', 'dist/middleware.mjs'),
+      javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
+      declarations('src/index.ts', 'dist/index.d.mts'),
+      declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
+      declarations('src/schema/public.ts', 'dist/schema.d.mts'),
+      declarations('src/reflection.ts', 'dist/reflection.d.mts'),
+      declarations('src/middleware.ts', 'dist/middleware.d.mts'),
+    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouterContract.ts'),
+  );

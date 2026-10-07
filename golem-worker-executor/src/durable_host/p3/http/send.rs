@@ -1193,13 +1193,25 @@ where
 
     let options = options.as_deref().copied();
     let (parts, body) = http_request.into_parts();
+    let structural_append_tasks = store.with(|mut access| {
+        durable_worker_ctx::<Ctx, U>(access.data_mut())
+            .public_state
+            .worker()
+            .runtime_append_tasks()
+    });
     Ok(PhysicalSend::Replayable(PhysicalSendRequest {
         pool,
         method: parts.method,
         uri: parts.uri,
         version: parts.version,
         headers: parts.headers,
-        body: DurableRequestBody::new(body, oplog, send_start_index, recording_enabled),
+        body: DurableRequestBody::new(
+            body,
+            oplog,
+            send_start_index,
+            recording_enabled,
+            structural_append_tasks,
+        ),
         options,
         final_transmission_tx,
         _phantom: PhantomData,
@@ -1293,7 +1305,7 @@ where
         )
     });
     let current_retry_policy_state = worker
-        .get_attached_last_known_status()
+        .get_last_known_status()
         .await
         .current_retry_state
         .get(&retry_point)

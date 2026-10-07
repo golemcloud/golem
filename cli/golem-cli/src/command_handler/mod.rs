@@ -19,6 +19,7 @@ use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
+use crate::command::tool::ToolSubcommand;
 use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
@@ -45,7 +46,9 @@ use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
-use crate::log::{Output, log_anyhow_error, logln, set_log_output};
+use crate::log::{
+    Output, RawOutputReservation, TracingSuppression, log_anyhow_error, logln, set_log_output,
+};
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
@@ -145,6 +148,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     ) -> ExitCode {
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
+                let raw_outputs = raw_tool_outputs(&command.subcommand);
+                let _raw_output_guard = raw_outputs.map(|(raw_stdout, raw_stderr)| {
+                    RawOutputReservation::new(raw_stdout, raw_stderr)
+                });
+                let _tracing_suppression = raw_outputs
+                    .is_some_and(|(_, raw_stderr)| raw_stderr)
+                    .then(TracingSuppression::new);
                 #[cfg(feature = "server-commands")]
                 let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
                     Hooks::override_verbosity(command.global_flags.verbosity())
@@ -273,11 +283,20 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     agent_type_name,
                     output_dir,
+                    derive_rule,
+                    rust_dependency,
                 } => {
                     ctx.get_or_init()
                         .await?
                         .bridge_handler()
-                        .cmd_generate_bridge(language, component_name, agent_type_name, output_dir)
+                        .cmd_generate_bridge(
+                            language,
+                            component_name,
+                            agent_type_name,
+                            output_dir,
+                            derive_rule,
+                            rust_dependency,
+                        )
                         .await
                 }
                 GolemCliSubcommand::Repl {
@@ -517,6 +536,58 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         debug!(command_name, shell=%shell, "completion");
         clap_complete::generate(shell, &mut command, command_name, &mut std::io::stdout());
         Ok(())
+    }
+}
+
+fn raw_tool_outputs(subcommand: &GolemCliSubcommand) -> Option<(bool, bool)> {
+    let GolemCliSubcommand::Tool {
+        subcommand: ToolSubcommand::Invoke(args),
+    } = subcommand
+    else {
+        return None;
+    };
+    Some((
+        args.stdout && args.output.is_none(),
+        args.stderr && args.stderr_output.is_none(),
+    ))
+}
+
+#[cfg(test)]
+mod raw_tool_output_tests {
+    use super::raw_tool_outputs;
+    use crate::command::GolemCliCommand;
+    use clap::Parser;
+    use test_r::test;
+
+    #[test]
+    fn raw_tool_fds_are_reserved_before_context_and_tracing_initialization() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--output",
+            "stdout.bin",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((false, true)));
+
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((true, true)));
     }
 }
 

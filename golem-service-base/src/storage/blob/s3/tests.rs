@@ -20,7 +20,8 @@ use crate::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use crate::replayable_stream::ReplayableStream;
 use crate::storage::blob::{
     BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageNamespace,
-    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment,
+    ExistsResult, ListedBlob, PutIfAbsent, agent_path_segment, join_blob_key, join_blob_path,
+    normalized_blob_path,
 };
 use anyhow::anyhow;
 use aws_runtime::retries::classifiers::{THROTTLING_ERRORS, TRANSIENT_ERRORS};
@@ -847,6 +848,56 @@ async fn get_raw_slice_turns_416_into_a_range_error_without_a_retry() {
     );
 }
 
+/// A guest gives a negative offset as the `u64` value that it wraps to. No offset of the `Range`
+/// header is larger than 5 TiB, the size of the largest S3 object, so every server parses the
+/// header. Such a range is outside every object, and the answer of S3 gives the range error of
+/// the range that the guest gave.
+#[test]
+async fn get_raw_slice_sends_no_offset_past_the_largest_object() {
+    let (storage, requests) = scripted_storage("", |request, _| match request.range.as_deref() {
+        Some("bytes=3-5497558138880") => Answer::partial(Some("bytes 3-5/6"), "def"),
+        _ => Answer::new(416, INVALID_RANGE),
+    });
+    let read = |start, end| {
+        storage.get_raw_slice(
+            "test",
+            "get-raw-slice",
+            namespace(),
+            Path::new("blob"),
+            start,
+            end,
+        )
+    };
+
+    let wrapped_start = read(u64::MAX, u64::MAX).await.map_err(range_error);
+    let wrapped_end = read(3, u64::MAX).await.map_err(range_error);
+
+    assert_eq!(
+        (
+            wrapped_start,
+            wrapped_end,
+            sent(&requests)
+                .iter()
+                .map(|request| request.range.clone())
+                .collect::<Vec<_>>()
+        ),
+        (
+            Err(Some(BlobRangeError {
+                start: u64::MAX,
+                end: u64::MAX
+            })),
+            Err(Some(BlobRangeError {
+                start: 3,
+                end: u64::MAX
+            })),
+            vec![
+                Some("bytes=5497558138880-5497558138880".to_string()),
+                Some("bytes=3-5497558138880".to_string())
+            ]
+        )
+    );
+}
+
 #[test]
 async fn get_raw_slice_keeps_a_416_and_a_missing_object_out_of_the_error_log() {
     // The 416 and the missing key are not retriable, so each of those reads makes 1 attempt.
@@ -913,8 +964,8 @@ async fn get_raw_slice_takes_the_range_out_of_a_200_response() {
     // backend uses the body as the full object, which is what RFC 9110 lets a server that
     // ignores the range send (sections 14.2 and 15.5.17). The last range is the one that a
     // guest reaches the host with after it gives a negative offset for the start and the end.
-    // The S3 case of `get_raw_slice_uses_inclusive_ranges` in `tests/blob_storage.rs` sends
-    // the same range to MinIO.
+    // The S3 case of `get_raw_slice_uses_inclusive_ranges` in
+    // `golem-worker-service/tests/blob_storage.rs` reads the same ranges from RustFS.
     let (storage, requests) = scripted_storage("", |request, _| {
         if request.uri.contains("empty") {
             Answer::new(200, "")
@@ -1061,7 +1112,7 @@ async fn get_raw_slice_checks_the_range_that_s3_returns() {
         Some("bytes=0-2") => Answer::partial(Some("bytes 0-2/6"), "a"),
         Some("bytes=3-4") => Answer::partial(Some("bytes 3-4/6"), "def"),
         Some("bytes=3-5") => Answer::partial(Some("bytes 1-5/6"), "def"),
-        Some("bytes=0-18446744073709551615") => {
+        Some("bytes=0-5497558138880") => {
             Answer::partial(Some("bytes 0-18446744073709551615/*"), "a")
         }
         _ => Answer {
@@ -3138,6 +3189,42 @@ async fn put_raw_if_absent_stops_at_a_fault_of_the_request() {
 }
 
 #[test]
+async fn put_raw_if_absent_gives_an_error_for_a_503_after_every_attempt() {
+    // A 503 says that the server did not take the write. It is neither `Written` nor
+    // `AlreadyExists`: the SDK sends no request again, so the retry loop makes its 3 attempts and
+    // the caller gets the error, which is transient. S3 gives `ServiceUnavailable` and
+    // `SlowDown` with the status 503, and MinIO gives `SlowDownRead` with it as well.
+    let mut outcomes = Vec::new();
+    for code in ["ServiceUnavailable", "SlowDown", "SlowDownRead"] {
+        let body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code><Message>Please reduce your request rate.</Message></Error>"#
+        );
+        let (storage, requests) = scripted_storage("", move |_, _| Answer::new(503, body.clone()));
+
+        let result = storage
+            .put_raw_if_absent(
+                "test",
+                "put-if-absent",
+                namespace(),
+                Path::new("blob"),
+                b"x",
+            )
+            .await;
+
+        outcomes.push((code, result.is_err(), sent(&requests).len()));
+    }
+
+    assert_eq!(
+        outcomes,
+        vec![
+            ("ServiceUnavailable", true, 3),
+            ("SlowDown", true, 3),
+            ("SlowDownRead", true, 3),
+        ]
+    );
+}
+
+#[test]
 async fn put_raw_if_absent_rejects_a_name_that_breaks_a_rule_without_a_request() {
     // The key of `namespace()` in a storage without an object prefix is the 36 bytes of the
     // nil UUID, `/`, and the name. The last name has 988 bytes, so its key has 1025. A root
@@ -3288,6 +3375,88 @@ async fn an_oplog_payload_goes_to_the_key_of_its_agent_path_segment() {
                 "/oplog-payload/prefix/durable/{}/{segment}/payload",
                 Uuid::nil()
             )]
+        )
+    );
+}
+
+#[test]
+async fn put_raw_percent_encodes_backslash_in_request_path() {
+    // A `\` is a character of a name and not a separator, so the key keeps it, and the client
+    // percent-encodes it in the path of the request.
+    let (storage, requests) = scripted_storage("", |_, _| Answer::new(200, ""));
+
+    storage
+        .put_raw(
+            "test",
+            "put_raw",
+            namespace(),
+            Path::new(r"photos/animals\cat.png"),
+            b"payload",
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        request_paths(&requests),
+        vec![format!(
+            "/custom-data/{}/photos/animals%5Ccat.png",
+            namespace_prefix()
+        )]
+    );
+}
+
+#[test]
+fn storage_keys_use_contract_separator() {
+    let (storage, _) = scripted_storage("root/prefix", |_, _| Answer::new(200, ""));
+    let namespace = namespace();
+    let key_of = |path: &Path| {
+        storage
+            .key_of(&namespace, &normalized_blob_path(path).unwrap())
+            .unwrap()
+    };
+    let namespace_root = storage.prefix_of(&namespace);
+    let directory_key = key_of(Path::new("photos"));
+
+    assert_eq!(
+        (
+            namespace_root.clone(),
+            key_of(Path::new(r"photos/animals\cat.png")),
+            key_of(&join_blob_path("photos", "cat.png").unwrap()),
+            key_of(Path::new("photos/")),
+            key_of(Path::new("")),
+            join_blob_key(&directory_key, "__dir_marker"),
+        ),
+        (
+            format!("root/prefix/{}", namespace_prefix()),
+            format!(r"root/prefix/{}/photos/animals\cat.png", namespace_prefix()),
+            format!("root/prefix/{}/photos/cat.png", namespace_prefix()),
+            directory_key.clone(),
+            format!("{namespace_root}/"),
+            format!("{directory_key}/__dir_marker"),
+        )
+    );
+    assert_eq!(
+        (
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &directory_key,
+                &format!(r"{directory_key}/animals\cat.png"),
+            ),
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &key_of(Path::new("")),
+                &format!("{namespace_root}/test-file"),
+            ),
+            S3BlobStorage::listed_path(
+                &namespace_root,
+                &key_of(Path::new("")),
+                &format!("{directory_key}/__dir_marker"),
+            ),
+        ),
+        (
+            Some(PathBuf::from(r"photos/animals\cat.png")),
+            Some(PathBuf::from("test-file")),
+            Some(PathBuf::from("photos")),
         )
     );
 }

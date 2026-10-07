@@ -913,6 +913,9 @@ impl PublicOplogEntry {
                 .unwrap_or(false),
             SchemaValue::Path { path } => Self::string_match(path, path_stack, query_path, query),
             SchemaValue::Url { url } => Self::string_match(url, path_stack, query_path, query),
+            SchemaValue::Uuid(value) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
             SchemaValue::Datetime { value } => {
                 Self::string_match(&value.to_rfc3339(), path_stack, query_path, query)
             }

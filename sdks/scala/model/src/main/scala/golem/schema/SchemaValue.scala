@@ -16,6 +16,8 @@
 
 package golem.schema
 
+import golem.Uuid
+
 /**
  * Recursive, in-memory mirror of a `golem:core/types@2.0.0`
  * `schema-value-node`.
@@ -64,6 +66,7 @@ object SchemaValue {
   final case class BinaryValue(bytes: Vector[Byte], mimeType: Option[String]) extends SchemaValue
   final case class PathValue(value: String)                                   extends SchemaValue
   final case class UrlValue(value: String)                                    extends SchemaValue
+  final case class UuidValue(value: Uuid)                                     extends SchemaValue
   final case class DatetimeValue(value: Datetime)                             extends SchemaValue
   final case class DurationValue(nanoseconds: Long)                           extends SchemaValue
   final case class QuantityValueNode(value: QuantityValue)                    extends SchemaValue
@@ -117,6 +120,7 @@ object v {
   def f64(value: Double): SchemaValue    = F64Value(value)
   def char(value: Int): SchemaValue      = CharValue(value)
   def string(value: String): SchemaValue = StringValue(value)
+  def uuid(value: Uuid): SchemaValue     = UuidValue(value)
 
   def record(fields: List[SchemaValue]): SchemaValue                            = RecordValue(fields)
   def variant(caseIndex: Int, payload: Option[SchemaValue] = None): SchemaValue =

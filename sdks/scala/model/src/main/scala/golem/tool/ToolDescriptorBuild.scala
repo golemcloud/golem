@@ -145,6 +145,7 @@ final case class BodyBuild(
   constraints: List[ExtendedConstraint] = Nil,
   stdin: Option[StreamSpec] = None,
   stdout: Option[StreamSpec] = None,
+  stderr: Option[StreamSpec] = None,
   result: Option[ResultBuild] = None,
   errors: List[ErrorCaseBuild] = Nil,
   annotations: Option[CommandAnnotations] = None,
@@ -186,6 +187,7 @@ object ToolDescriptorBuilder {
   def build(
     identity: String,
     version: String,
+    requiresFilesystem: Boolean,
     root: CommandBuild,
     children: List[ChildBuild]
   )(ctx: ToolBuildCtx): Either[ToolBuildError, ExtendedToolType] =
@@ -255,7 +257,7 @@ object ToolDescriptorBuilder {
 
         commands = commands.updated(0, commands(0).copy(subcommands = rootSubs))
 
-        val tool = ExtendedToolType(version, commands)
+        val tool = ExtendedToolType(version, commands, requiresFilesystem)
         if (ctx.isOutermostDescriptor) ToolComposition.normalizeInheritedGlobals(tool)
         else Right(tool)
       } catch { case ToolBuildException(error) => Left(error) }
@@ -313,6 +315,7 @@ object ToolDescriptorBuilder {
       constraints = build.constraints,
       stdin = build.stdin,
       stdout = build.stdout,
+      stderr = build.stderr,
       result = build.result.map(r => ExtendedResultSpec(r.graph, Doc.empty, r.formatters, r.defaultFormatter)),
       errors = build.errors.map(e => ExtendedErrorCase(e.name, e.doc, e.kind, e.exitCode, e.payload)),
       annotations = build.annotations,

@@ -492,10 +492,8 @@ fn collect_streams<'a>(
                 collect_streams(value, streams);
             }
         }
-        SchemaValue::Option { inner } => {
-            if let Some(value) = inner {
-                collect_streams(value, streams);
-            }
+        SchemaValue::Option { inner: Some(value) } => {
+            collect_streams(value, streams);
         }
         SchemaValue::Result(payload) => {
             let value = match payload {
@@ -921,6 +919,7 @@ impl GraphCtx {
             SchemaType::Url { restrictions, .. } => {
                 wire::SchemaTypeBody::UrlType(encode_url(restrictions))
             }
+            SchemaType::Uuid { .. } => wire::SchemaTypeBody::UuidType,
             SchemaType::Datetime { .. } => wire::SchemaTypeBody::DatetimeType,
             SchemaType::Duration { .. } => wire::SchemaTypeBody::DurationType,
             SchemaType::Quantity { spec, .. } => {
@@ -1248,6 +1247,7 @@ impl ValueCtx {
             }
             SchemaValue::Path { path } => wire::SchemaValueNode::PathValue(path.clone()),
             SchemaValue::Url { url } => wire::SchemaValueNode::UrlValue(url.clone()),
+            SchemaValue::Uuid(value) => wire::SchemaValueNode::UuidValue((*value).into()),
             SchemaValue::Datetime { value } => {
                 let seconds = value.timestamp();
                 let nanoseconds = value.timestamp_subsec_nanos();

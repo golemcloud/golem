@@ -1,4 +1,4 @@
-use crate::services::oplog::OplogServiceOps;
+use crate::services::oplog::{CommitLevel, Oplog, OplogService, OplogServiceOps};
 use crate::services::{HasComponentService, HasConfig, HasOplogService, HasWorkerService};
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::durable_stream::StreamSessionRecord;
@@ -12,15 +12,58 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
 use golem_common::model::{
-    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord, AutomaticSnapshot,
-    DurableStreamSessionIndex, ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey,
-    InvocationResultMembership, OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef,
-    PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex,
-    ReceivedCardTransferState, RetryConfig, RetryPolicyState, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    AgentFingerprint, AgentResourceDescription, AgentStatus, AgentStatusRecord,
+    AuthoritativeSnapshot, AuthoritativeSnapshotKind, AutomaticSnapshot, DurableStreamSessionIndex,
+    ExportForkAdmissions, FailedUpdateRecord, IdempotencyKey, InvocationResultMembership,
+    OplogProcessorCheckpointState, OwnedAgentId, PendingCardEventRef, PendingInvocationRef,
+    PendingUpdateKind, PendingUpdateRef, ReceivedCardTransferIndex, ReceivedCardTransferState,
+    RetryConfig, RetryPolicyState, SnapshotFiles, SuccessfulUpdateRecord, UsableAutomaticSnapshot,
 };
 use golem_common::serialization::{deserialize, try_deserialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
+
+/// One immutable projection boundary, shared by region discovery and every baseline attempt.
+pub(super) struct StatusOplogReader<'a> {
+    service: Arc<dyn OplogService>,
+    opened: Option<&'a dyn Oplog>,
+    owned_agent_id: &'a OwnedAgentId,
+    agent_mode: AgentMode,
+    horizon: OplogIndex,
+}
+
+impl<'a> StatusOplogReader<'a> {
+    pub(super) fn new(
+        this: &impl HasOplogService,
+        owned_agent_id: &'a OwnedAgentId,
+        agent_mode: AgentMode,
+        opened: Option<&'a dyn Oplog>,
+        horizon: OplogIndex,
+    ) -> Self {
+        Self {
+            service: this.oplog_service(),
+            opened,
+            owned_agent_id,
+            agent_mode,
+            horizon,
+        }
+    }
+
+    async fn read_exact(&self, first: OplogIndex, count: u64) -> BTreeMap<OplogIndex, OplogEntry> {
+        if first > self.horizon || count == 0 {
+            return BTreeMap::new();
+        }
+        let count = count.min(self.horizon.as_u64() - first.as_u64() + 1);
+        match self.opened {
+            Some(oplog) => oplog.read_exact(first, count).await,
+            None => {
+                self.service
+                    .read_exact(self.owned_agent_id, self.agent_mode, first, count)
+                    .await
+            }
+        }
+    }
+}
 
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
 pub async fn calculate_last_known_status_for_existing_worker<T>(
@@ -134,10 +177,27 @@ where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
+    let horizon = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
+    calculate_status_with_reader(this, &reader, last_known, read_checkpoint).await
+}
+
+pub(super) async fn calculate_status_with_reader<T, Fut>(
+    this: &T,
+    reader: &StatusOplogReader<'_>,
+    last_known: Option<AgentStatusRecord>,
+    read_checkpoint: impl FnOnce() -> Fut,
+) -> Result<Option<AgentStatusRecord>, String>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+    Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
+{
     // 1. Try folding forward from the live cached status.
     if let Some(last_known) = last_known
-        && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, last_known).await?
+        && let Some(status) = try_fold_status_from_reader(this, reader, last_known).await?
     {
         crate::metrics::workers::record_agent_status_recompute("cache");
         return Ok(Some(status));
@@ -146,25 +206,75 @@ where
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
-        && let Some(status) =
-            try_fold_status_from(this, owned_agent_id, agent_mode, checkpoint).await?
+        && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
     {
         crate::metrics::workers::record_agent_status_recompute("checkpoint");
         return Ok(Some(status));
     }
 
     // 3. Fall back to a full recompute from the start of the oplog.
-    let status = try_fold_status_from(
-        this,
-        owned_agent_id,
-        agent_mode,
-        AgentStatusRecord::default(),
-    )
-    .await?;
+    let status = try_fold_status_from_reader(this, reader, AgentStatusRecord::default()).await?;
     if status.is_some() {
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     Ok(status)
+}
+
+/// Folds an acknowledged commit, returning receipt-gap detection and the fixed repair horizon.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn fold_committed_status<T>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    oplog: &dyn Oplog,
+    agent_mode: AgentMode,
+    commit_level: CommitLevel,
+    appended_through: OplogIndex,
+    baseline: AgentStatusRecord,
+    mut entries: BTreeMap<OplogIndex, OplogEntry>,
+) -> (Result<Option<AgentStatusRecord>, String>, bool, OplogIndex)
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    // Direct commits may return receipts already covered by an earlier catch-up.
+    entries.retain(|index, _| *index > baseline.oplog_idx);
+    let flushes_buffer =
+        agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
+    let horizon = baseline
+        .oplog_idx
+        .max(if flushes_buffer {
+            appended_through
+        } else {
+            OplogIndex::NONE
+        })
+        .max(
+            entries
+                .last_key_value()
+                .map(|(index, _)| *index)
+                .unwrap_or(OplogIndex::NONE),
+        );
+    let contiguous = match (entries.first_key_value(), entries.last_key_value()) {
+        (Some((first, _)), Some((last, _))) => {
+            *first == baseline.oplog_idx.next()
+                && last.as_u64() - first.as_u64() + 1 == entries.len() as u64
+                && *last == horizon
+        }
+        _ => horizon == baseline.oplog_idx,
+    };
+    if contiguous {
+        (
+            update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry),
+            false,
+            horizon,
+        )
+    } else {
+        // Opened-oplog reads include ephemeral handoffs. Never flush the newer buffered tail.
+        let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
+        (
+            try_fold_status_from_reader(this, &reader, baseline).await,
+            true,
+            horizon,
+        )
+    }
 }
 
 /// Folds the oplog entries after `baseline.oplog_idx` onto `baseline`.
@@ -183,20 +293,35 @@ pub async fn try_fold_status_from<T>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
+    baseline: AgentStatusRecord,
+) -> Result<Option<AgentStatusRecord>, String>
+where
+    T: HasOplogService + HasConfig + HasComponentService + Sync,
+{
+    let horizon = this
+        .oplog_service()
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let reader = StatusOplogReader::new(this, owned_agent_id, agent_mode, None, horizon);
+    try_fold_status_from_reader(this, &reader, baseline).await
+}
+
+pub(super) async fn try_fold_status_from_reader<T>(
+    this: &T,
+    reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
 ) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let owned_agent_id = reader.owned_agent_id;
+    let agent_mode = reader.agent_mode;
     let full_rebuild = baseline.oplog_idx == OplogIndex::NONE;
     if full_rebuild && baseline.invocation_results.is_empty() {
         baseline.invocation_results = this.config().invocation_results.membership();
     }
 
-    let last_oplog_index = this
-        .oplog_service()
-        .get_last_index(owned_agent_id, agent_mode)
-        .await;
+    let last_oplog_index = reader.horizon;
 
     if last_oplog_index == OplogIndex::NONE {
         // Worker status can only be recovered if we have at least the Create oplog entry, otherwise
@@ -221,25 +346,14 @@ where
         .max(1);
 
     if full_rebuild {
-        return fold_status_with_precomputed_regions(
-            this,
-            owned_agent_id,
-            agent_mode,
-            baseline,
-            last_oplog_index,
-            chunk_size,
-        )
-        .await;
+        return fold_status_with_precomputed_regions(this, reader, baseline, chunk_size).await;
     }
 
     let original_baseline = baseline.clone();
     let mut first = baseline.oplog_idx.next();
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let mut entries = reader.read_exact(first, count).await;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -253,14 +367,7 @@ where
                 &mut entries,
             )
             .await?;
-            hydrate_initial_pending_evidence(
-                this,
-                owned_agent_id,
-                agent_mode,
-                &mut baseline,
-                &entries,
-            )
-            .await?;
+            hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
             let finalize_oplog_processor_checkpoints =
                 entries.keys().next_back() == Some(&last_oplog_index);
             update_status_with_new_entries_internal(
@@ -280,10 +387,8 @@ where
                 // the complete deletion set before treating a retained-history error as fatal.
                 return fold_status_with_precomputed_regions(
                     this,
-                    owned_agent_id,
-                    agent_mode,
+                    reader,
                     original_baseline,
-                    last_oplog_index,
                     chunk_size,
                 )
                 .await;
@@ -296,26 +401,18 @@ where
 
 async fn fold_status_with_precomputed_regions<T>(
     this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+    reader: &StatusOplogReader<'_>,
     mut baseline: AgentStatusRecord,
-    last_oplog_index: OplogIndex,
     chunk_size: u64,
 ) -> Result<Option<AgentStatusRecord>, String>
 where
     T: HasOplogService + HasConfig + HasComponentService + Sync,
 {
+    let owned_agent_id = reader.owned_agent_id;
+    let agent_mode = reader.agent_mode;
+    let last_oplog_index = reader.horizon;
     let start = baseline.oplog_idx.next();
-    let Some(region_entries) = read_region_entries(
-        this,
-        owned_agent_id,
-        agent_mode,
-        start,
-        last_oplog_index,
-        chunk_size,
-    )
-    .await
-    else {
+    let Some(region_entries) = read_region_entries(reader, start, chunk_size).await else {
         return Ok(None);
     };
     let deleted_regions =
@@ -326,7 +423,7 @@ where
         &region_entries,
     );
 
-    if baseline_is_invalidated(&baseline, &skipped_regions) {
+    if baseline_is_invalidated(&baseline, &deleted_regions, &skipped_regions) {
         return Ok(None);
     }
     baseline.deleted_regions = deleted_regions;
@@ -335,10 +432,7 @@ where
     let mut first = start;
     while first <= last_oplog_index {
         let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let mut entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let mut entries = reader.read_exact(first, count).await;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -350,8 +444,7 @@ where
             &mut entries,
         )
         .await?;
-        hydrate_initial_pending_evidence(this, owned_agent_id, agent_mode, &mut baseline, &entries)
-            .await?;
+        hydrate_initial_pending_evidence(reader, &mut baseline, &entries).await?;
         let finalize_oplog_processor_checkpoints =
             entries.keys().next_back() == Some(&last_oplog_index);
         let deleted_regions = baseline.deleted_regions.clone();
@@ -398,16 +491,11 @@ where
     Ok(())
 }
 
-async fn hydrate_initial_pending_evidence<T>(
-    this: &T,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+async fn hydrate_initial_pending_evidence(
+    reader: &StatusOplogReader<'_>,
     baseline: &mut AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> Result<(), String>
-where
-    T: HasOplogService + Sync,
-{
+) -> Result<(), String> {
     let deleted = calculate_deleted_regions(baseline.deleted_regions.clone(), entries);
     for (attached_idx, entry) in entries {
         if deleted.is_in_deleted_region(*attached_idx) {
@@ -445,14 +533,8 @@ where
         let referent = if let Some(entry) = entries.get(&attached.pending_invocation_oplog_index) {
             Some(entry)
         } else {
-            persisted_referent = this
-                .oplog_service()
-                .read_exact(
-                    owned_agent_id,
-                    agent_mode,
-                    attached.pending_invocation_oplog_index,
-                    1,
-                )
+            persisted_referent = reader
+                .read_exact(attached.pending_invocation_oplog_index, 1)
                 .await;
             persisted_referent.get(&attached.pending_invocation_oplog_index)
         };
@@ -522,7 +604,8 @@ fn update_status_with_new_entries_internal(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    if validate_baseline && baseline_is_invalidated(&last_known, &skipped_regions) {
+    if validate_baseline && baseline_is_invalidated(&last_known, &deleted_regions, &skipped_regions)
+    {
         return Ok(None);
     }
 
@@ -537,9 +620,16 @@ fn update_status_with_new_entries_internal(
     )?))
 }
 
-fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &DeletedRegions) -> bool {
-    if !skipped_regions.is_in_deleted_region(baseline.oplog_idx) {
-        return false;
+fn baseline_is_invalidated(
+    baseline: &AgentStatusRecord,
+    deleted_regions: &DeletedRegions,
+    skipped_regions: &DeletedRegions,
+) -> bool {
+    // A baseline taken inside a region a later revert deleted still carries folded state from
+    // entries that no longer exist, even when the baseline's own skipped coverage hides that
+    // region in the comparison below.
+    if deleted_regions.is_in_deleted_region(baseline.oplog_idx) {
+        return true;
     }
 
     let baseline_without_overrides = if baseline.skipped_regions.is_overridden() {
@@ -556,7 +646,22 @@ fn baseline_is_invalidated(baseline: &AgentStatusRecord, skipped_regions: &Delet
     } else {
         skipped_regions.clone()
     };
+    // Removing a temporary snapshot override exposes prefix entries absent from the baseline.
+    // Both newly hidden and newly visible prefix entries require a different baseline.
+    let has_uncovered_prefix = |regions: &DeletedRegions, other: &DeletedRegions| {
+        regions.regions().any(|region| {
+            if region.start > baseline.oplog_idx {
+                return false;
+            }
+            let relevant_end = region.end.min(baseline.oplog_idx);
+            !other.regions().any(|other_region| {
+                other_region.start <= region.start && other_region.end >= relevant_end
+            })
+        })
+    };
     new_without_overrides != baseline_without_overrides
+        && (has_uncovered_prefix(&new_without_overrides, &baseline_without_overrides)
+            || has_uncovered_prefix(&baseline_without_overrides, &new_without_overrides))
 }
 
 fn update_status_with_precomputed_regions(
@@ -569,6 +674,14 @@ fn update_status_with_precomputed_regions(
     finalize_oplog_processor_checkpoints: bool,
 ) -> Result<AgentStatusRecord, String> {
     let active_plugins = last_known.active_plugins.clone();
+    let mut atomic_rollback = last_known.atomic_rollback;
+    for (index, entry) in &new_entries {
+        if !skipped_regions.is_in_deleted_region(*index)
+            && !deleted_regions.is_in_deleted_region(*index)
+        {
+            atomic_rollback.observe(*index, entry);
+        }
+    }
 
     let (status, last_error_kind, current_retry_state, overridden_retry_config) =
         calculate_latest_worker_status(
@@ -582,8 +695,12 @@ fn update_status_with_precomputed_regions(
             &new_entries,
         );
 
-    let pending_invocations =
-        calculate_pending_invocations(last_known.pending_invocations, &new_entries);
+    let initial_pending_invocations = last_known.pending_invocations.clone();
+    let pending_invocations = calculate_pending_invocations(
+        last_known.pending_invocations,
+        &last_known.pending_updates,
+        &new_entries,
+    );
     let pending_card_events =
         calculate_pending_card_events(last_known.pending_card_events, &new_entries);
     let received_card_transfers =
@@ -642,9 +759,12 @@ fn update_status_with_precomputed_regions(
         component_revision,
         component_size,
         component_revision_for_replay,
+        component_revision_start_index,
         last_manual_update_snapshot_index,
+        authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,
+        manual_update_admissions: _,
     } = calculate_update_fields(
         UpdateFields {
             pending_updates: last_known.pending_updates,
@@ -653,9 +773,15 @@ fn update_status_with_precomputed_regions(
             component_revision: last_known.component_revision,
             component_size: last_known.component_size,
             component_revision_for_replay: last_known.component_revision_for_replay,
+            component_revision_start_index: last_known.component_revision_start_index,
             last_manual_update_snapshot_index: last_known.last_manual_update_snapshot_index,
+            authoritative_snapshot: last_known.authoritative_snapshot,
             last_automatic_snapshot: last_known.last_automatic_snapshot,
             previous_usable_automatic_snapshot: last_known.previous_usable_automatic_snapshot,
+            manual_update_admissions: initial_pending_invocations
+                .into_iter()
+                .filter(PendingInvocationRef::is_manual_update)
+                .collect(),
         },
         &deleted_regions,
         &new_entries,
@@ -703,6 +829,7 @@ fn update_status_with_precomputed_regions(
         pending_invocations,
         pending_card_events,
         skipped_regions,
+        atomic_rollback,
         pending_updates,
         failed_updates,
         successful_updates,
@@ -723,8 +850,10 @@ fn update_status_with_precomputed_regions(
         revoked_cards,
         deleted_regions,
         component_revision_for_replay,
+        component_revision_start_index,
         current_retry_state,
         last_manual_update_snapshot_index,
+        authoritative_snapshot,
         last_automatic_snapshot,
         previous_usable_automatic_snapshot,
         agent_mode,
@@ -788,15 +917,17 @@ fn calculate_latest_worker_status(
                     .get(retry_from)
                     .map(|s| s.retry_count())
                     .unwrap_or_default();
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    count,
-                    *inside_atomic_region,
-                    retry_policy_state.as_ref(),
-                ) {
+                if (*kind == OplogErrorKind::Recovery && retry_policy_state.is_none())
+                    || is_worker_error_retriable(
+                        current_retry_policy
+                            .as_ref()
+                            .unwrap_or(default_retry_policy),
+                        error,
+                        count,
+                        *inside_atomic_region,
+                        retry_policy_state.as_ref(),
+                    )
+                {
                     current_status = AgentStatus::Retrying;
                 } else {
                     current_status = AgentStatus::Failed;
@@ -984,16 +1115,10 @@ pub(crate) async fn skipped_regions_at(
     owned_agent_id: &OwnedAgentId,
     horizon: OplogIndex,
 ) -> Result<DeletedRegions, String> {
-    let entries = read_region_entries(
-        this,
-        owned_agent_id,
-        AgentMode::Durable,
-        OplogIndex::INITIAL,
-        horizon,
-        1024,
-    )
-    .await
-    .ok_or("Missing fork source history")?;
+    let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
+    let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024)
+        .await
+        .ok_or("Missing fork source history")?;
     let deleted = calculate_deleted_regions(DeletedRegions::default(), &entries);
     Ok(calculate_skipped_regions(
         DeletedRegions::default(),
@@ -1003,20 +1128,15 @@ pub(crate) async fn skipped_regions_at(
 }
 
 async fn read_region_entries(
-    this: &(impl HasOplogService + Sync),
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
+    reader: &StatusOplogReader<'_>,
     mut first: OplogIndex,
-    horizon: OplogIndex,
     chunk_size: u64,
 ) -> Option<BTreeMap<OplogIndex, OplogEntry>> {
     let mut regions = BTreeMap::new();
+    let horizon = reader.horizon;
     while first <= horizon {
         let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
-        let entries = this
-            .oplog_service()
-            .read_exact(owned_agent_id, agent_mode, first, count)
-            .await;
+        let entries = reader.read_exact(first, count).await;
         first = entries.keys().next_back()?.next();
         regions.extend(entries.into_iter().filter(|(_, entry)| {
             matches!(
@@ -1107,12 +1227,22 @@ fn calculate_skipped_regions_with_deleted_regions(
                     .build(),
                 )
             }
-            OplogEntry::SuccessfulUpdate { .. } => {
+            OplogEntry::SuccessfulUpdate {
+                snapshot_assisted_details,
+                ..
+            } => {
                 if let Some(ovrd) = skipped_override {
                     for region in ovrd.into_regions() {
                         skipped_builder.add(region);
                     }
                     skipped_override = None;
+                }
+                if let Some(details) = snapshot_assisted_details
+                    && !ignored_snapshot_update_region.is_some_and(|region| region.contains(*idx))
+                {
+                    skipped_builder.add(OplogRegion::from_index_range(
+                        OplogIndex::INITIAL.next()..=details.snapshot_index,
+                    ));
                 }
             }
             OplogEntry::FailedUpdate { .. } => {
@@ -1190,9 +1320,14 @@ fn manual_update_target_revision_of(
 
 fn calculate_pending_invocations(
     initial: Vec<PendingInvocationRef>,
+    initial_pending_updates: &VecDeque<PendingUpdateRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Vec<PendingInvocationRef> {
     let mut result = initial;
+    let mut pending_update_attempts: VecDeque<_> = initial_pending_updates
+        .iter()
+        .map(|update| (update.target_revision, update.admission_index))
+        .collect();
     for (oplog_idx, entry) in entries {
         // Here we are handling two categories of oplog entries:
         // - "input" entries adding items to pending queues (PendingAgentInvocation, PendingUpdate)
@@ -1241,19 +1376,61 @@ fn calculate_pending_invocations(
                 result.retain(|invocation| !invocation.has_idempotency_key(idempotency_key));
             }
             OplogEntry::PendingUpdate {
-                description:
-                    UpdateDescription::SnapshotBased {
-                        target_revision, ..
-                    },
+                description,
+                update_attempt_index,
                 ..
-            } => result.retain(|invocation| {
-                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
-            }),
+            } => {
+                let target_revision = *description.target_revision();
+                let admission_index = update_attempt_index.unwrap_or(*oplog_idx);
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && pending_update_attempts.front().is_some_and(
+                        |(pending_target, pending_admission)| {
+                            *pending_target == target_revision
+                                && *pending_admission == admission_index
+                        },
+                    );
+                if !refines_automatic_admission {
+                    pending_update_attempts.push_back((target_revision, admission_index));
+                }
+                if matches!(description, UpdateDescription::SnapshotBased { .. })
+                    && let Some(position) = result
+                        .iter()
+                        .position(|invocation| invocation.oplog_index == admission_index)
+                {
+                    result.remove(position);
+                }
+            }
             OplogEntry::FailedUpdate {
+                target_revision,
+                update_attempt_index,
+                ..
+            } => {
+                if update_attempt_index.is_some_and(|attempt_index| {
+                    pending_update_attempts
+                        .front()
+                        .is_some_and(|(_, pending_index)| *pending_index == attempt_index)
+                }) || (update_attempt_index.is_none()
+                    && pending_update_attempts
+                        .front()
+                        .is_some_and(|(pending_target, _)| pending_target == target_revision))
+                {
+                    pending_update_attempts.pop_front();
+                } else if let Some(position) = result.iter().position(|invocation| {
+                    update_attempt_index
+                        .is_some_and(|attempt_index| invocation.oplog_index == attempt_index)
+                }) {
+                    result.remove(position);
+                }
+            }
+            OplogEntry::SuccessfulUpdate {
                 target_revision, ..
-            } => result.retain(|invocation| {
-                invocation.manual_update_target_revision.as_ref() != Some(target_revision)
-            }),
+            } if pending_update_attempts
+                .front()
+                .is_some_and(|(pending_target, _)| pending_target == target_revision) =>
+            {
+                pending_update_attempts.pop_front();
+            }
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
@@ -1499,30 +1676,6 @@ fn calculate_export_fork_admissions(
     Ok(admissions)
 }
 
-/// Gives the pending updates after `entry`, and the pending update that `entry` applied when it
-/// is a `SuccessfulUpdate` and the queue held one. A `PendingUpdate` adds `new(description)` at
-/// the back. A `SuccessfulUpdate` or a `FailedUpdate` ends the update at the front. Any other
-/// entry changes nothing.
-pub(crate) fn pair_update<T>(
-    mut pending: VecDeque<T>,
-    entry: &OplogEntry,
-    new: impl FnOnce(&UpdateDescription) -> T,
-) -> (VecDeque<T>, Option<T>) {
-    let applied = match entry {
-        OplogEntry::PendingUpdate { description, .. } => {
-            pending.push_back(new(description));
-            None
-        }
-        OplogEntry::SuccessfulUpdate { .. } => pending.pop_front(),
-        OplogEntry::FailedUpdate { .. } => {
-            pending.pop_front();
-            None
-        }
-        _ => None,
-    };
-    (pending, applied)
-}
-
 /// The fields of the status that the component updates and the automatic snapshot entries decide.
 #[derive(Debug)]
 struct UpdateFields {
@@ -1532,48 +1685,155 @@ struct UpdateFields {
     component_revision: ComponentRevision,
     component_size: u64,
     component_revision_for_replay: ComponentRevision,
+    component_revision_start_index: OplogIndex,
     last_manual_update_snapshot_index: Option<OplogIndex>,
+    authoritative_snapshot: Option<AuthoritativeSnapshot>,
     last_automatic_snapshot: Option<AutomaticSnapshot>,
     previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
+    /// The manual update admissions (`PendingAgentInvocation` entries of a manual update) that
+    /// no `PendingUpdate` entry has taken yet. A `FailedUpdate` entry with their index as its
+    /// attempt index ends them.
+    manual_update_admissions: VecDeque<PendingInvocationRef>,
 }
 
 impl UpdateFields {
-    /// The fields after the entry `entry` at `oplog_idx`.
+    /// The manual update admissions after `entry` at `oplog_idx`. Entries in a deleted region
+    /// count here too: an admission and the `PendingUpdate` that takes it can be on different
+    /// sides of a revert.
+    fn after_admission(mut self, oplog_idx: OplogIndex, entry: &OplogEntry, deleted: bool) -> Self {
+        match entry {
+            OplogEntry::PendingAgentInvocation {
+                timestamp, payload, ..
+            } => {
+                if let Some(target_revision) = manual_update_target_revision_of(payload) {
+                    self.manual_update_admissions
+                        .push_back(PendingInvocationRef {
+                            timestamp: *timestamp,
+                            oplog_index: oplog_idx,
+                            idempotency_key: None,
+                            manual_update_target_revision: Some(target_revision),
+                        });
+                }
+            }
+            OplogEntry::PendingUpdate {
+                update_attempt_index: Some(update_attempt_index),
+                ..
+            } => self.remove_manual_update_admission(*update_attempt_index),
+            OplogEntry::FailedUpdate {
+                update_attempt_index: Some(update_attempt_index),
+                ..
+            } if deleted => self.remove_manual_update_admission(*update_attempt_index),
+            _ => {}
+        }
+        self
+    }
+
+    fn remove_manual_update_admission(&mut self, admission_index: OplogIndex) {
+        if let Some(position) = self
+            .manual_update_admissions
+            .iter()
+            .position(|invocation| invocation.oplog_index == admission_index)
+        {
+            self.manual_update_admissions.remove(position);
+        }
+    }
+
+    /// The fields after the entry `entry` at `oplog_idx`, which is outside the deleted regions.
+    ///
+    /// A `PendingUpdate` with an attempt index that names the automatic update at the front of
+    /// the queue is the strategy entry of that update: it refines the front instead of adding
+    /// an update. A `FailedUpdate` ends the front update when its attempt index names it (or,
+    /// without an attempt index, when its target revision matches), else the manual update
+    /// admission that its attempt index names. A `SuccessfulUpdate` ends the front update.
     fn after(mut self, oplog_idx: OplogIndex, entry: &OplogEntry) -> Self {
-        let (pending_updates, applied_update) = pair_update(
-            std::mem::take(&mut self.pending_updates),
-            entry,
-            |description| PendingUpdateRef {
-                timestamp: entry.timestamp(),
-                oplog_index: oplog_idx,
-                target_revision: *description.target_revision(),
-                kind: PendingUpdateKind::of(description),
-            },
-        );
-        self.pending_updates = pending_updates;
         match entry {
             OplogEntry::Create { parameters, .. } => {
                 self.component_revision = parameters.component_revision;
                 self.component_revision_for_replay = parameters.component_revision;
+                self.component_revision_start_index = oplog_idx;
                 self.component_size = parameters.component_size;
+            }
+            OplogEntry::PendingUpdate {
+                timestamp,
+                description,
+                update_attempt_index,
+            } => {
+                let kind = PendingUpdateKind::of(description);
+                let admission_index = update_attempt_index.unwrap_or(oplog_idx);
+                let target_revision = *description.target_revision();
+                let snapshot_based = matches!(description, UpdateDescription::SnapshotBased { .. });
+                let refines_automatic_admission = update_attempt_index.is_some()
+                    && !snapshot_based
+                    && self.pending_updates.front().is_some_and(|pending| {
+                        pending.admission_index == admission_index
+                            && pending.target_revision == target_revision
+                            && pending.oplog_index == pending.admission_index
+                            && pending.kind == PendingUpdateKind::Automatic
+                    });
+                if refines_automatic_admission {
+                    if let Some(pending) = self.pending_updates.front_mut() {
+                        pending.oplog_index = oplog_idx;
+                        pending.kind = kind;
+                    }
+                } else if update_attempt_index.is_none() || snapshot_based {
+                    self.pending_updates.push_back(PendingUpdateRef {
+                        timestamp: *timestamp,
+                        oplog_index: oplog_idx,
+                        admission_index,
+                        target_revision,
+                        kind,
+                    });
+                }
             }
             OplogEntry::FailedUpdate {
                 timestamp,
                 target_revision,
                 details,
+                snapshot_assisted_details,
+                update_attempt_index,
             } => {
+                let matches_pending = self.pending_updates.front().is_some_and(|pending| {
+                    update_attempt_index
+                        .is_some_and(|attempt_index| pending.admission_index == attempt_index)
+                        || (update_attempt_index.is_none()
+                            && pending.target_revision == *target_revision)
+                });
+                let applied_update = if matches_pending {
+                    self.pending_updates.pop_front()
+                } else {
+                    update_attempt_index
+                        .and_then(|attempt_index| {
+                            self.manual_update_admissions
+                                .iter()
+                                .position(|invocation| invocation.oplog_index == attempt_index)
+                        })
+                        .and_then(|position| self.manual_update_admissions.remove(position))
+                        .map(|invocation| PendingUpdateRef {
+                            timestamp: invocation.timestamp,
+                            oplog_index: invocation.oplog_index,
+                            admission_index: invocation.oplog_index,
+                            target_revision: *target_revision,
+                            kind: PendingUpdateKind::SnapshotBased {
+                                filesystem_snapshot: None,
+                            },
+                        })
+                };
                 self.failed_updates.push(FailedUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
                     details: details.clone(),
+                    pending_update: applied_update,
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
             }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_revision,
                 new_component_size,
+                snapshot_assisted_details,
                 ..
             } => {
+                let applied_update = self.pending_updates.pop_front();
                 self.successful_updates.push(SuccessfulUpdateRecord {
                     timestamp: *timestamp,
                     target_revision: *target_revision,
@@ -1581,14 +1841,23 @@ impl UpdateFields {
                     filesystem_snapshot: applied_update
                         .as_ref()
                         .and_then(|update| update.kind.filesystem_snapshot().cloned()),
+                    pending_update: applied_update.clone(),
+                    snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
                 self.component_revision = *target_revision;
+                self.component_revision_start_index = oplog_idx;
                 self.component_size = *new_component_size;
 
                 self.last_automatic_snapshot = None;
                 self.previous_usable_automatic_snapshot = None;
 
-                if let Some(PendingUpdateRef {
+                if let Some(details) = snapshot_assisted_details {
+                    self.component_revision_for_replay = details.source_component_revision;
+                    self.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: details.snapshot_index,
+                        kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic,
+                    });
+                } else if let Some(PendingUpdateRef {
                     kind: PendingUpdateKind::SnapshotBased { .. },
                     oplog_index: applied_update_oplog_index,
                     ..
@@ -1596,6 +1865,10 @@ impl UpdateFields {
                 {
                     self.component_revision_for_replay = *target_revision;
                     self.last_manual_update_snapshot_index = Some(applied_update_oplog_index);
+                    self.authoritative_snapshot = Some(AuthoritativeSnapshot {
+                        index: applied_update_oplog_index,
+                        kind: AuthoritativeSnapshotKind::ManualUpdate,
+                    });
                 }
             }
             OplogEntry::Snapshot {
@@ -1638,19 +1911,23 @@ impl UpdateFields {
     }
 }
 
-/// Gives `fields` after each entry of `entries` that is not in a deleted region.
+/// Gives `fields` after each entry of `entries`. Entries in a deleted region change only the
+/// manual update admissions.
 fn calculate_update_fields(
     fields: UpdateFields,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> UpdateFields {
-    entries
-        .iter()
-        // Skipping entries in deleted regions (by revert)
-        .filter(|(oplog_idx, _)| !deleted_regions.is_in_deleted_region(**oplog_idx))
-        .fold(fields, |fields, (oplog_idx, entry)| {
+    entries.iter().fold(fields, |fields, (oplog_idx, entry)| {
+        // Entries in deleted regions (by revert) are skipped, except for the admissions.
+        let deleted = deleted_regions.is_in_deleted_region(*oplog_idx);
+        let fields = fields.after_admission(*oplog_idx, entry, deleted);
+        if deleted {
+            fields
+        } else {
             fields.after(*oplog_idx, entry)
-        })
+        }
+    })
 }
 
 fn calculate_invocation_results(

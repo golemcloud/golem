@@ -1,6 +1,21 @@
 {
   "name": "@golemcloud/golem-ts-sdk",
   "type": "module",
+  "sideEffects": [
+    "./dist/index.mjs",
+    "./dist/runtime/index.mjs",
+    "./dist/runtime/middleware.mjs",
+    "./dist/runtime/schema/arktype.mjs",
+    "./dist/runtime/schema/effect.mjs",
+    "./dist/runtime/schema/valibot.mjs",
+    "./dist/runtime/schema/zod.mjs",
+    "./src/index.ts",
+    "./src/schema/arktype.ts",
+    "./src/schema/effect.ts",
+    "./src/schema/valibot.ts",
+    "./src/schema/zod.ts",
+    "./tests/components/**"
+  ],
   "version": "0.0.0",
   "publishConfig": {
     "access": "public"
@@ -13,25 +28,31 @@
   "main": "dist/index.mjs",
   "exports": {
     ".": {
+      "golem-component": "./dist/runtime/index.mjs",
       "import": "./dist/index.mjs",
       "types": "./dist/index.d.mts"
     },
     "./schema": {
+      "golem-component": "./dist/runtime/schema/public.mjs",
       "import": "./dist/schema.mjs",
       "types": "./dist/schema.d.mts"
     },
     "./reflection": {
+      "golem-component": "./dist/runtime/reflection.mjs",
       "import": "./dist/reflection.mjs",
       "types": "./dist/reflection.d.mts"
     },
     "./http-router": {
+      "golem-component": "./dist/runtime/http-router.mjs",
       "import": "./dist/http-router.mjs",
       "types": "./dist/http-router.d.mts"
     },
     "./middleware": {
+      "golem-component": "./dist/runtime/middleware.mjs",
       "import": "./dist/middleware.mjs",
       "types": "./dist/middleware.d.mts"
-    }
+    },
+    "./component": "./dist/component.mjs"
   },
   "typesVersions": {
     "*": {
@@ -78,7 +99,11 @@
   "license": "SEE LICENSE IN LICENSE",
   "description": "",
   "dependencies": {
-    "@noble/hashes": "^1.8.0"
+    "@noble/hashes": "^1.8.0",
+    "terser": "^5.46.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5.8.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",

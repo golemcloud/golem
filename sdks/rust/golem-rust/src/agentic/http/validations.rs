@@ -20,6 +20,82 @@ use crate::golem_agentic::golem::agent::common::{
 };
 use std::collections::HashSet;
 
+#[doc(hidden)]
+pub fn validate_wire_agent_http(
+    agent: &crate::golem_agentic::golem::agent::common::AgentType,
+) -> Result<(), String> {
+    use crate::golem_agentic::golem::agent::common::{FieldSource, InputSchema};
+    use crate::schema::wit::wire::Role;
+    let names = |input: &InputSchema, principal: bool| {
+        let InputSchema::Parameters(fields) = input;
+        fields
+            .iter()
+            .filter(|field| matches!(field.source, FieldSource::AutoInjected(_)) == principal)
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>()
+    };
+    let roles = |input: &InputSchema, role: Role| {
+        let InputSchema::Parameters(fields) = input;
+        fields
+            .iter()
+            .filter(|field| {
+                matches!(field.source, FieldSource::UserSupplied)
+                    && agent.schema.type_nodes[field.schema as usize]
+                        .metadata
+                        .role
+                        .as_ref()
+                        .is_some_and(|actual| {
+                            std::mem::discriminant(actual) == std::mem::discriminant(&role)
+                        })
+            })
+            .map(|field| field.name.clone())
+            .collect::<HashSet<_>>()
+    };
+    if let Some(mount) = &agent.http_mount {
+        let input = &agent.constructor.input_schema;
+        let parameters = names(input, false);
+        validate_no_catch_all_in_http_mount(&agent.type_name, mount)?;
+        for (role, kind) in [
+            (Role::UnstructuredText, "UnstructuredText"),
+            (Role::UnstructuredBinary, "UnstructuredBinary"),
+            (Role::Multimodal, "Multimodal"),
+        ] {
+            if let Some(name) = roles(input, role).iter().next() {
+                return Err(format!(
+                    "Agent '{}' constructor parameter '{}' cannot be of type '{}' when used with HTTP mount",
+                    agent.type_name, name, kind
+                ));
+            }
+        }
+        validate_mount_variables_are_not_principal(mount, &names(input, true))?;
+        validate_mount_variables_exist_in_constructor(mount, &parameters)?;
+        validate_constructor_vars_are_satisfied(mount, &parameters)?;
+    }
+    for method in &agent.methods {
+        if method.http_endpoint.is_empty() {
+            continue;
+        }
+        if agent.http_mount.is_none() {
+            return Err(format!(
+                "Agent method '{}' of '{}' defines HTTP endpoints but the agent is not mounted over HTTP. Please specify mount details in 'agent_definition'",
+                method.name, agent.type_name
+            ));
+        }
+        let input = &method.input_schema;
+        for endpoint in &method.http_endpoint {
+            validate_endpoint_variables(
+                endpoint,
+                &names(input, false),
+                &names(input, true),
+                &roles(input, Role::UnstructuredBinary),
+                &roles(input, Role::UnstructuredText),
+                &roles(input, Role::Multimodal),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 // This validation is applied along with other details in the definition
 // unlike basic parsing of the HTTP mount which is done earlier.
 pub fn validate_http_mount(

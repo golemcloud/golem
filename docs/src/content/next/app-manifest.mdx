@@ -39,9 +39,9 @@ Note that on top of the above schema there are other checks performed by `golem`
 
 ## Loading of Application Manifest documents
 
-The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. Once the top level manifest document is found, more manifests are searched based on the <FieldLink path="includes"/> fields.
+The _Golem CLI_ commands that use _Application Manifest_ start by searching for `golem.yaml` documents in the _current_ and the _parent_ directories. The outermost `golem.yaml` found this way is used as the root manifest document, then more manifests are searched based on its <FieldLink path="includes"/> field.
 
-After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
+After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by passing component names as positional arguments to the commands that accept them (e.g. `golem build <COMPONENT_NAME>...`), or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
 An Application Manifest can also be selected explicitly with `--app-manifest-path` (`-A`). This chooses the root manifest instead of searching parent directories; its `includes` are still resolved. Use `--disable-app-manifest-discovery` (`-X`) to run without manifest discovery.
 
@@ -304,7 +304,32 @@ Ambient tool names must not collide with application tools or selected account-o
 
 Both kinds use the normal effective binding policy. In particular, `configKeysReadable` is narrowing-only: the effective scope is the intersection of the system or environment binding and the agent binding. Calls made by a native implementation through Golem's config host helper are checked against that effective scope; running in the host does not grant unrestricted config access.
 
-Golem currently ships no production built-in or native tool inventory. A deployment can only refer to system-provided tool names advertised by the Golem installation it targets.
+Golem currently ships these component-implemented built-ins:
+
+- `read-file@0.3.0`, `write-file@0.3.0`, and `edit-file@0.3.0` provide filesystem operations. Their agent bindings must grant `filesystemAccess: allowed`.
+- `web-fetch@0.1.0` performs read-only HTTP and HTTPS GET requests. It requires no filesystem grant and is marked open-world because it contacts external services.
+
+For example, select and bind `web-fetch` as follows:
+
+```yaml
+tools:
+  web-fetch:
+    release:
+      account: builtin-tool-owner@golem.cloud
+      name: web-fetch
+      version: 0.1.0
+
+agents:
+  ResearchAgent:
+    tools:
+      web-fetch: {}
+```
+
+The tool requires a URL on each call. It also accepts `--timeout-ms` (default `10000`, allowed range `1`–`30000`), `--max-response-bytes` (default `2097152`, allowed range `1`–`5242880`), `--max-redirects` (default `5`, allowed range `0`–`10`), and `--convert-html-to-text` (default `false`) as optional **invocation arguments**. These are not manifest parameters or deployment configuration, and the safety limits' hard ceilings cannot be overridden. A zero redirect limit disables redirect following.
+
+`web-fetch` returns the final URL, HTTP status, original content type when present, textual content, and whether the result was truncated. Non-success HTTP statuses are returned normally with supported textual bodies. HTML is returned as decoded source unless `--convert-html-to-text` is enabled. Binary responses, invalid text encodings, unsafe redirects, redirect cycles, and elapsed deadlines return typed errors.
+
+Completed results and typed errors are durable and replay without another HTTP request. If execution is interrupted before the result is recorded, recovery may retry the GET request; endpoints should therefore tolerate repeated GETs.
 
 ### Bridge generation
 
@@ -730,6 +755,9 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     ***Optional template name or list of template names*** which will be used for creating the component fields.
 
     The _template name_ must be one of that are defined in <FieldLink path="componentTemplates"/>.
+
+    Templates can also inherit other templates, but every template may be inherited only through a single path:
+    e.g. using two templates that both inherit the same template is rejected.
 
     See <FieldLink path="componentTemplates"/> and [Template variable and functions](#template-variables-and-functions)
     for defining templates.
@@ -1348,6 +1376,18 @@ For registry-backed tools, the generator reads only the release's safe tool defi
 
   <Field
     meta={{
+      path: "componentTemplates.<template-name>.guestLanguage",
+      noSpecialization: true,
+    }}
+  >
+    ***Optional guest language*** of the components built with the template: `ts`, `effect`, `rust`, `scala` or `moonbit`.
+
+    A component's guest language comes from the templates applied to it, directly or through template inheritance. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. The built-in templates (e.g. `ts`, `rust`, `scala`) declare their language, so custom templates inheriting them don't need to declare it; custom templates that don't inherit a built-in template can declare it to enable these features. The templates applied to a component must not declare different languages.
+
+  </Field>
+
+  <Field
+    meta={{
       path: "componentTemplates.<template-name>.componentWasm",
     }}
   ></Field>
@@ -1568,6 +1608,9 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     since: Release.R_1_5_0
   }}>
     ***Optional template name or list of template names*** which will be used for creating the agent fields.
+
+    As for components, every template may be inherited only through a single path: e.g. listing a template
+    together with another template that inherits it is rejected.
   </Field>
 
   <Field meta={{
@@ -1852,21 +1895,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
     path: "secretDefaults.<environment-name>",
     since: Release.R_1_5_0
   }}>
-    ***Optional list of secret default entries*** for the environment.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].path",
-    since: Release.R_1_5_0
-  }}>
-    ***Required array of strings*** defining the path to the secret.
-  </Field>
-
-  <Field meta={{
-    path: "secretDefaults.<environment-name>[*].value",
-    since: Release.R_1_5_0
-  }}>
-    ***Required value*** of the secret default.
+    ***Optional object of secret default values*** for the environment, nested by secret path (e.g. `db: { password: ... }` for the `db.password` secret). Defaults are only applied to secrets that do not exist yet in the environment. String values can reference environment variables with `{{ VAR }}`; these are only required for secrets that get created.
   </Field>
 
   <Field meta={{

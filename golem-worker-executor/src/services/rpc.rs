@@ -48,7 +48,6 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, InvocationFailure, InvocationFailureKind,
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationStart,
@@ -72,6 +71,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -168,19 +168,20 @@ pub trait Rpc: Send + Sync {
         &self,
         _request: StreamAttachmentControlRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         Err(RpcError::ProtocolError {
             details:
                 "durable stream attachment control is not supported by this RPC implementation"
                     .to_string(),
-        })
+        }
+        .into())
     }
 
     async fn read_durable_stream_segment(
         &self,
         _request: DurableStreamReadRequest,
         _auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         Err(RpcError::ProtocolError {
             details: "durable stream segment reads are not supported by this RPC implementation"
                 .to_string(),
@@ -209,24 +210,48 @@ pub struct DurableRpcInvocationResult {
     pub output_mappings: Vec<DurableStreamMapping>,
 }
 
-/// Read transport failure, kept separate from durable invocation errors.
+/// Transport-level failure of a read or control sent to a remote durable stream producer, kept
+/// separate from durable invocation errors. `Unavailable` means the producer is temporarily
+/// unreachable (recovering, fenced, being deleted or migrating) and the operation may be retried.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DurableStreamReadError<E> {
+pub enum DurableStreamRemoteError<E> {
     Unavailable,
     Other(E),
 }
 
-impl<E> From<E> for DurableStreamReadError<E> {
+impl<E> From<E> for DurableStreamRemoteError<E> {
     fn from(error: E) -> Self {
         Self::Other(error)
     }
 }
 
-impl<E> DurableStreamReadError<E> {
-    pub fn map_other<F>(self, map: impl FnOnce(E) -> F) -> DurableStreamReadError<F> {
+impl<E> DurableStreamRemoteError<E> {
+    pub fn map_other<F>(self, map: impl FnOnce(E) -> F) -> DurableStreamRemoteError<F> {
         match self {
-            Self::Unavailable => DurableStreamReadError::Unavailable,
-            Self::Other(error) => DurableStreamReadError::Other(map(error)),
+            Self::Unavailable => DurableStreamRemoteError::Unavailable,
+            Self::Other(error) => DurableStreamRemoteError::Other(map(error)),
+        }
+    }
+
+    /// Runs `operation` until it succeeds or fails with anything but `Unavailable`, backing off
+    /// from 100ms up to 1s between attempts. Callers bound the wait if the target may never
+    /// come back.
+    pub(crate) async fn retry_while_unavailable<T, Fut>(
+        mut operation: impl FnMut() -> Fut,
+    ) -> Result<T, E>
+    where
+        Fut: Future<Output = Result<T, Self>>,
+    {
+        let mut delay = std::time::Duration::from_millis(100);
+        loop {
+            match operation().await {
+                Ok(value) => return Ok(value),
+                Err(Self::Other(error)) => return Err(error),
+                Err(Self::Unavailable) => {
+                    tokio::time::sleep(delay).await;
+                    delay = (delay * 2).min(std::time::Duration::from_secs(1));
+                }
+            }
         }
     }
 
@@ -787,18 +812,18 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         self.worker_proxy
             .control_durable_stream_attachment(request, auth_ctx)
             .await
-            .map_err(Into::into)
+            .map_err(|error| error.map_other(RpcError::from))
     }
 
     async fn read_durable_stream_segment(
         &self,
         request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         self.worker_proxy
             .read_durable_stream_segment(request, auth_ctx)
             .await
@@ -1831,7 +1856,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         &self,
         request: StreamAttachmentControlRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, DurableStreamRemoteError<RpcError>> {
         let key = request.operation.key();
         let target = if request.operation.targets_consumer() {
             OwnedAgentId::new(key.consumer_environment_id, &key.consumer)
@@ -1857,31 +1882,22 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 auth_ctx,
             )
             .await?;
-        Worker::<Ctx>::get_latest_metadata(self, &target)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &target,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await?;
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &target)
+            .await
+            .map_err(|error| error.map_other(RpcError::from))?
+            .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))
+            .map_err(RpcError::from)?;
         worker
             .control_durable_stream_attachment(request)
             .await
-            .map_err(Into::into)
+            .map_err(|error| error.map_other(RpcError::from))
     }
 
     async fn read_durable_stream_segment(
         &self,
         request: DurableStreamReadRequest,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamReadError<RpcError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<RpcError>> {
         let producer = match &request {
             DurableStreamReadRequest::AttachedConsumer(request) => OwnedAgentId::new(
                 request.attachment.producer_environment_id,
@@ -1924,23 +1940,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     details: error.to_string(),
                 })?,
         }
-        Worker::<Ctx>::get_latest_metadata(self, &producer)
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &producer)
             .await
-            .map_err(RpcError::from)?
+            .map_err(|error| error.map_other(RpcError::from))?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))
             .map_err(RpcError::from)?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &producer,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
-        .map_err(RpcError::from)?;
         match request {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let events = worker

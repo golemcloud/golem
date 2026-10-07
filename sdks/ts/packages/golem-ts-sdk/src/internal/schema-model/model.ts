@@ -48,6 +48,7 @@ import {
   type GuestSchemaValueStream,
 } from './schemaValueStreamHandle';
 import { GuestPermissionCardHandle } from './permissionCardHandle';
+import { Uuid } from '../../uuid';
 
 export type {
   TypeId,
@@ -106,6 +107,7 @@ export type SchemaTypeBody =
   | { tag: 'f64'; restrictions?: NumericRestrictions }
   | { tag: 'char' }
   | { tag: 'string' }
+  | { tag: 'uuid' }
   // Structural composites
   | { tag: 'record'; fields: NamedFieldType[] }
   | { tag: 'variant'; cases: VariantCaseType[] }
@@ -418,6 +420,7 @@ export type SchemaValue =
   | { tag: 'f64'; value: number }
   | { tag: 'char'; value: string }
   | { tag: 'string'; value: string }
+  | { tag: 'uuid'; value: Uuid }
   // Structural composites
   | { tag: 'record'; fields: SchemaValue[] }
   | { tag: 'variant'; caseIndex: number; payload?: SchemaValue }
@@ -502,6 +505,7 @@ export const t = {
   f64: (restrictions?: NumericRestrictions): SchemaType => schemaType({ tag: 'f64', restrictions }),
   char: (): SchemaType => schemaType({ tag: 'char' }),
   string: (): SchemaType => schemaType({ tag: 'string' }),
+  uuid: (): SchemaType => schemaType({ tag: 'uuid' }),
   record: (fields: NamedFieldType[]): SchemaType => schemaType({ tag: 'record', fields }),
   variant: (cases: VariantCaseType[]): SchemaType => schemaType({ tag: 'variant', cases }),
   enum: (cases: string[]): SchemaType => schemaType({ tag: 'enum', cases }),
@@ -558,6 +562,7 @@ export const v = {
   f64: (value: number): SchemaValue => ({ tag: 'f64', value }),
   char: (value: string): SchemaValue => ({ tag: 'char', value }),
   string: (value: string): SchemaValue => ({ tag: 'string', value }),
+  uuid: (value: Uuid): SchemaValue => ({ tag: 'uuid', value }),
   record: (fields: SchemaValue[]): SchemaValue => ({ tag: 'record', fields }),
   variant: (caseIndex: number, payload?: SchemaValue): SchemaValue => ({
     tag: 'variant',
