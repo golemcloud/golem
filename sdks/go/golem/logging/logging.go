@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package log routes Go logging through Golem's structured host logging channel
+// Package logging routes Go logging through Golem's structured host logging channel
 // (wasi:logging). Unlike writing to stdout/stderr — which the host records as raw
 // bytes with no level — a wasi:logging record carries a typed level and a context
 // (category) string, so it shows up in worker logs and the oplog with the right
@@ -29,7 +29,7 @@
 // log.Print output flows here too.) Call [SetDefault] to change the minimum level
 // or base context, [NewHandler] to build a handler yourself, or [Log] for a raw
 // one-shot record.
-package log
+package logging
 
 import (
 	"context"

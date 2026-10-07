@@ -16,9 +16,9 @@
 
 package golem
 
-import golemlog "github.com/golemcloud/golem/sdks/go/golem/log"
+import "github.com/golemcloud/golem/sdks/go/golem/logging"
 
 // installDefaultLogger routes slog (and, via slog, the standard log package)
 // through the host logging channel. Gated to the wasm target: on native builds
 // the no-op variant is used so `go test` never links the wasi:logging host call.
-func installDefaultLogger() { golemlog.SetDefault(nil) }
+func installDefaultLogger() { logging.SetDefault(nil) }

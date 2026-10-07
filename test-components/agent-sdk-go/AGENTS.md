@@ -201,7 +201,7 @@ Wire names come from the SDK's declarations, not from Go identifiers:
   `slog` (and, via slog, the standard `log` package) through the host logging channel, so records carry a
   real level and context in worker logs (`slog.Info(...)` → an `INFO` event, `slog.Warn`/`Error`
   likewise). Plain `fmt.Println` / direct `os.Stdout`/`os.Stderr` writes are still captured, but as raw
-  stdout/stderr with no level. Tune it with `golem/log`'s `SetDefault(&log.Options{Level: ...})`; view
+  stdout/stderr with no level. Tune it with `golem/logging`'s `SetDefault(&logging.Options{Level: ...})`; view
   output with the `golem-view-agent-logs` skill.
 - Do NOT edit files under `internal/wit/` in the SDK — they are generated.
 
