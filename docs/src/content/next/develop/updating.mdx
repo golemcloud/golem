@@ -12,7 +12,7 @@ The **automatic update** mode works as described in the general [Agents](/next/c
 golem agent update <AGENT_ID> auto --await
 ```
 
-Golem restarts the agent at once. When the update gets to the head of the update queue, Golem selects the strategy of the update and writes it into the oplog before the update runs. After that, the strategy does not change. A restart or a retry of the update uses the same strategy.
+Golem restarts the agent at once. When the agent is loaded and an upload of its newest automatic snapshot is in progress, the agent first waits for that upload, for at most a limit that the operator sets, 60 seconds by default. Then the update can use that snapshot. When the update gets to the head of the update queue, Golem selects the strategy of the update and writes it into the oplog before the update runs. After that, the strategy does not change. A restart or a retry of the update uses the same strategy.
 
 The replay continues through the source history that the agent committed before it stopped. It does not stop at the update request. So the work that the agent committed after the request stays, and an invocation that was in progress continues on the target revision. `--await` returns only after the update writes `SuccessfulUpdate` or `FailedUpdate`. Golem writes `SuccessfulUpdate` before the target revision does live work.
 
@@ -46,7 +46,7 @@ The snapshot-assisted strategy limits the **replayed history** to the history af
 
 ### When an automatic update fails
 
-When an attempt fails, Golem writes one `FailedUpdate` and starts the agent again on the source revision. In the same attempt, Golem does not try another snapshot record, and it does not change to a full replay. The details of some failures start with a code that tells you what to do next. See [Failure codes](#failure-codes).
+When an attempt fails, Golem writes one `FailedUpdate` and starts the agent again on the source revision. This is also true when a full replay diverges at a host call: the update fails with `UPDATE_REPLAY_FAILED`, and the agent runs on its source revision. In the same attempt, Golem does not try another snapshot record, and it does not change to a full replay. The details of some failures start with a code that tells you what to do next. See [Failure codes](#failure-codes).
 
 Some failures do not fail the update. When the component service does not answer, or when blob storage has a temporary error, Golem writes no `FailedUpdate`. The update stays pending, and Golem tries the start again with the same strategy.
 

@@ -157,7 +157,7 @@ impl CounterWithSnapshotAgent for CounterImpl {
 - Restoration does not call `new`. Use the context's `parameters`, `principal`, `agent_type`, and `phantom_id` fields to reconstruct identity-dependent state. Agent config can be read through `Config::<T>::new().get()` while restoring.
 - `parameters` is a `SchemaValueTree`. Pass it to `DirectAgentInput::new`, call `take::<T>()` once for each constructor parameter in declaration order, then call `finish()` to reject extra values and incomplete wire data. Each method returns a `WireError` on malformed input.
 - Both methods are `async` — they can perform asynchronous operations during serialization/deserialization.
-- Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the manual-update snapshot or a full replay.
+- Returning `Err` from `load_snapshot` rejects the incomplete instance. A manual update fails and remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay.
 
 ## Method Signatures
 

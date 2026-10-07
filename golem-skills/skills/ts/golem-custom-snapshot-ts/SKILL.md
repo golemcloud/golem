@@ -173,7 +173,7 @@ A custom `snapshot` block overrides the default serialization entirely. The rest
 
 Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. Golem runs `load` in read-only mode and does not write anything it does to the oplog. Decoding, local computation, fresh randomness, config reads, and other permitted reads can be used to build the returned state. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
 
-The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the manual-update snapshot or a full replay.
+The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay.
 
 ## Best Practices
 

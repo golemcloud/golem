@@ -155,7 +155,7 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 
 1. Admission records the target and an exact attempt identity.
 2. When that request reaches the queue head, Golem selects an automatic snapshot record of the source revision: the last record, else the usable record before it. The record must be usable (confirmed, or without a filesystem snapshot name), not rejected, before any queued manual update, and without a filesystem snapshot name on an executor without filesystem snapshots. The target revision must be newer than the source revision. A record committed after admission is eligible. Golem durably records either that record, with its filesystem snapshot name, or full replay from the authoritative recovery baseline before executing the strategy, so restart reconstruction does not recompute the choice.
-3. The worker is restarted promptly, including when an invocation is in flight.
+3. The worker is restarted promptly, including when an invocation is in flight. When the agent is loaded and the upload of its newest periodic snapshot is in progress, the agent first waits for that upload, for at most the operator's confirmation wait (60 seconds by default), so the update can use that snapshot.
 4. Golem restores the agent's files from the filesystem snapshot of the selected record (a record without a name gives the initial files of the source revision). The target loads the application snapshot of the same record and replays the committed history after it with the source revision's configuration and initial files. The replay can extend beyond the request entry because source work may finish while execution is stopping.
 5. At the update point, Golem applies the initial files of the target revision, as a full replay does. A changed declaration of an initial file at a path that the agent wrote, changed or deleted fails the update.
 6. Success is recorded only after replay validation and before target live effects continue. The selected record then becomes the authoritative recovery baseline. Every later start from it restores the same filesystem snapshot, and retention keeps that snapshot.
@@ -171,7 +171,7 @@ The details of a failed update start with a code for these causes. `golem agent 
 |------|------|-------|------------|
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | auto | The store lost the snapshot of the selected record; Golem rejects the record | Request the update again; Golem uses an earlier snapshot or a full replay |
 | `UPDATE_SNAPSHOT_INCOMPATIBLE` | auto | The target could not load the selected snapshot, or the replay after it diverged | Request the update again; the same target from the same source then replays the full history; if that fails too, use `manual` |
-| `UPDATE_REPLAY_FAILED` | auto | The full replay failed on the target | Use `manual` |
+| `UPDATE_REPLAY_FAILED` | auto | The full replay failed on the target, also a divergence at a host call; the agent runs on its source revision | Use `manual` |
 | `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` | manual | The executor has no filesystem snapshots, and the agent's files differ from its initial files | Run the update on an executor with filesystem snapshots |
 | `UPDATE_SNAPSHOT_UNAVAILABLE` | manual | The store lost the filesystem snapshot of the manual update | Request the manual update again; it takes a new snapshot |
 | `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | auto, manual | The update needs a filesystem snapshot, and the executor has no filesystem snapshots | Run the update on an executor with filesystem snapshots |
