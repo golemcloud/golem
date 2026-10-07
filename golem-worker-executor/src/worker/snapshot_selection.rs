@@ -235,19 +235,15 @@ where
 
 /// The periodic record that a start of `status` selects under `exclusions`, which is the periodic
 /// baseline of [`StartSelection::of`]: only a start without a pending update selects one. A start
-/// with a plain automatic update that has its strategy entry gets the closed queue filter and
-/// selects none. `enabled` tells whether this executor keeps filesystem snapshots.
+/// with a plain automatic update that has its strategy entry selects none. `enabled` tells whether
+/// this executor keeps filesystem snapshots.
 pub(crate) fn periodic_baseline(
     status: &AgentStatusRecord,
     exclusions: &SnapshotExclusions,
     enabled: bool,
 ) -> Option<UsableAutomaticSnapshot> {
     match Head::of(status) {
-        Head::None
-        | Head::Other(PendingUpdateRef {
-            kind: PendingUpdateKind::Automatic,
-            ..
-        }) => select_automatic_snapshot(status, exclusions.filter(status, enabled, true)),
+        Head::None => select_automatic_snapshot(status, exclusions.filter(status, enabled, true)),
         Head::UnselectedAutomatic(_) | Head::SelectedAssisted(..) | Head::Other(_) => None,
     }
 }
