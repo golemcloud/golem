@@ -143,6 +143,11 @@ func declareVcs(r *toolRegistry, d *definitions) *vcsTool {
 			return 0, errors.New("disk full")
 		case "panic":
 			panic("handler gave up")
+		case "half":
+			// The standard output fails while the command itself succeeds.
+			_, _ = io.WriteString(ctx.Stderr(), "kept")
+			_ = ctx.Stdout().Fail(OutputFailed("remote hung up"))
+			return 7, nil
 		}
 		if a.In == nil {
 			return 0, nil
@@ -513,9 +518,9 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := inv.Collect()
-	if err != nil {
-		t.Fatal(err)
+	got := inv.Collect()
+	if got.Err != nil || got.StdoutErr != nil || got.StderrErr != nil {
+		t.Fatalf("collected %v, %v, %v", got.Err, got.StdoutErr, got.StderrErr)
 	}
 	if string(got.Stdout) != "HELLO WORLD" || string(got.Stderr) != "pushing origin" || got.Result != 11+30 {
 		t.Errorf("got %q, %q and %d", got.Stdout, got.Stderr, got.Result)
@@ -529,6 +534,35 @@ func TestOutputCommandStreamsItsOutputs(t *testing.T) {
 	}
 	if _, err := inv.Wait(); err == nil {
 		t.Errorf("a panicking command succeeded")
+	}
+}
+
+// TestCollectKeepsEachOutcome — a failed output does not hide the result or the
+// other output, and a failed result does not hide what the outputs carried.
+func TestCollectKeepsEachOutcome(t *testing.T) {
+	v, r, d := newVcs(t)
+	loopback(t, r, d, golem.AnonymousPrincipal{})
+
+	inv, err := v.push.Call(func(a *PushArgs) { a.Name = "half" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := inv.Collect()
+	var se *OutputError
+	if got.Err != nil || got.Result != 7 {
+		t.Errorf("result %d, %v", got.Result, got.Err)
+	}
+	if !errors.As(got.StdoutErr, &se) || se.Failure.String() != "failed: remote hung up" {
+		t.Errorf("stdout failure %v", got.StdoutErr)
+	}
+	if got.StderrErr != nil || string(got.Stderr) != "kept" {
+		t.Errorf("stderr %q, %v", got.Stderr, got.StderrErr)
+	}
+
+	inv, _ = v.push.Call(func(a *PushArgs) { a.Name = "panic" })
+	got = inv.Collect()
+	if got.Err == nil || !errors.As(got.StdoutErr, &se) {
+		t.Errorf("a panicking command collected %v, %v", got.Err, got.StdoutErr)
 	}
 }
 
@@ -551,8 +585,8 @@ func TestWaitDrainsTheOutputsNotTaken(t *testing.T) {
 	if _, err := io.ReadAll(inv.Stdout()); !errors.Is(err, ErrOutputDrained) {
 		t.Errorf("stdout taken after Wait read %v", err)
 	}
-	if _, err := inv.Collect(); !errors.Is(err, ErrOutputDrained) {
-		t.Errorf("collecting after Wait gave %v", err)
+	if got := inv.Collect(); !errors.Is(got.StdoutErr, ErrOutputDrained) || got.Err != nil {
+		t.Errorf("collecting after Wait gave %v, %v", got.StdoutErr, got.Err)
 	}
 }
 

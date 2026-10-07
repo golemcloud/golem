@@ -483,38 +483,47 @@ func passOn(dst *Output, src *byteReader, cancel func()) error {
 // Cancel asks the runtime to cancel the call.
 func (i *Invocation[O]) Cancel() { i.call.cancel() }
 
-// Collected is everything a call produced.
+// Collected is everything a call produced. Each part carries its own outcome,
+// so a failed output does not hide the result, and a failed result does not
+// hide what the outputs carried.
 type Collected[O any] struct {
+	// Result is the command's result, valid when Err is nil.
 	Result O
+	// Err is why the call failed, usually a [*CallError].
+	Err error
+	// Stdout is what the command wrote to its standard output: nil for a
+	// command without one, and what was read before a failure otherwise.
 	Stdout []byte
+	// StdoutErr is why the standard output did not end normally, usually an
+	// [*OutputError] carrying the failure the command reported.
+	StdoutErr error
+	// Stderr is what the command wrote to its standard error, like Stdout.
 	Stderr []byte
+	// StderrErr is why the standard error did not end normally.
+	StderrErr error
 }
 
-// Collect reads every output to its end while awaiting the result. A failed
-// result is reported before a failed standard output, and that before a
-// failed standard error; what was read is returned either way.
-func (i *Invocation[O]) Collect() (Collected[O], error) {
+// Collect reads every output to its end while awaiting the result.
+func (i *Invocation[O]) Collect() Collected[O] {
 	var c Collected[O]
-	read := func(r io.Reader, into *[]byte) chan error {
-		done := make(chan error, 1)
+	read := func(o *invocationOutput, into *[]byte, failed *error) chan struct{} {
+		done := make(chan struct{})
+		declared := o.r != nil || o.drained
+		r := o.take()
 		go func() {
+			defer close(done)
 			data, err := io.ReadAll(r)
-			*into = data
-			done <- err
+			if declared {
+				*into = data
+			}
+			*failed = err
 		}()
 		return done
 	}
-	stdout := read(i.Stdout(), &c.Stdout)
-	stderr := read(i.Stderr(), &c.Stderr)
-	result, err := i.Wait()
-	c.Result = result
-	stdoutErr, stderrErr := <-stdout, <-stderr
-	switch {
-	case err != nil:
-		return c, err
-	case stdoutErr != nil:
-		return c, stdoutErr
-	default:
-		return c, stderrErr
-	}
+	stdout := read(&i.stdout, &c.Stdout, &c.StdoutErr)
+	stderr := read(&i.stderr, &c.Stderr, &c.StderrErr)
+	c.Result, c.Err = i.Wait()
+	<-stdout
+	<-stderr
+	return c
 }

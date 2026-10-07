@@ -67,8 +67,9 @@ func init() {
 			a.Stdin = strings.NewReader("hello tools")
 		})
 		check(err == nil, "push: %v", err)
-		out, err := inv.Collect()
-		check(err == nil, "push output: %v", err)
+		out := inv.Collect()
+		check(out.Err == nil && out.StdoutErr == nil && out.StderrErr == nil,
+			"push output: %v, %v, %v", out.Err, out.StdoutErr, out.StderrErr)
 		check(string(out.Stdout) == "HELLO TOOLS" && out.Result == 11, "push gave %q and %d", out.Stdout, out.Result)
 		check(string(out.Stderr) == "pushing origin", "push reported %q on stderr", out.Stderr)
 

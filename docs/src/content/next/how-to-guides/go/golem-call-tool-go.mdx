@@ -100,12 +100,12 @@ inv, err := tools.Upper.Call(func(a *tools.UpperArgs) { a.In = strings.NewReader
 if err != nil {
 	return err
 }
-out, err := inv.Collect() // out.Result, out.Stdout, out.Stderr
+out := inv.Collect() // out.Result/out.Err, out.Stdout/out.StdoutErr, out.Stderr/out.StderrErr
 ```
 
 - `inv.Stdout()` and `inv.Stderr()` take an output to read while the command runs; then `inv.Wait()` returns the result. Bytes on stderr do not mean the command failed.
 - `Wait` drains and discards every output not taken before it, so a command never stalls on output nobody reads; taking one afterwards reads `tool.ErrOutputDrained`. An output you took is yours: read it while waiting, or a command writing more than the stream buffers stalls.
-- `Collect` reads both outputs concurrently while awaiting the result; a failed result is reported before a failed stdout, and that before a failed stderr, with what was read returned either way.
+- `Collect` reads both outputs concurrently while awaiting the result. Each keeps its own outcome: `Err` for the result, `StdoutErr` and `StderrErr` for the outputs (a `*tool.OutputError` when the command failed one), so a failed output does not hide the result and a failed result does not hide what the outputs carried. `Stdout`/`Stderr` are nil for a command without that output.
 - `inv.Cancel()` asks the runtime to cancel the call.
 
 ## Errors
