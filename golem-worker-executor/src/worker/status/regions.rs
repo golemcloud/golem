@@ -50,18 +50,19 @@ pub(crate) fn fold_regions(
     baseline: &AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> RegionFold {
-    fold(baseline, entries, None)
+    fold(baseline, entries, None, true)
 }
 
 /// The skipped regions that a revert which drops `dropped` must respect. The regions of
 /// snapshot-based and snapshot-assisted updates whose outcome is inside `dropped`, and the
 /// override of a snapshot-based queue head inside `dropped`, are left out; jumps and earlier
-/// reverts stay.
+/// reverts stay. No skipped region depends on the manual admissions, so the fold does not decode
+/// the invocation payloads.
 pub(crate) fn revert_validation_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     dropped: &OplogRegion,
 ) -> DeletedRegions {
-    fold(&AgentStatusRecord::default(), entries, Some(dropped)).skipped
+    fold(&AgentStatusRecord::default(), entries, Some(dropped), false).skipped
 }
 
 /// The deleted regions of `initial` with the regions that the `Revert` entries of `entries` drop.
@@ -88,10 +89,13 @@ pub(crate) fn deleted_regions(
         .build()
 }
 
+/// The fold of `entries`. Without `manual_admissions` the manual update invocations do not reach
+/// the queue, which then holds no manual admissions.
 fn fold(
     baseline: &AgentStatusRecord,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     ignored: Option<&OplogRegion>,
+    manual_admissions: bool,
 ) -> RegionFold {
     let deleted = deleted_regions(baseline.deleted_regions.clone(), entries);
     let mut committed = baseline.skipped_regions.clone();
@@ -108,7 +112,12 @@ fn fold(
         ),
         |(queue, mut skipped, mut steps), (index, entry)| {
             let is_deleted = deleted.is_in_deleted_region(*index);
-            let (queue, step) = queue.after(*index, entry, is_deleted);
+            let (queue, step) = match entry {
+                OplogEntry::PendingAgentInvocation { .. } if !manual_admissions => {
+                    (queue, UpdateStep::Unchanged)
+                }
+                _ => queue.after(*index, entry, is_deleted),
+            };
             if !is_deleted {
                 match entry {
                     OplogEntry::Jump { jump, .. } => skipped.add(jump.clone()),

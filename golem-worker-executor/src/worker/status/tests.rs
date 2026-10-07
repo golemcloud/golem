@@ -7924,6 +7924,18 @@ mod invocation_payload_decodes {
             ]
         );
     }
+
+    #[test]
+    fn revert_validation_decodes_no_invocation_payload() {
+        let decodes = decodes_of(|| {
+            super::super::revert_validation_regions(
+                &history(),
+                &OplogRegion::from_index_range(idx(4)..=idx(5)),
+            );
+        });
+
+        assert_eq!(decodes, 0);
+    }
 }
 
 mod update_entry_sequences {
