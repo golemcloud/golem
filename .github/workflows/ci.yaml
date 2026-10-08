@@ -735,6 +735,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - build-golem-scala
       - builtin-artifacts
     timeout-minutes: 30
     steps:
@@ -768,9 +769,13 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Build Scala guest runtime WASMs
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
+      - name: Restore Scala guest runtime WASMs
+        uses: actions/download-artifact@v8
+        with:
+          name: agent-guest-wasm
+          path: tmp/sdk-artifacts
+      - name: Extract Scala guest runtime WASMs
+        run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - uses: ./.github/actions/restore-binaries
         with:
@@ -793,10 +798,15 @@ jobs:
       - name: Add golem to PATH
         run: echo "${{ github.workspace }}/target/debug" >> $GITHUB_PATH
 
-      - name: Publish Scala SDK locally
-        working-directory: sdks/scala
+      - name: Restore Scala SDK ivy local repo
+        uses: actions/download-artifact@v8
+        with:
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
         run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Run Scala SDK integration tests
         working-directory: sdks/scala
