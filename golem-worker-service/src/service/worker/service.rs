@@ -240,7 +240,7 @@ fn validate_one_shot_invocation_is_stream_free(
     component: &Component,
     agent_id: &AgentId,
     method_name: &str,
-    method_parameters: &golem_schema::proto::golem::schema::SchemaValue,
+    input: &SchemaValue,
 ) -> WorkerResult<()> {
     let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
@@ -263,10 +263,8 @@ fn validate_one_shot_invocation_is_stream_free(
                 agent_type.type_name
             ))
         })?;
-    let input = SchemaValue::try_from(method_parameters.clone())
-        .map_err(WorkerServiceError::TypeChecker)?;
     method
-        .validate_input(&agent_type.schema, &input)
+        .validate_input(&agent_type.schema, input)
         .map_err(|error| {
             WorkerServiceError::TypeChecker(format!(
                 "Invalid input for agent method '{method_name}': {error}"
@@ -2776,8 +2774,25 @@ impl WorkerService {
             )
         };
 
+        let method_parameters = if let Some(component) = validation_component.as_ref() {
+            let method = method_name.as_deref().ok_or_else(|| {
+                WorkerServiceError::TypeChecker(
+                    "method_name is required for non-lookup invocations".to_string(),
+                )
+            })?;
+            let input = method_parameters.ok_or_else(|| {
+                WorkerServiceError::TypeChecker(
+                    "method_parameters are required for non-lookup invocations".to_string(),
+                )
+            })?;
+            let input = SchemaValue::try_from(input).map_err(WorkerServiceError::TypeChecker)?;
+            validate_one_shot_invocation_is_stream_free(component, &agent_id, method, &input)?;
+            Some(input.try_into().map_err(WorkerServiceError::TypeChecker)?)
+        } else {
+            method_parameters
+        };
+
         self.dispatch_prepared_agent_invocation(
-            validation_component.as_ref(),
             agent_id,
             method_name,
             method_parameters,
@@ -2838,7 +2853,6 @@ impl WorkerService {
     #[allow(clippy::too_many_arguments)]
     async fn dispatch_prepared_agent_invocation(
         &self,
-        validation_component: Option<&Component>,
         agent_id: AgentId,
         method_name: Option<String>,
         method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
@@ -2854,25 +2868,6 @@ impl WorkerService {
         principal: golem_api_grpc::proto::golem::component::Principal,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        if let Some(validation_component) = validation_component {
-            let method_name = method_name.as_deref().ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "method_name is required for non-lookup invocations".to_string(),
-                )
-            })?;
-            let method_parameters = method_parameters.as_ref().ok_or_else(|| {
-                WorkerServiceError::TypeChecker(
-                    "method_parameters are required for non-lookup invocations".to_string(),
-                )
-            })?;
-            validate_one_shot_invocation_is_stream_free(
-                validation_component,
-                &agent_id,
-                method_name,
-                method_parameters,
-            )?;
-        }
-
         let mut output = self
             .worker_client
             .invoke_agent(
@@ -3474,16 +3469,14 @@ impl WorkerService {
             )));
         }
 
-        let method_parameters = json_input_schema_value_to_typed_schema_value(
-            request.method_parameters.into_inner(),
-            &invocation_agent_type.schema,
-            &method.input_schema,
-        )
-        .map_err(|err| {
-            WorkerServiceError::TypeChecker(format!("Agent method parameters type error: {err}"))
-        })?
-        .into_parts()
-        .1;
+        let method_parameters = request.method_parameters.into_inner();
+
+        validate_one_shot_invocation_is_stream_free(
+            &invocation_component,
+            &agent_id,
+            &method_name,
+            &method_parameters,
+        )?;
 
         let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
@@ -3505,7 +3498,6 @@ impl WorkerService {
 
         let output = self
             .dispatch_prepared_agent_invocation(
-                Some(&invocation_component),
                 agent_id.clone(),
                 Some(method_name.clone()),
                 Some(proto_method_parameters),
