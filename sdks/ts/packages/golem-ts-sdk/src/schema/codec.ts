@@ -27,6 +27,7 @@ import {
   freezeSchemaValue,
   schemaGraphToWit,
   numericRestrictionsMatch,
+  preflightWitValueTree,
 } from '../internal/schema-model';
 import {
   GuestSecretHandle,
@@ -77,6 +78,8 @@ export interface SchemaCodec {
   readonly fromValue: (value: SchemaValue) => unknown;
   /** Direct flat-wire conversion. Absent when this codec can contain owned resources. */
   readonly direct?: DirectSchemaCodec;
+  /** Structural invocation conversion, with the ordinary leaf codec semantics. */
+  readonly invocationDirect?: DirectSchemaCodec;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
   /**
@@ -153,7 +156,10 @@ export class SchemaValueReader {
   private readonly active = new Set<number>();
   private readonly read = new Set<number>();
 
-  constructor(readonly valueNodes: readonly WireValueNode[]) {}
+  constructor(
+    readonly valueNodes: readonly WireValueNode[],
+    private readonly invocation = false,
+  ) {}
 
   node<T>(
     index: number | undefined,
@@ -171,7 +177,8 @@ export class SchemaValueReader {
       );
     }
     if (this.active.has(index)) throw new TypeError(`cycle at value node index ${index}`);
-    if (this.read.has(index)) throw new TypeError(`aliased value node index ${index}`);
+    if (!this.invocation && this.read.has(index))
+      throw new TypeError(`aliased value node index ${index}`);
     const node = this.valueNodes[index]!;
     if (node.tag !== tag)
       throw new TypeError(`expected ${tag} at value node index ${index}, got ${node.tag}`);
@@ -185,7 +192,7 @@ export class SchemaValueReader {
   }
 
   finish(): void {
-    if (this.read.size !== this.valueNodes.length) {
+    if (!this.invocation && this.read.size !== this.valueNodes.length) {
       throw new TypeError('flat value tree contains unreachable value nodes');
     }
   }
@@ -226,14 +233,26 @@ export function directTypedSchemaValueToWit(codec: SchemaCodec, value: unknown) 
 /** Install direct operations from the explicit child links produced by schema constructors. */
 export function withDirectCodec(codec: SchemaCodec): SchemaCodec {
   const direct = buildDirect(codec);
-  return direct ? { ...codec, direct } : codec;
+  const invocationDirect = buildDirect(codec, true);
+  return {
+    ...codec,
+    ...(direct ? { direct } : {}),
+    ...(invocationDirect ? { invocationDirect } : {}),
+  };
 }
 
-function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
+/** Preflight the entire arena, including unreachable nodes, before invocation decoding. */
+export function invocationSchemaValueReader(tree: WireValueTree): SchemaValueReader {
+  preflightWitValueTree(tree.valueNodes, tree.root);
+  return new SchemaValueReader(tree.valueNodes, true);
+}
+
+function buildDirect(codec: SchemaCodec, invocation = false): DirectSchemaCodec | undefined {
   const child = (value: SchemaCodec | undefined) => {
     if (!value) return undefined;
-    if (value.direct) return value.direct;
-    return buildDirect(value);
+    if (invocation ? value.invocationDirect : value.direct)
+      return invocation ? value.invocationDirect : value.direct;
+    return buildDirect(value, invocation);
   };
   if (codec.isUnit) {
     return {
@@ -248,6 +267,8 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     };
   }
   if (codec.fields && !codec.optionInner) {
+    // Other vendors may omit absent optional properties when decoding records.
+    if (invocation && codec.sourceSchema?.['~standard'].vendor !== 'zod') return undefined;
     const fields = codec.fields.map((field) => ({ name: field.name, direct: child(field.codec) }));
     if (fields.some((field) => !field.direct)) return undefined;
     return {
@@ -290,6 +311,7 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     };
   }
   if (codec.optionInner) {
+    if (invocation) return undefined;
     const inner = child(codec.optionInner);
     if (!inner) return undefined;
     const none = codec.optionKind === 'nullable' ? null : undefined;
@@ -310,6 +332,7 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
     };
   }
   if (codec.resultOk && codec.resultErr) {
+    if (invocation) return undefined;
     const ok = child(codec.resultOk);
     const err = child(codec.resultErr);
     if (!ok || !err) return undefined;
@@ -378,7 +401,7 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
   if (!primitive) return undefined;
   const body = codec.graph.root.body;
   const tag = body.tag;
-  const restrictions = 'restrictions' in body ? body.restrictions : undefined;
+  const restrictions = !invocation && 'restrictions' in body ? body.restrictions : undefined;
   const integerBits = /^(s|u)(8|16|32|64)$/.exec(tag);
   const min = integerBits?.[1] === 's' ? -(2n ** (BigInt(integerBits[2]) - 1n)) : 0n;
   const max = integerBits
@@ -406,7 +429,7 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
         typeof value === 'number' &&
         numericRestrictionsMatch(
           restrictions as Parameters<typeof numericRestrictionsMatch>[0],
-          tag === 'f32' ? Math.fround(value) : value,
+          tag === 'f32' && !invocation ? Math.fround(value) : value,
         );
     } else if (tag === 'bool') {
       valid = typeof value === 'boolean';
@@ -419,14 +442,21 @@ function buildDirect(codec: SchemaCodec): DirectSchemaCodec | undefined {
       }
     }
     if (!valid) throw new TypeError('does not match its declared schema');
-    return tag === 'f32' ? Math.fround(value as number) : value;
+    return tag === 'f32' && !invocation ? Math.fround(value as number) : value;
   };
   return {
-    write: (value, writer) => writer.add({ tag: primitive, val: checked(value) } as WireValueNode),
+    write: (value, writer) => {
+      const encoded = invocation ? codec.toValue(value) : undefined;
+      return writer.add({
+        tag: primitive,
+        val: checked(encoded ? (encoded as SchemaValue & { value: unknown }).value : value),
+      } as WireValueNode);
+    },
     read: (reader, index) =>
-      reader.node(index, primitive, (node) =>
-        checked((node as WireValueNode & { val: unknown }).val),
-      ),
+      reader.node(index, primitive, (node) => {
+        const value = checked((node as WireValueNode & { val: unknown }).val);
+        return invocation ? codec.fromValue({ tag, value } as SchemaValue) : value;
+      }),
   };
 }
 
