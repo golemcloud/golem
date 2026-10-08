@@ -35,16 +35,20 @@ import (
 //	go func() {
 //	    defer w.Close()              // clean completion; the reader sees EOF
 //	    for _, line := range lines { // Write blocks: that is the backpressure
-//	        if err := w.Write(line); err != nil { return }
+//	        if err := w.Write(line); err != nil { return } // the reader went away
 //	    }
 //	}()
 //	return s
 //
 // Reading:
 //
-//	for line, err := range s.All() {
-//	    if err != nil { ... }
+//	for line := range s.All() {
+//	    ...
 //	}
+//
+// Reading a stream after it was handed on or closed, writing to a closed
+// writer, and an item that does not match its schema are bugs, not conditions
+// a caller can recover from, so they panic.
 //
 // A stream endpoint is affine: handing it on transfers it rather than copying
 // it, so a stream can be returned, or forwarded to another agent, but not both.
@@ -53,21 +57,21 @@ import (
 //
 // Clean completion is end of input, and a stream has no failure end of its own.
 // A producer that fails must not close it cleanly, because the reader could not
-// tell that apart from success: ProduceStream fails the invocation instead, as
-// the other SDKs do. Model recoverable failures in the item type, as
-// AgentStream[Result[T, E]].
+// tell that apart from success: ProduceStream fails the invocation instead.
+// Model recoverable failures in the item type, as AgentStream[Result[T, E]].
+
+// ErrReaderGone reports that the consumer dropped its end. A producer that
+// sees this should stop; it is cooperative, not an error in the data.
+var ErrReaderGone = errors.New("golem: the stream's reader went away")
 
 var (
-	// ErrStreamTransferred reports a stream used after it was handed on.
-	ErrStreamTransferred = errors.New("golem: stream was already transferred")
-	// ErrStreamPartiallyRead reports an attempt to forward a stream that has
+	// errStreamTransferred reports a stream used after it was handed on.
+	errStreamTransferred = errors.New("golem: stream was already transferred")
+	// errStreamPartiallyRead reports an attempt to forward a stream that has
 	// already been read from. The items already taken cannot be put back.
-	ErrStreamPartiallyRead = errors.New("golem: stream has already been read and cannot be forwarded")
-	// ErrStreamClosed reports a write to a closed stream.
-	ErrStreamClosed = errors.New("golem: stream is closed")
-	// ErrReaderGone reports that the consumer dropped its end. A producer that
-	// sees this should stop; it is cooperative, not an error in the data.
-	ErrReaderGone = errors.New("golem: the stream's reader went away")
+	errStreamPartiallyRead = errors.New("golem: stream has already been read and cannot be forwarded")
+	// errStreamClosed reports a use of a closed stream.
+	errStreamClosed = errors.New("golem: stream is closed")
 )
 
 // treeSource is the reading half of a schema-value stream, and treeSink the
@@ -151,7 +155,7 @@ func newAgentStreamWith[T any](c streamCodec[T]) (*AgentStreamWriter[T], AgentSt
 func StreamOf[T any](items ...T) AgentStream[T] {
 	w, s := NewAgentStream[T]()
 	go func() {
-		defer func() { _ = w.Close() }()
+		defer w.Close()
 		for _, item := range items {
 			if err := w.Write(item); err != nil {
 				return
@@ -163,9 +167,9 @@ func StreamOf[T any](items ...T) AgentStream[T] {
 
 // ProduceStream runs produce on its own goroutine and returns the stream it
 // writes to. Returning nil closes the stream cleanly. Returning an error, or
-// panicking, fails the invocation the stream belongs to — the component traps,
-// as a failing producer does in the other SDKs — because a stream has no failure
-// end and a consumer must not read a failed production as a complete one.
+// panicking, fails the invocation the stream belongs to — the component traps —
+// because a stream has no failure end and a consumer must not read a failed
+// production as a complete one.
 func ProduceStream[T any](produce func(*AgentStreamWriter[T]) error) AgentStream[T] {
 	w, s := NewAgentStream[T]()
 	go func() {
@@ -173,7 +177,7 @@ func ProduceStream[T any](produce func(*AgentStreamWriter[T]) error) AgentStream
 			failProduction(err)
 			return
 		}
-		_ = w.Close()
+		w.Close()
 	}()
 	return s
 }
@@ -184,52 +188,53 @@ var failProduction = func(err error) {
 	panic(fmt.Sprintf("golem: stream producer failed: %v", err))
 }
 
-// Next reads the next value. It reports ok=false with a nil error at clean end
-// of input; a non-nil error is a real failure and never means completion.
-func (s AgentStream[T]) Next() (T, bool, error) {
+// Next reads the next value, reporting ok=false at clean end of input. It
+// panics on a stream that was handed on or closed, and on an item that does
+// not match the stream's schema.
+func (s AgentStream[T]) Next() (T, bool) {
 	var zero T
 	if s.st == nil {
-		return zero, false, ErrStreamClosed
+		panic(errStreamClosed)
 	}
 	if s.st.taken {
-		return zero, false, ErrStreamTransferred
+		panic(errStreamTransferred)
 	}
 	if s.st.closed {
-		return zero, false, ErrStreamClosed
+		panic(errStreamClosed)
 	}
 	s.st.started = true
 
-	tree, ok, err := s.st.nextTree()
-	if err != nil || !ok {
-		return zero, false, err
+	tree, ok := s.st.nextTree()
+	if !ok {
+		return zero, false
 	}
 	v, err := s.codec.decode(tree)
 	if err != nil {
-		return zero, false, fmt.Errorf("golem: stream item: %w", err)
+		panic(fmt.Errorf("golem: stream item: %w", err))
 	}
-	return v, true, nil
+	return v, true
 }
 
 // nextTree pulls one value tree, refilling the batch when it runs out.
-func (st *streamState) nextTree() (types.SchemaValueTree, bool, error) {
+func (st *streamState) nextTree() (types.SchemaValueTree, bool) {
 	for {
 		if len(st.pending) > 0 {
 			tree := st.pending[0]
 			st.pending = st.pending[1:]
-			return tree, true, nil
+			return tree, true
 		}
 		if st.done {
-			return types.SchemaValueTree{}, false, nil
+			return types.SchemaValueTree{}, false
 		}
 		if !st.src.valid() {
-			return types.SchemaValueTree{}, false, ErrStreamClosed
+			panic(errStreamClosed)
 		}
 		batch := make([]types.SchemaValueTree, 1)
 		n := st.src.read(batch)
 		if n == 0 {
 			if st.src.writerDropped() {
 				st.done = true
-				return types.SchemaValueTree{}, false, nil
+				return types.SchemaValueTree{}, false
 			}
 			continue
 		}
@@ -237,21 +242,13 @@ func (st *streamState) nextTree() (types.SchemaValueTree, bool, error) {
 	}
 }
 
-// All iterates the stream. The loop ends at clean end of input; a failure is
-// yielded once, with the zero value, and then the iteration stops.
-func (s AgentStream[T]) All() iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
+// All iterates the stream to clean end of input, panicking as [AgentStream.Next]
+// does.
+func (s AgentStream[T]) All() iter.Seq[T] {
+	return func(yield func(T) bool) {
 		for {
-			v, ok, err := s.Next()
-			if err != nil {
-				var zero T
-				yield(zero, err)
-				return
-			}
-			if !ok {
-				return
-			}
-			if !yield(v, nil) {
+			v, ok := s.Next()
+			if !ok || !yield(v) {
 				return
 			}
 		}
@@ -260,35 +257,33 @@ func (s AgentStream[T]) All() iter.Seq2[T, error] {
 
 // Collect reads the stream to completion. Use it only where the sequence is
 // known to be bounded — it defeats the point of streaming otherwise.
-func (s AgentStream[T]) Collect() ([]T, error) {
+func (s AgentStream[T]) Collect() []T {
 	var out []T
-	for v, err := range s.All() {
-		if err != nil {
-			return out, err
-		}
+	for v := range s.All() {
 		out = append(out, v)
 	}
-	return out, nil
+	return out
 }
 
 // Close releases the reading endpoint. A producer observes it on its next
-// write; it does not interrupt work already in flight.
-func (s AgentStream[T]) Close() error {
+// write; it does not interrupt work already in flight. Closing a closed or
+// handed-on stream does nothing.
+func (s AgentStream[T]) Close() {
 	if s.st == nil || s.st.closed || s.st.taken {
-		return nil
+		return
 	}
 	s.st.closed = true
 	if s.st.src.valid() {
 		s.st.src.drop()
 	}
-	return nil
 }
 
 // Write sends one value. It blocks until the consumer has room, which is what
-// applies backpressure to the producer.
+// applies backpressure to the producer. The only error is [ErrReaderGone]; a
+// write to a closed writer, or of a value that cannot be encoded, panics.
 func (w *AgentStreamWriter[T]) Write(v T) error {
 	if w.closed {
-		return ErrStreamClosed
+		panic(errStreamClosed)
 	}
 	tree, err := w.codec.encode(v)
 	if err != nil {
@@ -297,7 +292,7 @@ func (w *AgentStreamWriter[T]) Write(v T) error {
 			// to be released here — nobody else has a reference to it.
 			w.codec.dispose(v)
 		}
-		return fmt.Errorf("golem: stream item: %w", err)
+		panic(fmt.Errorf("golem: stream item: %w", err))
 	}
 	batch := []types.SchemaValueTree{tree}
 	for len(batch) > 0 {
@@ -310,7 +305,7 @@ func (w *AgentStreamWriter[T]) Write(v T) error {
 	return nil
 }
 
-// WriteAll sends several values in order, stopping at the first failure.
+// WriteAll sends several values in order, stopping when the reader goes away.
 func (w *AgentStreamWriter[T]) WriteAll(vs ...T) error {
 	for _, v := range vs {
 		if err := w.Write(v); err != nil {
@@ -320,14 +315,14 @@ func (w *AgentStreamWriter[T]) WriteAll(vs ...T) error {
 	return nil
 }
 
-// Close completes the stream. The reader sees end of input.
-func (w *AgentStreamWriter[T]) Close() error {
+// Close completes the stream. The reader sees end of input. Closing twice does
+// nothing, so a deferred Close after an explicit one is safe.
+func (w *AgentStreamWriter[T]) Close() {
 	if w.closed {
-		return nil
+		return
 	}
 	w.closed = true
 	w.sink.drop()
-	return nil
 }
 
 // defaultStreamCodec converts items through the SDK's own codec for T.

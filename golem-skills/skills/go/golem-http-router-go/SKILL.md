@@ -65,7 +65,7 @@ httpApi:
 - The handler may keep writing after the head is sent; each `Write` streams out with backpressure.
 - Repeated headers stay separate (`w.Header().Add("Set-Cookie", …)` twice). Names are sent lowercase.
 - A missing `Content-Type` is sniffed from the first bytes; `204`, `304` and HEAD responses carry no body.
-- A panic **before** the head is sent fails the request. After it, the invocation fails (the component traps, as in the other SDKs), so the client sees a broken response rather than a short one that looks complete.
+- A panic **before** the head is sent fails the request. After it, the invocation fails (the component traps, as in Rust), so the client sees a broken response rather than a short one that looks complete.
 - The host owns framing: never set `Transfer-Encoding`.
 
 ## The raw envelope

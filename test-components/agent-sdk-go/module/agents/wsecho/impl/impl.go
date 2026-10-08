@@ -16,8 +16,8 @@ var agent = wsecho.Agent.Implement(func(wsecho.Id) *state { return &state{} })
 
 func init() {
 	agent.Handle(wsecho.Echo, func(_ *golem.Context[state], in wsecho.EchoIn) string {
-		conn := golem.Must(websocket.Connect(in.URL))
-		golem.Must0(conn.SendText(in.Message))
+		conn := websocket.MustConnect(in.URL)
+		conn.MustSendText(in.Message)
 		msg := golem.Must(conn.Receive())
 		golem.Must0(conn.Close(1000, "done"))
 		return msg.Text()

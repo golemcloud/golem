@@ -13,7 +13,7 @@ type ForwardIn struct{ Card golem.PermissionCard }
 var Forward = Agent.Method[ForwardIn, golem.PermissionCard]("forward")
 
 var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
-	return receiver.Accept.Call(receiver.Agent.Get(receiver.ID{Name: "target"}), receiver.AcceptIn{Card: in.Card})
+	return receiver.Accept.MustCall(receiver.Agent.Get(receiver.ID{Name: "target"}), receiver.AcceptIn{Card: in.Card})
 })
 ```
 

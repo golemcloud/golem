@@ -4,7 +4,7 @@
 
 A single Golem agent processes invocations **sequentially** — it cannot run work in parallel by itself. To execute work concurrently, distribute it across **multiple agent instances** and have them run at the same time. The Go SDK gives you three building blocks:
 
-1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. `Call` awaits one call at a time; `CallAsync` returns immediately, so several calls are in flight together, and a goroutine blocked in `Future.Get` yields to the component-model event loop while the others proceed.
+1. **`CallAsync` + `Future.Get`** — start several cross-agent calls at once, then await each. `Call` / `MustCall` await one call at a time; `CallAsync` returns immediately, so several calls are in flight together, and a goroutine blocked in `Future.Get` yields to the component-model event loop while the others proceed.
 2. **`Trigger` + promises** — fire-and-forget each worker, hand each a promise ID, then await all the promises. Best for long-running work where you don't want a call in flight the whole time.
 3. **`golem.ForkSelf`** — copy the running agent, state included, at the current point; the copy continues under a new phantom id.
 
@@ -12,7 +12,7 @@ A single Golem agent processes invocations **sequentially** — it cannot run wo
 
 ## Approach 1: async fan-out with `CallAsync` / `Future.Get`
 
-Start every worker call with `CallAsync`, collect the `*golem.Future[Out]` values in a slice, then `Get()` each. All calls are in flight while you await.
+Start every worker call with `CallAsync`, collect the `*golem.Future[Out]` values in a slice, then `Get()` (or `MustGet()`) each. All calls are in flight while you await.
 
 ### Worker definition (`agents/worker/worker.go`)
 
@@ -63,21 +63,24 @@ func init() {
         // 2. Await each. All calls were already in flight, so this fans in.
         results := make([]string, len(futures))
         for i, f := range futures {
-            results[i] = f.Get() // Get() blocks (and yields) for this one result
+            results[i] = f.MustGet() // MustGet() blocks (and yields) for this one result
         }
         return results
     })
 }
 ```
 
-`Future.Get` is **fail-loud**: an infra failure (a `golem.RemoteCallError`) traps and surfaces as an agent-error. Model *expected* per-item outcomes as a `golem.Result` in the worker method's output instead, then unwrap or inspect each result:
+`Future.Get` returns `(Out, error)`; the error is a `*golem.RemoteCallError` when the worker failed or could not be reached. `MustGet` panics with it instead, and the panic traps the component, as in Rust. To keep going when one worker fails, use `Get` and collect the errors. Model *expected* per-item outcomes as a `golem.Result` in the worker method's output, then unwrap or inspect each result:
 
 ```go
 // worker.Process returns golem.Result[string, string]
-res := futures[i].Get()          // golem.Result[string, string]
-if res.IsErr() {
+res, err := futures[i].Get()     // golem.Result[string, string]
+switch {
+case err != nil:
+    failures = append(failures, err.Error())
+case res.IsErr():
     failures = append(failures, res.Err())
-} else {
+default:
     successes = append(successes, res.Ok())
 }
 ```
@@ -99,13 +102,13 @@ agent.Handle(coordinator.DispatchAndCollect, func(ctx *golem.Context[state], in 
     // Fire-and-forget: hand each worker its region and its promise id.
     for i, region := range in.Regions {
         c := worker.Agent.Get(worker.ID{Region: region})
-        worker.RunReport.Trigger(c, worker.RunReportIn{Promise: promises[i].ID()})
+        worker.RunReport.MustTrigger(c, worker.RunReportIn{Promise: promises[i].ID()})
     }
 
     // Await all promises (each durably suspends until its worker completes it).
     results := make([]string, len(promises))
     for i, p := range promises {
-        results[i] = p.Await()
+        results[i] = p.MustAwait()
     }
     return results
 })
@@ -121,7 +124,7 @@ agent.Handle(worker.RunReport, func(ctx *golem.Context[state], in worker.RunRepo
 })
 ```
 
-`Trigger` returns a `golem.InvocationID` and does not wait; a failure after the invocation is accepted is not reported at the trigger site — the worker signals completion (or failure) through its promise.
+`Trigger` returns a `golem.InvocationID` (and an error if the invocation could not be enqueued) and does not wait; a failure after the invocation is accepted is not reported at the trigger site — the worker signals completion (or failure) through its promise.
 
 ## Approach 3: `golem.ForkSelf`
 
@@ -138,7 +141,7 @@ agent.Handle(coordinator.Compute, func(ctx *golem.Context[state], _ golem.Unit) 
 	}
 
 	// The original waits for the copy.
-	return "combined: original + " + result.Await()
+	return "combined: original + " + result.MustAwait()
 })
 ```
 
@@ -158,8 +161,8 @@ Fork in a loop for N-way fan-out: each iteration's copy takes slice `i` and retu
 
 - **No threads within an agent.** Parallelism comes from distributing across distinct worker instances (distinct `ID`s); fanning out to the *same* instance serializes.
 - Don't hold a `*golem.Future` across invocations — start it and `Get()` it within the same handler. `Get` consumes the future (a second `Get` panics).
-- `Future.Get` and `Promise.Await` are fail-loud; model expected outcomes as a `golem.Result` in the method output, not as a trap.
-- Avoid a **synchronous** cycle: two agents each blocking in `Call` on the other deadlocks. Break cycles with `Trigger` / promises.
+- `Future.Get` returns a remote failure as an error, and `Promise.Await` returns an error only for a payload that does not decode; their `Must` forms panic. Model expected outcomes as a `golem.Result` in the method output.
+- Avoid a **synchronous** cycle: two agents each blocking in `Call` / `MustCall` on the other deadlocks. Break cycles with `Trigger` / promises.
 - Worker instances persist after the coordinator finishes (they are durable by default); give them stable IDs you can address again, or make them ephemeral (see [`golem-stateless-agent-go`](/next/how-to-guides/go/golem-stateless-agent-go)).
 
 ### Related Guides

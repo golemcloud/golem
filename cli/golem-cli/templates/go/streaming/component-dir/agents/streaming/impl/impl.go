@@ -34,10 +34,7 @@ var agent = streaming.Agent.ImplementConfigured(func(*golem.InitContext[streamin
 func init() {
 	agent.Handle(streaming.Sum, func(_ *golem.Context[state], in streaming.SumIn) int64 {
 		var total int64
-		for v, err := range in.Input.All() {
-			if err != nil {
-				panic(err)
-			}
+		for v := range in.Input.All() {
 			total += v
 		}
 		return total
@@ -47,10 +44,7 @@ func init() {
 	})
 	agent.Handle(streaming.Transform, func(ctx *golem.Context[state], in streaming.TransformIn) golem.AgentStream[string] {
 		return golem.ProduceStream(func(w *golem.AgentStreamWriter[string]) error {
-			for v, err := range in.Input.All() {
-				if err != nil {
-					return err
-				}
+			for v := range in.Input.All() {
 				if err := w.Write(fmt.Sprintf("%s:%d", in.Prefix, v)); err != nil {
 					// Stopping early also closes the input, propagating the
 					// cancellation upstream.
@@ -75,10 +69,7 @@ func init() {
 	})
 	agent.Handle(streaming.DurableEcho, func(_ *golem.Context[state], in streaming.DurableEchoIn) golem.AgentStream[string] {
 		return golem.ProduceStream(func(w *golem.AgentStreamWriter[string]) error {
-			for v, err := range in.Input.All() {
-				if err != nil {
-					return err
-				}
+			for v := range in.Input.All() {
 				if err := w.Write("echo:" + v); err != nil {
 					return nil
 				}

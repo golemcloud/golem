@@ -15,7 +15,7 @@ In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is 
 
 1. **Create a promise** inside a handler with `golem.NewPromise[T]()`.
 2. **Persist its ID** (`p.ID()`) in the agent's state, and/or hand it to the outside world so someone can complete it later.
-3. **Await it** with `golem.PromiseByID[T](id).Await()` (or `p.Await()` in the same invocation) — the invocation durably suspends here.
+3. **Await it** with `golem.PromiseByID[T](id).MustAwait()` (or `p.MustAwait()` in the same invocation) — the invocation durably suspends here.
 4. **Complete it** from another agent with `golem.CompletePromise(id, value)`, or from off-platform via the worker REST endpoint / a minted `WebhookURL()`.
 
 ## API (from `promise.go`)
@@ -25,14 +25,15 @@ In Go a promise is a typed handle `golem.Promise[T]`: the completion payload is 
 | `golem.NewPromise[T]` | `func NewPromise[T any]() *Promise[T]` | Create a fresh promise owned by the current agent |
 | `golem.PromiseByID[T]` | `func PromiseByID[T any](id PromiseID) *Promise[T]` | Rebuild a handle from a stored `PromiseID` |
 | `(*Promise[T]).ID` | `func (p *Promise[T]) ID() PromiseID` | The durable identity to persist or hand out |
-| `(*Promise[T]).Await` | `func (p *Promise[T]) Await() T` | Durably block until completed; returns the payload as `T` |
+| `(*Promise[T]).Await` | `func (p *Promise[T]) Await() (T, error)` | Durably block until completed; returns the payload as `T`, or an error if it does not decode as `T` |
+| `(*Promise[T]).MustAwait` | `func (p *Promise[T]) MustAwait() T` | `Await` that panics if the payload does not decode |
 | `(*Promise[T]).AwaitContext` | `func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error)` | `Await` that gives up with `ctx.Err()` when the context ends first |
 | `(*Promise[T]).WebhookURL` | `func (p *Promise[T]) WebhookURL() string` | Mint an external URL whose POST body completes the promise |
 | `golem.CompletePromise[T]` | `func CompletePromise[T any](id PromiseID, value T) bool` | Complete a promise from another agent; returns `false` if already completed |
 
-`Await` is **fail-loud**: an infra failure traps and surfaces as an agent-error rather than returning an `error`. Only the agent that created the promise may `Await` it — awaiting from another agent traps in the host.
+The error from `Await` reports only a payload that does not decode as `T`: the bytes come from whoever completed the promise, so a mismatch is theirs. `MustAwait` panics instead, and the panic traps the component, as in Rust. Only the agent that created the promise may `Await` it — awaiting from another agent traps in the host.
 
-`p.AwaitContext(ctx)` gives up when the context ends — a deadline from `context.WithTimeout` or a cancellation — and returns `ctx.Err()`. Giving up only stops that wait: the promise can still be completed, and a later `Await` returns its value.
+`p.AwaitContext(ctx)` gives up when the context ends — a deadline from `context.WithTimeout` or a cancellation — and returns `ctx.Err()`; a payload that does not decode is returned as an error too. Giving up only stops that wait: the promise can still be completed, and a later `Await` returns its value.
 
 ## `PromiseID` structure
 
@@ -110,7 +111,7 @@ func init() {
             panic("no open approval request — call request first")
         }
         // Rebuild the handle from the stored id and durably suspend until completion.
-        return golem.PromiseByID[approval.Verdict](ctx.State.pending).Await()
+        return golem.PromiseByID[approval.Verdict](ctx.State.pending).MustAwait()
     })
 }
 ```
@@ -145,7 +146,7 @@ p := golem.NewPromise[Event]()
 url := p.WebhookURL() // hand this to an off-platform system; its POST body completes the promise
 ctx.State.pending = p.ID()
 // later, in another invocation:
-event := golem.PromiseByID[Event](ctx.State.pending).Await()
+event := golem.PromiseByID[Event](ctx.State.pending).MustAwait()
 ```
 
 `WebhookURL` is fail-loud: it traps if the agent is not HTTP-API-deployed.
@@ -155,7 +156,7 @@ event := golem.PromiseByID[Event](ctx.State.pending).Await()
 - The promise payload is typed as `T` via JSON. Use `golem.Promise[[]byte]` as an escape hatch to carry raw, non-JSON bytes through unchanged.
 - Only the **creating** agent may `Await` a promise; awaiting from a different agent traps.
 - Persist `p.ID()` in the agent's state if the promise is created in one invocation and awaited in another — a single agent processes invocations sequentially, so `Request` returns before `Await` runs.
-- `Await` is fail-loud (traps on infra failure), matching Golem's exactly-once model — do not expect an `error` return.
+- `Await` returns an error only for a payload that does not decode as `T`; the wait itself is durable and is not retried by the caller.
 - `CompletePromise` returns `false` if the promise was already completed; treat it as the idempotency signal, not a failure.
 
 ### Related Skills

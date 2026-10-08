@@ -96,14 +96,23 @@ func (p *Promise[T]) ID() PromiseID { return p.id }
 // Await blocks until the promise is completed and returns the payload decoded as
 // T (JSON, or the raw bytes when T is []byte). It durably SUSPENDS the invocation
 // — the worker may be evicted and resumed, and on replay the recorded payload is
-// returned from the oplog (exactly-once). Like [Future.Get] it is fail-loud: an
-// infra failure traps and surfaces as an agent-error rather than returning an
-// error value.
+// returned from the oplog (exactly-once). The error reports only a payload that
+// does not decode as T: the bytes come from whoever completed the promise, so a
+// mismatch is the completer's, not this agent's.
 //
 // Only the agent that created the promise may Await it; awaiting from another
 // agent traps in the host.
-func (p *Promise[T]) Await() T {
+func (p *Promise[T]) Await() (T, error) {
 	return decodePromisePayload[T](p.id, p.awaitData())
+}
+
+// MustAwait is [Promise.Await] that panics if the payload does not decode.
+func (p *Promise[T]) MustAwait() T {
+	v, err := p.Await()
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func (p *Promise[T]) awaitData() []byte {
@@ -115,14 +124,15 @@ func (p *Promise[T]) awaitData() []byte {
 
 // AwaitContext is [Promise.Await] that gives up when ctx ends first, returning
 // ctx.Err(). Giving up only stops this wait: the promise may still be completed,
-// and a later Await returns its value. Decoding failures panic, as for Await.
+// and a later Await returns its value. A payload that does not decode is
+// returned as an error, as for Await.
 func (p *Promise[T]) AwaitContext(ctx context.Context) (T, error) {
 	data, err := awaitWithContext(ctx, p.awaitData)
 	if err != nil {
 		var zero T
 		return zero, err
 	}
-	return decodePromisePayload[T](p.id, data), nil
+	return decodePromisePayload[T](p.id, data)
 }
 
 // awaitWithContext runs wait on its own goroutine and returns its outcome, or
@@ -166,9 +176,9 @@ func (w *Webhook[T]) URL() string { return w.url }
 //
 // It requires the agent type to be currently deployed behind an HTTP API (set
 // [Spec].HTTP on the agent and declare the agent in the manifest's httpApi
-// deployment) — it is fail-loud: the runtime traps, surfacing an agent-error, if
-// the agent is not http-api-deployed, or if a different agent type created the
-// promise. Typically called once per promise.
+// deployment). It panics if the agent is not http-api-deployed, or if a
+// different agent type created the promise, and the panic traps the component,
+// as in Rust. Typically called once per promise.
 func (p *Promise[T]) WebhookURL() string {
 	res := host.CreateWebhook(p.id.toWit())
 	if res.IsErr() {
@@ -217,20 +227,21 @@ func encodePromisePayload[T any](v T) []byte {
 // promise in a failure, and the payload is shown (truncated) because the bytes
 // come from whoever completed the promise — often another agent or an external
 // webhook — so seeing them is what identifies the mismatch.
-func decodePromisePayload[T any](id PromiseID, data []byte) T {
+func decodePromisePayload[T any](id PromiseID, data []byte) (T, error) {
 	var out T
 	if _, ok := any(out).([]byte); ok {
-		return any(data).(T)
+		return any(data).(T), nil
 	}
 	if err := json.Unmarshal(data, &out); err != nil {
-		panic(fmt.Errorf("golem: promise %s: payload does not decode as %s: %w; payload: %s",
-			id, promisePayloadTypeName[T](), err, truncatedPayload(data)))
+		var zero T
+		return zero, fmt.Errorf("golem: promise %s: payload does not decode as %s: %w; payload: %s",
+			id, promisePayloadTypeName[T](), err, truncatedPayload(data))
 	}
-	return out
+	return out, nil
 }
 
 // truncatedPayload renders payload bytes for an error message, keeping it short
-// enough to stay readable in a trap message.
+// enough to stay readable in an error message.
 func truncatedPayload(data []byte) string {
 	const max = 120
 	if len(data) > max {

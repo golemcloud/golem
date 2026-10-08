@@ -649,7 +649,7 @@ func init() {
 		} else {
 			localResult := RunResult{Message: "Hello from original agent with name: " + ctx.State.name}
 
-			forkedResult := promise.Await()
+			forkedResult := promise.MustAwait()
 
 			fmt.Println("local result :", localResult.Message)
 			fmt.Println("forked result:", forkedResult.Message)

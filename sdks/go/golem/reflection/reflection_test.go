@@ -17,7 +17,9 @@ package reflection
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,6 +93,32 @@ func snapshotNamed(t *testing.T, name string) AgentType {
 
 func snapshotOf(t *testing.T) AgentType { return snapshotNamed(t, "Greeter") }
 
+// TestAMalformedHostSchemaPanicsAtDiscovery — the host only describes
+// well-formed agent types, so a signature that does not resolve against the
+// snapshot's graph is raised when the snapshot is taken, and the schema
+// accessors never fail.
+func TestAMalformedHostSchemaPanicsAtDiscovery(t *testing.T) {
+	found, err := link.LocalAgentTypes()
+	if err != nil {
+		t.Fatalf("definition errors: %v", err)
+	}
+	for _, at := range found {
+		if at.TypeName != "Greeter" {
+			continue
+		}
+		at.Methods = slices.Clone(at.Methods)
+		at.Methods[0].OutputSchema = common.MakeOutputSchemaSingle(int32(len(at.Schema.TypeNodes) + 7))
+		defer func() {
+			if r := recover(); !strings.Contains(fmt.Sprint(r), `agent type "Greeter" method`) {
+				t.Fatalf("a dangling result type gave %v", r)
+			}
+		}()
+		newAgentType(at)
+		t.Fatal("a dangling result type was accepted")
+	}
+	t.Fatal("no agent type Greeter")
+}
+
 // TestSnapshotDescribesTheAgentType — the snapshot is everything a caller gets;
 // it has none of the target's Go types.
 func TestSnapshotDescribesTheAgentType(t *testing.T) {
@@ -99,7 +127,7 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 		t.Errorf("snapshot is %q/%q/%v", r.Name(), r.Description(), r.Mode())
 	}
 
-	ctor := need(r.Constructor().Input())
+	ctor := r.Constructor().Input()
 	if got := recordFieldNames(ctor); strings.Join(got, ",") != "name" {
 		t.Fatalf("constructor input fields are %v, want [name]", got)
 	}
@@ -111,10 +139,10 @@ func TestSnapshotDescribesTheAgentType(t *testing.T) {
 	if m.Description() != "Greet someone" {
 		t.Errorf("method description %q", m.Description())
 	}
-	if got := recordFieldNames(need(m.Input())); strings.Join(got, ",") != "greeting,times" {
+	if got := recordFieldNames(m.Input()); strings.Join(got, ",") != "greeting,times" {
 		t.Fatalf("method input fields are %v", got)
 	}
-	if need(m.Output()).IsNone() {
+	if m.Output().IsNone() {
 		t.Error("greet declares no output")
 	}
 	if _, known := r.Method("absent"); known {
@@ -145,7 +173,7 @@ func TestInputPacksTheInvocationRecord(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
 
-	packed, err := need(m.Input()).PackJSON(map[string]any{"greeting": "hi", "times": 2})
+	packed, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 2})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
@@ -168,7 +196,7 @@ func TestInputPacksTheInvocationRecord(t *testing.T) {
 		t.Errorf("decoded %+v", in)
 	}
 
-	back, err := need(m.Input()).UnpackJSON(packed)
+	back, err := m.Input().UnpackJSON(packed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +210,7 @@ func TestInputPacksTheInvocationRecord(t *testing.T) {
 func TestInputReportsEveryProblemAtOnce(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
-	_, err := need(m.Input()).PackJSON(map[string]any{"greetng": "hi", "extra": 1})
+	_, err := m.Input().PackJSON(map[string]any{"greetng": "hi", "extra": 1})
 	if err == nil {
 		t.Fatal("packing malformed arguments succeeded")
 	}
@@ -198,7 +226,7 @@ func TestInputReportsEveryProblemAtOnce(t *testing.T) {
 func TestInputJSONSchemaDescribesItsArguments(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
-	rendered, err := need(m.Input()).ToJSONSchema(true)
+	rendered, err := m.Input().ToJSONSchema(true)
 	if err != nil {
 		t.Fatalf("ToJSONSchema: %v", err)
 	}
@@ -232,7 +260,7 @@ func TestAutoInjectedFieldsAreNotAskedOfTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GraphToCore: %v", err)
 	}
-	ref := need(parametersRecord(conv, nil, in))
+	ref := need(parametersRecord(conv, in))
 	if got := recordFieldNames(ref); strings.Join(got, ",") != "name" {
 		t.Errorf("fields are %v, want only the caller-supplied one", got)
 	}
@@ -277,7 +305,7 @@ func (f *fakeRPC) schedule(_ time.Time, method string, _ types.SchemaValueTree) 
 func greetResult(t *testing.T, r AgentType, value string) types.SchemaValueTree {
 	t.Helper()
 	m, _ := r.Method("greet")
-	result, err := packWit(need(m.Output()).Unwrap(), value)
+	result, err := packWit(m.Output().Unwrap(), value)
 	if err != nil {
 		t.Fatalf("packing the result: %v", err)
 	}
@@ -367,7 +395,7 @@ func TestDiscoveryOffTarget(t *testing.T) {
 func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	r := snapshotOf(t)
 	m, _ := r.Method("greet")
-	input, err := need(m.Input()).PackJSON(map[string]any{"greeting": "hi", "times": 1})
+	input, err := m.Input().PackJSON(map[string]any{"greeting": "hi", "times": 1})
 	if err != nil {
 		t.Fatalf("PackJSON: %v", err)
 	}
@@ -381,7 +409,7 @@ func TestDynamicAgentClientCallsWithPackedValues(t *testing.T) {
 	if rpc.gotMethod != "greet" || id != fakeID || got.IsNone() {
 		t.Fatalf("invoked %q id %+v result %v", rpc.gotMethod, id, got)
 	}
-	value, err := need(m.Output()).Unwrap().UnpackJSON(got.Unwrap())
+	value, err := m.Output().Unwrap().UnpackJSON(got.Unwrap())
 	if err != nil || value != "hi" {
 		t.Errorf("result %v (%v)", value, err)
 	}

@@ -30,7 +30,7 @@ func SetOplogIndex(index uint64) {
 // the way to retry a side effect whose outcome was not acceptable:
 //
 //	cp := durability.NewCheckpoint()
-//	quote := cp.Must(fetchQuote()) // reverts, and so fetches again, on an error
+//	quote := cp.UnwrapOrRevert(fetchQuote()) // reverts, and so fetches again, on an error
 //	cp.AssertOrRevert(quote.Price < limit)
 //
 // A revert rewinds the whole agent, including goroutines awaiting something at
@@ -50,22 +50,22 @@ func (c Checkpoint) AssertOrRevert(ok bool) {
 	}
 }
 
-// Must returns v, or goes back to the checkpoint if err is not nil. It takes a
-// call's results directly: cp.Must(fetchQuote()).
-func (c Checkpoint) Must[T any](v T, err error) T {
+// UnwrapOrRevert returns v, or goes back to the checkpoint if err is not nil.
+// It takes a call's results directly: cp.UnwrapOrRevert(fetchQuote()).
+func (c Checkpoint) UnwrapOrRevert[T any](v T, err error) T {
 	if err != nil {
 		c.Revert()
 	}
 	return v
 }
 
-// MustRun calls f and returns its value, or goes back to the checkpoint if f
-// returns an error.
-func (c Checkpoint) MustRun[T any](f func() (T, error)) T { return c.Must(f()) }
+// RunOrRevert calls f and returns its value, or goes back to the checkpoint if
+// f returns an error.
+func (c Checkpoint) RunOrRevert[T any](f func() (T, error)) T { return c.UnwrapOrRevert(f()) }
 
 // WithCheckpoint captures a checkpoint, runs f with it, and goes back to it if f
 // returns an error.
 func WithCheckpoint[T any](f func(cp Checkpoint) (T, error)) T {
 	cp := NewCheckpoint()
-	return cp.Must(f(cp))
+	return cp.UnwrapOrRevert(f(cp))
 }

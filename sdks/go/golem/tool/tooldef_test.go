@@ -685,7 +685,7 @@ func TestToolInvocationRejectsUnknownCommandsAndMalformedInput(t *testing.T) {
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidCommandPath {
 		t.Error("a group without a body was invoked")
 	}
-	short, _ := golem.EncodeTypedValue(struct{ Message string }{"m"})
+	short := golem.EncodeTypedValue(struct{ Message string }{"m"})
 	res = d.invokeCommand(e, []string{"commit"}, witOf(short), nil, none, nil)
 	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput {
 		t.Error("a record with the wrong field count was accepted")

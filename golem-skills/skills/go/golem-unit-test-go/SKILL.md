@@ -87,9 +87,9 @@ func countUp(total int64) golem.AgentStream[string] {
 }
 
 func TestCountUp(t *testing.T) {
-	got, err := countUp(3).Collect()
-	if err != nil || len(got) != 3 || got[2] != "3" {
-		t.Fatalf("stream gave %v, %v", got, err)
+	got := countUp(3).Collect()
+	if len(got) != 3 || got[2] != "3" {
+		t.Fatalf("stream gave %v", got)
 	}
 }
 ```
@@ -103,10 +103,7 @@ parameters, results and snapshots use, which shows how a type travels:
 
 ```go
 func TestStateRoundTrips(t *testing.T) {
-	v, err := golem.EncodeTypedValue(State{Total: 7})
-	if err != nil {
-		t.Fatal(err)
-	}
+	v := golem.EncodeTypedValue(State{Total: 7})
 	back, err := golem.DecodeTypedValue[State](v)
 	if err != nil || back.Total != 7 {
 		t.Fatalf("round trip gave %+v, %v", back, err)

@@ -41,10 +41,7 @@ var Uppercase = Agent.Method[UppercaseIn, golem.AgentStream[string]]("uppercase"
 ```go
 agent.Handle(pipe.Uppercase, func(_ *golem.Context[state], in pipe.UppercaseIn) golem.AgentStream[string] {
 	return golem.ProduceStream(func(w *golem.AgentStreamWriter[string]) error {
-		for line, err := range in.Input.All() {
-			if err != nil {
-				return err
-			}
+		for line := range in.Input.All() {
 			if err := w.Write(strings.ToUpper(line)); err != nil {
 				return nil
 			}

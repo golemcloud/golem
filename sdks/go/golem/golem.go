@@ -49,7 +49,7 @@
 // client, and the method descriptor carries the call:
 //
 //	client := counteragent.Agent.Get(counteragent.CounterId{Name: "c1"})
-//	n := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
+//	n, err := counteragent.Add.Call(client, counteragent.AddIn{By: 5})
 //
 // Method descriptors are package-level values so the same value drives the
 // agent-type schema, the implementation binding, and typed calls from other

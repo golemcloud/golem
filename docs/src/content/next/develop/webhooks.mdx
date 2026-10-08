@@ -126,7 +126,7 @@ To use webhooks, your agent must:
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        To create a webhook, call `golem.NewWebhook[T]()`. `URL()` returns the public URL, and `Await()` suspends until the POST arrives and returns the request body decoded as `T` (JSON, or the raw bytes when `T` is `[]byte`):
+        To create a webhook, call `golem.NewWebhook[T]()`. `URL()` returns the public URL, and `Await()` suspends until the POST arrives and returns the request body decoded as `T` (JSON, or the raw bytes when `T` is `[]byte`), or an error when the body does not decode; `MustAwait()` panics on that error instead:
 
         ```go
         import "github.com/golemcloud/golem/sdks/go/golem"
@@ -140,7 +140,7 @@ To use webhooks, your agent must:
             webhook := golem.NewWebhook[MyEvent]()
             // Send the URL to the external system to POST to
             sendURL(webhook.URL())
-            return webhook.Await()
+            return webhook.MustAwait()
         }
         ```
     </Tabs.Tab>

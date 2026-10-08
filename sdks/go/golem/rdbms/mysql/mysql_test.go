@@ -122,6 +122,9 @@ func TestUnsignedGetters(t *testing.T) {
 	if got, err := r.Uint64(2); err != nil || got != 2026 {
 		t.Fatalf("Uint64(year) = %d, %v", got, err)
 	}
+	if got, err := r.Int64(1); err == nil {
+		t.Fatalf("Int64(bigint-unsigned above MaxInt64) = %d, want an error", got)
+	}
 }
 
 // TestScan — Scan fills typed destinations positionally, including *uint64 and *any.

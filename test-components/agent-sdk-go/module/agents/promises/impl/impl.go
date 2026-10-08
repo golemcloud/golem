@@ -34,7 +34,7 @@ func init() {
 		if p == nil {
 			panic(fmt.Errorf("no promise created with oplog index %d", in.OplogIdx))
 		}
-		return p.Await() // suspends until completed
+		return p.MustAwait() // suspends until completed
 	})
 	agent.Handle(promises.Complete, func(ctx *golem.Context[state], in promises.CompleteIn) bool {
 		p := ctx.State.created[uint64(in.OplogIdx)]

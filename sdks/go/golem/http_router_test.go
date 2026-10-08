@@ -195,14 +195,13 @@ func request(method, path string, query Option[string], headers []HTTPHeader, ch
 	}
 }
 
-func bodyOf(t *testing.T, resp HTTPResponse) (string, error) {
+func bodyOf(t *testing.T, resp HTTPResponse) string {
 	t.Helper()
-	chunks, err := resp.Body.Collect()
 	var b strings.Builder
-	for _, c := range chunks {
+	for _, c := range resp.Body.Collect() {
 		b.Write(c)
 	}
-	return b.String(), err
+	return b.String()
 }
 
 func TestTheAdapterEchoesAStreamedBody(t *testing.T) {
@@ -219,8 +218,8 @@ func TestTheAdapterEchoesAStreamedBody(t *testing.T) {
 	if got := fmt.Sprint(resp.Headers); !strings.Contains(got, "content-type") {
 		t.Fatalf("headers %v", resp.Headers)
 	}
-	if body, err := bodyOf(t, resp); err != nil || body != "hello" {
-		t.Fatalf("body %q, %v", body, err)
+	if body := bodyOf(t, resp); body != "hello" {
+		t.Fatalf("body %q", body)
 	}
 }
 
@@ -231,7 +230,7 @@ func TestTheAdapterPresentsTheFullRequest(t *testing.T) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = r })
 	resp := serveHTTP(context.Background(), h,
 		request("GET", "/web/a%2Fb/c", Some("x=1&x=2&y=a+b"), []HTTPHeader{{Name: "x-tenant", Value: []byte("acme")}}))
-	_, _ = bodyOf(t, resp)
+	_ = bodyOf(t, resp)
 	switch {
 	case seen.URL.Path != "/web/a/b/c" || seen.URL.RawPath != "/web/a%2Fb/c" || seen.URL.EscapedPath() != "/web/a%2Fb/c":
 		t.Fatalf("path %q raw %q", seen.URL.Path, seen.URL.RawPath)
@@ -251,7 +250,7 @@ func TestRepeatedResponseHeadersStaySeparate(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 	resp := serveHTTP(context.Background(), h, request("POST", "/c", None[string](), nil))
-	_, _ = bodyOf(t, resp)
+	_ = bodyOf(t, resp)
 	if resp.Status != 201 {
 		t.Fatalf("status %d", resp.Status)
 	}
@@ -281,8 +280,8 @@ func TestTheHeadIsSentBeforeTheBodyEnds(t *testing.T) {
 		t.Fatalf("status %d", resp.Status)
 	}
 	close(release)
-	if body, err := bodyOf(t, resp); err != nil || body != "first second" {
-		t.Fatalf("body %q, %v", body, err)
+	if body := bodyOf(t, resp); body != "first second" {
+		t.Fatalf("body %q", body)
 	}
 }
 
@@ -305,8 +304,8 @@ func TestAPanicAfterTheHeadFailsTheRequest(t *testing.T) {
 		panic("boom")
 	})
 	resp := serveHTTP(context.Background(), h, request("GET", "/p", None[string](), nil))
-	if chunk, ok, err := resp.Body.Next(); !ok || err != nil || string(chunk) != "partial" {
-		t.Fatalf("first chunk %q, %v, %v", chunk, ok, err)
+	if chunk, ok := resp.Body.Next(); !ok || string(chunk) != "partial" {
+		t.Fatalf("first chunk %q, %v", chunk, ok)
 	}
 	if err := <-failed; !strings.Contains(err.Error(), "panicked after sending the response head: boom") {
 		t.Fatalf("the production failed with %v", err)
@@ -320,13 +319,13 @@ func TestResponsesWithoutABodyRefuseOne(t *testing.T) {
 		_, werr = w.Write([]byte("x"))
 	})
 	resp := serveHTTP(context.Background(), h, request("DELETE", "/d", None[string](), nil))
-	if body, _ := bodyOf(t, resp); body != "" || werr != http.ErrBodyNotAllowed {
+	if body := bodyOf(t, resp); body != "" || werr != http.ErrBodyNotAllowed {
 		t.Fatalf("body %q, write error %v", body, werr)
 	}
 
 	h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "hidden") })
 	resp = serveHTTP(context.Background(), h, request("HEAD", "/h", None[string](), nil))
-	if body, _ := bodyOf(t, resp); body != "" {
+	if body := bodyOf(t, resp); body != "" {
 		t.Fatalf("a HEAD response carried %q", body)
 	}
 }
@@ -334,7 +333,7 @@ func TestResponsesWithoutABodyRefuseOne(t *testing.T) {
 func TestAnUntypedResponseIsSniffed(t *testing.T) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "<html></html>") })
 	resp := serveHTTP(context.Background(), h, request("GET", "/", None[string](), nil))
-	_, _ = bodyOf(t, resp)
+	_ = bodyOf(t, resp)
 	for _, f := range resp.Headers {
 		if f.Name == "content-type" && strings.HasPrefix(string(f.Value), "text/html") {
 			return

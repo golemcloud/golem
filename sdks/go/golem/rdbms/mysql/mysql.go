@@ -43,7 +43,9 @@
 package mysql
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	my "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_rdbms_mysql"
@@ -532,7 +534,7 @@ func (r Row) Get(i int) (any, error) {
 }
 
 // Int64 reads an integer column (any signed or unsigned width, or year) as int64.
-// A bigint-unsigned above math.MaxInt64 wraps; use [Row.Uint64] for those.
+// A bigint-unsigned above math.MaxInt64 is an error; use [Row.Uint64] for those.
 func (r Row) Int64(i int) (int64, error) {
 	v, err := r.at(i)
 	if err != nil {
@@ -558,7 +560,11 @@ func (r Row) Int64(i int) (int64, error) {
 	case my.DbValueIntUnsigned:
 		return int64(v.IntUnsigned()), nil
 	case my.DbValueBigintUnsigned:
-		return int64(v.BigintUnsigned()), nil
+		u := v.BigintUnsigned()
+		if u > math.MaxInt64 {
+			return 0, fmt.Errorf("golem/rdbms/mysql: column %d value %d overflows int64", i, u)
+		}
+		return int64(u), nil
 	case my.DbValueYear:
 		return int64(v.Year()), nil
 	default:
@@ -903,15 +909,15 @@ func (db *DB) Begin() (*Tx, error) {
 }
 
 // Transaction runs fn inside a transaction, committing if fn returns nil and
-// rolling back (and returning fn's error) otherwise.
+// rolling back otherwise; the error is fn's, joined with the rollback's when that
+// fails too.
 func (db *DB) Transaction(fn func(*Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
 }

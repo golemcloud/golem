@@ -37,7 +37,7 @@ func TestPromisePayloadJSON(t *testing.T) {
 	if string(data) != `{"Approved":true,"By":"alice"}` {
 		t.Fatalf("encoded JSON = %s", data)
 	}
-	if got := decodePromisePayload[Decision](PromiseID{}, data); got != want {
+	if got, err := decodePromisePayload[Decision](PromiseID{}, data); err != nil || got != want {
 		t.Fatalf("round-trip = %+v, want %+v", got, want)
 	}
 }
@@ -51,7 +51,7 @@ func TestPromisePayloadRawBytes(t *testing.T) {
 	if !bytes.Equal(data, raw) {
 		t.Fatalf("[]byte should pass through raw, got %v", data)
 	}
-	if got := decodePromisePayload[[]byte](PromiseID{}, data); !bytes.Equal(got, raw) {
+	if got, err := decodePromisePayload[[]byte](PromiseID{}, data); err != nil || !bytes.Equal(got, raw) {
 		t.Fatalf("[]byte round-trip = %v, want %v", got, raw)
 	}
 }
@@ -113,19 +113,15 @@ func TestPromisePayloadDecodeFailureNamesPromiseAndPayload(t *testing.T) {
 	type Verdict struct{ Approved bool }
 	id := PromiseID{AgentID: AgentID{AgentID: `ApprovalAgent("q")`}, OplogIndex: 12}
 
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("decoding a string as a struct should panic")
+	_, err := decodePromisePayload[Verdict](id, []byte(`"approved"`))
+	if err == nil {
+		t.Fatal("decoding a string as a struct should fail")
+	}
+	for _, want := range []string{`ApprovalAgent("q")`, "golem.Verdict", "approved"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
 		}
-		msg := fmt.Sprint(r)
-		for _, want := range []string{`ApprovalAgent("q")`, "golem.Verdict", "approved"} {
-			if !strings.Contains(msg, want) {
-				t.Errorf("panic message %q does not mention %q", msg, want)
-			}
-		}
-	}()
-	_ = decodePromisePayload[Verdict](id, []byte(`"approved"`))
+	}
 }
 
 // TestPromisePayloadTruncatesLongPayloads — the payload is quoted for a failure

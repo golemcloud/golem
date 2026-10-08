@@ -90,7 +90,7 @@ func init() {
 	})
 
 	RawRouter.HandleRaw(func(_ context.Context, req golem.HTTPRequest) golem.HTTPResponse {
-		_ = req.Body.Close()
+		req.Body.Close()
 		var query any
 		if q, ok := req.Query.Get(); ok {
 			query = q

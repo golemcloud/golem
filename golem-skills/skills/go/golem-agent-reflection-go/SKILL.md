@@ -34,12 +34,13 @@ func pingAll(ids []string) {
 		if err != nil {
 			continue
 		}
-		fmt.Println(id, Ping.Call(c, golem.Unit{}))
+		reply, err := Ping.Call(c, golem.Unit{})
+		fmt.Println(id, reply, err)
 	}
 }
 ```
 
-`Bind` checks nothing about the target, which the client does not describe; a mismatch is reported by the host or when the result is decoded. Binding does not create the agent, but the first call to a durable id does.
+`Bind` checks nothing about the target, which the client does not describe; a target that is not deployed is reported by `Bind`, and a mismatch by the host or when the result is decoded. Binding does not create the agent, but the first call to a durable id does.
 
 ## Full Clients
 
@@ -54,13 +55,14 @@ var (
 	Add     = Counter.Method[AddIn, int64]("add")
 )
 
-total := Add.Call(Counter.Get(CounterID{Name: "main"}), AddIn{By: 5})
+c, err := Counter.Get(CounterID{Name: "main"}) // an error when the target is not deployed
+total, err := Add.Call(c, AddIn{By: 5})
 
-c, err := Counter.Bind(agentID) // the id must name CounterAgent with a CounterID constructor
+c, err = Counter.Bind(agentID) // the id must name CounterAgent with a CounterID constructor
 id, err := Counter.AgentID(CounterID{Name: "main"}, golem.None[golem.UUID]()) // without creating it
 ```
 
-- `Get`, `NewPhantom`, `Bind` and `AgentID` work the same on an agent's own definition (`DefineAgent`).
+- `Get`, `NewPhantom`, `Bind` and `AgentID` work the same on an agent's own definition (`DefineAgent`), except that there `Get`, `NewPhantom` and `AgentID` panic instead of returning an error: the target is in the same component, so a failure is a programming mistake.
 - `golem.AgentClientSpec{Mode: golem.Ephemeral}` declares an ephemeral target: it has no durable identity, so `Get` and `Bind` are refused and `NewPhantom` addresses it.
 - `golem.DefineConfiguredFullAgentClient[Id, Cfg]` declares the target's configuration type, so `Get(id, golem.WithConfig(cfg))` passes typed creation-time overrides, checked before the call.
 
@@ -84,7 +86,7 @@ add, known := counter.Method("add")
 if !known {
 	panic("CounterAgent has no method add")
 }
-input := golem.Must(add.Input())                 // a schema.Ref of the parameter record
+input := add.Input()                              // a schema.Ref of the parameter record
 fmt.Println(golem.Must(input.ToJSONSchema(true))) // e.g. for an LLM
 ```
 
@@ -137,7 +139,7 @@ A dynamic client sends values the caller packed itself and validates nothing. Ke
 ```go
 t, _ := reflection.DiscoverAgentType(agentType)
 m, _ := t.Method(method)
-input := golem.Must(golem.Must(m.Input()).PackJSON(args))
+input := golem.Must(m.Input().PackJSON(args))
 
 client := golem.Must(reflection.BindAgentID(agentID))
 out, _, err := client.Call(method, input)
@@ -145,7 +147,7 @@ if err != nil {
 	panic(err)
 }
 if v, has := out.Get(); has {
-	if result, declared := golem.Must(m.Output()).Get(); declared {
+	if result, declared := m.Output().Get(); declared {
 		fmt.Println(golem.Must(result.UnpackJSON(v)))
 	}
 }

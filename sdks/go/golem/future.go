@@ -39,13 +39,13 @@ type Future[Out any] struct {
 	target string
 }
 
-// Get waits for the invocation to finish and returns its result, panicking on an
-// infra failure (a [RemoteCallError]) — fail-loud, like [MethodDef.Call], to align
-// with Golem's exactly-once model. Model expected outcomes as a [Result] in Out.
+// Get waits for the invocation to finish and returns its result. A remote
+// failure, or a result that does not decode as Out, is returned as a
+// [RemoteCallError]. Model expected outcomes as a [Result] in Out.
 //
 // It consumes the future: the underlying host handle is owned, so it is dropped
 // here and a second call panics rather than reusing a freed handle.
-func (f *Future[Out]) Get() Out {
+func (f *Future[Out]) Get() (Out, error) {
 	if f == nil || f.fut == nil {
 		panic(fmt.Errorf("golem: Get on an already-consumed or zero Future"))
 	}
@@ -55,9 +55,15 @@ func (f *Future[Out]) Get() Out {
 	f.fut = nil
 
 	if res.IsErr() {
-		panic(rpcErrorToGo(f.target, f.method, res.Err()))
+		var zero Out
+		return zero, rpcErrorToGo(f.target, f.method, res.Err())
 	}
-	out, err := decodeOutput[Out](f.target, f.method, res.Ok())
+	return decodeOutput[Out](f.target, f.method, res.Ok())
+}
+
+// MustGet is [Future.Get] that panics on a remote failure.
+func (f *Future[Out]) MustGet() Out {
+	out, err := f.Get()
 	if err != nil {
 		panic(err)
 	}

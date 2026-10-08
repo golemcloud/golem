@@ -15,13 +15,12 @@
 // Package blobstore is a Go wrapper over Golem's durable object store
 // (wasi:blobstore). Create or open a [Container], then read and write named blobs.
 //
-// Like [keyvalue], these are I/O operations that return an error (a missing
-// object is reported as found=false, not an error), distinct from the fail-loud
-// exactly-once control-flow surface. The store is durable, and because operations
-// are remote side effects, calling them inside a read-only method traps.
-//
-// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
-// invocation on error.
+// These are I/O operations whose failures (an absent container, an object that
+// already exists, an invalid argument, an exceeded limit) a caller can handle, so
+// they return an error; a missing object is reported as found=false, not an
+// error. The common entry points have a Must variant that panics instead. The
+// store is durable, and because operations are remote side effects, calling them
+// inside a read-only method traps.
 package blobstore
 
 import (
@@ -91,6 +90,9 @@ func GetContainer(name string) (*Container, error) {
 	return &Container{raw: r.Ok(), name: name}, nil
 }
 
+// MustGetContainer is [GetContainer] that panics on error.
+func MustGetContainer(name string) *Container { return must(GetContainer(name)) }
+
 // GetOrCreateContainer returns the container, creating it if it does not exist.
 // It tolerates a concurrent create (the create/get race).
 func GetOrCreateContainer(name string) (*Container, error) {
@@ -110,6 +112,11 @@ func GetOrCreateContainer(name string) (*Container, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// MustGetOrCreateContainer is [GetOrCreateContainer] that panics on error.
+func MustGetOrCreateContainer(name string) *Container {
+	return must(GetOrCreateContainer(name))
 }
 
 // ContainerExists reports whether a container exists.
@@ -239,6 +246,15 @@ func (c *Container) GetData(name string) (data []byte, found bool, err error) {
 	return data, true, nil
 }
 
+// MustGetData is [Container.GetData] that panics on error.
+func (c *Container) MustGetData(name string) (data []byte, found bool) {
+	data, found, err := c.GetData(name)
+	if err != nil {
+		panic(err)
+	}
+	return data, found
+}
+
 // GetRange reads bytes [start, end] of an object; both offsets are inclusive,
 // and it gives an error when a byte of the range is not in the object.
 func (c *Container) GetRange(name string, start, end uint64) ([]byte, error) {
@@ -262,7 +278,7 @@ func (c *Container) WriteData(name string, data []byte) error {
 	ov := bstypes.OutgoingValueNewOutgoingValue()
 	writer, reader := bstypes.MakeStreamU8()
 	if r := ov.OutgoingValueWriteBody(reader); r.IsErr() {
-		return bsError("outgoing-value write-body failed")
+		panic(bsError("outgoing-value write-body failed"))
 	}
 	writer.WriteAll(data)
 	writer.Drop()
@@ -270,6 +286,20 @@ func (c *Container) WriteData(name string, data []byte) error {
 		return bsError(r.Err())
 	}
 	return nil
+}
+
+// MustWriteData is [Container.WriteData] that panics on error.
+func (c *Container) MustWriteData(name string, data []byte) {
+	if err := c.WriteData(name, data); err != nil {
+		panic(err)
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 func drainStrings(r *witTypes.StreamReader[string]) []string {
@@ -297,7 +327,7 @@ func millis(ms uint64) time.Time { return time.UnixMilli(int64(ms)) }
 type Store[T any] struct{ c *Container }
 
 // Typed returns a view of the container that encodes and decodes objects as T
-// (JSON, or raw bytes when T is []byte).
+// with encoding/json; a []byte value is stored as a base64 JSON string.
 //
 //	report, found, err := container.Typed[Report]().Get("2026-09.json")
 func (c *Container) Typed[T any]() *Store[T] { return &Store[T]{c: c} }
@@ -321,13 +351,30 @@ func (s *Store[T]) Get(name string) (value T, found bool, err error) {
 	return v, true, nil
 }
 
-// Set JSON-encodes value and writes it as the named object.
+// MustGet is [Store.Get] that panics on error.
+func (s *Store[T]) MustGet(name string) (value T, found bool) {
+	v, found, err := s.Get(name)
+	if err != nil {
+		panic(err)
+	}
+	return v, found
+}
+
+// Set JSON-encodes value and writes it as the named object. It panics when value
+// does not encode as JSON.
 func (s *Store[T]) Set(name string, value T) error {
 	raw, err := marshalValue(value)
 	if err != nil {
-		return fmt.Errorf("golem/blobstore: encoding %q: %w", name, err)
+		panic(fmt.Errorf("golem/blobstore: encoding %q: %w", name, err))
 	}
 	return s.c.WriteData(name, raw)
+}
+
+// MustSet is [Store.Set] that panics on error.
+func (s *Store[T]) MustSet(name string, value T) {
+	if err := s.Set(name, value); err != nil {
+		panic(err)
+	}
 }
 
 // Delete removes the named object.

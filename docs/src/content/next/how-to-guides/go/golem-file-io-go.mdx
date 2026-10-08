@@ -123,7 +123,7 @@ func init() {
 }
 ```
 
-`golem.Must` unwraps `(value, error)` and aborts the invocation (which then retries) on error — the fail-loud way to handle I/O errors when the caller should not observe them as a value.
+`golem.Must` unwraps `(value, error)` and panics on error, which traps the component (the agent fails; inside `durability.Atomically` the region is retried) — the fail-loud way to handle I/O errors when the caller should not observe them as a value.
 
 ## Provisioning Initial Files (`golem.yaml`)
 

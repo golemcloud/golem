@@ -34,21 +34,19 @@ type TypedValue struct{ wit types.TypedSchemaValue }
 // The schema crosses into the shared model here: everything a caller does with
 // it — canonical JSON, JSON Schema, validation — lives in
 // github.com/golemcloud/golem/sdks/go/core/schema, so the guest SDK and an
-// external bridge read a value exactly the same way.
-func (v TypedValue) Schema() (core.Ref, error) {
+// external bridge read a value exactly the same way. It panics on a schema
+// graph the host could not have produced.
+func (v TypedValue) Schema() core.Ref {
 	converted, err := witschema.GraphToCore(v.wit.Graph)
 	if err != nil {
-		return core.Ref{}, err
+		panic(fmt.Errorf("golem: malformed typed-value schema: %w", err))
 	}
-	return core.NewRef(converted.Graph), nil
+	return core.NewRef(converted.Graph)
 }
 
 // JSON decodes the value into ordinary Go values, in the host's canonical form.
 func (v TypedValue) JSON() (any, error) {
-	ref, err := v.Schema()
-	if err != nil {
-		return nil, err
-	}
+	ref := v.Schema()
 	value, err := witschema.ValueToCore(v.wit.Value)
 	if err != nil {
 		return nil, err
@@ -59,10 +57,7 @@ func (v TypedValue) JSON() (any, error) {
 // WithJSON rebuilds the value from canonical JSON against the same schema, which
 // is how a middleware rewrites an argument it does not have a Go type for.
 func (v TypedValue) WithJSON(value any) (TypedValue, error) {
-	ref, err := v.Schema()
-	if err != nil {
-		return TypedValue{}, err
-	}
+	ref := v.Schema()
 	built, err := ref.PackJSON(value)
 	if err != nil {
 		return TypedValue{}, err
@@ -90,11 +85,12 @@ func DecodeTypedValue[T any](v TypedValue) (T, error) {
 	return out, nil
 }
 
-// EncodeTypedValue packages a Go value together with its derived schema.
-func EncodeTypedValue[T any](value T) (TypedValue, error) {
+// EncodeTypedValue packages a Go value together with its derived schema. It
+// panics when T has no schema.
+func EncodeTypedValue[T any](value T) TypedValue {
 	c := defs.Compile(reflect.TypeFor[T]())
 	if c.Invalid != "" {
-		return TypedValue{}, fmt.Errorf("golem: %s cannot be encoded: %s", reflect.TypeFor[T](), c.Invalid)
+		panic(fmt.Errorf("golem: %s cannot be encoded: %s", reflect.TypeFor[T](), c.Invalid))
 	}
 	g := engine.GraphBuilder{E: defs.Engine}
 	root := g.Node(c)
@@ -103,5 +99,5 @@ func EncodeTypedValue[T any](value T) (TypedValue, error) {
 	return TypedValue{wit: types.TypedSchemaValue{
 		Graph: graph,
 		Value: engine.EncodeWith(c, reflect.ValueOf(&value).Elem()),
-	}}, nil
+	}}
 }

@@ -28,31 +28,34 @@ import (
 
 // Cross-agent calls hang off the method descriptor rather than the client:
 //
-//	res := Charge.Call(pay, ChargeIn{AmountCents: 500})
+//	res, err := Charge.Call(pay, ChargeIn{AmountCents: 500})
 //
 // Go methods cannot introduce type parameters, so a Client[Id] could never have
 // a Call[In, Out] method. The descriptor already binds In and Out, and shares Id
 // with the client — which is what makes aiming a method at the wrong agent a
 // compile error.
 //
-// The RPC methods are FAIL-LOUD: they return the value and panic on an infra
-// failure (a [RemoteCallError] — the callee failed, or was unreachable after the
-// runtime exhausted its retries). This matches Golem's exactly-once model — the
-// runtime handles transient failures and replays deterministically, so a failure
-// that reaches the guest is terminal; the documented way to "rely on" the
-// automatic retry is to let it propagate. Model *expected* outcomes as a [Result]
-// in the method's output instead. To degrade gracefully on a non-critical call
-// (rare), wrap it and recover the [RemoteCallError].
+// A remote failure — the callee failed, or was unreachable after the runtime
+// exhausted its retries, or returned a value that does not decode as Out — is
+// returned as a [RemoteCallError]. The runtime handles transient failures and
+// replays deterministically, so a failure that reaches the guest is terminal.
+// Each call form has a Must variant ([MethodDef.MustCall], [Future.MustGet], …)
+// that panics instead; a panic in an agent method traps the component, as in
+// Rust, so the worker fails (or, inside an atomic region, the region is
+// retried). Model *expected* outcomes as a [Result] in the method's output.
+//
+// Misuse — a zero Client, an input that does not encode, a stream on a
+// fire-and-forget form — panics in every form.
 
 // noScopeCard is the permission scope card sent with every outgoing invocation.
-// The Go SDK does not yet expose permission scoping, so calls carry no card
-// (None) — behaviorally identical to before permission cards were introduced.
-// TODO: expose PermissionCard on the client API (tracked follow-up).
+// Calls carry no scope card, as in the TS and Rust SDKs; cards move as fields of
+// the invocation's values instead.
 func noScopeCard() witTypes.Option[*types.PermissionCard] {
 	return witTypes.None[*types.PermissionCard]()
 }
 
-// Call invokes the method and waits for its result, panicking on an infra failure.
+// Call invokes the method and waits for its result. A remote failure is
+// returned as a [RemoteCallError].
 //
 // It is [MethodDef.CallAsync] followed by [Future.Get]: the call goes through the
 // asynchronous import, as every other SDK's does, which is the form the executor
@@ -63,14 +66,20 @@ func noScopeCard() witTypes.Option[*types.PermissionCard] {
 // While it waits, other goroutines of the same invocation may run: Call is a
 // yield point, exactly like Future.Get. To have several calls in flight at once,
 // use [MethodDef.CallAsync] directly.
-func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) Out {
+func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
 	return m.CallAsync(c, in).Get()
 }
 
+// MustCall is [MethodDef.Call] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustCall(c Client[Id], in In) Out {
+	return m.CallAsync(c, in).MustGet()
+}
+
 // Trigger invokes the method without waiting for a result, returning the
-// invocation's identity (panicking on an infra failure). Failures after the
-// invocation is accepted are not reported here.
-func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) InvocationID {
+// invocation's identity. A failure to start the invocation is returned as a
+// [RemoteCallError]; failures after the invocation is accepted are not
+// reported here.
+func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationID, error) {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
@@ -81,14 +90,24 @@ func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) InvocationID {
 	}
 	res := c.rpc.Invoke(m.name, tree, noScopeCard())
 	if res.IsErr() {
-		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
+		return InvocationID{}, rpcErrorToGo(c.agentID, m.name, res.Err())
 	}
-	return invocationIDFrom(res.Ok())
+	return invocationIDFrom(res.Ok()), nil
+}
+
+// MustTrigger is [MethodDef.Trigger] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) InvocationID {
+	id, err := m.Trigger(c, in)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // Schedule arranges for the method to be invoked at the given time and returns a
-// token that can cancel it beforehand (panicking on an infra failure).
-func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) *ScheduledInvocation {
+// token that can cancel it beforehand. A failure to schedule is returned as a
+// [RemoteCallError].
+func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*ScheduledInvocation, error) {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
@@ -99,17 +118,27 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) *Sch
 	}
 	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
 	if res.IsErr() {
-		panic(rpcErrorToGo(c.agentID, m.name, res.Err()))
+		return nil, rpcErrorToGo(c.agentID, m.name, res.Err())
 	}
 	receipt := res.Ok()
 	return &ScheduledInvocation{
 		ID:    invocationIDFrom(receipt.Metadata),
 		token: receipt.CancellationToken,
-	}
+	}, nil
 }
 
-// CallAsync starts the invocation and returns immediately with a future
-// (panicking on an infra failure at start).
+// MustSchedule is [MethodDef.Schedule] that panics on a remote failure.
+func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) *ScheduledInvocation {
+	s, err := m.Schedule(c, at, in)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
+// CallAsync starts the invocation and returns immediately with a future. A
+// failure to start is reported by the future's Get, as the host's
+// asynchronous import has no error result of its own.
 //
 // This is the only way to have several invocations in flight: `invoke-and-await`
 // is a synchronous import and blocks the component, whereas the future's Get is

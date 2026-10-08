@@ -7,13 +7,13 @@ description: "Fire-and-forget agent invocations in Go with Trigger. Use when the
 
 ## Overview
 
-`Method.Trigger(client, in)` enqueues an invocation **without waiting for its result** and returns an `InvocationID`. Use it for notifications, fan-out, or handing work to a background/worker agent. Unlike a synchronous `Call`, `Trigger` does not block — so it is also safe for an agent to message **itself** (a synchronous self-`Call` would deadlock, since one instance handles one invocation at a time).
+`Method.Trigger(client, in)` enqueues an invocation **without waiting for its result** and returns an `InvocationID`, or an error if the invocation could not be enqueued (`MustTrigger` panics instead). Use it for notifications, fan-out, or handing work to a background/worker agent. Unlike a synchronous `Call`, `Trigger` does not block — so it is also safe for an agent to message **itself** (a synchronous self-`Call` would deadlock, since one instance handles one invocation at a time).
 
 ## Steps
 
 1. **Import the target agent's definition package.**
 2. **Get a client** with `Agent.Get(id)`.
-3. **Trigger the method**: `Target.Method.Trigger(client, in)` — returns immediately.
+3. **Trigger the method**: `Target.Method.MustTrigger(client, in)` — returns immediately.
 
 ## Example
 
@@ -36,7 +36,7 @@ func init() {
 		// Hand each unit of work to a worker without awaiting the outcome.
 		for _, w := range in.Jobs {
 			c := worker.Agent.Get(worker.ID{Name: w.Worker})
-			worker.Dispatch.Trigger(c, worker.DispatchIn{Job: w.Job})
+			worker.Dispatch.MustTrigger(c, worker.DispatchIn{Job: w.Job})
 		}
 		return golem.Unit{}
 	})
@@ -47,9 +47,9 @@ Fanning out is just a loop of `Trigger` calls — each runs independently on its
 
 ## Trigger vs Call
 
-- `Call(c, in) Out` — blocks, returns the result. Use when you need the value. Never self-`Call`.
-- `Trigger(c, in) InvocationID` — returns immediately, no result. Use for notifications, fan-out, and self-messaging.
-- `CallAsync(c, in) *Future[Out]` — start now, await later with `Get()`. Use when you want the result but not to block yet (see `golem-call-another-agent-go`).
+- `Call(c, in) (Out, error)` / `MustCall(c, in) Out` — blocks, returns the result. Use when you need the value. Never self-`Call`.
+- `Trigger(c, in) (InvocationID, error)` / `MustTrigger(c, in) InvocationID` — returns immediately, no result. Use for notifications, fan-out, and self-messaging.
+- `CallAsync(c, in) *Future[Out]` — start now, await later with `Get()` or `MustGet()`. Use when you want the result but not to block yet (see `golem-call-another-agent-go`).
 
 The returned `InvocationID` is an opaque handle to the enqueued invocation; you can ignore it for pure fire-and-forget.
 

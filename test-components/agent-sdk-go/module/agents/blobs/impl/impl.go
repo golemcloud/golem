@@ -18,30 +18,30 @@ var agent = blobs.Agent.Implement(func(blobs.Id) *state { return &state{} })
 
 func init() {
 	agent.Handle(blobs.Write, func(_ *golem.Context[state], in blobs.WriteIn) golem.Unit {
-		c := golem.Must(blobstore.GetOrCreateContainer(in.Container))
-		golem.Must0(c.WriteData(in.Object, []byte(in.Data)))
+		c := blobstore.MustGetOrCreateContainer(in.Container)
+		c.MustWriteData(in.Object, []byte(in.Data))
 		return golem.Unit{}
 	})
 	agent.Handle(blobs.Read, func(_ *golem.Context[state], in blobs.ObjectIn) string {
-		c := golem.Must(blobstore.GetOrCreateContainer(in.Container))
-		data, found := golem.Must2(c.GetData(in.Object))
+		c := blobstore.MustGetOrCreateContainer(in.Container)
+		data, found := c.MustGetData(in.Object)
 		if !found {
 			return ""
 		}
 		return string(data)
 	})
 	agent.Handle(blobs.Size, func(_ *golem.Context[state], in blobs.ObjectIn) int64 {
-		c := golem.Must(blobstore.GetOrCreateContainer(in.Container))
+		c := blobstore.MustGetOrCreateContainer(in.Container)
 		info := golem.Must(c.ObjectInfo(in.Object))
 		return int64(info.Size)
 	})
 	agent.Handle(blobs.Delete, func(_ *golem.Context[state], in blobs.ObjectIn) golem.Unit {
-		c := golem.Must(blobstore.GetOrCreateContainer(in.Container))
+		c := blobstore.MustGetOrCreateContainer(in.Container)
 		golem.Must0(c.Delete(in.Object))
 		return golem.Unit{}
 	})
 	agent.Handle(blobs.List, func(_ *golem.Context[state], in blobs.ContainerIn) []string {
-		c := golem.Must(blobstore.GetOrCreateContainer(in.Container))
+		c := blobstore.MustGetOrCreateContainer(in.Container)
 		names := golem.Must(c.ListObjects())
 		sort.Strings(names) // deterministic order for the test assertion
 		return names

@@ -189,7 +189,7 @@ func TestMaterializeConfig(t *testing.T) {
 	if got.Db.Url != "db://x" {
 		t.Errorf("Db.Url = %q", got.Db.Url)
 	}
-	if pw := got.Db.Password.Get(); pw != "s3cr3t" {
+	if pw, err := got.Db.Password.Get(); err != nil || pw != "s3cr3t" {
 		t.Errorf("Db.Password.Get() = %q", pw)
 	}
 }
@@ -200,10 +200,10 @@ func TestMaterializeConfig(t *testing.T) {
 func TestSecretGetIsLive(t *testing.T) {
 	n := 0
 	s := Secret[string]{read: func() (string, error) { n++; return fmt.Sprintf("v%d", n), nil }}
-	if a := s.Get(); a != "v1" {
+	if a := s.MustGet(); a != "v1" {
 		t.Fatalf("first Get = %q, want v1", a)
 	}
-	if b := s.Get(); b != "v2" {
+	if b, err := s.Get(); err != nil || b != "v2" {
 		t.Fatalf("second Get = %q, want v2 (Get must re-read, not cache)", b)
 	}
 	func() {
@@ -213,7 +213,7 @@ func TestSecretGetIsLive(t *testing.T) {
 			}
 		}()
 		var zero Secret[string]
-		_ = zero.Get()
+		_, _ = zero.Get()
 	}()
 }
 

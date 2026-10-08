@@ -347,8 +347,9 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
     </Tabs.Tab>
     <Tabs.Tab>
     To await a promise, use the `Await` method of a `golem.Promise[T]`, which returns the completion payload decoded
-    from JSON as `T`. A handle for a stored `PromiseID` is rebuilt with `golem.PromiseByID[T]`. `AwaitContext(ctx)`
-    stops waiting with `ctx.Err()` when the context ends first.
+    from JSON as `T`, or an error when the payload does not decode. `MustAwait` panics on that error instead. A handle
+    for a stored `PromiseID` is rebuilt with `golem.PromiseByID[T]`. `AwaitContext(ctx)` stops waiting with `ctx.Err()`
+    when the context ends first.
 
     ```go
     import "github.com/golemcloud/golem/sdks/go/golem"
@@ -358,7 +359,7 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
     }
 
     func waitForPayload(promiseID golem.PromiseID) MyPayload {
-        return golem.PromiseByID[MyPayload](promiseID).Await()
+        return golem.PromiseByID[MyPayload](promiseID).MustAwait()
     }
     ```
 

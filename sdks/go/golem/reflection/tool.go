@@ -35,14 +35,30 @@ type Tool struct {
 	lookupName string
 	wit        toolCommon.Tool
 	conv       witschema.Converted
-	convErr    error
 }
 
-// newTool converts a discovered tool's schema up front, on the same
-// terms as an agent type.
+// newTool converts a discovered tool's schema once, when the snapshot is
+// taken, and checks every command's signature against it, on the same terms as
+// an agent type: a tool the host describes is well-formed, so one that does not
+// convert is a broken host and panics.
 func newTool(lookupName string, wit toolCommon.Tool) Tool {
 	conv, err := witschema.GraphToCore(wit.Schema)
-	return Tool{lookupName: lookupName, wit: wit, conv: conv, convErr: err}
+	if err != nil {
+		panic(fmt.Errorf("golem: tool %q has a malformed schema: %w", lookupName, err))
+	}
+	r := Tool{lookupName: lookupName, wit: wit, conv: conv}
+	for _, c := range r.Commands() {
+		if !c.Callable() {
+			continue
+		}
+		if _, err := c.input(); err != nil {
+			panic(fmt.Errorf("golem: tool %q command %s: %w", lookupName, commandLabel(c.path), err))
+		}
+		if _, err := c.output(); err != nil {
+			panic(fmt.Errorf("golem: tool %q command %s result: %w", lookupName, commandLabel(c.path), err))
+		}
+	}
+	return r
 }
 
 // Name returns the name a client binds to, which is stable across adapters.
@@ -53,17 +69,12 @@ func (r Tool) Version() string { return r.wit.Version }
 
 // Schema returns the tool's type pool. Its root is a placeholder: command
 // bodies index into it.
-func (r Tool) Schema() (core.Ref, error) {
-	if r.convErr != nil {
-		return core.Ref{}, r.convErr
-	}
-	return core.NewRef(r.conv.Graph), nil
-}
+func (r Tool) Schema() core.Ref { return core.NewRef(r.conv.Graph) }
 
 // Root returns the tool's root command.
 func (r Tool) Root() Command {
 	return Command{
-		conv: r.conv, convErr: r.convErr, witGraph: r.wit.Schema,
+		conv: r.conv, witGraph: r.wit.Schema,
 		tree: r.wit.Commands, index: 0, chain: []int32{0},
 	}
 }
@@ -99,8 +110,7 @@ func (r Tool) Commands() []Command {
 
 // Command is one node of a tool's command tree.
 type Command struct {
-	conv    witschema.Converted
-	convErr error
+	conv witschema.Converted
 	// witGraph is the tool's schema as the wire carries it. An invocation
 	// travels as a typed value, so the graph that goes with it has to be the
 	// wire's own, not the converted one.
@@ -131,7 +141,7 @@ func (c Command) Subcommands() []Command {
 	out := make([]Command, 0, len(kids))
 	for _, idx := range kids {
 		out = append(out, Command{
-			conv: c.conv, convErr: c.convErr, witGraph: c.witGraph,
+			conv: c.conv, witGraph: c.witGraph,
 			tree: c.tree, index: idx,
 			path:  append(append([]string(nil), c.path...), c.tree.Nodes[idx].Name),
 			chain: append(append([]int32(nil), c.chain...), idx),
@@ -247,11 +257,17 @@ func (c Command) canonicalFields() ([]canonicalField, error) {
 
 // Input returns the command's canonical input record: inherited globals,
 // positionals, the tail, options and flags. Pack canonical JSON with its
-// PackJSON, and render it with ToJSONSchema.
-func (c Command) Input() (core.Ref, error) {
-	if c.convErr != nil {
-		return core.Ref{}, c.convErr
+// PackJSON, and render it with ToJSONSchema. Only a [Command.Callable] command
+// has one; Input panics on a node that only dispatches to subcommands.
+func (c Command) Input() core.Ref {
+	ref, err := c.input()
+	if err != nil {
+		panic(err)
 	}
+	return ref
+}
+
+func (c Command) input() (core.Ref, error) {
 	fields, err := c.canonicalFields()
 	if err != nil {
 		return core.Ref{}, err
@@ -309,13 +325,19 @@ func (c Command) inputGraph(fields []canonicalField) types.SchemaGraph {
 	return types.SchemaGraph{TypeNodes: nodes, Defs: c.witGraph.Defs, Root: root}
 }
 
-// Output returns the command's result type, none when it produces none.
-func (c Command) Output() (golem.Option[core.Ref], error) {
-	if c.convErr != nil {
-		return golem.None[core.Ref](), c.convErr
+// Output returns the command's result type, none when it produces none or has
+// no body of its own.
+func (c Command) Output() golem.Option[core.Ref] {
+	ref, err := c.output()
+	if err != nil {
+		panic(err)
 	}
+	return ref
+}
+
+func (c Command) output() (golem.Option[core.Ref], error) {
 	if !c.Callable() {
-		return golem.None[core.Ref](), fmt.Errorf("golem: command %q has no body", c.Name())
+		return golem.None[core.Ref](), nil
 	}
 	body := c.node().Body.Some()
 	if body.Result.IsNone() {
@@ -357,7 +379,7 @@ func (c Command) Errors() []ErrorCase {
 		if e.Kind == toolCommon.ErrorKindRuntimeError {
 			r.Kind = tool.RuntimeError
 		}
-		if e.Payload.IsSome() && c.convErr == nil {
+		if e.Payload.IsSome() {
 			if ref, err := c.conv.Ref(e.Payload.Some()); err == nil {
 				r.Payload = golem.Some(ref)
 			}
@@ -371,7 +393,7 @@ func (c Command) Errors() []ErrorCase {
 // renders them with a graph rooted at that record, which is what the host
 // checks an invocation against.
 func (c Command) pack(args map[string]any) (types.TypedSchemaValue, error) {
-	input, err := c.Input()
+	input, err := c.input()
 	if err != nil {
 		return types.TypedSchemaValue{}, err
 	}
@@ -437,10 +459,7 @@ func (c *ToolClient) Start(path []string, args map[string]any, stdin io.Reader) 
 		return nil, &tool.CallError{Tool: c.tool.Name(), CommandPath: path, Kind: tool.CallInvalidInput,
 			Message: "the command requires standard input"}
 	}
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
+	output := cmd.Output()
 	name := c.tool.Name()
 	inv, err := link.StartToolCall(name, path, input, stdin,
 		tool.Streams{Stdout: body.Stdout.IsSome(), Stderr: body.Stderr.IsSome()}, false,

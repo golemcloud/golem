@@ -23,23 +23,23 @@ var agent = rpccaller.Agent.Implement(func(rpccaller.Id) *state { return &state{
 func init() {
 	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
-		return ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+		return ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
 	agent.Handle(rpccaller.AtomicCall, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		var total int64
 		durability.Atomically(func() {
 			c := ledger.Agent.Get(ledger.Id{Region: in.Region})
-			total = ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+			total = ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 		})
 		return total
 	})
 	agent.Handle(rpccaller.AwaitRemote, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
 		c := promises.Agent.Get(promises.Id{Name: in.Name})
-		return promises.Await.Call(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx})
+		return promises.Await.MustCall(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx})
 	})
 	agent.Handle(rpccaller.AwaitRemoteAsync, func(_ *golem.Context[state], in rpccaller.AwaitRemoteIn) string {
 		c := promises.Agent.Get(promises.Id{Name: in.Name})
-		return promises.Await.CallAsync(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx}).Get()
+		return promises.Await.CallAsync(c, promises.OplogIdxIn{OplogIdx: in.OplogIdx}).MustGet()
 	})
 	agent.Handle(rpccaller.CallParallel, func(_ *golem.Context[state], in rpccaller.CallParallelIn) []int64 {
 		totals := make([]int64, len(in.Regions))
@@ -47,7 +47,7 @@ func init() {
 		for i, region := range in.Regions {
 			wg.Go(func() {
 				c := ledger.Agent.Get(ledger.Id{Region: region})
-				totals[i] = ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+				totals[i] = ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 			})
 		}
 		wg.Wait()
@@ -55,6 +55,6 @@ func init() {
 	})
 	agent.Handle(rpccaller.Async, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		c := ledger.Agent.Get(ledger.Id{Region: in.Region})
-		return ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}).Get().MustOk()
+		return ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}).MustGet().MustOk()
 	})
 }

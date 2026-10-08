@@ -53,14 +53,14 @@ func TestCheckpointRevertsOnlyOnFailure(t *testing.T) {
 	cp := NewCheckpoint()
 	h.index = 50
 
-	if _, reverted := reverts(h, func() { _ = cp.Must(1, nil) }); reverted {
-		t.Fatal("Must reverted without an error")
+	if _, reverted := reverts(h, func() { _ = cp.UnwrapOrRevert(1, nil) }); reverted {
+		t.Fatal("UnwrapOrRevert reverted without an error")
 	}
-	if i, reverted := reverts(h, func() { _ = cp.Must(0, errors.New("no")) }); !reverted || i != 41 {
-		t.Fatalf("Must: reverted=%v to %d, want the checkpoint's 41", reverted, i)
+	if i, reverted := reverts(h, func() { _ = cp.UnwrapOrRevert(0, errors.New("no")) }); !reverted || i != 41 {
+		t.Fatalf("UnwrapOrRevert: reverted=%v to %d, want the checkpoint's 41", reverted, i)
 	}
-	if _, reverted := reverts(h, func() { _ = cp.MustRun(func() (int, error) { return 0, errors.New("no") }) }); !reverted {
-		t.Fatal("MustRun did not revert on an error")
+	if _, reverted := reverts(h, func() { _ = cp.RunOrRevert(func() (int, error) { return 0, errors.New("no") }) }); !reverted {
+		t.Fatal("RunOrRevert did not revert on an error")
 	}
 	if _, reverted := reverts(h, func() { cp.AssertOrRevert(true) }); reverted {
 		t.Fatal("AssertOrRevert reverted on true")

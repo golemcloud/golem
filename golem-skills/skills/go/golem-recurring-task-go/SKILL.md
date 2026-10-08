@@ -7,7 +7,7 @@ description: "Recurring / scheduled work in a Go agent. Use when the user wants 
 
 ## Overview
 
-A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation`.
+A recurring task is a method that **reschedules itself**: it does its work, then schedules the next run. Scheduling uses `Method.Schedule(client, at, in)`, which arranges an invocation at a future time and returns a cancelable `*golem.ScheduledInvocation` (and an error if the host refuses it; `MustSchedule` panics instead).
 
 To message itself an agent needs a client for its **own** instance, which needs its own `ID`. `Context` only exposes the raw id string, so **capture the typed `ID` in state at construction** — the constructor passed to `Agent.Implement` receives it.
 
@@ -60,7 +60,7 @@ var agent = poller.Agent.Implement(func(id poller.ID) *state { return &state{sel
 func init() {
 	agent.Handle(poller.Start, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		self := poller.Agent.Get(ctx.State.self)
-		poller.Tick.Schedule(self, time.Now().Add(interval), golem.Unit{})
+		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
 
@@ -69,7 +69,7 @@ func init() {
 
 		// schedule the next iteration
 		self := poller.Agent.Get(ctx.State.self)
-		poller.Tick.Schedule(self, time.Now().Add(interval), golem.Unit{})
+		poller.Tick.MustSchedule(self, time.Now().Add(interval), golem.Unit{})
 		return golem.Unit{}
 	})
 }
@@ -79,8 +79,8 @@ Kick off the loop by invoking `start` once (from the CLI, an HTTP endpoint, or a
 
 ## Scheduling vs immediate self-messaging
 
-- `Schedule(client, at, in) *ScheduledInvocation` — run at a future `time.Time`. Keep the handle to cancel it: `inv.Cancel()`.
-- `Trigger(client, in)` — enqueue immediately, no delay (use it to advance a state machine to the next step now).
+- `Schedule(client, at, in) (*ScheduledInvocation, error)` — run at a future `time.Time`. Keep the handle to cancel it: `inv.Cancel()`. `MustSchedule` panics instead of returning the error.
+- `Trigger(client, in)` / `MustTrigger(client, in)` — enqueue immediately, no delay (use it to advance a state machine to the next step now).
 - **Never self-`Call`** — a synchronous call into the same instance deadlocks (one instance processes one invocation at a time). Self-messaging must use `Trigger` or `Schedule`.
 
 ## Key Constraints

@@ -33,7 +33,7 @@ import (
 //	type ForwardIn struct{ Card golem.PermissionCard }
 //
 //	var _ = agent.Handle(Forward, func(_ *golem.Context[state], in ForwardIn) golem.PermissionCard {
-//	    return Accept.Call(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
+//	    return Accept.MustCall(Receiver.Get(ReceiverID{Name: "target"}), AcceptIn{Card: in.Card})
 //	})
 
 // ErrPermissionCardMoved reports a card used after it was handed on.

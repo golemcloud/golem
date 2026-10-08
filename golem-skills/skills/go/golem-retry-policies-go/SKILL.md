@@ -228,26 +228,22 @@ agent.Handle(retrying.Burst, func(_ *golem.Context[state], _ golem.Unit) retryin
 names := retry.PolicyNames()
 
 // Fully decoded rules:
-policies, err := retry.GetPolicies()
-if err == nil {
-	for _, p := range policies {
-		_ = p.Name()     // string
-		_ = p.Priority() // uint32
-	}
+for _, p := range retry.GetPolicies() {
+	_ = p.Name()     // string
+	_ = p.Priority() // uint32
 }
 
 // A specific rule by name:
-np, found, err := retry.GetByName("http-transient")
-if err == nil && found {
+if np, found := retry.GetByName("http-transient"); found {
 	_ = np.Priority()
 }
 
-// What policy the runtime would pick for a hypothetical operation:
-pol, matched, err := retry.Resolve("GET", "https://api.example.com/x",
+// What policy the runtime would pick for a hypothetical operation; a property
+// value is a string, an integer type or a bool:
+pol, matched := retry.Resolve("GET", "https://api.example.com/x",
 	map[string]any{"status-code": 503})
 _ = pol
 _ = matched
-_ = err
 ```
 
 `NamedPolicy` accessors: `.Name()`, `.Priority()`, `.Strategy()` (opaque `Policy`),

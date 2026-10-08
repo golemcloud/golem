@@ -193,9 +193,10 @@ Wire names come from the SDK's declarations, not from Go identifiers:
 - Method descriptors must be **package-level vars** in the definition package: the same value drives
   the schema, the implementation binding and cross-agent calls.
 - State is **private to the implementation package** — a caller never sees it. Cross-agent calls go
-  through the definition: `client := ledger.Agent.Get(id)` then `ledger.Record.Call(client, in)`.
-  The client hangs off the definition and the call off the descriptor, because Go methods cannot
-  introduce type parameters.
+  through the definition: `client := ledger.Agent.Get(id)` then `ledger.Record.Call(client, in)`,
+  which returns `(Out, error)`, or `ledger.Record.MustCall(client, in)`, which panics on a remote
+  failure. The client hangs off the definition and the call off the descriptor, because Go methods
+  cannot introduce type parameters.
 - `main.go` (`package main`) holds an empty `func main() {}` plus a blank import of each agent's
   **implementation** package. The blank `_ "github.com/golemcloud/golem/sdks/go/golem"` import must
   stay — it initializes the SDK runtime (e.g. HTTP) and links the component exports; do not remove it

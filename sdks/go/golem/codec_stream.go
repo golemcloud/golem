@@ -37,17 +37,17 @@ func (s AgentStream[T]) streamElem() reflect.Type { return reflect.TypeFor[T]() 
 // the state.
 func (s AgentStream[T]) streamTake() (treeSource, error) {
 	if s.st == nil {
-		return treeSource{}, ErrStreamClosed
+		return treeSource{}, errStreamClosed
 	}
 	switch {
 	case s.st.taken:
-		return treeSource{}, ErrStreamTransferred
+		return treeSource{}, errStreamTransferred
 	case s.st.closed:
-		return treeSource{}, ErrStreamClosed
+		return treeSource{}, errStreamClosed
 	case s.st.started:
 		// The items already read cannot be put back, so the receiver would get
 		// a different stream from the one it was promised.
-		return treeSource{}, ErrStreamPartiallyRead
+		return treeSource{}, errStreamPartiallyRead
 	}
 	s.st.taken = true
 	return s.st.src, nil

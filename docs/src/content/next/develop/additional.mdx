@@ -1104,7 +1104,7 @@ This can be useful if state needs to be shared between different agents or if th
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Go SDK wraps the `wasi:keyvalue` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/keyvalue` package. A missing key is not an error; failures are returned as a `*keyvalue.Error`.
+        The Go SDK wraps the `wasi:keyvalue` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/keyvalue` package. A missing key is not an error. The operations return no error: the host fails one only on a denied permission or on a storage failure it has already retried, and such a failure panics and fails the invocation.
 
         The following declarations summarize the public API shape; they are not definitions to copy into your application.
 
@@ -1112,21 +1112,21 @@ This can be useful if state needs to be shared between different agents or if th
         package keyvalue
 
         // OpenBucket opens (or creates) the named bucket.
-        func OpenBucket(name string) (*Bucket, error)
+        func OpenBucket(name string) *Bucket
 
-        func (b *Bucket) Get(key string) (value []byte, found bool, err error)
-        func (b *Bucket) Set(key string, value []byte) error
-        func (b *Bucket) Delete(key string) error
-        func (b *Bucket) Exists(key string) (bool, error)
+        func (b *Bucket) Get(key string) (value []byte, found bool)
+        func (b *Bucket) Set(key string, value []byte)
+        func (b *Bucket) Delete(key string)
+        func (b *Bucket) Exists(key string) bool
         ```
 
         The batch API is exposed on the same `Bucket` type:
 
         ```go
-        func (b *Bucket) Keys() ([]string, error)
-        func (b *Bucket) GetMany(keys []string) (map[string][]byte, error)
-        func (b *Bucket) SetMany(entries map[string][]byte) error
-        func (b *Bucket) DeleteMany(keys []string) error
+        func (b *Bucket) Keys() []string
+        func (b *Bucket) GetMany(keys []string) map[string][]byte
+        func (b *Bucket) SetMany(entries map[string][]byte)
+        func (b *Bucket) DeleteMany(keys []string)
         ```
 
         For example:
@@ -1134,17 +1134,12 @@ This can be useful if state needs to be shared between different agents or if th
         ```go
         import "github.com/golemcloud/golem/sdks/go/golem/keyvalue"
 
-        bucket, err := keyvalue.OpenBucket("shared")
-        if err != nil {
-            return err
-        }
-        if err := bucket.Set("greeting", []byte("hello")); err != nil {
-            return err
-        }
-        value, found, err := bucket.Get("greeting")
+        bucket := keyvalue.OpenBucket("shared")
+        bucket.Set("greeting", []byte("hello"))
+        value, found := bucket.Get("greeting")
         ```
 
-        `keyvalue.Typed[T](bucket)` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing JSON-encoded values of the Go type `T`.
+        `keyvalue.Typed[T](bucket)` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Get` returns `(T, bool, error)`, where the error reports stored data that does not decode as `T`; `MustGet` panics on that error instead.
     </Tabs.Tab>
 </Tabs>
 
@@ -1512,7 +1507,7 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
     </Tabs.Tab>
 
     <Tabs.Tab>
-        The Go SDK wraps the `wasi:blobstore` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/blobstore` package. Failures are returned as a `*blobstore.Error`.
+        The Go SDK wraps the `wasi:blobstore` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/blobstore` package. Failures are returned as a `*blobstore.Error`. `MustGetOrCreateContainer`, `MustGetContainer`, `Container.MustGetData`, `Container.MustWriteData`, `Store.MustGet` and `Store.MustSet` panic on the error instead.
 
         The following declarations summarize the public API shape; they are not definitions to copy into your application.
 
@@ -1551,6 +1546,6 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         func (c *Container) Clear() error
         ```
 
-        The Go wrapper reads and writes blob data as `[]byte`. `blobstore.Typed[T](container)` wraps a container in a `*blobstore.Store[T]` storing JSON-encoded values of the Go type `T`.
+        The Go wrapper reads and writes blob data as `[]byte`. `blobstore.Typed[T](container)` wraps a container in a `*blobstore.Store[T]` storing values of the Go type `T` encoded with `encoding/json` (a `[]byte` is stored as a base64 JSON string). Its `Set` panics when the value does not encode as JSON.
     </Tabs.Tab>
 </Tabs>

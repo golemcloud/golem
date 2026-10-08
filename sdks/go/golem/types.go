@@ -119,12 +119,12 @@ type Secret[T any] struct {
 // ErrSecretMoved reports a received secret used after it was handed on.
 var ErrSecretMoved = errors.New("golem: the secret was moved to another agent")
 
-// Get reads the secret's current plaintext from the host and returns it, or
-// panics if the read fails. Because it re-reads on every call, a rotated secret
-// is observed rather than a stale snapshot. A read failure has no in-band
-// recovery, so it panics rather than returning an error; the panic surfaces as
-// an agent-error. Must be called inside an invocation (it calls the host).
-func (s Secret[T]) Get() T {
+// Get reads the secret's current plaintext from the host and returns it.
+// Because it re-reads on every call, a rotated secret is observed rather than a
+// stale snapshot. A secret that is unavailable, whose version is gone, or that
+// was moved ([ErrSecretMoved]) is returned as an error. Must be called inside an
+// invocation (it calls the host).
+func (s Secret[T]) Get() (T, error) {
 	if s.read == nil {
 		// Only reachable for a zero-value Secret — one never obtained from config
 		// (e.g. `var s Secret[string]`). That is a programming mistake, not an
@@ -133,7 +133,12 @@ func (s Secret[T]) Get() T {
 		// message.
 		panic(fmt.Errorf("golem: Secret has no source; obtain it from the agent's config"))
 	}
-	v, err := s.read()
+	return s.read()
+}
+
+// MustGet is [Secret.Get] that panics if the read fails.
+func (s Secret[T]) MustGet() T {
+	v, err := s.Get()
 	if err != nil {
 		panic(err)
 	}

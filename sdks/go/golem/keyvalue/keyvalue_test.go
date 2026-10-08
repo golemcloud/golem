@@ -42,10 +42,14 @@ func TestTypedCodecRoundTrip(t *testing.T) {
 	}
 }
 
-// TestErrorFormatting — the host-error wrapper renders its trace.
-func TestErrorFormatting(t *testing.T) {
-	e := &Error{Trace: "bucket not found"}
-	if e.Error() != "golem/keyvalue: bucket not found" {
-		t.Fatalf("Error() = %q", e.Error())
+// TestBytesEncodeAsBase64JSON — a []byte value is a base64 JSON string, not raw
+// bytes.
+func TestBytesEncodeAsBase64JSON(t *testing.T) {
+	raw, err := marshalValue([]byte("hi"))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(raw) != `"aGk="` {
+		t.Fatalf("encoded = %s", raw)
 	}
 }

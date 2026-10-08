@@ -15,7 +15,6 @@
 package reflection
 
 import (
-	"fmt"
 	"github.com/golemcloud/golem/sdks/go/golem"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
@@ -63,14 +62,15 @@ func (c *DynamicToolClient) Start(path []string, input golem.TypedValue, stdin i
 
 // Bind connects to the discovered tool. Nothing is checked until a call: the
 // tool is looked up by name when a command is invoked.
-func (r Tool) Bind() (*ToolClient, error) {
-	return &ToolClient{tool: r}, nil
+func (r Tool) Bind() *ToolClient {
+	return &ToolClient{tool: r}
 }
 
-// BindTool binds a tool by name without retaining its metadata.
-func BindTool(toolName string) (*DynamicToolClient, error) {
+// BindTool binds a tool by name without retaining its metadata. Nothing is
+// checked until a call; it panics on an empty name.
+func BindTool(toolName string) *DynamicToolClient {
 	if toolName == "" {
-		return nil, fmt.Errorf("golem: BindTool requires a tool name")
+		panic("golem: BindTool requires a tool name")
 	}
-	return &DynamicToolClient{toolName: toolName}, nil
+	return &DynamicToolClient{toolName: toolName}
 }

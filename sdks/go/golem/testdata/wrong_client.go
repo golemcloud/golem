@@ -29,5 +29,5 @@ func main() {
 
 	// ERROR: Charge is MethodDef[PaymentID, …]; Call wants Client[PaymentID],
 	// but orderClient is Client[OrderID]. Type-check must reject this.
-	_ = Charge.Call(orderClient, ChargeIn{AmountCents: 100})
+	_, _ = Charge.Call(orderClient, ChargeIn{AmountCents: 100})
 }

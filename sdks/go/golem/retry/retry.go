@@ -416,55 +416,57 @@ func PolicyNames() []string {
 }
 
 // GetPolicies returns the rules active for this agent, decoded into [NamedPolicy]
-// values. It errors if the host returned a malformed policy graph.
-func GetPolicies() ([]NamedPolicy, error) {
+// values. It panics if the host returned a malformed policy graph.
+func GetPolicies() []NamedPolicy {
 	raw := apiRetry.GetRetryPolicies()
 	out := make([]NamedPolicy, 0, len(raw))
 	for _, r := range raw {
-		np, err := decodeNamed(r)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, np)
+		out = append(out, mustDecodeNamed(r))
 	}
-	return out, nil
+	return out
 }
 
-// GetByName returns the rule with the given name. found is false if no such rule
-// exists; err is non-nil only if the host returned a malformed policy graph.
-func GetByName(name string) (policy NamedPolicy, found bool, err error) {
+// GetByName returns the rule with the given name, reporting false if no such
+// rule exists. It panics if the host returned a malformed policy graph.
+func GetByName(name string) (NamedPolicy, bool) {
 	opt := apiRetry.GetRetryPolicyByName(name)
 	if opt.IsNone() {
-		return NamedPolicy{}, false, nil
+		return NamedPolicy{}, false
 	}
-	np, err := decodeNamed(opt.Some())
-	if err != nil {
-		return NamedPolicy{}, true, err
-	}
-	return np, true, nil
+	return mustDecodeNamed(opt.Some()), true
 }
 
 // Resolve returns the [Policy] the runtime would apply to an operation with the
 // given verb, noun URI and context properties (the highest-priority matching
-// rule). matched is false if no rule matches.
-func Resolve(verb, nounURI string, props map[string]any) (policy Policy, matched bool, err error) {
+// rule), reporting false if no rule matches. A property value is a string, an
+// integer type or a bool; any other type panics, as does a malformed policy
+// graph from the host.
+func Resolve(verb, nounURI string, props map[string]any) (Policy, bool) {
 	tuples := make([]witTypes.Tuple2[string, apiRetry.PredicateValue], 0, len(props))
 	for k, v := range props {
-		pv, cErr := toPredicateValue(v)
-		if cErr != nil {
-			return Policy{}, false, cErr
+		pv, err := toPredicateValue(v)
+		if err != nil {
+			panic(fmt.Errorf("golem/retry: property %q: %w", k, err))
 		}
 		tuples = append(tuples, witTypes.Tuple2[string, apiRetry.PredicateValue]{F0: k, F1: pv})
 	}
 	opt := apiRetry.ResolveRetryPolicy(verb, nounURI, tuples)
 	if opt.IsNone() {
-		return Policy{}, false, nil
+		return Policy{}, false
 	}
-	pol, dErr := decodePolicy(opt.Some())
-	if dErr != nil {
-		return Policy{}, true, dErr
+	pol, err := decodePolicy(opt.Some())
+	if err != nil {
+		panic(fmt.Errorf("%w (in the policy the host resolved)", err))
 	}
-	return pol, true, nil
+	return pol, true
+}
+
+func mustDecodeNamed(raw apiRetry.NamedRetryPolicy) NamedPolicy {
+	np, err := decodeNamed(raw)
+	if err != nil {
+		panic(fmt.Errorf("%w (in the host's policy %q)", err, raw.Name))
+	}
+	return np
 }
 
 // ── Lowering (value tree -> flattened index graph); pure, no host calls ───────

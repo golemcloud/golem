@@ -92,7 +92,7 @@ func TestToolSnapshotWalksTheCommandTree(t *testing.T) {
 func TestToolInputIsTheCanonicalRecord(t *testing.T) {
 	r := reflection.ToolOf(tool.FilesMetadata(t))
 	add, _ := r.Command([]string{"index", "add"})
-	input := need(add.Input())
+	input := add.Input()
 	if got := recordFieldNames(input); strings.Join(got, ",") != "path,retries,force" {
 		t.Errorf("fields are %v, want positionals then options then flags", got)
 	}
@@ -100,7 +100,7 @@ func TestToolInputIsTheCanonicalRecord(t *testing.T) {
 	if _, isBool := record.Fields[2].Body.Body.(core.BoolType); !isBool {
 		t.Errorf("the flag is typed %T instead of a bool", record.Fields[2].Body.Body)
 	}
-	if need(add.Output()).IsNone() {
+	if add.Output().IsNone() {
 		t.Error("add declares no output")
 	}
 
@@ -120,11 +120,11 @@ func TestToolInputIsTheCanonicalRecord(t *testing.T) {
 
 func TestReflectedToolClientCalls(t *testing.T) {
 	r := reflection.ToolOf(tool.FilesMetadata(t))
-	result, _ := golem.EncodeTypedValue("/tmp/a")
+	result := golem.EncodeTypedValue("/tmp/a")
 	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		return witTypes.Some(witOf(result)), nil
 	})
-	client := need(r.Bind())
+	client := r.Bind()
 
 	got, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/tmp/a", "force": false, "retries": 1})
 	if err != nil {
@@ -139,14 +139,14 @@ func TestReflectedToolClientCalls(t *testing.T) {
 // reaches the caller with its name and payload rather than as a message.
 func TestReflectedToolClientKeepsDeclaredErrorsStructured(t *testing.T) {
 	r := reflection.ToolOf(tool.FilesMetadata(t))
-	payload, _ := golem.EncodeTypedValue("missing.txt")
+	payload := golem.EncodeTypedValue("missing.txt")
 	tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		e := types.MakeToolRpcErrorRemoteToolError(types.MakeToolErrorCustomError(types.CustomToolError{
 			Name: "not-found", Payload: witOf(payload),
 		}))
 		return witTypes.None[types.TypedSchemaValue](), &e
 	})
-	client := need(r.Bind())
+	client := r.Bind()
 	_, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/x", "force": false, "retries": 1})
 	var ce *tool.CallError
 	if !errors.As(err, &ce) || ce.Kind != tool.CallDeclaredError || ce.ErrorName != "not-found" {
@@ -161,7 +161,7 @@ func TestReflectedToolClientKeepsDeclaredErrorsStructured(t *testing.T) {
 // discoverable but has nothing to run.
 func TestReflectedToolClientRefusesANamespace(t *testing.T) {
 	r := reflection.ToolOf(tool.FilesMetadata(t))
-	client := need(r.Bind())
+	client := r.Bind()
 	_, err := client.Call([]string{"index"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "only dispatches to subcommands") {
 		t.Errorf("error is %v", err)
@@ -173,7 +173,7 @@ func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
 	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		return witTypes.None[types.TypedSchemaValue](), nil
 	})
-	client := need(r.Bind())
+	client := r.Bind()
 	_, err := client.Call([]string{"index", "add"}, map[string]any{"path": "/tmp/a", "force": "yes", "retries": 1})
 	if err == nil {
 		t.Fatal("an invalid flag reached the target")
@@ -186,16 +186,13 @@ func TestReflectedToolClientValidatesBeforeSending(t *testing.T) {
 func TestDynamicToolClientCalls(t *testing.T) {
 	r := reflection.ToolOf(tool.FilesMetadata(t))
 	add, _ := r.Command([]string{"index", "add"})
-	input, err := golem.EncodeTypedValue(addArgs{Path: "/tmp/a", Retries: 1})
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
+	input := golem.EncodeTypedValue(addArgs{Path: "/tmp/a", Retries: 1})
 	_ = add
-	result, _ := golem.EncodeTypedValue("/tmp/a")
+	result := golem.EncodeTypedValue("/tmp/a")
 	calls := tool.RecordToolCalls(t, func([]string) (witTypes.Option[types.TypedSchemaValue], *types.ToolRpcError) {
 		return witTypes.Some(witOf(result)), nil
 	})
-	client := need(reflection.BindTool("files"))
+	client := reflection.BindTool("files")
 	got, err := client.Call([]string{"index", "add"}, input)
 	if err != nil {
 		t.Fatalf("Call: %v", err)
@@ -219,16 +216,12 @@ func TestReflectionPacksTheCanonicalRecord(t *testing.T) {
 	if !ok {
 		t.Fatal("reflection does not find commit")
 	}
-	input, err := cmd.Input()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := recordFieldNames(input); !slices.Equal(got, want) {
+	if got := recordFieldNames(cmd.Input()); !slices.Equal(got, want) {
 		t.Errorf("reflected fields %v, want %v", got, want)
 	}
 
 	inputs := tool.RecordToolInputs(t)
-	if _, err := need(reflection.ToolOf(meta).Bind()).Start([]string{"commit"}, map[string]any{
+	if _, err := reflection.ToolOf(meta).Bind().Start([]string{"commit"}, map[string]any{
 		"dir": "/src", "verbose": 1, "branch": "dev", "paths": []any{"z"}, "message": "via reflection",
 		"author": "ann", "include": []any{}, "tags": []any{}, "amend": false, "signoff": false,
 	}, nil); err != nil {

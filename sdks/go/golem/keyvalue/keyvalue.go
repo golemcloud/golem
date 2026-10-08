@@ -16,20 +16,17 @@
 // (wasi:keyvalue). Open a [Bucket] by name and Get/Set/Delete/Exists byte values,
 // or wrap it with [Typed] for a JSON-encoded [Store] of a Go type.
 //
-// Unlike the exactly-once control-flow surface (RPC, promises, durability,
-// transactions), which is fail-loud, these are I/O operations whose failures a
-// caller can handle, so they return an error. A missing key is not an error: Get
-// returns (nil, false, nil). The store is durable — operations are journaled and
-// replayed — but because they are remote side effects, calling them inside a
-// read-only method traps.
-//
-// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
-// invocation on error.
+// The bucket operations return no error: the host fails one only on a denied
+// permission or on a backend failure it has already retried, and neither is
+// something the calling agent can recover from, so such a failure panics and
+// fails the invocation. A missing key is not a failure: Get returns
+// (nil, false). The store is durable — operations are journaled and replayed —
+// but because they are remote side effects, calling them inside a read-only
+// method traps.
 package keyvalue
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	eventual "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_keyvalue_eventual"
@@ -39,88 +36,76 @@ import (
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
-// Error is a key-value host error, carrying the host's diagnostic trace.
-type Error struct{ Trace string }
-
-func (e *Error) Error() string { return "golem/keyvalue: " + e.Trace }
-
-func kvError(e *kverr.Error) error {
+func hostFailure(op string, e *kverr.Error) error {
 	if e == nil {
-		return errors.New("golem/keyvalue: unknown error")
+		return fmt.Errorf("golem/keyvalue: %s: unknown error", op)
 	}
-	return &Error{Trace: e.Trace()}
+	return fmt.Errorf("golem/keyvalue: %s: %s", op, e.Trace())
 }
 
 // Bucket is a handle to a key-value bucket.
 type Bucket struct{ raw *kvtypes.Bucket }
 
 // OpenBucket opens (or creates) the named bucket.
-func OpenBucket(name string) (*Bucket, error) {
+func OpenBucket(name string) *Bucket {
 	r := kvtypes.BucketOpenBucket(name)
 	if r.IsErr() {
-		return nil, kvError(r.Err())
+		panic(hostFailure("open bucket "+name, r.Err()))
 	}
-	return &Bucket{raw: r.Ok()}, nil
+	return &Bucket{raw: r.Ok()}
 }
 
-// Get returns the value stored at key. found is false (with a nil error) when the
-// key is absent.
-func (b *Bucket) Get(key string) (value []byte, found bool, err error) {
+// Get returns the value stored at key. found is false when the key is absent.
+func (b *Bucket) Get(key string) (value []byte, found bool) {
 	r := eventual.Get(b.raw, key)
 	if r.IsErr() {
-		return nil, false, kvError(r.Err())
+		panic(hostFailure("get", r.Err()))
 	}
 	opt := r.Ok()
 	if opt.IsNone() {
-		return nil, false, nil
+		return nil, false
 	}
-	return consume(opt.Some())
+	return consume(opt.Some()), true
 }
 
 // Set stores value at key.
-func (b *Bucket) Set(key string, value []byte) error {
-	ov, err := outgoing(value)
-	if err != nil {
-		return err
+func (b *Bucket) Set(key string, value []byte) {
+	if r := eventual.Set(b.raw, key, outgoing(value)); r.IsErr() {
+		panic(hostFailure("set", r.Err()))
 	}
-	if r := eventual.Set(b.raw, key, ov); r.IsErr() {
-		return kvError(r.Err())
-	}
-	return nil
 }
 
 // Delete removes key (a no-op if it is absent).
-func (b *Bucket) Delete(key string) error {
+func (b *Bucket) Delete(key string) {
 	if r := eventual.Delete(b.raw, key); r.IsErr() {
-		return kvError(r.Err())
+		panic(hostFailure("delete", r.Err()))
 	}
-	return nil
 }
 
 // Exists reports whether key is present.
-func (b *Bucket) Exists(key string) (bool, error) {
+func (b *Bucket) Exists(key string) bool {
 	r := eventual.Exists(b.raw, key)
 	if r.IsErr() {
-		return false, kvError(r.Err())
+		panic(hostFailure("exists", r.Err()))
 	}
-	return r.Ok(), nil
+	return r.Ok()
 }
 
 // Keys lists all keys in the bucket.
-func (b *Bucket) Keys() ([]string, error) {
+func (b *Bucket) Keys() []string {
 	r := batch.Keys(b.raw)
 	if r.IsErr() {
-		return nil, kvError(r.Err())
+		panic(hostFailure("keys", r.Err()))
 	}
-	return r.Ok(), nil
+	return r.Ok()
 }
 
 // GetMany fetches several keys at once, returning a map of only the present keys.
 // The batch is not atomic.
-func (b *Bucket) GetMany(keys []string) (map[string][]byte, error) {
+func (b *Bucket) GetMany(keys []string) map[string][]byte {
 	r := batch.GetMany(b.raw, keys)
 	if r.IsErr() {
-		return nil, kvError(r.Err())
+		panic(hostFailure("get many", r.Err()))
 	}
 	opts := r.Ok()
 	out := make(map[string][]byte, len(opts))
@@ -128,53 +113,43 @@ func (b *Bucket) GetMany(keys []string) (map[string][]byte, error) {
 		if i >= len(keys) || o.IsNone() {
 			continue
 		}
-		v, _, err := consume(o.Some())
-		if err != nil {
-			return nil, err
-		}
-		out[keys[i]] = v
+		out[keys[i]] = consume(o.Some())
 	}
-	return out, nil
+	return out
 }
 
 // SetMany stores several entries at once. The batch is not atomic.
-func (b *Bucket) SetMany(entries map[string][]byte) error {
+func (b *Bucket) SetMany(entries map[string][]byte) {
 	kvs := make([]witTypes.Tuple2[string, *kvtypes.OutgoingValue], 0, len(entries))
 	for k, v := range entries {
-		ov, err := outgoing(v)
-		if err != nil {
-			return err
-		}
-		kvs = append(kvs, witTypes.Tuple2[string, *kvtypes.OutgoingValue]{F0: k, F1: ov})
+		kvs = append(kvs, witTypes.Tuple2[string, *kvtypes.OutgoingValue]{F0: k, F1: outgoing(v)})
 	}
 	if r := batch.SetMany(b.raw, kvs); r.IsErr() {
-		return kvError(r.Err())
+		panic(hostFailure("set many", r.Err()))
 	}
-	return nil
 }
 
 // DeleteMany removes several keys at once. The batch is not atomic.
-func (b *Bucket) DeleteMany(keys []string) error {
+func (b *Bucket) DeleteMany(keys []string) {
 	if r := batch.DeleteMany(b.raw, keys); r.IsErr() {
-		return kvError(r.Err())
+		panic(hostFailure("delete many", r.Err()))
 	}
-	return nil
 }
 
-func consume(iv *kvtypes.IncomingValue) ([]byte, bool, error) {
+func consume(iv *kvtypes.IncomingValue) []byte {
 	r := iv.IncomingValueConsumeSync()
 	if r.IsErr() {
-		return nil, false, kvError(r.Err())
+		panic(hostFailure("read value", r.Err()))
 	}
-	return r.Ok(), true, nil
+	return r.Ok()
 }
 
-func outgoing(value []byte) (*kvtypes.OutgoingValue, error) {
+func outgoing(value []byte) *kvtypes.OutgoingValue {
 	ov := kvtypes.OutgoingValueNewOutgoingValue()
 	if r := ov.OutgoingValueWriteBodySync(value); r.IsErr() {
-		return nil, kvError(r.Err())
+		panic(hostFailure("write value", r.Err()))
 	}
-	return ov, nil
+	return ov
 }
 
 // ── Typed store ───────────────────────────────────────────────────────────────
@@ -183,22 +158,23 @@ func outgoing(value []byte) (*kvtypes.OutgoingValue, error) {
 // with [Bucket.Typed].
 type Store[T any] struct{ b *Bucket }
 
-// Typed returns a view of the bucket that encodes and decodes values as T
-// (JSON, or raw bytes when T is []byte).
+// Typed returns a view of the bucket that encodes and decodes values as T with
+// encoding/json; a []byte value is stored as a base64 JSON string.
 //
-//	cart, found, err := bucket.Typed[Cart]().Get("cart-1")
+//	cart, found := bucket.Typed[Cart]().MustGet("cart-1")
 func (b *Bucket) Typed[T any]() *Store[T] { return &Store[T]{b: b} }
 
 // Typed is [Bucket.Typed] as a free function, for call sites that read better
 // with the type first.
 func Typed[T any](b *Bucket) *Store[T] { return b.Typed[T]() }
 
-// Get decodes the value at key as T. found is false (nil error) when absent.
+// Get decodes the value at key as T. found is false (nil error) when absent; the
+// error reports stored data that does not decode as T.
 func (s *Store[T]) Get(key string) (value T, found bool, err error) {
-	raw, found, err := s.b.Get(key)
-	if err != nil || !found {
+	raw, found := s.b.Get(key)
+	if !found {
 		var zero T
-		return zero, found, err
+		return zero, false, nil
 	}
 	v, err := unmarshalValue[T](raw)
 	if err != nil {
@@ -208,23 +184,33 @@ func (s *Store[T]) Get(key string) (value T, found bool, err error) {
 	return v, true, nil
 }
 
-// Set JSON-encodes value and stores it at key.
-func (s *Store[T]) Set(key string, value T) error {
+// MustGet is [Store.Get] that panics when the stored data does not decode as T.
+func (s *Store[T]) MustGet(key string) (value T, found bool) {
+	v, found, err := s.Get(key)
+	if err != nil {
+		panic(err)
+	}
+	return v, found
+}
+
+// Set JSON-encodes value and stores it at key. It panics when value does not
+// encode as JSON.
+func (s *Store[T]) Set(key string, value T) {
 	raw, err := marshalValue(value)
 	if err != nil {
-		return fmt.Errorf("golem/keyvalue: encoding %q: %w", key, err)
+		panic(fmt.Errorf("golem/keyvalue: encoding %q: %w", key, err))
 	}
-	return s.b.Set(key, raw)
+	s.b.Set(key, raw)
 }
 
 // Delete removes key.
-func (s *Store[T]) Delete(key string) error { return s.b.Delete(key) }
+func (s *Store[T]) Delete(key string) { s.b.Delete(key) }
 
 // Exists reports whether key is present.
-func (s *Store[T]) Exists(key string) (bool, error) { return s.b.Exists(key) }
+func (s *Store[T]) Exists(key string) bool { return s.b.Exists(key) }
 
 // Keys lists all keys.
-func (s *Store[T]) Keys() ([]string, error) { return s.b.Keys() }
+func (s *Store[T]) Keys() []string { return s.b.Keys() }
 
 // marshalValue/unmarshalValue are the JSON codec behind Store.
 func marshalValue[T any](v T) ([]byte, error) { return json.Marshal(v) }

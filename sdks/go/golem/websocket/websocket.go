@@ -21,8 +21,8 @@
 // — and because they are remote side effects, using it inside a read-only method
 // traps.
 //
-// Pair a fallible call with golem.Must / golem.Must0 / golem.Must2 to abort the
-// invocation on error.
+// Connect and the send operations have a Must variant that panics on error,
+// failing the invocation.
 package websocket
 
 import (
@@ -169,6 +169,15 @@ func Connect(url string, opts ...ConnectOpt) (*Conn, error) {
 	return &Conn{raw: r.Ok()}, nil
 }
 
+// MustConnect is [Connect] that panics on error.
+func MustConnect(url string, opts ...ConnectOpt) *Conn {
+	c, err := Connect(url, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // Send sends a frame.
 func (c *Conn) Send(m Message) error {
 	if r := c.raw.Send(m.toWit()); r.IsErr() {
@@ -182,6 +191,19 @@ func (c *Conn) SendText(s string) error { return c.Send(TextMessage(s)) }
 
 // SendBinary sends a binary frame.
 func (c *Conn) SendBinary(b []byte) error { return c.Send(BinaryMessage(b)) }
+
+// MustSend is [Conn.Send] that panics on error.
+func (c *Conn) MustSend(m Message) {
+	if err := c.Send(m); err != nil {
+		panic(err)
+	}
+}
+
+// MustSendText is [Conn.SendText] that panics on error.
+func (c *Conn) MustSendText(s string) { c.MustSend(TextMessage(s)) }
+
+// MustSendBinary is [Conn.SendBinary] that panics on error.
+func (c *Conn) MustSendBinary(b []byte) { c.MustSend(BinaryMessage(b)) }
 
 // Receive blocks until a frame arrives (durably suspending the invocation).
 func (c *Conn) Receive() (Message, error) {

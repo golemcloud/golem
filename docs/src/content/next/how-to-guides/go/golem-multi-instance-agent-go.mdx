@@ -29,7 +29,7 @@ var Touch = Agent.Method[golem.Unit, int64]("touch", golem.Desc("Record activity
 ```go
 // Durable instance for this (user, device) — same id always maps to the same agent.
 c := session.Agent.Get(session.ID{User: "alice", Device: "laptop"})
-hits := session.Touch.Call(c, golem.Unit{})
+hits := session.Touch.MustCall(c, golem.Unit{})
 ```
 
 Iterate ids to address many instances:
@@ -37,7 +37,7 @@ Iterate ids to address many instances:
 ```go
 for _, u := range users {
     c := session.Agent.Get(session.ID{User: u, Device: "web"})
-    session.Touch.Trigger(c, golem.Unit{}) // fan out
+    session.Touch.MustTrigger(c, golem.Unit{}) // fan out
 }
 ```
 
@@ -47,7 +47,7 @@ for _, u := range users {
 
 ```go
 c := session.Agent.NewPhantom(session.ID{User: "alice", Device: "kiosk"})
-session.Touch.Call(c, golem.Unit{})
+session.Touch.MustCall(c, golem.Unit{})
 
 // To reach the SAME phantom again later, capture and reuse its id:
 if pid, ok := c.PhantomID().Get(); ok {      // PhantomID() is Option[UUID]

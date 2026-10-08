@@ -48,6 +48,7 @@ package postgres
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/netip"
 	"time"
@@ -1523,15 +1524,15 @@ func (db *DB) Begin() (*Tx, error) {
 }
 
 // Transaction runs fn inside a transaction, committing if fn returns nil and
-// rolling back (and returning fn's error) otherwise.
+// rolling back otherwise; the error is fn's, joined with the rollback's when that
+// fails too.
 func (db *DB) Transaction(fn func(*Tx) error) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
+		return errors.Join(err, tx.Rollback())
 	}
 	return tx.Commit()
 }

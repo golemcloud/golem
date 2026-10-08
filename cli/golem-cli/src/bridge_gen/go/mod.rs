@@ -736,8 +736,9 @@ impl GoBridgeGenerator {
 
         // The client.
         writer.doc(&format!(
-            "{} calls a {agent_name} agent. A failed call panics with the SDK's own\n\
-             error, the same as golem.MethodDef.Call, so its classification survives.",
+            "{} calls a {agent_name} agent. A failed call returns the SDK's own\n\
+             error, the same as golem.MethodDef.Call, so its classification survives;\n\
+             wrap a call in golem.Must or golem.Must0 to panic on it instead.",
             n.client
         ));
         writer.line(format!(
@@ -753,40 +754,36 @@ impl GoBridgeGenerator {
             writer.doc(&format!(
                 "{} returns a client for the {agent_name} instance identified by id,\n\
                  creating it if it does not exist yet. Options address a phantom\n\
-                 (golem.WithPhantomID) and override configuration{}.",
+                 (golem.WithPhantomID) and override configuration{}. It returns an\n\
+                 error when the host cannot resolve the target.",
                 n.get,
                 self.config_option_hint()
             ));
-            // Always multi-line: gofmt keeps a one-line body only below a size
-            // limit, and an agent's name decides which side of it this falls on.
             writer.line(format!(
-                "func {}(id {}, opts ...golem.ClientOpt) {} {{",
+                "func {}(id {}, opts ...golem.ClientOpt) ({}, error) {{",
                 n.get, n.id, n.client
             ));
             writer.indent();
-            writer.line(format!(
-                "return {}{{client: {remote}.Get(id, opts...)}}",
-                n.client
-            ));
+            writer.line(format!("c, err := {remote}.Get(id, opts...)"));
+            writer.line(format!("return {}{{client: c}}, err", n.client));
             writer.dedent();
             writer.line("}");
             writer.blank();
         }
         writer.doc(&format!(
             "{} allocates a fresh phantom {agent_name} instance. Options override\n\
-             configuration{}.",
+             configuration{}. It returns an error when the host cannot resolve the\n\
+             target.",
             n.new_phantom,
             self.config_option_hint()
         ));
         writer.line(format!(
-            "func {}(id {}, opts ...golem.ClientOpt) {} {{",
+            "func {}(id {}, opts ...golem.ClientOpt) ({}, error) {{",
             n.new_phantom, n.id, n.client
         ));
         writer.indent();
-        writer.line(format!(
-            "return {}{{client: {remote}.NewPhantom(id, opts...)}}",
-            n.client
-        ));
+        writer.line(format!("c, err := {remote}.NewPhantom(id, opts...)"));
+        writer.line(format!("return {}{{client: c}}, err", n.client));
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -852,7 +849,7 @@ impl GoBridgeGenerator {
         // Parameter names avoid the receiver and the locals the body uses.
         let param_idents = unique_idents_with_reserved(
             fields.iter().map(|f| to_param_ident(&f.name)).collect(),
-            &["c", "golem"],
+            &["c", "err", "golem"],
         );
         let field_idents = unique_idents(fields.iter().map(|f| to_field_ident(&f.name)).collect());
 
@@ -894,15 +891,16 @@ impl GoBridgeGenerator {
         match &method.output_schema {
             OutputSchema::Unit => {
                 writer.line(format!(
-                    "func (c {}) {}({signature}) {{",
+                    "func (c {}) {}({signature}) error {{",
                     n.client, n.methods[idx]
                 ));
                 writer.indent();
-                writer.line(call);
+                writer.line(format!("_, err := {call}"));
+                writer.line("return err");
             }
             OutputSchema::Single(_) => {
                 writer.line(format!(
-                    "func (c {}) {}({signature}) {output} {{",
+                    "func (c {}) {}({signature}) ({output}, error) {{",
                     n.client, n.methods[idx]
                 ));
                 writer.indent();

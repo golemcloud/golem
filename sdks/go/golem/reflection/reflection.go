@@ -56,16 +56,46 @@ type AgentType struct {
 	// the snapshot is taken rather than on every call. It also carries the
 	// index side table, because the wire selects sub-schemas by node index and
 	// the shared model has no indices.
-	conv    witschema.Converted
-	convErr error
+	conv        witschema.Converted
+	constructor Constructor
+	methods     []Method
 }
 
-// newAgentType converts a discovered agent type's schema up front. A
-// malformed graph is remembered rather than raised here, so discovery stays a
-// lookup and the failure surfaces where the schema is actually used.
+// newAgentType converts a discovered agent type's schema, and the constructor's
+// and methods' signatures within it, once, when the snapshot is taken. The host
+// only describes well-formed agent types, so a graph that does not convert is a
+// broken host and panics.
 func newAgentType(wit common.AgentType) AgentType {
 	conv, err := witschema.GraphToCore(wit.Schema)
-	return AgentType{wit: wit, conv: conv, convErr: err}
+	if err != nil {
+		panic(fmt.Errorf("golem: agent type %q has a malformed schema: %w", wit.TypeName, err))
+	}
+	ctorInput, err := parametersRecord(conv, wit.Constructor.InputSchema)
+	if err != nil {
+		panic(fmt.Errorf("golem: agent type %q constructor: %w", wit.TypeName, err))
+	}
+	methods := make([]Method, 0, len(wit.Methods))
+	for _, m := range wit.Methods {
+		input, err := parametersRecord(conv, m.InputSchema)
+		if err != nil {
+			panic(fmt.Errorf("golem: agent type %q method %q: %w", wit.TypeName, m.Name, err))
+		}
+		output := golem.None[core.Ref]()
+		if m.OutputSchema.Tag() == common.OutputSchemaSingle {
+			ref, err := conv.Ref(m.OutputSchema.Single())
+			if err != nil {
+				panic(fmt.Errorf("golem: agent type %q method %q result: %w", wit.TypeName, m.Name, err))
+			}
+			output = golem.Some(ref)
+		}
+		methods = append(methods, Method{wit: m, input: input, output: output})
+	}
+	return AgentType{
+		wit:         wit,
+		conv:        conv,
+		constructor: Constructor{wit: wit.Constructor, input: ctorInput},
+		methods:     methods,
+	}
 }
 
 // Name returns the agent type's name.
@@ -87,32 +117,21 @@ func (r AgentType) Mode() golem.Mode {
 
 // Schema returns the snapshot's type graph. Its root is a placeholder: the
 // meaningful roots are the constructor's and the methods' inputs and outputs.
-func (r AgentType) Schema() (core.Ref, error) {
-	if r.convErr != nil {
-		return core.Ref{}, r.convErr
-	}
-	return core.NewRef(r.conv.Graph), nil
+func (r AgentType) Schema() core.Ref {
+	return core.NewRef(r.conv.Graph)
 }
 
 // Constructor returns the agent type's constructor.
-func (r AgentType) Constructor() Constructor {
-	return Constructor{conv: r.conv, convErr: r.convErr, wit: r.wit.Constructor}
-}
+func (r AgentType) Constructor() Constructor { return r.constructor }
 
 // Methods returns the agent type's methods in declaration order.
-func (r AgentType) Methods() []Method {
-	out := make([]Method, 0, len(r.wit.Methods))
-	for _, m := range r.wit.Methods {
-		out = append(out, Method{conv: r.conv, convErr: r.convErr, wit: m})
-	}
-	return out
-}
+func (r AgentType) Methods() []Method { return slices.Clone(r.methods) }
 
 // Method looks one method up by name.
 func (r AgentType) Method(name string) (Method, bool) {
-	for _, m := range r.wit.Methods {
-		if m.Name == name {
-			return Method{conv: r.conv, convErr: r.convErr, wit: m}, true
+	for _, m := range r.methods {
+		if m.wit.Name == name {
+			return m, true
 		}
 	}
 	return Method{}, false
@@ -122,18 +141,13 @@ func (r AgentType) Method(name string) (Method, bool) {
 //
 //nolint:unused // called from host_wasm.go
 func (r AgentType) packConstructor(args map[string]any) (types.SchemaValueTree, error) {
-	input, err := r.Constructor().Input()
-	if err != nil {
-		return types.SchemaValueTree{}, err
-	}
-	return packJSONTree(input, args)
+	return packJSONTree(r.constructor.input, args)
 }
 
 // Constructor is a snapshot of an agent type's constructor.
 type Constructor struct {
-	conv    witschema.Converted
-	convErr error
-	wit     common.AgentConstructor
+	wit   common.AgentConstructor
+	input core.Ref
 }
 
 // Description returns the constructor's documentation.
@@ -143,15 +157,13 @@ func (c Constructor) Description() string { return c.wit.Description }
 // injects, such as the principal, are left out: a caller neither supplies nor
 // can override them. Pack canonical JSON with its PackJSON, and render it with
 // ToJSONSchema.
-func (c Constructor) Input() (core.Ref, error) {
-	return parametersRecord(c.conv, c.convErr, c.wit.InputSchema)
-}
+func (c Constructor) Input() core.Ref { return c.input }
 
 // Method is a snapshot of one agent method.
 type Method struct {
-	conv    witschema.Converted
-	convErr error
-	wit     common.AgentMethod
+	wit    common.AgentMethod
+	input  core.Ref
+	output golem.Option[core.Ref]
 }
 
 // Name returns the method's name.
@@ -173,33 +185,16 @@ func (m Method) PromptHint() (string, bool) {
 func (m Method) ReadOnly() bool { return m.wit.ReadOnly.IsSome() }
 
 // Input returns the method's caller-supplied parameters as a record type.
-func (m Method) Input() (core.Ref, error) {
-	return parametersRecord(m.conv, m.convErr, m.wit.InputSchema)
-}
+func (m Method) Input() core.Ref { return m.input }
 
 // Output returns the method's result type, none when it returns nothing.
-func (m Method) Output() (golem.Option[core.Ref], error) {
-	if m.convErr != nil {
-		return golem.None[core.Ref](), m.convErr
-	}
-	if m.wit.OutputSchema.Tag() != common.OutputSchemaSingle {
-		return golem.None[core.Ref](), nil
-	}
-	ref, err := m.conv.Ref(m.wit.OutputSchema.Single())
-	if err != nil {
-		return golem.None[core.Ref](), err
-	}
-	return golem.Some(ref), nil
-}
+func (m Method) Output() golem.Option[core.Ref] { return m.output }
 
 // parametersRecord is a parameter list as one record type: the caller-supplied
 // fields, in order. An auto-injected field — the principal, today — is filled
 // in by the host, so asking a caller for it would be wrong twice over: it
 // cannot know the value, and supplying one would not be honoured.
-func parametersRecord(conv witschema.Converted, convErr error, in common.InputSchema) (core.Ref, error) {
-	if convErr != nil {
-		return core.Ref{}, convErr
-	}
+func parametersRecord(conv witschema.Converted, in common.InputSchema) (core.Ref, error) {
 	params := in.Parameters()
 	fields := make([]core.NamedField, 0, len(params))
 	for _, f := range params {
@@ -221,9 +216,6 @@ func parametersRecord(conv witschema.Converted, convErr error, in common.InputSc
 func (r AgentType) configValues(entries []configOverride) ([]common.TypedAgentConfigValue, error) {
 	if len(entries) == 0 {
 		return nil, nil
-	}
-	if r.convErr != nil {
-		return nil, r.convErr
 	}
 	var problems []error
 	out := make([]common.TypedAgentConfigValue, 0, len(entries))
@@ -351,13 +343,9 @@ func (c *AgentClient) pack(method string, args map[string]any) (Method, types.Sc
 	if !known {
 		return m, types.SchemaValueTree{}, fmt.Errorf("golem: agent type %q has no method %q", c.agentType.Name(), method)
 	}
-	input, err := m.Input()
+	tree, err := packJSONTree(m.Input(), args)
 	if err == nil {
-		var tree types.SchemaValueTree
-		tree, err = packJSONTree(input, args)
-		if err == nil {
-			return m, tree, nil
-		}
+		return m, tree, nil
 	}
 	return m, types.SchemaValueTree{}, fmt.Errorf("golem: %s.%s: %w", c.agentType.Name(), method, err)
 }
@@ -396,11 +384,7 @@ func (c *AgentClient) CallAsync(method string, args map[string]any) (*PendingCal
 
 // decodeResult reads a method's result against the snapshot.
 func (c *AgentClient) decodeResult(m Method, method string, res witTypes.Option[types.SchemaValueTree]) (any, error) {
-	output, err := m.Output()
-	if err != nil {
-		return nil, err
-	}
-	out, declared := output.Get()
+	out, declared := m.Output().Get()
 	tree, has := optionFromWit(res).Get()
 	switch {
 	case has && !declared:

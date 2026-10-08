@@ -54,6 +54,6 @@ func init() {
 
 	relay := Relay.Implement(func(RelayID) *relayState { return &relayState{} })
 	relay.Handle(Ask, func(_ *golem.Context[relayState], in RelayIn) string {
-		return Whoami.Call(Ledger.Get(LedgerID{Name: in.Ledger}), WhoamiIn{})
+		return Whoami.MustCall(Ledger.Get(LedgerID{Name: in.Ledger}), WhoamiIn{})
 	})
 }

@@ -19,30 +19,30 @@ var agent = kvstore.Agent.Implement(func(kvstore.Id) *state { return &state{} })
 
 func init() {
 	agent.Handle(kvstore.Set, func(_ *golem.Context[state], in kvstore.SetIn) golem.Unit {
-		b := golem.Must(keyvalue.OpenBucket(in.Bucket))
-		golem.Must0(b.Set(in.Key, []byte(in.Value)))
+		b := keyvalue.OpenBucket(in.Bucket)
+		b.Set(in.Key, []byte(in.Value))
 		return golem.Unit{}
 	})
 	agent.Handle(kvstore.Get, func(_ *golem.Context[state], in kvstore.GetIn) string {
-		b := golem.Must(keyvalue.OpenBucket(in.Bucket))
-		value, found := golem.Must2(b.Get(in.Key))
+		b := keyvalue.OpenBucket(in.Bucket)
+		value, found := b.Get(in.Key)
 		if !found {
 			return ""
 		}
 		return string(value)
 	})
 	agent.Handle(kvstore.Exists, func(_ *golem.Context[state], in kvstore.GetIn) bool {
-		b := golem.Must(keyvalue.OpenBucket(in.Bucket))
-		return golem.Must(b.Exists(in.Key))
+		b := keyvalue.OpenBucket(in.Bucket)
+		return b.Exists(in.Key)
 	})
 	agent.Handle(kvstore.Delete, func(_ *golem.Context[state], in kvstore.GetIn) golem.Unit {
-		b := golem.Must(keyvalue.OpenBucket(in.Bucket))
-		golem.Must0(b.Delete(in.Key))
+		b := keyvalue.OpenBucket(in.Bucket)
+		b.Delete(in.Key)
 		return golem.Unit{}
 	})
 	agent.Handle(kvstore.Keys, func(_ *golem.Context[state], in kvstore.GetIn) []string {
-		b := golem.Must(keyvalue.OpenBucket(in.Bucket))
-		keys := golem.Must(b.Keys())
+		b := keyvalue.OpenBucket(in.Bucket)
+		keys := b.Keys()
 		sort.Strings(keys) // deterministic order for the test assertion
 		return keys
 	})

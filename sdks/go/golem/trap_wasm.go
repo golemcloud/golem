@@ -24,8 +24,8 @@ import (
 // An unrecovered panic makes the Go runtime exit with status 2, which Golem
 // records as a deliberate process exit. At the crash level the runtime aborts
 // through a wasm trap instead, which Golem treats as a failure: it fails the
-// agent, or retries the invocation inside an atomic region, as for the other
-// SDKs. This covers panics on any goroutine.
+// agent, or retries the invocation inside an atomic region, as in Rust. This
+// covers panics on any goroutine.
 func init() { debug.SetTraceback("crash") }
 
 // trap reports an agent method's panic and traps the component. The report is

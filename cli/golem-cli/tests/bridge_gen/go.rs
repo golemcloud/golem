@@ -390,13 +390,14 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "{client}"
     );
     assert!(!client.contains("CounterAgentIncrementInput"), "{client}");
-    // A method with no output returns nothing; one with an output returns it.
+    // A method with no output returns only an error; one with an output
+    // returns it and an error.
     assert!(
-        client.contains("func (c CounterAgentClient) Increment() float64 {"),
+        client.contains("func (c CounterAgentClient) Increment() (float64, error) {"),
         "{client}"
     );
     assert!(
-        client.contains("func (c CounterAgentClient) Add(by uint32) {"),
+        client.contains("func (c CounterAgentClient) Add(by uint32) error {"),
         "{client}"
     );
     let go_mod = generated.read("go.mod");
@@ -444,10 +445,7 @@ import (
 
 func roundTrip[T any](t *testing.T, name string, in T) {{
 	t.Helper()
-	tv, err := golem.EncodeTypedValue(in)
-	if err != nil {{
-		t.Fatalf("%s: encode: %v", name, err)
-	}}
+	tv := golem.EncodeTypedValue(in)
 	out, err := golem.DecodeTypedValue[T](tv)
 	if err != nil {{
 		t.Fatalf("%s: decode: %v", name, err)
@@ -1324,7 +1322,7 @@ fn go_guest_client_overrides_typed_configuration(env: &GoEnv) {
         "LimitsMaxItems values.Option[uint16]",
         "func WithCounterAgentConfig(cfg CounterAgentConfig) golem.ClientOpt {",
         "golem.ConfigEntryOf([]string{\"limits\", \"max-items\"}, v)",
-        "func GetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
+        "func GetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) (CounterAgentClient, error) {",
     ] {
         assert!(
             client.contains(expected),

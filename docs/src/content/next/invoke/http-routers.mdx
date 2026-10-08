@@ -729,7 +729,7 @@ owner.update() |> ignore
 Inside the handler, before writing the response:
 
 ```go
-fileowner.Update.Call(fileowner.FileOwner.Get(fileowner.FileOwnerID{Name: "from-router"}), golem.Unit{})
+fileowner.Update.MustCall(fileowner.FileOwner.Get(fileowner.FileOwnerID{Name: "from-router"}), golem.Unit{})
 ```
 </Tabs.Tab>
 </Tabs>

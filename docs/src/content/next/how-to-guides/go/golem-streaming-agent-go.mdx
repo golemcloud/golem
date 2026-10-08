@@ -35,27 +35,21 @@ A stream input is a field of the input struct, like any other parameter. `golem.
 ```go
 agent.Handle(pipe.Sum, func(_ *golem.Context[state], in pipe.ValuesIn) int64 {
 	var total int64
-	for v, err := range in.Values.All() {
-		if err != nil {
-			panic(err) // a failure, never the end of the stream
-		}
+	for v := range in.Values.All() {
 		total += int64(v)
 	}
 	return total
 })
 ```
 
-`Next()` returns `(value, ok, err)`: `ok == false` with a nil error is a clean end. `Collect()` reads everything and is only for bounded streams. `Close()` abandons a stream you stop reading; the producer sees it on its next write.
+`Next()` returns `(value, ok)`: `ok == false` is a clean end. `Collect()` reads everything and is only for bounded streams. `Close()` abandons a stream you stop reading; the producer sees it on its next write. Reading a stream that was closed or handed on, and an item that does not match the stream's schema, panic: they are bugs, not conditions to handle.
 
 ## Produce
 
 ```go
 agent.Handle(pipe.Doubled, func(_ *golem.Context[state], in pipe.ValuesIn) golem.AgentStream[int32] {
 	return golem.ProduceStream(func(w *golem.AgentStreamWriter[int32]) error {
-		for v, err := range in.Values.All() {
-			if err != nil {
-				return err // ends the output early
-			}
+		for v := range in.Values.All() {
 			if err := w.Write(v * 2); err != nil {
 				return nil // the reader went away (golem.ErrReaderGone)
 			}
@@ -66,8 +60,8 @@ agent.Handle(pipe.Doubled, func(_ *golem.Context[state], in pipe.ValuesIn) golem
 ```
 
 - `golem.ProduceStream` runs the producer on its own goroutine and returns the reading end at once.
-- Returning an error (or panicking) from the producer fails the invocation — the component traps, as in the other SDKs — because a stream has no failure end and the reader must not see a clean end. Model recoverable errors as items, e.g. `golem.AgentStream[golem.Result[T, E]]`.
-- `Write` blocks until the consumer has room: that is the back-pressure, so nothing piles up in memory.
+- Returning an error (or panicking) from the producer fails the invocation — the component traps, as in Rust — because a stream has no failure end and the reader must not see a clean end. Model recoverable errors as items, e.g. `golem.AgentStream[golem.Result[T, E]]`.
+- `Write` blocks until the consumer has room: that is the back-pressure, so nothing piles up in memory. Its only error is `golem.ErrReaderGone`; writing to a closed writer, or a value that cannot be encoded, panics.
 - `golem.NewAgentStream[T]()` returns a writer and a stream for producing by hand; `defer w.Close()` ends it cleanly.
 - `golem.StreamOf(items...)` is a stream of fixed values, handy for small results and tests.
 
@@ -81,13 +75,13 @@ agent.Handle(pipe.Forward, func(_ *golem.Context[state], in pipe.ValuesIn) golem
 })
 ```
 
-A stream is affine: once returned, passed to a call or sent as an item, using it again fails with `golem.ErrStreamTransferred`. A stream that was already read from cannot be forwarded (`golem.ErrStreamPartiallyRead`).
+A stream is affine: once returned, passed to a call or sent as an item, reading it again panics. A stream that was already read from cannot be forwarded: passing or returning it fails the call.
 
 ## Ordering and Errors
 
 - Items of one stream arrive in order. Sibling streams have no ordering between them; read them from separate goroutines when one producer could block on the other's back-pressure.
-- A bare stream has no error channel: a producer that returns an error just ends the stream, and a reader in another agent cannot tell that from a clean end. Model failures as items: `golem.AgentStream[golem.Result[T, E]]`.
-- A decode failure or a failed invocation is reported as an error by `Next`/`All`, never as a clean end.
+- A bare stream has no error channel: a producer that returns an error fails the invocation rather than ending the stream, so the reader never mistakes a failure for a clean end. To let the reader see failures, model them as items: `golem.AgentStream[golem.Result[T, E]]`.
+- A decode failure panics in `Next`/`All`; it is never reported as a clean end.
 
 ## Calling Streaming Methods
 
@@ -95,11 +89,8 @@ Same-component calls use the method descriptors as usual:
 
 ```go
 target := pipe.Agent.Get(pipe.ID{Name: "main"})
-out := pipe.Doubled.Call(target, pipe.ValuesIn{Values: golem.StreamOf[int32](1, 2, 3)})
-for v, err := range out.All() {
-	if err != nil {
-		panic(err)
-	}
+out := pipe.Doubled.MustCall(target, pipe.ValuesIn{Values: golem.StreamOf[int32](1, 2, 3)})
+for v := range out.All() {
 	fmt.Println(v)
 }
 ```

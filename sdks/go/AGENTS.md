@@ -40,6 +40,16 @@ therefore exposes the plumbing as package-level functions (`OptionGet`, `ResultS
 `IsSome`, `Get` and `Unwrap` and not four reflect-flavoured methods they must never
 call.
 
+## Error shapes
+
+A function returns an `error` only when the caller can act on the failure. A failure the
+caller can never handle — a host op whose WIT has no error channel, an infrastructure
+failure the host has already retried, an SDK invariant, a programming mistake — panics,
+which traps the component. Where the error is handleable but callers usually want to
+trap, the function has a `Must` variant next to the error-returning form
+(`MethodDef.MustCall`, `blobstore.MustGetContainer`); everywhere else `golem.Must`,
+`Must0` and `Must2` turn an error into a panic at the call site.
+
 ## Prerequisites
 
 - Stock Go matching `golem/go.mod` for `go build` and `go test`.

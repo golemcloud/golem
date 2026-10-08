@@ -165,7 +165,8 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
     package. `websocket.Connect` opens a connection and returns a `*websocket.Conn` with `Send`, `SendText`,
     `SendBinary`, `Receive`, `ReceiveWithTimeout`, and `Close` methods. A received `websocket.Message` is either a
     text or a binary frame, and a graceful close surfaces as a `*websocket.Error` whose `IsClosed()` is true,
-    carrying `CloseCode` and `CloseReason`.
+    carrying `CloseCode` and `CloseReason`. `websocket.MustConnect`, `MustSend`, `MustSendText`, and `MustSendBinary`
+    panic on the error instead of returning it.
 
     ```go
     // Definition package (agents/example/example.go)
@@ -200,9 +201,9 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
 
     func init() {
         agent.Handle(example.Run, func(_ *golem.Context[state], _ golem.Unit) golem.Unit {
-            conn := golem.Must(websocket.Connect("wss://example.com/chat"))
+            conn := websocket.MustConnect("wss://example.com/chat")
             slog.Info("Connected")
-            golem.Must0(conn.SendText("Hello, server!"))
+            conn.MustSendText("Hello, server!")
             for {
                 msg, err := conn.Receive()
                 var wsErr *websocket.Error

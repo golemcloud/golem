@@ -4594,10 +4594,10 @@ async fn test_go_agent_guest_bridge_e2e() {
 
             func init() {{
             	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
-            		counter := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}})
-            		stepped := provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName + "-stepped"}},
-            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}}))
-            		return fmt.Sprintf("ok:%d:%d", counter.Increment(), stepped.Increment())
+            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}}))
+            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName + "-stepped"}},
+            			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
+            		return fmt.Sprintf("ok:%d:%d", golem.Must(counter.Increment()), golem.Must(stepped.Increment()))
             	}})
             }}
         "#},

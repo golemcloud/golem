@@ -37,7 +37,7 @@ import (
 func serveHTTP(ctx context.Context, h http.Handler, req HTTPRequest) HTTPResponse {
 	r, err := toHTTPRequest(ctx, req)
 	if err != nil {
-		_ = req.Body.Close()
+		req.Body.Close()
 		return HTTPResponse{Status: http.StatusBadRequest, Headers: []HTTPHeader{}, Body: StreamOf[[]byte]()}
 	}
 
@@ -66,7 +66,7 @@ func serveHTTP(ctx context.Context, h http.Handler, req HTTPRequest) HTTPRespons
 
 	head := <-heads
 	if head.panicked {
-		_ = body.Close()
+		body.Close()
 		panic(head.panicValue)
 	}
 	return HTTPResponse{Status: head.status, Headers: head.headers, Body: body}
@@ -135,14 +135,10 @@ func (b *streamBody) Read(p []byte) (int, error) {
 		if b.err != nil {
 			return 0, b.err
 		}
-		chunk, ok, err := b.s.Next()
-		switch {
-		case err != nil:
-			// A failed or cancelled upload is never a complete one.
-			b.err = err
-		case !ok:
+		chunk, ok := b.s.Next()
+		if !ok {
 			b.err = io.EOF
-		default:
+		} else {
 			b.buf = chunk
 		}
 	}
@@ -156,7 +152,8 @@ func (b *streamBody) Close() error {
 		b.err = errBodyClosed
 	}
 	b.buf = nil
-	return b.s.Close()
+	b.s.Close()
+	return nil
 }
 
 // responseHead is what the handler commits before its body: the status and

@@ -26,13 +26,13 @@ func init() {
 		// 2. Register the pending approval with the human over agent RPC.
 		//    Normally you would surface this in a UI, email, etc.
 		approver := human.Agent.Get(human.ID{Username: in.Approver})
-		human.RequestApproval.Call(approver, human.RequestApprovalIn{
+		human.RequestApproval.MustCall(approver, human.RequestApprovalIn{
 			WorkflowId: ctx.State.workflowID,
 			PromiseId:  approval.ID(),
 		})
 
 		// 3. Pause here until the promise is completed by the human.
-		decision := approval.Await()
+		decision := approval.MustAwait()
 
 		// 4. Continue based on the human decision.
 		if decision == "approved" {

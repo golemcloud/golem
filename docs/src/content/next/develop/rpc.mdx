@@ -399,8 +399,14 @@ The caller can then use the typed client without depending on the provider's def
 ```go
 import weather "golem.local/bridge/weather-agent-guest-client"
 
-current := weather.GetWeatherAgent(weather.WeatherAgentId{Location: "London"}).CurrentWeather()
+london, err := weather.GetWeatherAgent(weather.WeatherAgentId{Location: "London"})
+if err != nil {
+	return err // the weather component is not deployed
+}
+current, err := london.CurrentWeather()
 ```
+
+`GetWeatherAgent` returns an error when the host cannot resolve the target, and each method returns the call's result with an error, as `Call` does.
 
 Alternatively, declare the target by hand in the caller with `golem.DefineFullAgentClient[ID]("WeatherAgent", golem.AgentClientSpec{})` and its `Method` descriptors; unlike `golem.DefineAgent`, it does not register the type in the caller component.
   </Tabs.Tab>
@@ -625,7 +631,13 @@ Once we have a _client_ for a remote agent, it is possible to call its methods j
 
      <Tabs.Tab>
      ```go
-      currentWeather := weather.CurrentWeather.Call(weatherInLondon, golem.Unit{})
+      currentWeather, err := weather.CurrentWeather.Call(weatherInLondon, golem.Unit{})
+      ```
+
+     `Call` returns a remote failure as a `*golem.RemoteCallError`, whose `Kind` classifies it. `MustCall` returns only the value and panics on a failure instead; the panic traps the component, as in Rust:
+
+     ```go
+      currentWeather := weather.CurrentWeather.MustCall(weatherInLondon, golem.Unit{})
       ```
      </Tabs.Tab>
 </Tabs>
@@ -683,11 +695,11 @@ It is possible to trigger the remote execution of an agent method without awaiti
     </Tabs.Tab>
 
     <Tabs.Tab>
-    To trigger an agent method and return immediately, use the `Trigger` method of the method descriptor. It returns the `golem.InvocationID` of the enqueued invocation:
+    To trigger an agent method and return immediately, use the `Trigger` method of the method descriptor. It returns the `golem.InvocationID` of the enqueued invocation, and an error if the invocation could not be enqueued (`MustTrigger` panics instead):
 
     ```go
     remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobId: backgroundJobID})
-    backgroundtask.RunTask.Trigger(remoteAgent, backgroundtask.RunTaskIn{Message: "hello", Count: 1234})
+    backgroundtask.RunTask.MustTrigger(remoteAgent, backgroundtask.RunTaskIn{Message: "hello", Count: 1234})
     ```
     </Tabs.Tab>
 </Tabs>
@@ -782,14 +794,14 @@ An advanced case of triggering the execution of an agent method is to **schedule
 
         ```go
         remoteAgent := backgroundtask.Agent.Get(backgroundtask.ID{JobId: backgroundJobID})
-        scheduled := backgroundtask.RunTask.Schedule(
+        scheduled := backgroundtask.RunTask.MustSchedule(
           remoteAgent,
           time.Now().Add(60*time.Second),
           backgroundtask.RunTaskIn{Message: "hello", Count: 1234},
         )
         ```
 
-        Here the second parameter is a `time.Time` representing when the method should be executed, and the last one is the method's input. The returned `*golem.ScheduledInvocation` can be canceled with `scheduled.Cancel()` until the invocation starts.
+        Here the second parameter is a `time.Time` representing when the method should be executed, and the last one is the method's input. The returned `*golem.ScheduledInvocation` can be canceled with `scheduled.Cancel()` until the invocation starts. `Schedule` returns the same value with an error instead of panicking.
 
      </Tabs.Tab>
 </Tabs>

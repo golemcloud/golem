@@ -7,7 +7,7 @@ description: "Scheduling a one-off future agent call from Go agent code, and can
 
 ## Overview
 
-`Method.Schedule(client, at, in)` enqueues a **one-off** invocation of a method to run at a specific future time. It returns a `*golem.ScheduledInvocation`, whose `Cancel()` prevents the invocation if it has not started yet.
+`Method.Schedule(client, at, in)` enqueues a **one-off** invocation of a method to run at a specific future time. It returns a `*golem.ScheduledInvocation`, whose `Cancel()` prevents the invocation if it has not started yet, and an error if the host refuses to schedule it; `MustSchedule` panics instead.
 
 Like `Trigger`, `Schedule` does not wait for a result — so it is safe to target **another** agent or the **same** instance (a synchronous self-`Call` would deadlock). The scheduled time is recorded durably and survives restarts.
 
@@ -16,7 +16,7 @@ For a task that **reschedules itself** on an interval (a periodic / cron-like lo
 ## Steps
 
 1. **Get a client** for the target instance: `counter.Agent.Get(counter.ID{Name: "my-counter"})`.
-2. **Schedule the method** at a `time.Time`: `counter.Increment.Schedule(c, when, in)`.
+2. **Schedule the method** at a `time.Time`: `counter.Increment.MustSchedule(c, when, in)`.
 3. **Keep the returned `*golem.ScheduledInvocation`** if you may need to cancel it.
 4. **Cancel** with `inv.Cancel()` before the scheduled time to prevent it.
 
@@ -42,13 +42,13 @@ func init() {
 	agent.Handle(scheduler.Arm, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		c := counter.Agent.Get(counter.ID{Name: "my-counter"})
 		// Run counter.increment 60 seconds from now.
-		ctx.State.pending = counter.Increment.Schedule(c, time.Now().Add(60*time.Second), golem.Unit{})
+		ctx.State.pending = counter.Increment.MustSchedule(c, time.Now().Add(60*time.Second), golem.Unit{})
 		return golem.Unit{}
 	})
 }
 ```
 
-`Schedule` returns a `*golem.ScheduledInvocation`; its `ID` field is the invocation's `InvocationID`.
+`Schedule` returns a `*golem.ScheduledInvocation` and an error; its `ID` field is the invocation's `InvocationID`.
 
 ### Scheduling a method that takes arguments
 
@@ -56,7 +56,7 @@ Pass the method's input value as the last argument, exactly as with `Call` / `Tr
 
 ```go
 c := counter.Agent.Get(counter.ID{Name: "my-counter"})
-counter.Add.Schedule(c, time.Now().Add(24*time.Hour), counter.AddIn{By: 5})
+counter.Add.MustSchedule(c, time.Now().Add(24*time.Hour), counter.AddIn{By: 5})
 ```
 
 ## Canceling a scheduled call
@@ -83,13 +83,13 @@ To message its own instance an agent needs a client for its own `ID`. `Context` 
 
 ```go
 self := counter.Agent.Get(ctx.State.self) // ctx.State.self captured in the constructor
-counter.Increment.Schedule(self, time.Now().Add(time.Minute), golem.Unit{})
+counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 ```
 
 ## Schedule vs Trigger
 
-- `Schedule(c, at, in) *ScheduledInvocation` — run once at a future `time.Time`; cancelable via `Cancel()`.
-- `Trigger(c, in) InvocationID` — enqueue immediately, no delay, not cancelable. Use it to advance to the next step now.
+- `Schedule(c, at, in) (*ScheduledInvocation, error)` — run once at a future `time.Time`; cancelable via `Cancel()`. `MustSchedule` panics on the error.
+- `Trigger(c, in) (InvocationID, error)` — enqueue immediately, no delay, not cancelable. Use it to advance to the next step now.
 - Never self-`Call` — a synchronous call into the same instance deadlocks; self-messaging must use `Schedule` or `Trigger`.
 
 ## Key Constraints

@@ -84,35 +84,30 @@ func streamOverFake[T any](t *testing.T, values ...T) (AgentStream[T], *fakeStre
 
 func TestAgentStreamReadsToCleanEOF(t *testing.T) {
 	s, _ := streamOverFake(t, "a", "b", "c")
-	got, err := s.Collect()
-	if err != nil {
-		t.Fatalf("Collect: %v", err)
-	}
+	got := s.Collect()
 	if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
 		t.Errorf("read %v", got)
 	}
 }
 
-// TestAgentStreamEOFIsNotAnError — the contract a consumer relies on: a clean
-// end of input is ok=false with a nil error, never an error value.
-func TestAgentStreamEOFIsNotAnError(t *testing.T) {
+// TestAgentStreamEOFIsOkFalse — the contract a consumer relies on: a clean
+// end of input is ok=false, and reading past it stays there.
+func TestAgentStreamEOFIsOkFalse(t *testing.T) {
 	s, _ := streamOverFake(t, "only")
-	if _, ok, err := s.Next(); !ok || err != nil {
-		t.Fatalf("first read: ok=%v err=%v", ok, err)
+	if _, ok := s.Next(); !ok {
+		t.Fatal("first read reported end of input")
 	}
-	v, ok, err := s.Next()
-	if ok || err != nil {
-		t.Errorf("end of input reported as ok=%v err=%v value=%v", ok, err, v)
+	for range 2 {
+		if v, ok := s.Next(); ok {
+			t.Errorf("end of input reported as ok=%v value=%v", ok, v)
+		}
 	}
 }
 
 func TestAgentStreamAllStopsAtEOF(t *testing.T) {
 	s, _ := streamOverFake(t, int64(1), int64(2))
 	var seen []int64
-	for v, err := range s.All() {
-		if err != nil {
-			t.Fatalf("All yielded %v", err)
-		}
+	for v := range s.All() {
 		seen = append(seen, v)
 	}
 	if !reflect.DeepEqual(seen, []int64{1, 2}) {
@@ -147,20 +142,31 @@ func TestAgentStreamCloseIsCleanCompletion(t *testing.T) {
 	f := &fakeStream{}
 	w := &AgentStreamWriter[string]{sink: f.sink(), codec: defaultStreamCodec[string]()}
 	_ = w.Write("a")
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	w.Close()
 	if !f.dropped {
 		t.Error("closing the writer did not complete the stream")
 	}
-	// Closing twice is not an error; a deferred Close after an explicit one is
+	// Closing twice does nothing; a deferred Close after an explicit one is
 	// the normal Go shape.
-	if err := w.Close(); err != nil {
-		t.Errorf("second Close gave %v", err)
-	}
-	if err := w.Write("b"); !errors.Is(err, ErrStreamClosed) {
-		t.Errorf("write after close gave %v", err)
-	}
+	w.Close()
+	mustPanic(t, "stream is closed", func() { _ = w.Write("b") })
+}
+
+// TestAnUnencodableItemPanics — an item the stream's codec cannot encode is a
+// bug in the producer, not a condition it could handle.
+func TestAnUnencodableItemPanics(t *testing.T) {
+	f := &fakeStream{}
+	w := &AgentStreamWriter[chan int]{sink: f.sink(), codec: defaultStreamCodec[chan int]()}
+	mustPanic(t, "stream item", func() { _ = w.Write(make(chan int)) })
+}
+
+// TestReadingAClosedStreamPanics — Close releases the endpoint, so a later
+// read is a bug; closing again does nothing.
+func TestReadingAClosedStreamPanics(t *testing.T) {
+	s, _ := streamOverFake(t, "a")
+	s.Close()
+	s.Close()
+	mustPanic(t, "stream is closed", func() { s.Next() })
 }
 
 // TestAgentStreamTransferIsAffine — handing a stream on moves the endpoint;
@@ -172,22 +178,20 @@ func TestAgentStreamTransferIsAffine(t *testing.T) {
 	if _, err := s.streamTake(); err != nil {
 		t.Fatalf("first transfer: %v", err)
 	}
-	if _, err := alias.streamTake(); !errors.Is(err, ErrStreamTransferred) {
-		t.Errorf("second transfer through an alias gave %v, want ErrStreamTransferred", err)
+	if _, err := alias.streamTake(); !errors.Is(err, errStreamTransferred) {
+		t.Errorf("second transfer through an alias gave %v, want errStreamTransferred", err)
 	}
-	if _, _, err := s.Next(); !errors.Is(err, ErrStreamTransferred) {
-		t.Errorf("reading a transferred stream gave %v", err)
-	}
+	mustPanic(t, "already transferred", func() { s.Next() })
 }
 
 // TestAgentStreamPartiallyReadCannotBeForwarded — the items already taken
 // cannot be put back, so the receiver would not get the stream it was promised.
 func TestAgentStreamPartiallyReadCannotBeForwarded(t *testing.T) {
 	s, _ := streamOverFake(t, "a", "b")
-	if _, ok, err := s.Next(); !ok || err != nil {
-		t.Fatalf("first read: ok=%v err=%v", ok, err)
+	if _, ok := s.Next(); !ok {
+		t.Fatal("first read reported end of input")
 	}
-	if _, err := s.streamTake(); !errors.Is(err, ErrStreamPartiallyRead) {
+	if _, err := s.streamTake(); !errors.Is(err, errStreamPartiallyRead) {
 		t.Errorf("forwarding a partially read stream gave %v", err)
 	}
 }
@@ -204,8 +208,8 @@ func TestAgentStreamForwardingUnreadDoesNotPump(t *testing.T) {
 	}
 }
 
-// TestAgentStreamDecodeErrorIsNotEOF — a malformed item must be distinguishable
-// from the end of the stream, or a consumer silently truncates.
+// TestAgentStreamDecodeErrorIsNotEOF — a malformed item must not look like the
+// end of the stream, or a consumer silently truncates: it panics instead.
 func TestAgentStreamDecodeErrorIsNotEOF(t *testing.T) {
 	var b engine.ValBuilder
 	root := b.Push(types.MakeSchemaValueNodeStringValue("not an int"))
@@ -215,13 +219,7 @@ func TestAgentStreamDecodeErrorIsNotEOF(t *testing.T) {
 	}
 	s := AgentStream[int64]{st: &streamState{src: f.source()}, codec: defaultStreamCodec[int64]()}
 
-	_, ok, err := s.Next()
-	if ok {
-		t.Fatal("a malformed item was accepted")
-	}
-	if err == nil {
-		t.Fatal("a malformed item was reported as the end of the stream")
-	}
+	mustPanic(t, "stream item", func() { s.Next() })
 }
 
 // TestStreamSchemaIsAlwaysTyped — an untyped stream cannot supply an item
@@ -313,16 +311,16 @@ func TestAFailedProductionIsNotEndOfInput(t *testing.T) {
 		}
 		return errors.New("disk gone")
 	})
-	if v, ok, err := s.Next(); !ok || err != nil || v != 1 {
-		t.Fatalf("first item %d, %v, %v", v, ok, err)
+	if v, ok := s.Next(); !ok || v != 1 {
+		t.Fatalf("first item %d, %v", v, ok)
 	}
 	if err := <-failed; err == nil || err.Error() != "disk gone" {
 		t.Fatalf("the production failed with %v", err)
 	}
 
 	done := ProduceStream(func(w *AgentStreamWriter[int32]) error { return w.Write(2) })
-	if got, err := done.Collect(); err != nil || len(got) != 1 || got[0] != 2 {
-		t.Fatalf("a finished production gave %v, %v", got, err)
+	if got := done.Collect(); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("a finished production gave %v", got)
 	}
 	select {
 	case err := <-failed:

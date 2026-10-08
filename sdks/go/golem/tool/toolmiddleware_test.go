@@ -37,11 +37,7 @@ type AuditParams struct {
 
 func mustTypedValue[T any](t *testing.T, v T) golem.TypedValue {
 	t.Helper()
-	tv, err := golem.EncodeTypedValue(v)
-	if err != nil {
-		t.Fatalf("EncodeTypedValue: %v", err)
-	}
-	return tv
+	return golem.EncodeTypedValue(v)
 }
 
 // localUnderlying is the layer beneath a middleware: the wrapped tool's own

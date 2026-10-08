@@ -25,9 +25,17 @@
 //	        …
 //	    }
 //	}
+//
+// [MustGet] and [MustSearch] are the same iterations without the error, for
+// code that would only panic on it.
 package oplog
 
-import oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
+import (
+	"iter"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+	oplogwit "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_api_oplog"
+)
 
 // Entry is one oplog entry. Its cases are the constants of this package.
 type Entry = oplogwit.PublicOplogEntry
@@ -47,4 +55,32 @@ type (
 type SearchHit struct {
 	Index uint64
 	Entry Entry
+}
+
+// MustGet is [Get], panicking on a failing page.
+func MustGet(id golem.AgentID, start uint64) iter.Seq[Entry] {
+	return func(yield func(Entry) bool) {
+		for e, err := range Get(id, start) {
+			if err != nil {
+				panic(err)
+			}
+			if !yield(e) {
+				return
+			}
+		}
+	}
+}
+
+// MustSearch is [Search], panicking on a failing page.
+func MustSearch(id golem.AgentID, text string) iter.Seq[SearchHit] {
+	return func(yield func(SearchHit) bool) {
+		for h, err := range Search(id, text) {
+			if err != nil {
+				panic(err)
+			}
+			if !yield(h) {
+				return
+			}
+		}
+	}
 }

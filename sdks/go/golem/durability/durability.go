@@ -36,8 +36,8 @@ import (
 // atomic regions, idempotence mode, an idempotency-key generator, and oplog
 // commit. They wrap host functions that the runtime already implements; the
 // durability semantics are guaranteed by the executor, and these are thin,
-// fail-loud wrappers (a host failure traps and surfaces as an agent-error,
-// matching the RPC/promise surface — no in-band error return).
+// fail-loud wrappers (a host failure traps the component — no in-band error
+// return).
 //
 // Concurrency: these knobs apply at the worker level — the scope is per worker,
 // not per goroutine.

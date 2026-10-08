@@ -15,7 +15,7 @@ atomicity, idempotency, or oplog replication.
 They live in the `durability` package (`github.com/golemcloud/golem/sdks/go/golem/durability`: `durability.Atomically`, `durability.WithIdempotenceMode`,
 `durability.OplogCommit`, `durability.GenerateIdempotencyKey`)
 and are thin, **fail-loud** wrappers over host functions: on a host failure they
-trap and surface as an agent-error — there is no in-band error return.
+trap the component — there is no in-band error return.
 
 > **Concurrency note.** These knobs apply at the **worker level**, not per
 > goroutine. Golem runs an agent single-threaded with cooperative task-switching
@@ -43,8 +43,8 @@ an outer variable**:
 // recovery to re-run BOTH calls, not skip the reservation.
 var orderID string
 durability.Atomically(func() {
-	reservation := inventory.Reserve.Call(invClient, inventory.ReserveIn{Item: item, Qty: qty})
-	charge := payment.Charge.Call(payClient, payment.ChargeIn{Customer: cust, Amount: price})
+	reservation := inventory.Reserve.MustCall(invClient, inventory.ReserveIn{Item: item, Qty: qty})
+	charge := payment.Charge.MustCall(payClient, payment.ChargeIn{Customer: cust, Amount: price})
 	orderID = combine(reservation, charge)
 })
 ```
@@ -145,7 +145,7 @@ system (e.g. a payment processor) to make an external call idempotent:
 ```go
 key := durability.GenerateIdempotencyKey()
 // key.String() is stable across restarts — safe as a payment idempotency key
-resp := payment.Charge.Call(client, payment.ChargeIn{Amount: amt, Key: key.String()})
+resp := payment.Charge.MustCall(client, payment.ChargeIn{Amount: amt, Key: key.String()})
 ```
 
 ## Oplog Commit
@@ -164,15 +164,15 @@ A checkpoint is a point in the agent's execution to go back to. Reverting discar
 
 ```go
 cp := durability.NewCheckpoint()
-quote := cp.Must(fetchQuote())           // fetchQuote() (Quote, error): reverts on an error
-cp.AssertOrRevert(quote.Price < limit)   // reverts unless the condition holds
+quote := cp.UnwrapOrRevert(fetchQuote()) // fetchQuote() (Quote, error): reverts on an error
+cp.AssertOrRevert(quote.Price < limit)    // reverts unless the condition holds
 
 total := durability.WithCheckpoint(func(cp durability.Checkpoint) (int64, error) {
-	return charge(amount)                // a returned error reverts to the checkpoint
+	return charge(amount)                 // a returned error reverts to the checkpoint
 })
 ```
 
-`cp.MustRun(func() (T, error))` is the function form of `cp.Must`, and `cp.Revert()` goes back unconditionally. A revert does not return. `durability.OplogIndex()` / `durability.SetOplogIndex(i)` are the raw operations underneath. A revert rewinds the whole agent, so don't revert while other goroutines are mid-await.
+`cp.RunOrRevert(func() (T, error))` is the function form of `cp.UnwrapOrRevert`, and `cp.Revert()` goes back unconditionally. A revert does not return. `durability.OplogIndex()` / `durability.SetOplogIndex(i)` are the raw operations underneath. A revert rewinds the whole agent, so don't revert while other goroutines are mid-await.
 
 ## Retry policy for a block
 
@@ -199,7 +199,7 @@ cases.
   `defer`) or the scope never ends.
 - These knobs are **worker-global**, not per-goroutine — don't hold a scope open
   across a concurrent await.
-- Failures trap and surface as agent-errors; there is no error return value.
+- Failures trap the component; there is no error return value.
 - `GenerateIdempotencyKey` is the only helper that returns a value
   (`golem.UUID`); the rest return nothing or a `restore` closure.
 

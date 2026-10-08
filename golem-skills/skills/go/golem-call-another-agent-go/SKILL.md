@@ -15,7 +15,7 @@ Calls are durable: results are recorded in the oplog and replayed after a restar
 
 1. **Import the callee's definition package** (e.g. `myapp/agents/ledger`).
 2. **Get a client** for a specific instance: `ledger.Agent.Get(ledger.ID{Region: "eu"})`.
-3. **Call a method descriptor** on the client: `ledger.Record.Call(client, ledger.RecordIn{Amount: 10})`.
+3. **Call a method descriptor** on the client: `ledger.Record.MustCall(client, ledger.RecordIn{Amount: 10})`, or `Call` to get `(Out, error)` back.
 4. If the method returns a `golem.Result`, unwrap it (`.MustOk()` or inspect it).
 
 ## Synchronous call
@@ -38,25 +38,42 @@ func init() {
 	agent.Handle(rpccaller.Call, func(_ *golem.Context[state], in rpccaller.CallIn) int64 {
 		// Get a client for the ledger instance identified by region.
 		c := ledger.Agent.Get(ledger.ID{Region: in.Region})
-		// Call returns the method's Out; here Out is a golem.Result, unwrapped with MustOk.
-		return ledger.Record.Call(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
+		// MustCall returns the method's Out; here Out is a golem.Result, unwrapped with MustOk.
+		return ledger.Record.MustCall(c, ledger.RecordIn{Amount: in.Amount}).MustOk()
 	})
 }
 ```
 
-`Call` blocks until the callee returns. Because a single agent processes invocations sequentially, a **synchronous self-call** (calling back into the same instance) would deadlock — use `Trigger`/`Schedule` for self-messaging (see `golem-recurring-task-go`).
+`Call` and `MustCall` block until the callee returns. Because a single agent processes invocations sequentially, a **synchronous self-call** (calling back into the same instance) would deadlock — use `Trigger`/`Schedule` for self-messaging (see `golem-recurring-task-go`).
 
 ### Plain vs Result returns
 
-`Call` returns the method's declared output type **directly**. Only unwrap when that type is a `golem.Result` — don't append `.MustOk()` to a plain return:
+`MustCall` returns the method's declared output type **directly**. Only unwrap when that type is a `golem.Result` — don't append `.MustOk()` to a plain return:
 
 ```go
 // greeter.Hello returns a plain string → use it directly
-greeting := greeter.Hello.Call(c, greeter.HelloIn{Name: "alice"})
+greeting := greeter.Hello.MustCall(c, greeter.HelloIn{Name: "alice"})
 
 // ledger.Record returns golem.Result[int64, string] → unwrap
-total := ledger.Record.Call(c, ledger.RecordIn{Amount: 10}).MustOk()
+total := ledger.Record.MustCall(c, ledger.RecordIn{Amount: 10}).MustOk()
 ```
+
+## Handling a failed call
+
+`Call` returns `(Out, error)`. The error is a `*golem.RemoteCallError` when the callee failed, could not be reached after the runtime's retries, or returned a value that does not decode as `Out`. Its `Kind` classifies the failure, and a remote custom error stays reachable through `errors.As`:
+
+```go
+total, err := ledger.Record.Call(c, ledger.RecordIn{Amount: 10})
+if err != nil {
+	var remote *golem.RemoteCallError
+	if errors.As(err, &remote) && remote.Kind == golem.RemoteNotFound {
+		return "the ledger is not deployed"
+	}
+	panic(err)
+}
+```
+
+`MustCall` panics with the same error instead. A panic in a method traps the component, as in Rust: the calling agent fails, or, inside `durability.Atomically`, the region is retried.
 
 ## Asynchronous call
 
@@ -65,7 +82,7 @@ Start the call, do other work, then await:
 ```go
 fut := ledger.Record.CallAsync(c, ledger.RecordIn{Amount: in.Amount}) // *golem.Future[Out]
 // ... other work ...
-total := fut.Get().MustOk() // Get() blocks for the result
+total := fut.MustGet().MustOk() // MustGet() blocks for the result; Get() returns (Out, error)
 ```
 
 Launch several and await them to fan out work across other agents.
@@ -75,7 +92,7 @@ Launch several and await them to fan out work across other agents.
 When a method's output is `golem.Result[Ok, Err]`:
 
 ```go
-res := ledger.Record.Call(c, in) // golem.Result[int64, string]
+res := ledger.Record.MustCall(c, in) // golem.Result[int64, string]
 switch {
 case res.IsErr():
     // handle the domain error value
@@ -87,7 +104,7 @@ default:
 }
 
 // Or fail loud (panic on Err, which fails the calling agent):
-total := ledger.Record.Call(c, in).MustOk()
+total := ledger.Record.MustCall(c, in).MustOk()
 ```
 
 ## Import-cycle rule (important)
@@ -124,25 +141,30 @@ Import it and call through the typed client:
 ```go
 import weather "golem.local/bridge/weather-agent-guest-client"
 
-forecast := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"}).Forecast(3)
+client, err := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"})
+if err != nil {
+	return err.Error() // the weather component is not deployed
+}
+forecast := golem.Must(client.Forecast(3))
 ```
 
-- Each method on the client calls `MethodDef.Call` underneath, so a failed call panics with the SDK's own error, exactly as a same-component call does.
+- `Get<Agent>` and `NewPhantom<Agent>` return an error when the host cannot resolve the target, as the callee lives in another component that may not be deployed.
+- Each method on the client calls `MethodDef.Call` underneath and returns its `(Out, error)` (only `error` for a method without output), so a failed call returns the SDK's own `*golem.RemoteCallError`, exactly as a same-component call does. Wrap it in `golem.Must` / `golem.Must0` to panic instead.
 - The `.local` module path can never be fetched from a module proxy, so a missing `replace` fails the build rather than silently resolving something else.
 - The client's types are the callee's, generated from its schema: records become structs, variants sealed interfaces with one type per case, enums integer constants with a `String()` method.
 - Methods that take or return streams are included, with each stream spelled `golem.AgentStream[T]` (see `golem-streaming-agent-go`).
 - `Get<Agent>` and `NewPhantom<Agent>` take `golem.ClientOpt`s. When the callee declares local configuration, the client also has a `<Agent>Config` struct, with one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`), and a `With<Agent>Config` option. Only the fields you set are sent; the rest keep their provisioned values:
 
 ```go
-counter := counters.GetCounterAgent(counters.CounterAgentId{Name: "fast"},
+counter, err := counters.GetCounterAgent(counters.CounterAgentId{Name: "fast"},
 	counters.WithCounterAgentConfig(counters.CounterAgentConfig{Step: golem.Some[uint32](5)}))
 ```
 
 ## Key Constraints
 
-- You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync`.
+- You call `Method.Call(client, in)` (not `client.Call(method, in)`): the method descriptor carries the input/output types. Same for `Trigger`, `Schedule`, `CallAsync` and the `Must` forms.
 - The client comes from the **definition** (`Def.Agent.Get(id)`); the ID is encoded from the `ID` type, so the caller does not need the callee locally registered.
-- Don't hold a `*golem.Future` across invocations — await it (`Get()`) within the same handler.
+- Don't hold a `*golem.Future` across invocations — await it (`Get()` / `MustGet()`) within the same handler.
 
 ### Related Skills
 

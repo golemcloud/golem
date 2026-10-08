@@ -246,10 +246,11 @@ func (a *AgentDefinition[Id, Cfg]) ImplementConfigured[S any](
 // into a uniform dispatcher; dispatch itself never uses reflection to call it.
 //
 // A handler returns only its output value. There is no error return: a failed
-// invocation is signalled by panicking (the SDK recovers it into a non-retriable
-// agent-error surfaced to the caller — the worker survives). Reserve panic for
-// genuine failures; model expected, typed outcomes as a [Result] in the output.
-// Use [Must] to turn an inner (value, error) call into a panic-on-error.
+// invocation is signalled by panicking, which traps the component, as in Rust —
+// the worker fails, or, inside an atomic region, the region is retried. Reserve
+// panic for genuine failures; model expected, typed outcomes as a [Result] in
+// the output. Use [Must] to turn an inner (value, error) call into a
+// panic-on-error.
 func (i *AgentImpl[Id, S, Cfg]) Handle[In any, Out any](
 	m MethodDef[Id, In, Out],
 	h func(*Context[S], In) Out,
@@ -365,7 +366,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	}
 
 	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
-		// A panic traps the component, as in the other SDKs: the executor fails the
+		// A panic traps the component, as in Rust: the executor fails the
 		// agent, or retries the invocation inside an atomic region. The stage
 		// attributes it, so an SDK bug is not reported as if it were the agent's
 		// fault.

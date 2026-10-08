@@ -13,7 +13,7 @@ A webhook is a promise completed by an HTTP POST:
 
 - `golem.NewWebhook[T]()` creates the promise and the URL that completes it; `w.URL()` is the URL to hand out.
 - `w.ID()` returns the `golem.PromiseID` to persist in agent state.
-- `golem.PromiseByID[T](id).Await()` (or `w.Await()`) suspends until the POST arrives and returns the body decoded as `T`.
+- `golem.PromiseByID[T](id).MustAwait()` (or `w.MustAwait()`) suspends until the POST arrives and returns the body decoded as `T`; `Await()` returns `(T, error)` instead.
 
 This is useful for payment gateways, CI/CD, GitHub/Stripe callbacks, and any event-driven workflow where an external system notifies the agent.
 
@@ -35,7 +35,8 @@ The agent type **must** have an HTTP mount (`Spec.HTTP = &golem.Mount{Path: "/..
 | `golem.NewWebhook[T]()` | Create a promise and the public URL that a POST completes; returns `*golem.Webhook[T]` (a `*golem.Promise[T]` plus `URL()`); requires the agent be HTTP-API-deployed |
 | `(*Promise[T]).WebhookURL() string` | Mint the URL for a promise created with `golem.NewPromise[T]()` |
 | `(*Promise[T]).ID() golem.PromiseID` | The durable id — persist it to await/complete in a later invocation |
-| `(*Promise[T]).Await() T` | Suspend until completed; returns the POST body decoded as `T` (JSON, or raw bytes when `T` is `[]byte`) |
+| `(*Promise[T]).Await() (T, error)` | Suspend until completed; returns the POST body decoded as `T` (JSON, or raw bytes when `T` is `[]byte`), or an error if it does not decode |
+| `(*Promise[T]).MustAwait() T` | `Await` that panics if the body does not decode |
 | `golem.PromiseByID[T](id)` | Rebuild a handle from a stored `PromiseID` |
 | `golem.CompletePromise[T](id, value)` | Complete a promise from *another agent* (external completers use the URL instead) |
 
@@ -102,14 +103,14 @@ func init() {
 		if !ctx.State.open {
 			panic("no open webhook — call open first")
 		}
-		return golem.PromiseByID[webhookdemo.Event](ctx.State.pending).Await()
+		return golem.PromiseByID[webhookdemo.Event](ctx.State.pending).MustAwait()
 	})
 }
 ```
 
 ## Payload decoding
 
-`Await()` decodes the POST body as its type parameter `T` via JSON. Use a struct with `json` tags (as `Event` above) for structured payloads, or `golem.PromiseByID[[]byte](id).Await()` to receive the raw request bytes unchanged.
+`Await()` decodes the POST body as its type parameter `T` via JSON, and returns an error when the body does not decode. Use a struct with `json` tags (as `Event` above) for structured payloads, or `golem.PromiseByID[[]byte](id).Await()` to receive the raw request bytes unchanged.
 
 ## Webhook URL structure and suffix
 
@@ -126,7 +127,7 @@ HTTP: &golem.Mount{Path: "/api/orders/{id}", WebhookSuffix: "/workflow-hooks"},
 
 ## Key Constraints
 
-- The agent **must** set `Spec.HTTP` and be deployed via `httpApi`, or `WebhookURL()` traps (it is fail-loud, surfacing an agent-error).
+- The agent **must** set `Spec.HTTP` and be deployed via `httpApi`, or `WebhookURL()` panics, which traps the component, as in Rust.
 - Only the agent that created the promise may `Await` it; awaiting from another agent traps in the host.
 - Only a `POST` to the URL completes the promise; the URL is one-shot — once completed it is invalid, and a later `Await` returns the recorded body from the oplog.
 - The agent is durably suspended while awaiting — it survives failures, restarts, and updates.

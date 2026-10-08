@@ -32,7 +32,7 @@ import (
 //	var Ping   = Pinger.Method[golem.Unit, string]("ping")
 //
 //	c, err := Pinger.Bind(agentID)
-//	reply := Ping.Call(c, golem.Unit{})
+//	reply, err := Ping.Call(c, golem.Unit{})
 //
 // A full client also declares the target type's name, constructor (Id) and
 // lifecycle, so it creates and addresses instances like the agent's own
@@ -41,7 +41,8 @@ import (
 //	var Counter = golem.DefineFullAgentClient[CounterId]("CounterAgent", golem.AgentClientSpec{})
 //	var Add     = Counter.Method[AddIn, int64]("add")
 //
-//	total := Add.Call(Counter.Get(CounterId{Name: "c1"}), AddIn{By: 3})
+//	c, err := Counter.Get(CounterId{Name: "c1"})
+//	total, err := Add.Call(c, AddIn{By: 3})
 //
 // Neither is published by the component: [DefineAgent] declares an agent the
 // component provides, which is a different thing.
@@ -140,15 +141,17 @@ func (a *FullAgentClient[Id, Cfg]) Method[In any, Out any](name string, opts ...
 }
 
 // Get returns a client for the agent with the given id, creating it if it does
-// not exist yet — the same contract as [AgentDefinition.Get], and it panics on
-// the same failures.
-func (a *FullAgentClient[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
+// not exist yet. Unlike [AgentDefinition.Get] it returns an error rather than
+// panicking when the host cannot resolve the target: the target is another
+// component's agent, which may not be deployed. Misuse — an override that does
+// not match the declared config — still panics.
+func (a *FullAgentClient[Id, Cfg]) Get(id Id, opts ...ClientOpt) (Client[Id], error) {
 	return getClient[Id](defs, a.name, id, opts)
 }
 
 // NewPhantom allocates a fresh phantom instance and returns a client for it,
-// mirroring [AgentDefinition.NewPhantom].
-func (a *FullAgentClient[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[Id] {
+// with the error contract of [FullAgentClient.Get].
+func (a *FullAgentClient[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) (Client[Id], error) {
 	return newPhantomClient[Id](defs, a.name, id, opts)
 }
 

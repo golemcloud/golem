@@ -20,7 +20,7 @@ var agent = scheduler.Agent.Implement(func(scheduler.Id) *state { return &state{
 func scheduleBump(in scheduler.ScheduleIn) *golem.ScheduledInvocation {
 	c := counter.Agent.Get(counter.CounterID{Name: in.Target})
 	at := time.Now().Add(time.Duration(in.DelayMillis) * time.Millisecond)
-	return counter.Increment.Schedule(c, at, golem.Unit{})
+	return counter.Increment.MustSchedule(c, at, golem.Unit{})
 }
 
 func init() {

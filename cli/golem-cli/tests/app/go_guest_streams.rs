@@ -168,55 +168,49 @@ async fn test_go_generated_guest_streams_e2e() {
             	}}
             }}
 
-            func next[T any](s golem.AgentStream[T]) (T, bool) {{
-            	v, ok, err := s.Next()
-            	check(err == nil, "read: %v", err)
-            	return v, ok
-            }}
-
             func init() {{
             	agent.Handle(consumer.Run, func(ctx *golem.Context[state], _ golem.Unit) string {{
-            		remote := provider.GetStreamProvider(provider.StreamProviderId{{Name: ctx.State.name}})
+            		remote := golem.Must(provider.GetStreamProvider(provider.StreamProviderId{{Name: ctx.State.name}}))
 
-            		total := remote.Consume(golem.StreamOf[int8](1, 2, 3))
+            		total := golem.Must(remote.Consume(golem.StreamOf[int8](1, 2, 3)))
             		check(total == 6, "consume returned %d", total)
 
-            		output := remote.Produce()
-            		forwarded := remote.Forward(provider.StreamBundle{{Optional: values.Some(output)}})
+            		output := golem.Must(remote.Produce())
+            		forwarded := golem.Must(remote.Forward(provider.StreamBundle{{Optional: values.Some(output)}}))
             		optional, some := forwarded.Optional.Get()
             		check(some, "forward lost the optional stream")
-            		item, ok := next(optional)
+            		item, ok := optional.Next()
             		check(ok && item.Label == "remote", "first item: %+v %v", item, ok)
             		check(len(item.Children) == 1 && item.Children[0].Label == "child", "children: %+v", item.Children)
-            		_, ok = next(optional)
+            		_, ok = optional.Next()
             		check(!ok, "the produced stream did not end")
 
             		for count := 0; count < 4; count++ {{
             			siblings := make([]golem.AgentStream[provider.StreamItem], 0, count)
             			for range count {{
-            				siblings = append(siblings, remote.Produce())
+            				siblings = append(siblings, golem.Must(remote.Produce()))
             			}}
-            			returned := remote.Forward(provider.StreamBundle{{Siblings: siblings}})
+            			returned := golem.Must(remote.Forward(provider.StreamBundle{{Siblings: siblings}}))
             			check(len(returned.Siblings) == count, "forwarded %d of %d siblings", len(returned.Siblings), count)
             			for _, s := range returned.Siblings {{
-            				check(s.Close() == nil, "close a sibling")
+            				s.Close()
             			}}
             		}}
 
             		outer := golem.ProduceStream(func(w *golem.AgentStreamWriter[golem.AgentStream[provider.StreamItem]]) error {{
             			return w.Write(golem.StreamOf(provider.StreamItem{{Label: "nested"}}))
             		}})
-            		returned := remote.Nested(outer)
-            		inner, ok := next(returned)
+            		returned := golem.Must(remote.Nested(outer))
+            		inner, ok := returned.Next()
             		check(ok, "the nested stream is empty")
-            		item, ok = next(inner)
+            		item, ok = inner.Next()
             		check(ok && item.Label == "nested", "nested item: %+v %v", item, ok)
-            		_, ok = next(inner)
+            		_, ok = inner.Next()
             		check(!ok, "the inner stream did not end")
-            		_, ok = next(returned)
+            		_, ok = returned.Next()
             		check(!ok, "the outer stream did not end")
 
-            		return "ok:" + remote.Status()
+            		return "ok:" + golem.Must(remote.Status())
             	}})
             }}
         "#},

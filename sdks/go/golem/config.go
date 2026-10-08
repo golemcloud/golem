@@ -48,7 +48,7 @@ import (
 //
 //	cfg := golem.Config(Shop, ctx)  // ctx is the running agent's *Context[S]
 //	_ = cfg.Greeting                // local field — cached (worker-lifetime), so this is fast
-//	_ = cfg.APIKey.Get()            // secret field — re-reads the host each call (live)
+//	_ = cfg.APIKey.MustGet()        // secret field — re-reads the host each call (live)
 //
 // Config is materialized ONCE per worker and cached, so calling golem.Config(Shop, ctx)
 // on a hot method is near-free: local fields are read from the host on the first
@@ -215,7 +215,7 @@ func flattenConfigStruct(d *definitions, e *agentEntry, agentName string, cfgTyp
 // [Secret] field is a lazy handle whose [Secret.Get] re-reads the host each call,
 // so a rotated secret is observed and the user decides when to read (and whether
 // to store) it. A read failure has no in-band recovery, so it panics rather than
-// returning an error; the panic surfaces as an agent-error.
+// returning an error; the panic traps the component, as in Rust.
 func (c *Context[S]) Config[Id any, Cfg any](def *AgentDefinition[Id, Cfg]) Cfg {
 	// def fixes Cfg; the receiver is the compile-time "inside a running method"
 	// gate. Neither carries the config itself: it is materialized from the

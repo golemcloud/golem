@@ -7,7 +7,7 @@ description: "Adding typed secrets to a Go Golem agent with golem.Secret[T]. Use
 
 ## Overview
 
-Secrets are sensitive configuration values (API keys, passwords, tokens) read at runtime through `golem.Secret[T]`. A secret uses the **same config mechanism as regular typed config** — it is just a field whose type is `golem.Secret[T]` inside the agent's config struct (see `golem-add-config-go`). The config value carries an opaque secret handle; the plaintext is revealed only when your code calls `.Get()`.
+Secrets are sensitive configuration values (API keys, passwords, tokens) read at runtime through `golem.Secret[T]`. A secret uses the **same config mechanism as regular typed config** — it is just a field whose type is `golem.Secret[T]` inside the agent's config struct (see `golem-add-config-go`). The config value carries an opaque secret handle; the plaintext is revealed only when your code calls `.Get()` or `.MustGet()`.
 
 Secrets are **not** stored in `golem.yaml` (which is source-controlled) except through `secretDefaults` for local development. In real environments they are managed per-environment via the CLI.
 
@@ -15,7 +15,7 @@ Secrets are **not** stored in `golem.yaml` (which is source-controlled) except t
 
 1. **Add a `golem.Secret[T]` field** to the agent's config struct.
 2. **Define / implement** the agent as a configured agent (`DefineConfiguredAgent` + `ImplementConfigured`).
-3. **Reveal** the value at runtime with `.Get()`.
+3. **Reveal** the value at runtime with `.MustGet()`, or `.Get()` to handle a read failure.
 4. **Provide values** via `secretDefaults` (local) or the CLI (per environment).
 
 ## Declaring a Secret Field
@@ -51,7 +51,7 @@ var Connect = Agent.Method[golem.Unit, string]("connect", golem.Desc("Describe t
 
 ## Reading a Secret at Runtime
 
-Read the config, then call `.Get()` on the secret field to reveal the current plaintext. Because `.Get()` re-reads the host on every call, a *rotated* secret is observed rather than a stale snapshot:
+Read the config, then call `.MustGet()` on the secret field to reveal the current plaintext. Because it re-reads the host on every call, a *rotated* secret is observed rather than a stale snapshot. `.Get()` returns `(T, error)` instead, for a secret that may be unavailable:
 
 ```go
 // Package impl is the IMPLEMENTATION of the API-client agent.
@@ -73,8 +73,8 @@ func init() {
 	agent.Handle(client.Connect, func(ctx *golem.Context[state], _ golem.Unit) string {
 		cfg := ctx.Config(client.Agent)
 
-		apiKey := cfg.APIKey.Get()      // reveals the current plaintext
-		dbPass := cfg.DB.Password.Get() // secret at any depth
+		apiKey := cfg.APIKey.MustGet()      // reveals the current plaintext
+		dbPass := cfg.DB.Password.MustGet() // secret at any depth
 
 		return fmt.Sprintf("connecting to %s (key len=%d, db host=%s, pw len=%d)",
 			cfg.Endpoint, len(apiKey), cfg.DB.Host, len(dbPass))
@@ -86,7 +86,7 @@ A `golem.Secret[T]` cannot be constructed from a plaintext: it comes from the ag
 
 ## Passing a Secret to Another Agent
 
-A `golem.Secret[T]` can be a field of a method's input or its result. It travels as a secret handle, never as plaintext, and the receiver reveals it with `.Get()`:
+A `golem.Secret[T]` can be a field of a method's input or its result. It travels as a secret handle, never as plaintext, and the receiver reveals it with `.Get()` / `.MustGet()`:
 
 ```go
 var Share = Agent.Method[golem.Unit, golem.Secret[string]]("share")
@@ -96,7 +96,7 @@ agent.Handle(Share, func(ctx *golem.Context[state], _ golem.Unit) golem.Secret[s
 })
 
 // in another agent
-key := client.Share.Call(client.Agent.Get(client.ID{Name: "keeper"}), golem.Unit{}).Get()
+key := client.Share.MustCall(client.Agent.Get(client.ID{Name: "keeper"}), golem.Unit{}).MustGet()
 ```
 
 A config secret can be sent again; a secret you received moves when you send it on, and the copy that was sent is unusable afterwards (`golem.ErrSecretMoved`). External clients cannot carry secrets.
@@ -137,9 +137,9 @@ golem secret delete apiKey
 ## Key Constraints
 
 - A secret is a **config field** of type `golem.Secret[T]` — the agent must be a configured agent (`DefineConfiguredAgent` / `ImplementConfigured`); see `golem-add-config-go`.
-- Only **`.Get()`** reveals the plaintext, and it re-reads the host each call, so a rotated value is observed without restarting the agent. Each reveal pins the resolved revision for deterministic retry/replay.
+- Only **`.Get()`** / **`.MustGet()`** reveal the plaintext, and it re-reads the host each call, so a rotated value is observed without restarting the agent. Each reveal pins the resolved revision for deterministic retry/replay.
 - Secret values are **never** written to `golem.yaml` except via `secretDefaults` (local dev). Production values come from the CLI, per environment.
-- A missing required secret fails agent creation/deployment. Read a secret from within an invocation only — `.Get()` calls the host, and a read failure panics (fails the agent).
+- A missing required secret fails agent creation/deployment. Read a secret from within an invocation only — `.Get()` calls the host. It returns an error when the secret is unavailable, its version is gone, or it was moved; `.MustGet()` panics instead, which traps the component (fails the agent), as in Rust.
 - Over RPC, secret fields are always platform-provisioned; `golem.WithConfig` overrides only **local** config, never secrets.
 
 ### Related Skills

@@ -215,7 +215,7 @@ func init() {
 
 	// Unstructured and multimodal content round-trips through another agent.
 	ops.Handle(Content, func(*golem.Context[opsState], golem.Unit) string {
-		out := EchoContent.Call(Source.Get(SourceID{Name: "content"}), ContentIn{
+		out := EchoContent.MustCall(Source.Get(SourceID{Name: "content"}), ContentIn{
 			Doc: golem.UnstructuredText[EnOrDe]{Text: "hallo", Language: "de"},
 			Media: golem.Multimodal{
 				golem.TextModality{Value: golem.UnstructuredText[golem.AnyLanguage]{URL: "https://example.com/a.txt"}},
@@ -237,7 +237,7 @@ func init() {
 			}
 			r.Commit(1)
 		}
-		child := Spend.Call(Source.Get(SourceID{Name: "quota"}), SpendIn{Token: tok.Split(1)})
+		child := Spend.MustCall(Source.Get(SourceID{Name: "quota"}), SpendIn{Token: tok.Split(1)})
 		_, err := tok.Reserve(1)
 		var failed *golem.FailedReservation
 		return fmt.Sprintf("%s|exhausted:%t", child, errors.As(err, &failed))
@@ -245,7 +245,7 @@ func init() {
 
 	// A secret received from another agent is revealed through the host.
 	ops.Handle(SharedKey, func(*golem.Context[opsState], golem.Unit) string {
-		return "revealed:" + Share.Call(Greeter.Get(GreeterID{Name: "keeper"}), golem.Unit{}).Get()
+		return "revealed:" + Share.MustCall(Greeter.Get(GreeterID{Name: "keeper"}), golem.Unit{}).MustGet()
 	})
 
 	ops.Handle(Sleepy, func(*golem.Context[opsState], golem.Unit) string {
@@ -258,7 +258,7 @@ func init() {
 		start := time.Now()
 		done := make(chan string, 1)
 		fut := Slow.CallAsync(Source.Get(SourceID{Name: "slow"}), golem.Unit{})
-		go func() { done <- fut.Get() }()
+		go func() { done <- fut.MustGet() }()
 		select {
 		case r := <-done:
 			return fmt.Sprintf("rpc-first:%s:%dms", r, time.Since(start).Milliseconds())
@@ -278,7 +278,7 @@ func init() {
 			return fmt.Sprintf("the wait ended with %v", err)
 		}
 		golem.CompletePromise(p.ID(), "late")
-		return "timed-out|" + p.Await()
+		return "timed-out|" + p.MustAwait()
 	})
 
 	// A reflected caller creates a configured agent with an override, calls it
@@ -313,11 +313,8 @@ func init() {
 
 	// A failed production must not reach the reader as a clean end.
 	ops.Handle(ReadFailing, func(*golem.Context[opsState], golem.Unit) string {
-		items, err := Failing.Call(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
-		if err == nil {
-			return fmt.Sprintf("clean-eof:%v", items)
-		}
-		return fmt.Sprintf("failed:%v", err)
+		items := Failing.MustCall(Source.Get(SourceID{Name: "s"}), golem.Unit{}).Collect()
+		return fmt.Sprintf("clean-eof:%v", items)
 	})
 
 	ops.Handle(Self, func(*golem.Context[opsState], golem.Unit) string {
@@ -329,7 +326,7 @@ func init() {
 	// retries converge.
 	ops.Handle(RetryUntil3, func(_ *golem.Context[opsState], in NameIn) int64 {
 		cp := durability.NewCheckpoint()
-		n := Increment.Call(counterClient(in.Name), golem.Unit{})
+		n := Increment.MustCall(counterClient(in.Name), golem.Unit{})
 		cp.AssertOrRevert(n >= 3)
 		return n
 	})
@@ -344,19 +341,19 @@ func init() {
 		if phantom == (golem.UUID{}) {
 			panic("fork returned no phantom id")
 		}
-		return "original+" + result.Await()
+		return "original+" + result.MustAwait()
 	})
 
 	ops.Handle(RevertOne, func(_ *golem.Context[opsState], in NameIn) int64 {
 		c := counterClient(in.Name)
-		Increment.Call(c, golem.Unit{})
-		Increment.Call(c, golem.Unit{})
+		Increment.MustCall(c, golem.Unit{})
+		Increment.MustCall(c, golem.Unit{})
 		id, ok := golem.ResolveAgentIDStrict("go-agent-ops:main", c.AgentID())
 		if !ok {
 			panic("the counter agent did not resolve")
 		}
 		golem.MustRevertAgent(id, golem.RevertLastInvocations(1))
-		return Value.Call(c, golem.Unit{})
+		return Value.MustCall(c, golem.Unit{})
 	})
 
 	ops.Handle(Counters, func(*golem.Context[opsState], golem.Unit) string {
@@ -374,10 +371,7 @@ func init() {
 	// finish a GC cycle inside cabi_realloc.
 	ops.Handle(Invocations, func(*golem.Context[opsState], golem.Unit) int64 {
 		var n int64
-		for e, err := range oplog.Get(golem.MustGetSelfMetadata().AgentID, 0) {
-			if err != nil {
-				panic(err)
-			}
+		for e := range oplog.MustGet(golem.MustGetSelfMetadata().AgentID, 0) {
 			if e.Tag() == oplog.AgentInvocationStarted {
 				n++
 			}

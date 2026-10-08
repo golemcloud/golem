@@ -65,22 +65,27 @@ func WithPhantomID(id UUID) ClientOpt {
 }
 
 // Get returns a client addressing the agent instance identified by id, or panics
-// if the target can't be resolved (unknown agent, a bad config override, or
-// invalid constructor parameters). Such a failure is a programming or
-// configuration error with no in-band recovery, so it panics rather than
-// returning an error; the panic surfaces to the caller as an agent-error.
+// if the target can't be resolved (a bad config override, or invalid
+// constructor parameters). The target is this component's own agent, so such a
+// failure is a programming or configuration error with no in-band recovery; the
+// panic traps the component, as in Rust.
 //
 // The id is encoded with the same codecs the target uses to decode its
 // constructor parameters — they are derived from the same Go types — so caller
 // and callee agree by construction rather than by convention.
 func (a *AgentDefinition[Id, Cfg]) Get(id Id, opts ...ClientOpt) Client[Id] {
-	return getClient[Id](defs, a.name, id, opts)
+	return Must(getClient[Id](defs, a.name, id, opts))
 }
 
 // getClient builds a client for an agent registered under name. It is shared by
 // the local ([AgentDefinition.Get]) and client ([FullAgentClient.Get]) paths,
 // which differ only in how the target was declared, never in how it is called.
-func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Client[Id] {
+//
+// Misuse — an unknown name, an ephemeral target without a phantom, an override
+// that does not match the declared config — panics. What only the host can
+// check (the constructor parameters, whether the target is deployed) is
+// returned as an error.
+func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Client[Id], error) {
 	e := d.agents[name]
 	if e == nil {
 		panic(fmt.Errorf("golem: Get: unknown agent %s", name))
@@ -110,7 +115,11 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Cli
 	// now than as an opaque not-found on the first call.
 	resolved := host.MakeAgentId(name, ctor, o.phantomID)
 	if resolved.IsErr() {
-		panic(fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(resolved.Err())))
+		return Client[Id]{}, fmt.Errorf("golem: Get %s: %w", name, agentErrorToGo(resolved.Err()))
+	}
+	created := host.WasmRpcCreate(name, ctor, o.phantomID, agentConfig)
+	if created.IsErr() {
+		return Client[Id]{}, rpcErrorToGo(name, "<constructor>", created.Err())
 	}
 
 	phantomID := None[UUID]()
@@ -118,11 +127,11 @@ func getClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Cli
 		phantomID = Some(uuidFromWit(o.phantomID.Some()))
 	}
 	return Client[Id]{
-		rpc:       host.MakeWasmRpc(name, ctor, o.phantomID, agentConfig),
+		rpc:       created.Ok(),
 		agentType: name,
 		agentID:   resolved.Ok(),
 		phantomID: phantomID,
-	}
+	}, nil
 }
 
 // requireIdentity refuses to address an ephemeral agent without a phantom: it
@@ -136,7 +145,7 @@ func requireIdentity(e *agentEntry, phantom bool) error {
 
 // newPhantomClient allocates a fresh phantom instance and returns a client for
 // it, shared by the local and remote paths.
-func newPhantomClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) Client[Id] {
+func newPhantomClient[Id any](d *definitions, name string, id Id, opts []ClientOpt) (Client[Id], error) {
 	phantom := uuidFromWit(apiHost.GenerateIdempotencyKey())
 	return getClient[Id](d, name, id, append(slices.Clone(opts), WithPhantomID(phantom)))
 }
@@ -150,9 +159,9 @@ func (a *AgentDefinition[Id, Cfg]) Bind(agentID string) (Client[Id], error) {
 }
 
 // AgentID renders the identity of the instance id (and phantom, if any)
-// names, without creating it.
-func (a *AgentDefinition[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) (string, error) {
-	return makeTypedAgentID[Id](defs, a.name, id, phantom)
+// names, without creating it. It panics on failure, like [AgentDefinition.Get].
+func (a *AgentDefinition[Id, Cfg]) AgentID(id Id, phantom Option[UUID]) string {
+	return Must(makeTypedAgentID[Id](defs, a.name, id, phantom))
 }
 
 // bindTypedClient binds an agent id to a definition: the id must name the
@@ -171,8 +180,8 @@ func bindTypedClient[Id any](d *definitions, name, agentID string) (Client[Id], 
 	return bindClient[Id](agentID)
 }
 
-// bindClient addresses the agent agentID names. The host parses the id;
-// nothing about the target is checked here.
+// bindClient addresses the agent agentID names. The host parses the id and
+// reports a target that is not deployed; nothing else about it is checked here.
 func bindClient[Id any](agentID string) (Client[Id], error) {
 	res := host.ParseAgentId(agentID)
 	if res.IsErr() {
@@ -183,8 +192,12 @@ func bindClient[Id any](agentID string) (Client[Id], error) {
 	if t.F2.IsSome() {
 		phantomID = Some(uuidFromWit(t.F2.Some()))
 	}
+	created := host.WasmRpcCreate(t.F0, t.F1.Value, t.F2, nil)
+	if created.IsErr() {
+		return Client[Id]{}, rpcErrorToGo(t.F0, "<bind>", created.Err())
+	}
 	return Client[Id]{
-		rpc:       host.MakeWasmRpc(t.F0, t.F1.Value, t.F2, nil),
+		rpc:       created.Ok(),
 		agentType: t.F0,
 		agentID:   agentID,
 		phantomID: phantomID,
@@ -217,7 +230,7 @@ func makeTypedAgentID[Id any](d *definitions, name string, id Id, phantom Option
 // Ephemeral agents have no durable identity, so this is the only way to obtain
 // a client for one.
 func (a *AgentDefinition[Id, Cfg]) NewPhantom(id Id, opts ...ClientOpt) Client[Id] {
-	return newPhantomClient[Id](defs, a.name, id, opts)
+	return Must(newPhantomClient[Id](defs, a.name, id, opts))
 }
 
 // AgentErrorKind classifies an [AgentError].
@@ -230,7 +243,7 @@ const (
 	AgentInvalidMethod
 	// AgentInvalidType means no such agent type exists.
 	AgentInvalidType
-	// AgentCustom means the agent failed (a returned error or a panic).
+	// AgentCustom means the agent reported a custom error.
 	AgentCustom
 	// AgentUnknown is an error kind the SDK does not recognize.
 	AgentUnknown
@@ -277,7 +290,7 @@ func agentErrorToGo(e common.AgentError) error {
 
 // customErrorMessage recovers the string payload the SDK encodes into the
 // custom-error case (see customError). Without this the TypedSchemaValue would
-// render as a struct dump, and — on the RPC path — a remote agent's panic message
+// render as a struct dump, and — on the RPC path — a remote agent's error message
 // would reach the caller as that dump. Non-string payloads fall back to %v.
 func customErrorMessage(tsv types.TypedSchemaValue) string {
 	nodes := tsv.Value.ValueNodes
