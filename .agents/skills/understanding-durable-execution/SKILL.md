@@ -918,8 +918,8 @@ lost_shard)`, one table of problem by column (`Periodic`, `ManualPending`, `Manu
 `InitialFiles`, `AutomaticPending`, `AssistedPending`, `AssistedPromoted`). It gives a
 `StartAction`: `FailUpdate { entry, reject }` with the entry already built from the paired queue
 element (attempt index, the snapshot-assisted details of the head, `snapshot_fault`, and the
-details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry`, `Succeed`
-or `ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
+details text with its stable code), `SkipPeriodic`, `RejectPeriodic`, `Error`, `Retry` or
+`ShardLost`. The sites only perform the action; `on_worker_update_failed` takes the built
 entry. After `FailUpdate` the start returns `RetryDecision::Immediate` and the outer loop rebuilds
 on the source revision. The details have the form `CODE: text: cause`, and the text says what to
 do next (`Code::prefix`), for example request the update again, or use a manual snapshot-based
