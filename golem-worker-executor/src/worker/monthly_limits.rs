@@ -1154,7 +1154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     async fn lock_for_outcome(
         &self,
-    ) -> Result<async_lock::MutexGuard<'_, super::WorkerInterruptState>, WorkerExecutorError> {
+    ) -> Result<super::interrupt::InterruptGuard<'_>, WorkerExecutorError> {
         loop {
             let interrupts = self.interrupt_signal.lock().await;
             if !matches!(&*interrupts,

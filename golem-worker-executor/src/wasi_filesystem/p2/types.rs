@@ -1617,6 +1617,7 @@ mod tests {
                 kind: ObjectKind::File,
                 link_count: 1,
                 size: 42,
+                read_only: true,
                 accessed: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(123)),
                 modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(456)),
             })),
