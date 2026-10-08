@@ -54,6 +54,16 @@ describe('direct flat-wire schema codecs', () => {
     expect(transforms).toBe(0);
   });
 
+  it('rejects sparse and typed-array results like ordinary list encoding', () => {
+    const codec = compileSchema(z.array(s.u8()));
+    const sparse = [7, 31];
+    delete sparse[1];
+    for (const value of [sparse, new Uint8Array([7, 31])]) {
+      expect(() => schemaValueToWit(codec.toValue(value))).toThrow();
+      expect(() => codec.invocationDirect!.write(value, new SchemaValueWriter())).toThrow();
+    }
+  });
+
   it('keeps nullish, optional, results and recursive shapes on their ordinary path', () => {
     const optional = compileSchema(z.object({ count: z.number().optional() }));
     expect(optional.invocationDirect).toBeUndefined();
@@ -94,6 +104,26 @@ describe('direct flat-wire schema codecs', () => {
     wire.valueNodes[1].val = [9];
     expect(() => invocationSchemaValueReader(wire)).toThrow(/out of range/);
     expect(() => schemaValueFromWit(wire)).toThrow(/out of range/);
+  });
+
+  it('preserves invocation interpretation of unexpected scalar tags and extra nested record fields', () => {
+    const codec = compileSchema(z.array(z.object({ name: z.string() })));
+    const wire = schemaValueToWit({
+      tag: 'list',
+      elements: [
+        {
+          tag: 'record',
+          fields: [
+            { tag: 'bool', value: true },
+            { tag: 'u8', value: 31 },
+          ],
+        },
+      ],
+    });
+    const reader = invocationSchemaValueReader(wire);
+    expect(codec.invocationDirect!.read(reader, wire.root)).toEqual(
+      codec.fromValue(schemaValueFromWit(wire)),
+    );
   });
 
   it('converts nested records, arrays, options, and results without generic model conversion', () => {
