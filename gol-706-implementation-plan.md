@@ -49,17 +49,84 @@ passes do not confer completion on the reduced implementation.
 | M5 | Final regression, scope and reproduction gate | DONE | Broad correctness evidence and unchanged published-pin isolated controls pass; full group4 timeout retained as residual risk; Oracle explicitly approves closure, final bug-finder clean |
 | M6 | Deliver reviewed change | DONE | Published locked pin/build, aligned docs, reviewed implementation pushed to existing drafts; exact results and residual risk recorded; merge/release remain separate |
 
-Current position: M0–M6 complete for authorized draft delivery under the approved
-RPC contract and disclosed final verification caveat below. The runtime
-is published at [4ff92c67](https://github.com/golemcloud/wasmtime/commit/4ff92c67b5eee08ff94460d6544c5d7a5c7ae0bf)
+Current position: M0–M6 and the Wasmtime review follow-up are complete for authorized
+draft delivery under the approved RPC contract and disclosed verification caveats.
+The currently verified runtime is published at
+[d853214](https://github.com/golemcloud/wasmtime/commit/d853214fa72f038344a266f2a7ee66a387144257)
 in [the companion draft PR](https://github.com/golemcloud/wasmtime/pull/9).
 The root manifest/lock pin that revision without local overrides or version drift.
-Golem implementation [afa31b101](https://github.com/golemcloud/golem/commit/afa31b101)
+Golem follow-up [aac940237](https://github.com/golemcloud/golem/commit/aac940237)
 is pushed to [draft PR #4062](https://github.com/golemcloud/golem/pull/4062).
 Merge/release remain unauthorized. Golem baseline is
 [`accae0e4`](https://github.com/golemcloud/golem/commit/accae0e435b5097cd1d7940a5c1f568bde8a055a).
 Prototype recovery files are in `tmp/gol706-reduction-20261005/`. Ignored binaries
 and WASMs may be stale; they are not baseline evidence.
+
+## Wasmtime review follow-up — VERIFIED AND PUSHED
+
+The user approved incorporating and verifying published fork revision
+[d853214fa72f038344a266f2a7ee66a387144257](https://github.com/golemcloud/wasmtime/commit/d853214fa72f038344a266f2a7ee66a387144257)
+from the independent PR9 review. This supersedes the earlier dependency pin;
+historical results remain labelled with their original source. There is no lifecycle
+or suspension-policy change.
+
+The production installation now propagates the fallible observer-installation error
+through the existing anyhow → WorkerExecutorError conversion; four unit-test
+installation sites assert success. Removing the runtime's `Unknown` activity kind
+needs no Golem classification change: every new runtime activity remains unknown
+until Golem explicitly classifies it. All 35 lockfile replacements are Git source
+changes, with no version/dependency drift or local override.
+
+Lock audit: the private owner mutex guards IDs and accounting metadata, never a
+Store, future or waker. RuntimeStore::drive releases it before polling; commit
+releases it before Notify; ExternalReceiveWake and RpcWake release accounting locks
+before forwarding wakes. RPC lock ordering is poll → owner, never the reverse.
+Store/driver/host destruction occurs outside these guards. Oracle agrees there is
+no identified owner-lock reentrancy cycle. The fork review clarified that short,
+independent bookkeeping critical sections and brief cross-participant contention
+are permitted; waiting for runtime progress, runtime re-entry and holding a lock
+across runtime poll/drop/wake are prohibited. Every notification remains synchronous;
+no invalidations are dropped or deferred. Its documentation-only clarification is
+not yet published; verification targets d853214 exactly.
+
+Added verification: the existing prepared-suspension test wakes from another OS
+thread; its parent waker asserts the owner lock is available and eligibility is
+already invalidated before wake forwarding. A new minimal component parks in a
+borrowed host fiber, then drops the driver and Store with the real RuntimeStore
+observer; the host drop guard checks lock availability and final activity cleanup.
+All follow-up gates pass against d853214 without local overrides:
+
+- Locked library/integration build: success, 36m08s (`build.log`).
+- Full executor units: 2659 passed, 8 existing ignored, 22.596s (`units.log`).
+- Both cross-thread wake and parked-fiber teardown regressions: pass, including
+  10 additional paired runs (`races-repeated.log`).
+- Targeted suspension integration: 25 passed, no ignored/failed, 434.634s
+  (`suspension-integration.log`). Covers P2/P3 timers and HTTP overlap, promises,
+  synchronous RPC veto, owned/unobserved async RPC, tool entities, durable stream
+  unload/reconstruction, replay and explicit interruption.
+- Seven original timing-sensitive regressions pass twice more: 7/7 in 101.752s
+  and 102.401s, giving three runs including the targeted suite
+  (`regressions-2.log`, `regressions-3.log`).
+- `cargo clippy --locked -p golem-worker-executor --lib --test integration
+  --no-deps -- -D warnings`: success, 11m09s (`clippy.log`).
+- `cargo test --locked -p golem-common --lib --
+  precompiled_components_are_compatible_across_engines --report-time`: 1 passed
+  (`engine-compatibility.log`).
+- Scoped formatting and whitespace checks pass. Cargo commands use
+  `CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0
+  CARGO_BUILD_JOBS=4`; logs are under `tmp/gol706-fork-followup/`.
+
+Oracle APPROVED/ON TRACK after resolving the contract wording; all its validation
+conditions are now met. Bug-finder `gol706-wasmtime-followup` run 1 is clean.
+Implementation and tests are committed and pushed as
+[aac940237](https://github.com/golemcloud/golem/commit/aac940237).
+These targeted results do not erase the earlier full-group4 timeout or the
+GOL-761/GOL-769 follow-ups; the full group4 suite was not repeated for this pin.
+
+The user will merge the Wasmtime PR and notify this thread. Only after that
+notification: switch to the usual fork-branch reference, merge latest Golem main,
+resolve conflicts and rerun affected checks before making PR4062 ready to merge.
+Neither merge has been performed here; Golem merge/release remains separate.
 
 ## M1 — establish what must change and where it integrates
 
