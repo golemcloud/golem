@@ -361,6 +361,160 @@ mod tests {
         }
     }
 
+    struct HashOutput(blake3::Hasher);
+
+    impl desert_rust::BinaryOutput for HashOutput {
+        fn write_u8(&mut self, value: u8) {
+            self.0.update(&[value]);
+        }
+
+        fn write_bytes(&mut self, bytes: &[u8]) {
+            self.0.update(bytes);
+        }
+    }
+
+    fn streamed_digest<T: desert_rust::BinarySerializer>(value: &T) -> [u8; 32] {
+        let output = desert_rust::serialize(value, HashOutput(blake3::Hasher::new())).unwrap();
+        *output.0.finalize().as_bytes()
+    }
+
+    #[test]
+    fn streamed_cache_digest_matches_materialized_bytes() {
+        for value in [
+            SchemaValue::U64(u64::MAX),
+            SchemaValue::String("quotes: \"; nul: \0; unicode: árvíz".to_string()),
+            multimodal(vec![
+                ("a", SchemaValue::F64(-0.0)),
+                ("b", SchemaValue::I64(i64::MIN)),
+            ]),
+            tuple(vec![SchemaValue::List {
+                elements: (0..10_000)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }]),
+        ] {
+            assert_eq!(
+                streamed_digest(&value),
+                digest_bytes(&canonicalize_schema_value(&value))
+            );
+        }
+        for p in [Principal::anonymous(), principal(17), principal(23)] {
+            assert_eq!(streamed_digest(&p), digest_bytes(&principal_bytes(&p)));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn profile_invocation_payload_passes() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        fn sample(mut f: impl FnMut(), iterations: u32) -> Vec<u128> {
+            for _ in 0..10 {
+                f();
+            }
+            let mut samples = Vec::new();
+            for _ in 0..7 {
+                let start = Instant::now();
+                for _ in 0..iterations {
+                    f();
+                }
+                samples.push(start.elapsed().as_nanos() / u128::from(iterations));
+            }
+            samples.sort_unstable();
+            samples
+        }
+
+        for size in [100, 10_000] {
+            let value = tuple(vec![SchemaValue::List {
+                elements: (0..size)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }]);
+            let shared = std::sync::Arc::new(value.clone());
+            let proto: golem_schema::proto::golem::schema::SchemaValue =
+                value.clone().try_into().unwrap();
+            let bytes = canonicalize_schema_value(&value);
+            println!(
+                "size={size} serialized_bytes={} protobuf_bytes={}",
+                bytes.len(),
+                prost::Message::encoded_len(&proto)
+            );
+            for (label, samples) in [
+                (
+                    "cache_vec_hash",
+                    sample(
+                        || {
+                            black_box(digest_bytes(&canonicalize_schema_value(black_box(&value))));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "cache_stream_hash",
+                    sample(
+                        || {
+                            black_box(streamed_digest(black_box(&value)));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "native_clone",
+                    sample(
+                        || {
+                            black_box(black_box(&value).clone());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "shared_clone",
+                    sample(
+                        || {
+                            black_box(black_box(&shared).clone());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "protobuf_clone_decode",
+                    sample(
+                        || {
+                            black_box(SchemaValue::try_from(black_box(&proto).clone()).unwrap());
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "protobuf_encoded_len",
+                    sample(
+                        || {
+                            black_box(prost::Message::encoded_len(black_box(&proto)));
+                        },
+                        100,
+                    ),
+                ),
+                (
+                    "output_clone_convert",
+                    sample(
+                        || {
+                            black_box(
+                                golem_schema::proto::golem::schema::SchemaValue::try_from(
+                                    black_box(&value).clone(),
+                                )
+                                .unwrap(),
+                            );
+                        },
+                        100,
+                    ),
+                ),
+            ] {
+                println!("{label} ns median={} samples={samples:?}", samples[3]);
+            }
+        }
+    }
+
     #[test]
     fn equal_inputs_produce_equal_keys() {
         let a = tuple(vec![SchemaValue::U32(1), SchemaValue::U32(2)]);

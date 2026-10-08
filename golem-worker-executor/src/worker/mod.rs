@@ -5268,12 +5268,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         key: &IdempotencyKey,
         output: AgentInvocationOutput,
     ) {
+        let cached = InvocationResult::Cached {
+            result: Ok(output.clone()),
+        };
         let mut map = self.hydrated_invocation_results.write().await;
         map.insert(
             key.clone(),
-            InvocationResult::Cached {
-                result: Ok(output.clone()),
-            },
+            cached,
             self.last_known_status
                 .load()
                 .invocation_results
@@ -9672,9 +9673,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else if let Some(oplog_idx) = status.invocation_results.get(key) {
             crate::metrics::workers::record_invocation_result_resolution("memory_exact");
             Some((
-                InvocationResult::Lazy {
+                Arc::new(InvocationResult::Lazy {
                     oplog_idx: *oplog_idx,
-                },
+                }),
                 *oplog_idx,
             ))
         } else if status.invocation_results.is_exact_complete() {
@@ -9686,24 +9687,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } else {
             self.resolve_old_invocation_result_index(&status, key)
                 .await
-                .map(|oplog_idx| (InvocationResult::Lazy { oplog_idx }, oplog_idx))
+                .map(|oplog_idx| (Arc::new(InvocationResult::Lazy { oplog_idx }), oplog_idx))
         };
         if let Some((mut result, result_oplog_idx)) = maybe_result {
-            result
-                .cache(
-                    &self.owned_agent_id,
-                    self.agent_mode(),
-                    self.initial_worker_metadata.fingerprint,
-                    self,
-                )
-                .await;
+            if matches!(result.as_ref(), InvocationResult::Lazy { .. }) {
+                Arc::make_mut(&mut result)
+                    .cache(
+                        &self.owned_agent_id,
+                        self.agent_mode(),
+                        self.initial_worker_metadata.fingerprint,
+                        self,
+                    )
+                    .await;
+            }
             self.hydrated_invocation_results.write().await.insert(
                 key.clone(),
                 result.clone(),
                 status.invocation_results.revert_generation(),
                 result_oplog_idx,
             );
-            lookup_result_from_cached_result(&status, key, result)
+            lookup_result_from_cached_result(&status, key, Arc::unwrap_or_clone(result))
         } else {
             let is_pending = status
                 .pending_invocations
@@ -12874,7 +12877,7 @@ struct HydratedInvocationResultCache {
 }
 
 struct HydratedInvocationResultCacheEntry {
-    result: InvocationResult,
+    result: Arc<InvocationResult>,
     /// Oplog branch generation in which this result was produced.
     revert_generation: u64,
     oplog_idx: OplogIndex,
@@ -12893,7 +12896,7 @@ impl HydratedInvocationResultCache {
         &self,
         key: &IdempotencyKey,
         status: &AgentStatusRecord,
-    ) -> Option<(&InvocationResult, OplogIndex)> {
+    ) -> Option<(&Arc<InvocationResult>, OplogIndex)> {
         self.values.get(key).and_then(|entry| {
             (entry.revert_generation == status.invocation_results.revert_generation()
                 && !status.deleted_regions.is_in_deleted_region(entry.oplog_idx))
@@ -12909,7 +12912,7 @@ impl HydratedInvocationResultCache {
     fn insert(
         &mut self,
         key: IdempotencyKey,
-        value: InvocationResult,
+        value: impl Into<Arc<InvocationResult>>,
         revert_generation: u64,
         oplog_idx: OplogIndex,
     ) {
@@ -12919,7 +12922,7 @@ impl HydratedInvocationResultCache {
         self.values.insert(
             key,
             HydratedInvocationResultCacheEntry {
-                result: value,
+                result: value.into(),
                 revert_generation,
                 oplog_idx,
             },
@@ -14060,6 +14063,63 @@ mod tests {
 
         assert!(!cache.contains_key(&first));
         assert!(cache.contains_key(&second));
+    }
+
+    #[test]
+    fn hydrated_invocation_results_share_payloads_but_reject_deleted_branches() {
+        let key = IdempotencyKey::new("shared-result".to_string());
+        let index = OplogIndex::from_u64(4);
+        let status = AgentStatusRecord::default();
+        let generation = status.invocation_results.revert_generation();
+        let result = Arc::new(InvocationResult::Cached {
+            result: Ok(AgentInvocationOutput {
+                result: AgentInvocationResult::AgentMethod {
+                    output: SchemaValue::List {
+                        elements: (0..10_000)
+                            .map(|i| SchemaValue::U8((i % 251) as u8))
+                            .collect(),
+                    },
+                },
+                consumed_fuel: Some(123),
+                invocation_status: None,
+                component_revision: Some(ComponentRevision::INITIAL),
+                agent_id: None,
+                idempotency_key: Some(key.clone()),
+                oplog_index: Some(index),
+                agent_fingerprint: None,
+            }),
+        });
+        let mut cache = HydratedInvocationResultCache::new(1);
+        cache.insert(key.clone(), result.clone(), generation, index);
+        let (first, found_index) = cache.get_valid(&key, &status).unwrap();
+        assert_eq!(found_index, index);
+        assert!(Arc::ptr_eq(first, &result));
+        let follower = first.clone();
+        cache.insert(key.clone(), follower.clone(), generation, index);
+        assert!(Arc::ptr_eq(
+            cache.get_valid(&key, &status).unwrap().0,
+            &follower
+        ));
+
+        cache.insert(key.clone(), result.clone(), generation + 1, index);
+        assert!(cache.get_valid(&key, &status).is_none());
+        cache.remove(&key);
+        assert!(cache.get_valid(&key, &status).is_none());
+        match lookup_result_from_cached_result(&status, &key, Arc::unwrap_or_clone(follower)) {
+            LookupResult::Complete(Ok(output)) => {
+                assert_eq!(output.consumed_fuel, Some(123));
+                assert_eq!(output.oplog_index, Some(index));
+                let AgentInvocationResult::AgentMethod { output } = output.result else {
+                    panic!("expected method result");
+                };
+                let SchemaValue::List { elements } = output else {
+                    panic!("expected list output");
+                };
+                assert_eq!(elements.len(), 10_000);
+                assert_eq!(elements[9_999], SchemaValue::U8(210));
+            }
+            other => panic!("expected completed result, got {other:?}"),
+        }
     }
 
     #[test]
