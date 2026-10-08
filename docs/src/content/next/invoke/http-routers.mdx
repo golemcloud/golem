@@ -18,7 +18,7 @@ Define a router with a unique type name and a literal mount path. This `EchoRout
 streams an upload back to the caller at `/echo`.
 It does not collect the upload into memory or calculate its length first.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { defineHttpRouter } from '@golemcloud/golem-ts-sdk';
@@ -149,6 +149,32 @@ Import `golemcloud/golem_sdk/http` and `golemcloud/golem_sdk/schema` in the
 component's `moon.pkg`. Build through `golem build` so it generates registration
 and schema code before compiling.
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+package routers
+
+import (
+	"io"
+	"net/http"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+var EchoRouter = golem.DefineHTTPRouter(golem.RouterSpec{Name: "EchoRouter", Mount: "/echo"})
+
+func init() {
+	EchoRouter.Handle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(w, r.Body)
+	}))
+}
+```
+
+`Handle` accepts any `http.Handler`, so an `http.ServeMux`, a third-party router, or an
+existing service can serve the mount. The handler sees `r.URL.Path` as the full public
+path; wrap it in `http.StripPrefix("/echo", ...)` to route relative to the mount. Blank-import
+the package from the component's `main.go`. For the original, unnormalized HTTP envelope,
+use `HandleRaw` instead; see [Working with headers](#working-with-headers).
+</Tabs.Tab>
 </Tabs>
 
 Merge this deployment into your application's manifest:
@@ -182,7 +208,7 @@ explains when a code-first endpoint or file mapping takes priority over the hand
 Keep repeated headers separate, especially `Set-Cookie`. The raw APIs use lowercase
 names and byte-valued fields. For example, add two cookies to a streaming response:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 The Web adapter already preserves separate `Set-Cookie` fields. For byte-valued
 or strictly ordered fields, import `withRawHeaders` from `@golemcloud/golem-ts-sdk`
@@ -262,6 +288,31 @@ headers: [
 ],
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+Add both fields before the handler writes the body:
+
+```go
+w.Header().Add("Set-Cookie", "first=one")
+w.Header().Add("Set-Cookie", "second=two")
+```
+
+Repeated fields stay separate and names are sent lowercase. For byte-valued or strictly
+ordered fields, register a raw handler instead of `Handle` (a router has one handler);
+it also needs the `context` import:
+
+```go
+EchoRouter.HandleRaw(func(ctx context.Context, req golem.HTTPRequest) golem.HTTPResponse {
+	return golem.HTTPResponse{
+		Status: 200,
+		Headers: []golem.HTTPHeader{
+			{Name: "set-cookie", Value: []byte("first=one")},
+			{Name: "set-cookie", Value: []byte("second=two")},
+		},
+		Body: req.Body,
+	}
+})
+```
+</Tabs.Tab>
 </Tabs>
 
 Let Golem handle transfer framing. Omit `Content-Length` unless you know the exact
@@ -275,7 +326,7 @@ bodyless responses and the distinction between EOF and invocation success.
 Create a router with file mappings and no handler. This `StaticRouter` serves an
 explicit index at `/static` and assets below `/static/assets/`:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { defineHttpRouter } from '@golemcloud/golem-ts-sdk';
@@ -352,6 +403,20 @@ struct StaticRouter {}
 fn StaticRouter::new() -> StaticRouter { StaticRouter::{ } }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+var StaticRouter = golem.DefineHTTPRouter(golem.RouterSpec{
+	Name:  "StaticRouter",
+	Mount: "/static",
+	StaticFiles: []golem.FileMapping{
+		{Route: "/", Path: "/public/index.html"},
+		{Route: "/assets/*", Path: "/public/assets/$1"},
+	},
+})
+```
+
+A static-only router registers no handler.
+</Tabs.Tab>
 </Tabs>
 
 Create `index.html` and `message.txt` beside `golem.yaml`. Provision them as
@@ -411,7 +476,7 @@ Use a normal durable agent when files are created or modified at runtime. Bind i
 constructor parameters in the mount and expose only the desired files. This
 `FileOwner` creates `/value.txt` during initialization and overwrites it on `update`:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { defineAgent, http, method } from '@golemcloud/golem-ts-sdk';
@@ -554,6 +619,49 @@ pub async fn FileOwner::update(_self : Self) -> String {
 
 Import `golemcloud/golem_sdk/filesystem` as `@fs` in `moon.pkg`.
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+package fileowner
+
+import (
+	"os"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type FileOwnerID struct{ Name string }
+
+var FileOwner = golem.DefineAgent[FileOwnerID](golem.Spec{
+	Name: "FileOwner",
+	HTTP: &golem.Mount{
+		Path:        "/files/{name}",
+		ExposeFiles: []golem.FileMapping{{Route: "/value", Path: "/value.txt"}},
+	},
+})
+
+var Update = FileOwner.Method[golem.Unit, string]("update")
+
+type state struct{}
+
+func init() {
+	impl := FileOwner.Implement(func(id FileOwnerID) *state {
+		if err := os.WriteFile("/value.txt", []byte("initial:"+id.Name), 0o644); err != nil {
+			panic(err)
+		}
+		return &state{}
+	})
+	impl.Handle(Update, func(_ *golem.Context[state], _ golem.Unit) string {
+		if err := os.WriteFile("/value.txt", []byte("updated"), 0o644); err != nil {
+			panic(err)
+		}
+		return "updated"
+	})
+}
+```
+
+The definition and implementation share one package here for brevity; usually they
+live in a definition package and its `impl` package.
+</Tabs.Tab>
 </Tabs>
 
 Add `FileOwner: {}` beside the routers in the deployment's `agents` map, then:
@@ -576,7 +684,7 @@ Call ordinary agents through the same clients used for
 [agent-to-agent communication](/next/develop/rpc). For example, inside an async
 handler, update the file owner before constructing the response:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 await FileOwner.client.get({ name: 'from-router' }).update();
@@ -617,6 +725,13 @@ defer owner.drop()
 owner.update() |> ignore
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+Inside the handler, before writing the response:
+
+```go
+fileowner.Update.Call(fileowner.FileOwner.Get(fileowner.FileOwnerID{Name: "from-router"}), golem.Unit{})
+```
+</Tabs.Tab>
 </Tabs>
 
 For cross-component calls, declare the dependency and generate its client as described
@@ -631,7 +746,7 @@ Add an OpenAPI provider to describe your router's operations. For `EchoRouter`,
 describe `POST /` relative to its mount; Golem publishes it as `POST /echo`.
 The provider must return OpenAPI 3.1.0, not an OpenAPI 3.0 or YAML document.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 Insert this before `.implement(...)`; the SDK serializes the returned object:
 
@@ -777,6 +892,22 @@ pub fn EchoRouter::describe(
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+Register a provider beside the handler in `init`, importing `context`:
+
+```go
+EchoRouter.OpenAPI(func(ctx context.Context) string {
+	return `{
+		"openapi": "3.1.0",
+		"info": {"title": "Echo API", "version": "1"},
+		"paths": {"/": {"post": {
+			"operationId": "echo",
+			"responses": {"200": {"description": "Streamed request bytes"}}
+		}}}
+	}`
+})
+```
+</Tabs.Tab>
 </Tabs>
 
 Keep providers finite and deterministic. Use unique component names and operation
@@ -809,7 +940,7 @@ Configure authentication and CORS on the **router mount**, not its handler metho
 Use the same [security scheme configuration](/next/invoke/making-custom-apis/authentication)
 as code-first endpoints. The router declarations accept these options:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 .mount('/echo', { auth: true, cors: ['https://app.example.com'] })
@@ -843,6 +974,18 @@ Add these annotations to the router struct:
 ```moonbit
 #derive.mount_auth(true)
 #derive.mount_cors("https://app.example.com")
+```
+</Tabs.Tab>
+<Tabs.Tab>
+Set these fields on the router's `RouterSpec`:
+
+```go
+var EchoRouter = golem.DefineHTTPRouter(golem.RouterSpec{
+	Name:  "EchoRouter",
+	Mount: "/echo",
+	Auth:  true,
+	CORS:  []string{"https://app.example.com"},
+})
 ```
 </Tabs.Tab>
 </Tabs>

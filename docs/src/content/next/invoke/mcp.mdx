@@ -103,7 +103,7 @@ Singleton agents (those with no constructor parameters) expose parameterless met
 
 Method descriptions and prompt hints become MCP tool and resource metadata, helping AI models understand what each tool does and how to use it. TypeScript defines them with the `description` and `promptHint` properties of `method(...)`; other SDKs use the corresponding language-specific annotations.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -186,6 +186,25 @@ trait CounterAgent extends BaseAgent {
 pub fn CounterAgent::increment_by(self : Self, value : UInt64) -> UInt64 {
   // ...
 }
+```
+</Tabs.Tab>
+<Tabs.Tab>
+In Go, the `golem.Desc` and `golem.PromptHint` method options set the description and the prompt hint.
+
+```go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+type IncrementByIn struct{ Value uint64 }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+var IncrementBy = Agent.Method[IncrementByIn, uint64]("incrementBy",
+    golem.Desc("Add a value to the current counter"),
+    golem.PromptHint("Increments the counter by the given value and returns the new count"))
 ```
 </Tabs.Tab>
 </Tabs>

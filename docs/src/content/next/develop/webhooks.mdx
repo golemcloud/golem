@@ -23,7 +23,7 @@ To use webhooks, your agent must:
 
 ### Creating a webhook
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         To create a webhook, call `createWebhook`. The returned object provides the public URL and can be awaited to receive the incoming payload:
 
@@ -125,6 +125,25 @@ To use webhooks, your agent must:
         }
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        To create a webhook, call `golem.NewWebhook[T]()`. `URL()` returns the public URL, and `Await()` suspends until the POST arrives and returns the request body decoded as `T` (JSON, or the raw bytes when `T` is `[]byte`):
+
+        ```go
+        import "github.com/golemcloud/golem/sdks/go/golem"
+
+        type MyEvent struct {
+            Action     string `json:"action"`
+            ResourceID string `json:"resourceId"`
+        }
+
+        func waitForCallback(sendURL func(url string)) MyEvent {
+            webhook := golem.NewWebhook[MyEvent]()
+            // Send the URL to the external system to POST to
+            sendURL(webhook.URL())
+            return webhook.Await()
+        }
+        ```
+    </Tabs.Tab>
 </Tabs>
 
 ### Webhook URL structure
@@ -144,7 +163,7 @@ When a webhook is created, Golem generates a URL with the following format:
 
 You can customize the webhook URL suffix using the `webhookSuffix` annotation on your agent:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In the TypeScript SDK the suffix is passed as the `webhookSuffix` option of `http.mount(...)` on `defineAgent(...)`:
 
@@ -195,6 +214,18 @@ You can customize the webhook URL suffix using the `webhookSuffix` annotation on
         ```moonbit
         #derive.mount("/workflow/{id}")
         #derive.mount_webhook("/workflow-hooks")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        In the Go SDK the suffix is the `WebhookSuffix` field of the agent's `golem.Mount`. It must consist of literal path segments only:
+
+        ```go
+        type ID struct{ Id string }
+
+        var Agent = golem.DefineAgent[ID](golem.Spec{
+            Name: "WorkflowAgent",
+            HTTP: &golem.Mount{Path: "/workflow/{id}", WebhookSuffix: "/workflow-hooks"},
+        })
         ```
     </Tabs.Tab>
 </Tabs>

@@ -8,7 +8,7 @@ This page shows how to define, test, bind, publish, and consume a [Golem-native 
 
 The SDKs project the same model: a command tree, inherited global options and flags, command bodies, typed results, declared errors, and optional stdin/stdout/stderr byte streams.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -116,6 +116,35 @@ pub fn Files::read(path : String) -> Result[String, FileError] {
 
 Use `@asyncCore.Stream[Byte]` for stdin and `@tool.ProviderOutput` for outputs. An unannotated provider output is stdout; select stderr with `#derive.arg("parameter-name", channel="stderr")`.
   </Tabs.Tab>
+  <Tabs.Tab>
+```go
+import (
+    "github.com/golemcloud/golem/sdks/go/golem"
+    "github.com/golemcloud/golem/sdks/go/golem/tool"
+)
+
+type Files struct{}
+
+var Tool = tool.DefineTool[Files]("files", tool.Spec{Version: "1.0.0"})
+
+var ErrNotFound = tool.DefineToolError[golem.Unit](Tool, "not-found", tool.ErrorSpec{
+    Kind: tool.RuntimeError, ExitCode: 2,
+})
+
+type ReadArgs struct{ Path string }
+
+var Read = Tool.Command[ReadArgs, string]("read", func(a *ReadArgs, s *tool.CommandSpec) {
+    s.Positional(&a.Path)
+    s.Raises(ErrNotFound)
+})
+
+var _ = Read.Handle(func(_ *tool.Context, a ReadArgs) (string, error) {
+    return a.Path, nil
+})
+```
+
+Return a declared error with `ErrNotFound.New(golem.Unit{})`. Declare a command with `Tool.OutputCommand` and `s.Stdout()` / `s.Stderr()` to write stdout and stderr, and bind an `io.Reader` field with `s.Stdin` for stdin.
+  </Tabs.Tab>
 </Tabs>
 
 ## Model commands precisely
@@ -134,7 +163,7 @@ The command tree is metadata, not a spawned shell. A component cannot currently 
 
 ## Call through a typed client
 
-Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, and MoonBit code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
+Definition-owned clients preserve the command tree and schemas. TypeScript uses `definition.client()`, Effect uses `Tool.client(definition)`, and the Rust, Scala, MoonBit, and Go code generators project equivalent clients. For a tool implemented in another component or language, add it to bridge generation:
 
 ```yaml filename="golem.yaml"
 bridge:
@@ -174,7 +203,7 @@ export const safeFiles = files.middleware({
 });
 ```
 
-Effect exports typed and universal middleware from `@golemcloud/effect-golem/middleware`. Rust, Scala, and MoonBit expose the same runtime middleware contract through their SDK authoring forms. Binding and traversal are separate: registering middleware in a component does not attach it to any call.
+Effect exports typed and universal middleware from `@golemcloud/effect-golem/middleware`. Rust, Scala, MoonBit, and Go expose the same runtime middleware contract through their SDK authoring forms. Binding and traversal are separate: registering middleware in a component does not attach it to any call.
 
 ## Declare and bind
 
@@ -221,7 +250,7 @@ toolReleases:
     files: {}
 ```
 
-The published version comes from the tool's discovered metadata. The Effect SDK currently emits tool metadata version `0.1.0`; its `toolDefinition` does not expose a version option. The `1.0.0` consumer below therefore applies to the TypeScript, Rust, Scala, and MoonBit definitions shown above.
+The published version comes from the tool's discovered metadata. The Effect SDK currently emits tool metadata version `0.1.0`; its `toolDefinition` does not expose a version option. The `1.0.0` consumer below therefore applies to the TypeScript, Rust, Scala, MoonBit, and Go definitions shown above.
 
 A consumer selects an exact release and supplies its own configuration:
 

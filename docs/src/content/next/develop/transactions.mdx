@@ -15,9 +15,9 @@ The SDK provides support for two different types of transactions:
 
 Many times external operations (such as HTTP calls to remote hosts) need to be executed transactionally. If some operations failed, the transaction needs to be rolled back; compensation actions need to undo whatever the already successfully performed operations did.
 
-A **fallible transaction** deals with domain errors. Successful steps register compensations. Propagating a domain error out of the transaction body triggers these compensations in reverse order; handling the error inside the body does not automatically trigger rollback. The failing step has no registered compensation. TypeScript, Rust and Scala stop at the first compensation error and report partial rollback. Effect's `withFallibleCompensation` continues the remaining compensations and reports the first compensation error.
+A **fallible transaction** deals with domain errors. Successful steps register compensations. Propagating a domain error out of the transaction body triggers these compensations in reverse order; handling the error inside the body does not automatically trigger rollback. The failing step has no registered compensation. TypeScript, Rust, Scala and Go stop at the first compensation error and report partial rollback. Effect's `withFallibleCompensation` continues the remaining compensations and reports the first compensation error.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In TypeScript, a fallible saga can be executed using the async `fallibleSaga` function, by
         passing an async callback that can execute operations on the open transaction (see below).
@@ -39,13 +39,20 @@ A **fallible transaction** deals with domain errors. Successful steps register c
         the same pattern manually by combining lower-level durability helpers such as `with_atomic_operation` with
         explicit compensation logic for the operations you need to roll back.
     </Tabs.Tab>
+    <Tabs.Tab>
+        In Go, a fallible transaction can be executed using the `transaction.Fallible` function of the
+        `github.com/golemcloud/golem/sdks/go/golem/transaction` package, by passing a function that can execute
+        operations on the open transaction (see below). A domain error returned from the body triggers the
+        compensations, and the transaction returns a `transaction.Failure[E]`; rollback stops at the first
+        compensation error, which is reported in its `CompensationFailure` field.
+    </Tabs.Tab>
 </Tabs>
 
 ### Infallible transactions
 
 In an infallible transaction, a propagated domain error runs compensations and then rewinds for an immediate, retry-policy-independent restart. Unexpected failures follow host recovery semantics and do not guarantee compensation. In Effect, interruption triggers compensation: the fallible helper propagates the interruption, while the infallible helper rewinds.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         In TypeScript, an infallible saga can be executed using the async `infallibleSaga` function, by
         passing an async callback that can execute operations on the open transaction (see below).
@@ -68,6 +75,11 @@ In an infallible transaction, a propagated domain error runs compensations and t
         `with_atomic_operation`, and rewinding with `set_oplog_index` after running compensations so the whole
         transaction is retried from the saved checkpoint.
     </Tabs.Tab>
+    <Tabs.Tab>
+        In Go, an infallible transaction can be executed using the `transaction.Infallible` function, by passing a
+        function that can execute operations on the open transaction (see below). It returns the plain result
+        value. If a compensation fails while rolling back for the retry, the transaction panics.
+    </Tabs.Tab>
 </Tabs>
 
 ### Operations
@@ -76,7 +88,7 @@ Both transaction types require the definition of **operations**.
 
 It is defined with the following interface:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         ```typescript
         /**
@@ -232,13 +244,34 @@ It is defined with the following interface:
 
     </Tabs.Tab>
 
+    <Tabs.Tab>
+        ```go
+        // Operation is a compensable step: an action paired with the rollback to undo it.
+        // compensate receives both the original input and the output execute produced.
+        type Operation[In, Out, E any] struct {
+            // unexported fields
+        }
+        ```
+
+        An operation is created with `transaction.NewOperation` from a pair of functions. Domain errors are
+        the error arm of a `golem.Result`:
+
+        ```go
+        func NewOperation[In, Out, E any](
+            execute func(In) golem.Result[Out, E],
+            compensate func(In, Out) golem.Result[golem.Unit, E],
+        ) Operation[In, Out, E]
+        ```
+
+    </Tabs.Tab>
+
 </Tabs>
 
 ### Executing operations
 
 The defined operations can be executed in _fallible_ or _infallible_ mode:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     import { compensable, fallibleSaga, infallibleSaga, Result } from "@golemcloud/golem-ts-sdk"
@@ -404,5 +437,59 @@ The defined operations can be executed in _fallible_ or _infallible_ mode:
     ```
 
     Per-step atomic regions do not undo external effects and do not by themselves make the whole sequence crash-atomic. External operations must be idempotent. A stronger crash-reexecution guarantee requires an enclosing atomic region and application-specific handling of compensation failures.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    ```go
+    import (
+        "fmt"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+        "github.com/golemcloud/golem/sdks/go/golem/transaction"
+    )
+
+    // example operation with compensation
+    var op = transaction.NewOperation(
+        func(idx int32) golem.Result[string, string] {
+            // the operation / side effect
+            return golem.Ok[string, string](fmt.Sprintf("id-%d", idx))
+        },
+        func(idx int32, id string) golem.Result[golem.Unit, string] {
+            // compensation
+            fmt.Printf("reverting %s, %d\n", id, idx)
+            return golem.Ok[golem.Unit, string](golem.Unit{})
+        },
+    )
+
+    type Pair = golem.Tuple2[string, string]
+
+    // With Fallible, errors are propagated using golem.Result.
+    resultFallible := transaction.Fallible(func(tx *transaction.Tx[string]) golem.Result[Pair, string] {
+        firstID := tx.Step(op, 1)
+        if firstID.IsErr() {
+            return golem.Err[Pair, string](firstID.Err())
+        }
+        secondID := tx.Step(op, 2)
+        if secondID.IsErr() {
+            return golem.Err[Pair, string](secondID.Err())
+        }
+        return golem.Ok[Pair, string](Pair{A: firstID.Ok(), B: secondID.Ok()})
+    })
+
+    // With Infallible, a returned error compensates and retries the whole transaction.
+    resultInfallible := transaction.Infallible(func(tx *transaction.Tx[string]) golem.Result[Pair, string] {
+        firstID := tx.Step(op, 1)
+        if firstID.IsErr() {
+            return golem.Err[Pair, string](firstID.Err())
+        }
+        secondID := tx.Step(op, 2)
+        if secondID.IsErr() {
+            return golem.Err[Pair, string](secondID.Err())
+        }
+        return golem.Ok[Pair, string](Pair{A: firstID.Ok(), B: secondID.Ok()})
+    })
+    ```
+
+    `resultFallible` is a `golem.Result[Pair, transaction.Failure[string]]`, and `resultInfallible` is the plain
+    `Pair`. The steps of a transaction run inside an atomic region, in which an outgoing `net/http` request does not currently complete; perform such external calls through RPC to another agent that owns the HTTP request.
     </Tabs.Tab>
 </Tabs>

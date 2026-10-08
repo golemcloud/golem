@@ -146,11 +146,7 @@ func run(ctx context.Context) error {
 
 Generated clients preserve streams wherever they occur in a method's typed input or output, including nested values and multiple sibling streams. The examples below assume a `MediaAgent` with input-only `upload`, output-only `transcribe`, and mixed `transform` methods. The generated method names and parameter order follow the agent definition; there is no separate streaming method suffix.
 
-<Callout type="info">
-Go clients do not include stream-bearing methods yet: the rest of the agent's client is generated, the generated client's documentation names the methods it leaves out, and `golem build` warns about them.
-</Callout>
-
-<Tabs items={["Rust", "TypeScript", "Effect TypeScript", "Scala", "MoonBit"]} storageKey="bridge-streaming-languages-effect">
+<Tabs items={["Rust", "TypeScript", "Effect TypeScript", "Scala", "MoonBit", "Go"]} storageKey="bridge-streaming-languages-effect">
 <Tabs.Tab>
 ```rust
 use futures_util::{stream, StreamExt};
@@ -304,6 +300,63 @@ async fn main {
 
 An `AgentStream` allows only one reader and one outstanding `next()` call. After an input stream is passed to an invocation, client code can no longer read or cancel it.
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/golemcloud/golem/sdks/go/bridge"
+	client "golem.local/bridge/media-agent-client"
+)
+
+func run(ctx context.Context) error {
+	if err := bridge.Configure(bridge.Configuration{
+		Server: bridge.Local(), AppName: "media-app", EnvName: "prod",
+	}); err != nil {
+		return err
+	}
+	agent, err := client.GetMediaAgent(client.MediaAgentId{Name: "studio-a"})
+	if err != nil {
+		return err
+	}
+
+	// Input-only: a stream passed to a method is given away to the invocation.
+	if err := agent.Upload(ctx, bridge.StreamOf[uint8](1, 2)); err != nil {
+		return err
+	}
+
+	// Output-only.
+	words, err := agent.Transcribe(ctx)
+	if err != nil {
+		return err
+	}
+	for word, err := range words.All(ctx) {
+		if err != nil {
+			return err
+		}
+		fmt.Println(word)
+	}
+
+	// Mixed: ProduceStream writes the input from its own goroutine.
+	input := bridge.ProduceStream(func(w *bridge.AgentStreamWriter[uint8]) error {
+		return w.Write(10)
+	})
+	output, err := agent.Transform(ctx, input)
+	if err != nil {
+		return err
+	}
+	if first, ok, err := output.Next(ctx); err != nil {
+		return err
+	} else if ok {
+		fmt.Println(first)
+	}
+	return output.Close() // Closing an unread output sends consumer-drop cancellation.
+}
+```
+
+A stream is read once: reading it again after passing it to a method, or passing it twice, fails with `bridge.ErrStreamConsumed`. A returned stream ends with a `*bridge.StreamError` when the producer failed, or a `*bridge.StreamCancelled` when either side cancelled it.
+</Tabs.Tab>
 </Tabs>
 
 ### Raw binary lanes
@@ -405,7 +458,7 @@ This feature is the generated external bridge and CLI **invocation-session WebSo
 
 ## Configuration Options
 
-The TypeScript, Effect TypeScript, Rust, Scala and MoonBit bridge libraries require three configuration parameters:
+The TypeScript, Effect TypeScript, Rust, Scala, MoonBit and Go bridge libraries require three configuration parameters:
 
 | Parameter | Description |
 |-----------|-------------|

@@ -6,7 +6,7 @@ import { Tabs } from "nextra/components"
 
 Golem's **command line interface** provides a set of predefined, Golem-specific **templates** to choose from as a starting point.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To get started from scratch, first create a new application using the TypeScript template:
 
@@ -52,6 +52,15 @@ cd my-app
 ```
     </Tabs.Tab>
 
+    <Tabs.Tab>
+To get started from scratch, first create a new application using the Go template:
+
+```shell copy
+golem new --template go --yes my-app
+cd my-app
+```
+    </Tabs.Tab>
+
 </Tabs>
 
 An application can consist of multiple components. Add a new component by choosing from one of the available templates. To see the list of available templates, run:
@@ -62,7 +71,7 @@ golem templates
 
 Then create a new component using the chosen template:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```shell copy
 golem new . --template ts --component-name my:component --yes
@@ -90,6 +99,12 @@ golem new . --template scala --component-name my:component --yes
     <Tabs.Tab>
 ```shell copy
 golem new . --template moonbit --component-name my:component --yes
+```
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+```shell copy
+golem new . --template go --component-name my:component --yes
 ```
     </Tabs.Tab>
 </Tabs>
@@ -121,7 +136,7 @@ checks. Invocation-scoped underlying access still advances the pinned middleware
 
 Defining Golem agents is done using the Golem SDK, which is included in all the templates provided by `golem`.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 An agent is declared with `defineAgent(...)` and given its behaviour with `.implement(...)`:
 
@@ -225,6 +240,41 @@ fn MyAgent::new(name : String) -> MyAgent {
 }
 ```
     </Tabs.Tab>
+    <Tabs.Tab>
+An agent is declared in a **definition** package with `golem.DefineAgent(...)` and given its behaviour in a nested `impl` package with `Agent.Implement(...)` and one `Handle` per method:
+
+```go
+// agents/myagent/myagent.go
+package myagent
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ /* constructor parameters — see below */ }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "MyAgent"})
+
+var (
+	// Method descriptors: Agent.Method[In, Out]("name", ...)
+)
+```
+
+```go
+// agents/myagent/impl/impl.go
+package impl
+
+import "myapp/agents/myagent"
+
+type state struct{ /* private state */ }
+
+var agent = myagent.Agent.Implement(func(myagent.ID) *state { return &state{} })
+
+func init() {
+	// agent.Handle(myagent.SomeMethod, func(ctx *golem.Context[state], in SomeIn) SomeOut { ... })
+}
+```
+
+The component's `main.go` blank-imports each agent's `impl` package (`_ "myapp/agents/myagent/impl"`) so that it is registered.
+    </Tabs.Tab>
 
 </Tabs>
 
@@ -235,7 +285,7 @@ Every agent must define a **constructor** with an arbitrary number of parameters
 
 For example, an agent working on a particular user's particular request could be defined as:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -293,6 +343,18 @@ fn RequestHandler::new(user_id : String, request_id : String) -> RequestHandler 
 }
 ```
     </Tabs.Tab>
+    <Tabs.Tab>
+The constructor parameters are the fields of the agent's `ID` struct:
+
+```go
+type ID struct {
+	UserID    string
+	RequestID string
+}
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "RequestHandler"})
+```
+    </Tabs.Tab>
 </Tabs>
 
 The Effect agent shown here is identified by `RequestHandler("user-123", "request-456")`; agent identifiers preserve the declared agent name.
@@ -309,7 +371,7 @@ This metadata is stored in the Golem component and can be used when exposing the
 
 The following example shows the use of how to attach these metadata to simple agent methods in different languages
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -457,6 +519,36 @@ pub fn RequestHandler::add_details(
 ```
     </Tabs.Tab>
 
+    <Tabs.Tab>
+Method metadata is passed as options to the method descriptor: `golem.Desc(...)` sets the description and `golem.PromptHint(...)` the prompt hint.
+
+```go
+package requesthandler
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type TaskDetails struct {
+	Description string
+	Priority    uint8
+}
+
+type RequestHandlerStatus struct {
+	Summary    string
+	Successful bool
+}
+
+type ID struct{ Name string }
+
+type AddDetailsIn struct{ Details TaskDetails }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "RequestHandler"})
+
+var AddDetails = Agent.Method[AddDetailsIn, RequestHandlerStatus]("addDetails",
+	golem.Desc("Adds some more details to the request handler about the task being performed. The result is an update of the current status."),
+	golem.PromptHint("Enter new details about the task"))
+```
+    </Tabs.Tab>
+
 </Tabs>
 
 Agent methods can be both sync or async. Effect TypeScript handlers always return an `Effect`, whether the work represented by that Effect is synchronous or asynchronous.
@@ -464,7 +556,7 @@ Agent methods can be both sync or async. Effect TypeScript handlers always retur
 ### Supported data types
 The SDK supports a large variety of data types in agent constructors and agent methods, both in parameter and return type position. Validation timing is SDK-specific; Effect TypeScript validates whether its schemas have an unambiguous Golem representation during registration and discovery.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     In TypeScript, declare constructor parameters, method inputs, and return values using supported runtime schemas, such as Zod schemas. Use `z.object(...)` for records and `z.enum(...)` for string alternatives; TypeScript types are inferred from these schemas.
     </Tabs.Tab>
@@ -486,11 +578,15 @@ The SDK supports a large variety of data types in agent constructors and agent m
     <Tabs.Tab>
     In MoonBit, built-in serializable types such as `String`, `Bool`, numeric types, arrays, options, tuples, and `Bytes` work as expected. For user-defined types used in constructors, method parameters, and return types, add `#derive.golem_schema`. See the [page about data type mapping](/next/type-mapping) for more details.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+    In Go, constructor parameters are the fields of the `ID` struct, and each method takes one input struct (one parameter per exported field) and returns one value. Records are plain Go structs, a `*T` field is an option, slices and maps are lists and maps, and variants and enums are registered with `golem.DefineVariant` and `golem.DefineEnum`. Use sized integers such as `int64`; bare `int` and `uint` are rejected. See the [page about data type mapping](/next/type-mapping) for more details.
+    </Tabs.Tab>
 </Tabs>
 
 ### Library support
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     See the [JS APIs](/next/js-apis) page for a detailed overview of all the supported Web Platform and Node.js APIs. Most 3rd party libraries can be installed using `npm` and used in the agent code, as long as they only rely on the supported APIs and do not require native addons.
     </Tabs.Tab>
@@ -510,12 +606,16 @@ The SDK supports a large variety of data types in agent constructors and agent m
     <Tabs.Tab>
     Any MoonBit package can be added as a dependency in `moon.mod.json` and imported from `moon.pkg`, as long as it supports compiling to WASI.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+    Any Go module can be added with `go get` in the component's module directory, as long as it compiles to the WASI component target: pure-Go modules and modules doing I/O through standard library packages such as `net/http` work, while modules relying on `cgo`, OS threads, or raw sockets do not.
+    </Tabs.Tab>
 </Tabs>
 
 ### Agent mode - durable or ephemeral
 By default every agent is **durable**. To define an **ephemeral agent**, override the agent mode in the agent definition:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     export const EphemeralAgent = defineAgent({
@@ -576,6 +676,15 @@ By default every agent is **durable**. To define an **ephemeral agent**, overrid
     }
     ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+    ```go
+    var EphemeralAgent = golem.DefineAgent[ID](golem.Spec{
+        Name: "EphemeralAgent",
+        Mode: golem.Ephemeral,
+    })
+    ```
+    </Tabs.Tab>
 </Tabs>
 
 ## Agent configuration
@@ -589,7 +698,7 @@ Golem supports two ways of doing this:
 
 ### Environment variables
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 Environment variables are accessible through the `node:process` module:
 
@@ -631,6 +740,16 @@ val agentId = env("GOLEM_AGENT_ID")
 Environment variables are accessible through the `@environment` module:
 ```moonbit
 let env = @environment.get_environment()
+```
+</Tabs.Tab>
+
+
+<Tabs.Tab>
+Environment variables are accessible through the standard `os` package:
+```go
+import "os"
+
+agentID := os.Getenv("GOLEM_AGENT_ID")
 ```
 </Tabs.Tab>
 

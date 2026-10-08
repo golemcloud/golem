@@ -148,7 +148,7 @@ Handlers return their output value; the platform maps it to a response. In Go:
 - Bindable path/query/header fields must be scalar; non-scalars go in the body.
 - Bodyless verbs (`GET`, `HEAD`) must bind every input field.
 - Field references on the wire use the **lower-first** field name (`Sku` → `sku`).
-- **Go gap:** the Rust SDK's `UnstructuredBinary` / `UnstructuredText` (with `AllowedMimeTypes` / `AllowedLanguages`) raw-body wrapper types have **no public Go equivalent** yet — model bodies as JSON structs, or use `[]byte` fields for raw bytes.
+- A raw (non-JSON) body is a single body field of type `golem.UnstructuredBinary[M]` or `golem.UnstructuredText[L]`; `M`/`L` is `golem.AnyMimeType`/`golem.AnyLanguage` or a marker type whose `MimeTypes()`/`Languages()` lists what is accepted. Any other body is a JSON object keyed by the lower-first field names.
 
 ### Related Skills
 

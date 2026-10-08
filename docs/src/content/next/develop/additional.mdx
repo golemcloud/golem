@@ -10,7 +10,7 @@ It is guaranteed that this idempotency key will always be the same (per occurren
 
 To generate an idempotency key:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import { generateIdempotencyKey } from "@golemcloud/golem-ts-sdk";
@@ -47,13 +47,21 @@ val key = HostApi.generateIdempotencyKey()
 let key = @api.generate_idempotency_key()
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem/durability"
+
+key := durability.GenerateIdempotencyKey()
+```
+    </Tabs.Tab>
 </Tabs>
 
 ### Get agent metadata
 
 It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     /**
@@ -174,6 +182,36 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     </Tabs.Tab>
 
+
+    <Tabs.Tab>
+    ```go
+    // AgentMetadata describes an agent as the host sees it.
+    type AgentMetadata struct {
+      // The agent ID, consists of the component ID and the agent id string (agent type and agent parameters)
+      AgentID           AgentID
+      // Command line arguments seen by the agent
+      Args              []string
+      // Environment variables seen by the agent
+      Env               map[string]string
+      // Configuration variables seen by the agent
+      Config            map[string]string
+      // The current agent status
+      Status            AgentStatus
+      // The component revision the agent is running with
+      ComponentRevision uint64
+      // The agent's current retry count
+      RetryCount        uint64
+      // The environment the agent belongs to
+      EnvironmentID     UUID
+    }
+    ```
+
+    There are two exported functions in the `golem` package to query agent metadata:
+
+    - `golem.GetSelfMetadata()` returns `(golem.AgentMetadata, error)` for the current agent; `golem.MustGetSelfMetadata()` panics on failure instead
+    - `golem.GetAgentMetadata(id golem.AgentID)` returns the metadata for a specific agent given by its `AgentID`, and `false` if it does not exist
+
+    </Tabs.Tab>
 </Tabs>
 
 ### Enumerate agents
@@ -186,7 +224,7 @@ Agent enumeration is a feature of Golem available both through the public HTTP A
 
 The following example demonstrates how to use the agent enumeration API:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 ```typescript
 import {
@@ -323,13 +361,34 @@ while true {
 }
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+var componentID golem.UUID = /* ... */
+
+var agents []golem.AgentMetadata
+for md, err := range golem.GetAgents(componentID, golem.GetAgentsOptions{
+	Filter:  golem.AgentStatusFilter(golem.FilterEqual, golem.AgentStatusIdle),
+	Precise: true,
+}) {
+	if err != nil {
+		return err
+	}
+	agents = append(agents, md)
+}
+```
+
+`golem.GetAgents` fetches the pages as the loop advances. Filters are combined with their `And` and `Or` methods; `golem.MustGetAgents` is the variant panicking on a failing page.
+    </Tabs.Tab>
 </Tabs>
 
 The `precise` parameter or option enables precise mode. In this mode, Golem calculates the latest metadata for each returned agent; otherwise, it uses only the last cached values.
 
 ### Update an agent
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
@@ -403,6 +462,21 @@ let target_revision : UInt64 = 1
 @api.update_agent(agent_id, target_revision, @api.UpdateMode::AUTOMATIC)
 ```
     </Tabs.Tab>
+
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `golem.UpdateAgent` function:
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+agentID := golem.MustGetSelfMetadata().AgentID
+var targetRevision uint64 = 1
+
+if err := golem.UpdateAgent(agentID, targetRevision, golem.UpdateModeAutomatic); err != nil {
+	return err
+}
+```
+    </Tabs.Tab>
 </Tabs>
 
 To learn more about updating agents, see the Agent Update section of the [agents page](/next/concepts/agents).
@@ -455,7 +529,7 @@ Golem associates an **invocation context** with each invocation, which contains 
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.5.0`:
 
@@ -658,6 +732,34 @@ If `finish` is not explicitly called on the span, it is going to be finished whe
 
 </Tabs.Tab>
 
+
+    <Tabs.Tab>
+The `github.com/golemcloud/golem/sdks/go/golem/invocation` package reads the invocation context and starts custom spans. `invocation.CurrentContext()` returns a snapshot of the context:
+
+| method | description |
+| ------ | ----------- |
+| `TraceID` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `SpanID` | Returns the span ID associated with the context |
+| `Parent` | Returns the parent invocation context, if any |
+| `Attribute` | Gets an attribute from the current span by key, or searches the full parent chain when `inherited` is `true` |
+| `Attributes` | Gets all attributes from the current span, or the merged attribute set from the full parent chain when `inherited` is `true` |
+| `AttributeChain` | Gets all values of a given attribute from the current and parent contexts |
+| `AttributeChains` | Get all attributes and their previous values |
+| `TraceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context, as an `http.Header` |
+
+Custom attributes can only be set on **custom spans**. Start one with `invocation.StartSpan`, set attributes on it with `SetAttribute` or `SetAttributes`, and end it with `Finish`; `StartedAt` returns when it started:
+
+```go
+span := invocation.StartSpan("charge")
+defer span.Finish()
+span.SetAttribute("order", orderID)
+
+ctx := invocation.CurrentContext()
+slog.Info("charging", "trace", ctx.TraceID())
+```
+
+A span that is never finished ends when it is garbage collected.
+</Tabs.Tab>
 </Tabs>
 
 The custom spans are pushed onto the invocation context stack, so whenever an RPC call or HTTP call is made, their parent span(s) will include the user-defined custom spans as well as the rest of the invocation context.
@@ -670,7 +772,7 @@ Although Golem agents can store their state completely in their own memory, it i
 
 This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         There are two primary modules for using the key-value store:
         - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
@@ -1000,13 +1102,57 @@ This can be useful if state needs to be shared between different agents or if th
 
         For most use cases, the synchronous `FixedArray[Byte]` helpers are the most convenient way to work with key-value data from MoonBit.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+        The Go SDK wraps the `wasi:keyvalue` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/keyvalue` package. A missing key is not an error; failures are returned as a `*keyvalue.Error`.
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
+        ```go
+        package keyvalue
+
+        // OpenBucket opens (or creates) the named bucket.
+        func OpenBucket(name string) (*Bucket, error)
+
+        func (b *Bucket) Get(key string) (value []byte, found bool, err error)
+        func (b *Bucket) Set(key string, value []byte) error
+        func (b *Bucket) Delete(key string) error
+        func (b *Bucket) Exists(key string) (bool, error)
+        ```
+
+        The batch API is exposed on the same `Bucket` type:
+
+        ```go
+        func (b *Bucket) Keys() ([]string, error)
+        func (b *Bucket) GetMany(keys []string) (map[string][]byte, error)
+        func (b *Bucket) SetMany(entries map[string][]byte) error
+        func (b *Bucket) DeleteMany(keys []string) error
+        ```
+
+        For example:
+
+        ```go
+        import "github.com/golemcloud/golem/sdks/go/golem/keyvalue"
+
+        bucket, err := keyvalue.OpenBucket("shared")
+        if err != nil {
+            return err
+        }
+        if err := bucket.Set("greeting", []byte("hello")); err != nil {
+            return err
+        }
+        value, found, err := bucket.Get("greeting")
+        ```
+
+        `keyvalue.Typed[T](bucket)` wraps a bucket in a `*keyvalue.Store[T]` with the same operations, storing JSON-encoded values of the Go type `T`.
+    </Tabs.Tab>
 </Tabs>
 
 ### The WASI Blob Store interface
 
 The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. Storage is shared across agents and components within the same environment.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
 
@@ -1363,5 +1509,48 @@ The `wasi:blobstore` interface provides a way to store and retrieve large binary
         ```
 
         `IncomingValue` can be consumed either synchronously as a `FixedArray[Byte]` or asynchronously as an `@async-core.Stream[Byte]`. To write blob data, create an `OutgoingValue` with `@types.OutgoingValue::new_outgoing_value()` and pass an `@async-core.Stream[Byte]` to `outgoing_value_write_body`.
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+        The Go SDK wraps the `wasi:blobstore` interfaces in the `github.com/golemcloud/golem/sdks/go/golem/blobstore` package. Failures are returned as a `*blobstore.Error`.
+
+        The following declarations summarize the public API shape; they are not definitions to copy into your application.
+
+        ```go
+        package blobstore
+
+        type ObjectID struct {
+            Container string
+            Object    string
+        }
+
+        func CreateContainer(name string) (*Container, error)
+        func GetContainer(name string) (*Container, error)
+        func GetOrCreateContainer(name string) (*Container, error)
+        func DeleteContainer(name string) error
+        func ContainerExists(name string) (bool, error)
+        func CopyObject(src, dest ObjectID) error
+        func MoveObject(src, dest ObjectID) error
+        ```
+
+        A `Container` provides read-write access for the blobs in it:
+
+        ```go
+        func (c *Container) Name() string
+        func (c *Container) Info() (ContainerMetadata, error)
+        // GetData reads the whole object; found is false when the object is absent.
+        func (c *Container) GetData(name string) (data []byte, found bool, err error)
+        // GetRange reads bytes [start, end] of an object; both offsets are inclusive.
+        func (c *Container) GetRange(name string, start, end uint64) ([]byte, error)
+        func (c *Container) WriteData(name string, data []byte) error
+        func (c *Container) ListObjects() ([]string, error)
+        func (c *Container) Delete(name string) error
+        func (c *Container) DeleteMany(names []string) error
+        func (c *Container) Has(name string) (bool, error)
+        func (c *Container) ObjectInfo(name string) (ObjectMetadata, error)
+        func (c *Container) Clear() error
+        ```
+
+        The Go wrapper reads and writes blob data as `[]byte`. `blobstore.Typed[T](container)` wraps a container in a `*blobstore.Store[T]` storing JSON-encoded values of the Go type `T`.
     </Tabs.Tab>
 </Tabs>

@@ -10,7 +10,7 @@ A simpler way is to use the **fork API**. The fork API consists of a single host
 
 The declarations below show the public interface shape; use the SDK calls shown in the usage examples rather than copying these declarations into an application.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 declare module 'golem:api/host@1.5.0' {
@@ -127,6 +127,21 @@ pub(all) enum ForkResult {
 pub fn fork() -> ForkResult
 ```
 </Tabs.Tab>
+
+<Tabs.Tab>
+`ForkSelf` and `MustForkSelf` are in the root `golem` package. Instead of a result variant, they return a `forked` flag that tells the two agents apart:
+
+```go
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+// ForkSelf copies the running agent under a new phantom id. Both copies continue
+// from here: forked tells them apart, and phantomID is the copy's id in both.
+func ForkSelf() (forked bool, phantomID golem.UUID, err error)
+
+// MustForkSelf is ForkSelf, panicking on failure.
+func MustForkSelf() (forked bool, phantomID golem.UUID)
+```
+</Tabs.Tab>
 </Tabs>
 
 ## Usage
@@ -135,7 +150,7 @@ Using this `fork` function from a component that was created from Golem's built-
 
 The following code snippet demonstrates calling `fork` and continuing on two different parallel branches based on its result value:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { z } from 'zod';
@@ -272,6 +287,48 @@ pub fn ExampleAgent::run(self : Self) -> Unit {
 }
   ```
   </Tabs.Tab>
+  <Tabs.Tab>
+  `agents/example/example.go`
+
+  ```go
+package example
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "ExampleAgent"})
+
+var Run = Agent.Method[golem.Unit, golem.Unit]("run")
+  ```
+
+  `agents/example/impl/impl.go`
+
+  ```go
+package impl
+
+import (
+	"myapp/agents/example"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{ name string }
+
+var agent = example.Agent.Implement(func(id example.ID) *state { return &state{name: id.Name} })
+
+func init() {
+	agent.Handle(example.Run, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+		if forked, _ := golem.MustForkSelf(); forked {
+			// ...
+		} else {
+			// ...
+		}
+		return golem.Unit{}
+	})
+}
+  ```
+  </Tabs.Tab>
 </Tabs>
 
 ## Join
@@ -288,7 +345,7 @@ The high level idea is the following:
 The following code snippet demonstrates this pattern:
 
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { z } from 'zod';
@@ -556,5 +613,52 @@ pub async fn ExampleAgent::run(self : Self) -> Unit {
   }
 }
   ```
+  </Tabs.Tab>
+  <Tabs.Tab>
+  `agents/example/impl/impl.go`, for the `ExampleAgent` definition above:
+
+  ```go
+package impl
+
+import (
+	"fmt"
+
+	"myapp/agents/example"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type RunResult struct {
+	Message string `json:"message"`
+}
+
+type state struct{ name string }
+
+var agent = example.Agent.Implement(func(id example.ID) *state { return &state{name: id.Name} })
+
+func init() {
+	agent.Handle(example.Run, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
+		promise := golem.NewPromise[RunResult]()
+
+		if forked, _ := golem.MustForkSelf(); forked {
+			result := RunResult{Message: "Hello from forked agent with name: " + ctx.State.name}
+
+			fmt.Println("forked result :", result.Message)
+
+			golem.CompletePromise(promise.ID(), result)
+		} else {
+			localResult := RunResult{Message: "Hello from original agent with name: " + ctx.State.name}
+
+			forkedResult := promise.Await()
+
+			fmt.Println("local result :", localResult.Message)
+			fmt.Println("forked result:", forkedResult.Message)
+		}
+		return golem.Unit{}
+	})
+}
+  ```
+
+  `NewPromise[T]` carries a JSON-encoded payload of type `T`. `Await` durably suspends the original agent until the forked agent completes the promise.
   </Tabs.Tab>
 </Tabs>
