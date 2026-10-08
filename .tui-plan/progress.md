@@ -1,5 +1,20 @@
 # Progress
 
+## 2026-10-08: Stable Ops Rebuild Contract
+
+- Replaced the prototype subject-by-view matrix with stable Overview, Agents,
+  Oplog, Stream, Metrics, Deployments, and Configuration destinations.
+- Locked explicit cross-destination scope handoff, per-destination route/state,
+  bounded collection semantics, and shared loading/freshness states.
+- Locked local-first Agent and Server dashboards plus Explore, truthful metric
+  transforms, bounded approximation, and source-oplog correlation.
+- Locked exact bounded Oplog search, typed grouping, a 20-Agent mixed-scope cap,
+  and a persistent exact-Agent Stream session.
+- Expanded Configuration to lazy typed Environment, Account, and Server
+  inventories while retaining a read-only first milestone.
+- Recorded Metrics-first implementation checkpoints and explicit deferrals for
+  remote metrics, mutation, traces/log storage, rollups, Grafana, and web UI.
+
 ## 2026-10-07: Ops Resources, Activity Snapshots, And Local Metrics
 
 - Added subject-aware Ops view navigation. Agents and individual Agents expose

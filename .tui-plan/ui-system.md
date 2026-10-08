@@ -121,8 +121,8 @@ Terms:
 - Dev view: Build & Deploy, Server, or REPL.
 - Primary view: the Dev view occupying the main layout region.
 - Subview: an optional secondary Dev view beside the primary view.
-- Ops subject: the resource or collection being inspected.
-- Ops view: the representation of that subject.
+- Ops destination: a stable top-level page in the Ops tab row.
+- Ops route: a root or drill-down state owned by one destination.
 - Pane: a focusable rendered layout region. Details is a pane, not a subview.
 - Focus: the active pane or control that receives keyboard input.
 
@@ -202,19 +202,18 @@ owns local lifecycle, process state, bound ports, data directory, and logs. REPL
 interactive PTY. View capability is independent: unavailable views stay
 discoverable and explain what context is missing.
 
-Ops uses subject then view navigation. Agents, Deployment, Environment, and
-Server are the minimal roots. Individual Agents, Components, Agent Types,
-Deployment Revisions, and Environment resource kinds are drill-down subjects.
-Overview, History, Diff, Resources, Activity, and Metrics appear only where the
-subject supports them.
+Ops has one persistent horizontal tab row: Overview, Agents, Oplog, Stream,
+Metrics, Deployments, and Configuration. A destination may own breadcrumbs and
+drill-down routes, but selecting an entity never silently changes another
+destination's scope.
 
-Activity contains Timeline, Journal, and single-Agent Live. Metrics lists
-families before concrete series and keeps Golem service and Agent OTLP source
-availability separate. Fake metrics belong only to deterministic preview/test
-providers and must never appear as live production data.
+Metrics separates curated Dashboard from ad-hoc Explore and keeps Server and
+Agent telemetry explicit. Oplog separates Grouped from exact Entries. Stream
+is an exact-Agent live session. Fake telemetry belongs only to visibly labelled
+preview/test providers and must never appear as live production data.
 
-Shared resources have one entity identity. Dev may link to an Ops subject, but
-must not invent a duplicate Dev-specific resource explorer.
+Shared resources have one entity identity. Dev may link to an Ops destination,
+but must not invent a duplicate Dev-specific resource explorer.
 
 ## Layout And Navigation
 
@@ -784,11 +783,12 @@ They must not grow TUI-specific methods such as `for_tui`.
 
 Production has Dev and Ops workspaces. Dev owns reviewed nested-CLI Plan,
 Build, Deploy, Clean, Server, and REPL sessions. Ops has the accepted Agents
-collection/details surface plus read-only Agent, Deployment, Environment, and
-Server overviews, Deployment/Environment Resources catalogs, bounded Activity
-snapshots, and local Metrics. Recursive right/bottom pane layouts, focus,
-resize, terminal scrollback, context switching, and bounded finite-Job history
-are live.
+collection/details surface plus prototype subject/view pages for deployment,
+environment, server, Oplog snapshots, and local Metrics. The prototype data
+paths are live, but their navigation and page composition are being replaced by
+the stable destination model in `product-contract.md`. Recursive right/bottom
+pane layouts, focus, resize, terminal scrollback, context switching, and
+bounded finite-Job history are live.
 
 Production composes the accepted `ContextHeader`, `PaneHeader`, status,
 boundary, scrollbar, workspace-selector, shortcut-row, notice, table, and
@@ -796,12 +796,12 @@ overlay primitives. Dev and Ops share one context-only header, title grammar,
 neutral structural chrome, and semantic status colors. The fake OTLP lab was
 retired; production Metrics uses only live local-server data.
 
-True transient Live, generalized Metrics controls/remote providers, remote
-unlock, generalized Ops mutations, and neutral target materializers beyond
-resolved CLI flags remain gated follow-up work. Selected-target launch material is consolidated and
-cross-Server switching now stops the supervised Server while same-Server
-app/environment switches preserve it. Agent oplog and stream acquisition must
-continue to use direct typed or streaming provider rules.
+The active rebuild adds a real Stream session, Dashboard/Explore, bounded Oplog
+search, Deployment history/diff, and typed Configuration. Remote metrics,
+remote unlock, Ops mutations, and neutral target materializers beyond resolved
+CLI flags remain follow-up work. Selected-target launch material is
+consolidated and cross-Server switching stops the supervised Server while
+same-Server app/environment switches preserve it.
 
 ## Review Status
 
@@ -810,40 +810,24 @@ product-contract.md are accepted. This document is synchronized to that
 contract; tasks.md is the authoritative readiness ledger for unchecked design
 gates and implementation work.
 
-The rebuild is not decision-complete. A checkpoint may start only after its
-named planning prerequisites are checked in tasks.md.
+The Ops rebuild is decision-complete. Checkpoint readiness and implementation
+status live in `tasks.md`.
 
 ## Roadmap
 
 The executable order is maintained in phases.md and tasks.md:
 
-1. synchronize and accept the product/readiness contract;
-2. replace product state, action metadata, shell, and recursive layout;
-3. introduce finite Jobs, persistent sessions, and mutation safeguards;
-4. rebuild the minimal Dev loop;
-5. complete Ops subject drill-downs and resource actions;
-6. finish Activity cursor/scope behavior and direct Live;
-7. complete generalized Metrics controls and visual acceptance;
-8. validate minimal local acquisition and decide remote/companion tooling only
-   when required;
-9. remove replaced paths and pass final terminal acceptance.
+1. establish stable Ops routes and reusable page primitives;
+2. complete local Metrics data and the Dashboard/Explore UI;
+3. add bounded Oplog and persistent Stream investigation;
+4. add Deployment history/diff and full typed Configuration;
+5. finish Overview, preview coverage, and terminal acceptance.
 
-## Open Questions
+## Deferred Questions
 
-These are required planning gates, not implementation details to infer:
-
-- exact content, controls, states, and contextual actions for Build & Deploy,
-  Server, and REPL;
-- responsive header/footer priority rules for Jobs, Live, context, and remote
-  lock state;
-- integration of the accepted active-work quit behavior with the future Live
-  session;
-- exact contextual action and risk inventory for each minimal Ops subject;
-- generalized Metrics range, aggregation, auto-refresh, and follow controls;
-- final typed provider boundaries and implementation ordering.
-
-The minimal local receiver/store is locked. Remote acquisition, Docker
-integration, and a possible web UI remain deliberately deferred.
+Remote metrics acquisition, Ops mutation safety, persisted metric rollups,
+guest-defined metric APIs, Docker/Grafana integration, and a possible web UI
+remain deliberately deferred. They are not decisions for the active rebuild.
 
 ## Accessibility And Stability
 

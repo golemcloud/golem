@@ -1,73 +1,46 @@
 # Golem CLI TUI Plan
 
-This directory tracks the active product, design, architecture, implementation,
-and validation plan for the terminal UI in cli/golem-cli, exposed through both
-golem tui and golem-cli tui.
+This directory is the source of truth for the terminal UI exposed through
+`golem tui` and `golem-cli tui`.
 
 ## Current State
 
-- The accepted visual foundation and rebuilt Dev/Ops shell are in production.
-- Dev provides reviewed nested-CLI Plan, Build, Deploy, Clean, Server, and REPL
-  workflows with bounded Jobs and persistent terminal sessions.
-- Ops preserves the live typed Agents collection and adds individual Agent,
-  current Deployment, Environment, and Server overviews, bounded Activity
-  snapshots, Deployment/Environment resource catalogs, and local Metrics.
-- The built-in local server owns the minimal Metrics provider: five-second
-  service samples plus OTLP/HTTP JSON Agent metrics in a bounded SQLite store.
-  The retired fake OTLP explorer is not retained as dormant preview code.
-- The optional `tui-preview` feature keeps one real production-rendered Ops
-  Agents fixture plus browser, terminal, and export tooling. Focused lab cases
-  are added only while a new design question is active.
-- Replaced Home, Output, Agents Dev panel, named layout presets, global Server
-  drawer, and nested Agent Inspect paths are implementation history rather than
-  compatibility behavior.
-- The current focus is focused verification and real-terminal acceptance of
-  this Ops slice. Exact remaining implementation gaps are marked `[~]` in
-  tasks.md.
-- True transient Live Activity, Deployment History/Diff, richer resource
-  drill-downs/actions, Metrics controls, remote providers, Docker integration,
-  and a possible web UI remain explicit follow-up work.
+- The shared visual foundation and the Dev workspace are implemented.
+- Dev owns the nested-CLI application loop: Plan, Build, Deploy, Clean, Server,
+  and REPL.
+- Ops currently contains a mature Agents table plus prototype subject/view
+  pages for activity, metrics, deployment, environment, and server data.
+- The prototypes proved the data paths but not the final information
+  architecture. The subject-by-view matrix, `Activity`, and `Resources` are
+  superseded by the stable destination contract below.
+- The next implementation batch rebuilds Ops around the locked navigation and
+  local observability contracts. No compatibility layer for the prototype is
+  required.
 
 ## Locked Direction
 
-- The global context is app/env/server.
-- Dev and Ops are the initial top-level workspaces, with navigation designed for
-  additional workspaces later.
-- Dev contains Build & Deploy, Server, and REPL as one primary view plus
-  optional right or bottom subviews.
-- Ops uses subject then view navigation with Agents, Deployment, Environment,
-  and Server as minimal root subjects.
-- Activity provides Timeline, Journal, and single-Agent Live representations.
-- Metrics uses metric-family then concrete-series drill-down and keeps Golem
-  service metrics distinct from Agent OTLP telemetry.
-- Relevant resource mutations are available through contextual actions with
-  explicit risk classes and a session-only remote write lock.
-- Finite commands and mutations use the global Jobs overlay. Server, REPL, and
-  Live are persistent sessions.
+- The global context remains `app/env/server`.
+- Dev and Ops remain the initial workspaces.
+- Ops destinations are stable, horizontal tabs:
+  `Overview · Agents · Oplog · Stream · Metrics · Deployments · Configuration`.
+- Ops is observe/investigate-first and read-only in this milestone.
+- Metrics is local-first and TUI-only, with curated Dashboard and ad-hoc
+  Explore modes. Grafana and a web UI are deferred.
+- Oplog is both a readable grouped journal and an exact indexed forensic view.
+- Configuration has Environment, Account, and Server scopes.
 - Only visual preferences persist across restarts; operational state remains
   session-local.
 
-## Sources Of Truth
+## Sources of Truth
 
-- product-contract.md: locked behavior, vocabulary, scope, and remaining
-  product decisions.
-- ui-system.md: accepted visual and interaction rules.
-- architecture.md: runtime boundaries, state ownership, providers, Jobs, and
-  persistence structure.
-- tasks.md: exact readiness checklist and executable backlog.
-- phases.md: checkpoint order and acceptance gates.
-- testing.md: test layers, scenarios, preview coverage, and validation commands.
-- dx-ux-review.md: visual review ledger and active acceptance focus.
-- progress.md: chronological implementation and validation history.
+- `product-contract.md`: product behavior and scope.
+- `ui-system.md`: rendering and interaction rules.
+- `architecture.md`: runtime, state, provider, and protocol boundaries.
+- `tasks.md`: executable checklist.
+- `phases.md`: checkpoint and commit order.
+- `testing.md`: automated and manual acceptance matrix.
+- `dx-ux-review.md`: current visual review ledger.
+- `progress.md`: chronological implementation history.
 
-When documents disagree, product-contract.md owns product behavior,
-ui-system.md owns rendering, and tasks.md owns current executable status.
-Progress entries remain historical and must not override the active contract.
-
-## Working Rule
-
-Before implementing a milestone, close its unchecked planning gate in tasks.md,
-update the owning source-of-truth document, and record a checkpoint-sized
-implementation batch. After implementation, run the smallest focused tests,
-the relevant preview coverage, package checks, and git diff --check before
-marking the milestone complete.
+When documents disagree, product contract owns behavior, UI system owns
+presentation, architecture owns boundaries, and tasks owns current status.

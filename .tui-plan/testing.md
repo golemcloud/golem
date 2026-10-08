@@ -1,169 +1,74 @@
-# Testing
+# TUI Validation Plan
 
-The TUI test strategy should make interactive behavior inspectable without requiring manual terminal use for every change.
+## Unit and State Tests
 
-## Validation Commands
+- Destination switching, tab scrolling, route push/pop, state restoration, and
+  context resets.
+- Collection filter/find distinction, cursor/end state, selection visibility,
+  literal match highlighting, and explicit server-search escalation.
+- Details placement, four-direction resize, scrollbar ownership, mouse hit
+  regions, and route-derived actions/help.
+- Dashboard transforms: delta and cumulative counters, counter reset, gauge
+  seed, histogram quantiles, event quantiles, gaps, units, freshness, and
+  exact/approximate metadata.
+- Oplog scan limit, empty-match continuation, timestamp inclusivity, component
+  revision tracking, typed grouping, cancellation, and multi-Agent merge.
+- Stream reconnect, cancellation, background unread state, ring eviction, and
+  separate server/local loss counters.
+- Secret, token, and security projections prove sensitive fields cannot render.
 
-Use targeted commands for TUI work:
+## Service and Artifact Tests
 
-```shell
-cargo check -p golem-cli
-cargo check -p golem-cli --features tui-preview --example tui-preview
-cargo test -p golem-cli --lib -- tui:: --report-time
-cargo test -p golem-cli --lib --features tui-preview -- tui:: --report-time
-```
+- Local observability schema-version rejection and schema-2 round trips.
+- Families/series/sample SQL paging and dashboard query tests.
+- Exporter processing tests prove first-entry-index propagation and reserved
+  attribute stripping from series identity.
+- Worker executor/service tests cover the structured search request and scanned
+  progress through archived/multilayer storage.
+- REST endpoint and generated client tests cover request validation,
+  authorization, and continuation with zero matches.
 
-Do not use `cargo make test`. Avoid `--report-time` on broad `cargo test` commands because doctests reject it on stable Rust.
-
-In this environment, `test-r` may need local socket listener permissions. If the sandboxed run fails with `Failed to create local socket listener`, rerun the same targeted command outside the sandbox.
-
-The rebuilt local Dev/read-only Ops checkpoint runs the complete `tui::`
-library suite in both feature configurations. Preview coverage renders every
-registered production fixture at its default, wide, short, narrow, and
-degenerate sizes. Both package configurations must compile without TUI
-dead-code or unused-import warnings.
-
-This does not replace the `UX-024` real-terminal and dev-release playground
-acceptance pass.
-
-## Test Layers
-
-- Pure state tests for reducers, action selection, filtering, context selection, and job lifecycle.
-- Scoped logging tests for concurrent captures, indentation/output restoration across `.await`, and global fallback behavior.
-- Render tests with `ratatui::backend::TestBackend` for important visible states.
-- `TuiTestDriver` scenario tests for high-level workflows.
-- PTY smoke tests only when terminal lifecycle or nested process behavior changes.
-
-## TuiTestDriver
-
-The driver should support:
-
-- constructing default app state;
-- sending key events;
-- rendering frame text;
-- asserting visible and absent text;
-- dumping active view, mode, context, and frame text on failure.
-
-Use the driver for scenario tests that protect manual UX paths. Keep exact snapshots small and rare.
-
-## Scenario Coverage
-
-High-value scenarios:
-
-- help, footer, leader, and palette surfaces match registered action labels,
-  paths, availability reasons, and risk metadata;
-- ctrl+x w/v/l/a/j/e opens the correct hierarchical group and scales without
-  assigning top-level numeric shortcuts to destinations;
-- ctrl+p reopens the session-remembered palette scope, ctrl+x a explicitly
-  opens Context, and left/right switches an open palette without losing its
-  query;
-- palette results follow exact/prefix/word-prefix/substring/fuzzy ranking,
-  preserve registry order for empty queries, and highlight matches only in
-  visible row text;
-- tab and shift+tab move pane focus only, including while Layout mode selects
-  and resizes physical dividers;
-- Dev restores primary view, visible subviews, right/bottom placement, focus,
-  ratios, persistent Server, and persistent REPL after an Ops round trip;
-- direct navigation focuses a visible Dev view and replaces the primary when
-  the target is hidden without increasing the pane count;
-- Jobs retain immutable launch targets, remain globally visible, and enforce
-  one mutating Job per environment with no implicit queue;
-- nested Plan/Build/Deploy/Clean, Server, and interactive REPL sessions receive
-  the actual pane content size, preserve ANSI, expose 2,000 lines of scrollback,
-  and never spawn a real child process from a unit test;
-- finite commands and REPL begin in CLI input while Server begins in TUI input;
-  the normal Server footer and status expose Enter-to-CLI ownership transfer;
-- review forms keep Run and confirmation fields in their locked order, expose
-  an active Run style, render a real cursor for edited values, apply with Enter,
-  discard with esc, and move/delete safely across Unicode boundaries;
-- Server omits `--ports-file` by default, treats a successful spawn as Running,
-  and uses an explicitly supplied fresh file only as optional port metadata;
-- local and remote resource actions exercise availability, target review,
-  remote unlock, risk confirmation, masking, cancellation, and stale-result
-  handling;
-- context switching applies the accepted stop/preserve/close rules separately
-  to Jobs, Server, REPL, and Live;
-- Ops root subjects, drill-down subjects, breadcrumbs, direct palette jumps,
-  collection/details focus, and Enter-to-open semantics remain consistent;
-- read-only Deployment, Environment, and Server refreshes use typed data,
-  ignore stale generations, retain stale snapshots on failure, and never
-  create a missing application or environment;
-- Activity scope is an explicit bounded snapshot, Timeline and Journal retain
-  AgentID plus per-Agent oplog index, partial Agent failures remain visible,
-  and the unimplemented Live provider is never simulated with oplog polling;
-- Metrics navigates family to concrete series, distinguishes service and Agent
-  OTLP sources, renders every provider-availability state truthfully, and never
-  injects the local exporter outside normal local deploy resolution;
-- local observability tests cover opt-out/default/CLI precedence, OTLP JSON
-  identity validation, bounded store queries and cleanup, explicit exporter
-  precedence, and authenticated private routes;
-- Metrics fixtures are introduced only for an active provider-independent UI
-  review and must remain unmistakably synthetic;
-- stale typed refresh results are ignored by request and context generation;
-- non-manifest, unreachable, and incomplete contexts keep unavailable views
-  and actions discoverable with concrete reasons;
-- only visual preferences survive restart; operational session state does not;
-- divider rails remain disjoint from content and scrollbars, expose a visible
-  grip, and retain hit-test priority across right and bottom placement;
-- active-work quit defaults to Return and requires an explicit Force quit for
-  every implemented TUI-owned Job/session combination; Live joins this matrix
-  when implemented.
-# TUI preview verification
-
-The `tui-preview` feature contains the host and a feature-gated production
-fixture; normal CLI builds do not compile either. The browser, terminal, and
-export modes render registered cases through Ratatui's `TestBackend` and the
-production render tree. The browser representation preserves cells, symbols,
-colors, and modifiers, although indexed colors and font metrics can vary from a
-real terminal.
-
-Use these focused checks when changing the renderer:
+Required generation and artifact checks:
 
 ```shell
-cargo check -p golem-cli
-cargo check -p golem-cli --features tui-preview --example tui-preview
-cargo test -p golem-cli --lib -- tui::
-cargo test -p golem-cli --lib --features tui-preview -- tui::
+cargo make generate-configs
+cargo make generate-openapi
+cargo build -p golem-client
+cargo make build-plugins
+wasm-tools validate --features all plugins/otlp-exporter.wasm
 ```
 
-Also inspect `cargo make tui-preview` for browser reload behavior and
-`cargo make tui-preview-terminal` for case switching and resize cleanup. Use
-`cargo make tui-preview-live` only for the production provider and PTY path.
+Run focused package tests while iterating, then the affected service/client
+checks, `cargo check -p golem-cli --features tui-preview`, registry-service
+check, and authoritative built-in-plugin integration group. Never use
+`cargo make test`.
 
-Browser review links preserve case, font, and size across watched server
-restarts. Every registered case has a unique ID. The persistent catalog contains
-only `ops-agents`; add a focused lab case only for an active design question,
-and remove it after acceptance unless it adds unique regression coverage.
+## Render Matrix
 
-The preview wrapper is tested against direct production rendering. The
-production case renders at representative wide, short, narrow, and `1×1`
-sizes and must reject unknown case IDs.
+Every destination covers ready plus relevant loading, refreshing, empty,
+partial, unavailable, stale, and failed states at:
 
-Pane geometry tests assert that every visible scrollbar occupies its pane's
-trailing-right cell, removes exactly one usable content column, preserves the
-outer-left spine, stays distinct from resize dividers, and exposes nested
-horizontal resize handles through hit testing. Scrolling story tests additionally
-assert that text and ellipses stop immediately before that reserved cell.
-Terminal preview tests route resize events through a backend-generic helper and
-verify both viewport dimensions and redraw signaling.
+- wide: 140×40;
+- medium: 100×30;
+- narrow: 60×24;
+- short: 100×12;
+- extreme: 1×1.
 
-Pane-table tests cover required and optional visibility, transactional chooser
-apply/cancel behavior, content-aware width allocation, horizontal offset
-clamping, frozen marker placement, selected-row wrapping, one-cell selection
-rails, and all four odd/even × selected/unselected surface tokens. Fitting and
-truncation tests include wide, emoji, and combining characters and assert exact
-terminal display widths.
+Assertions include no panic/overflow, visible focus, content ending before its
+right scrollbar, draggable dividers, stable popup size while filtering, and no
+footer/help duplication.
 
-The watched terminal preview uses up/down for registered case inspection. Its
-process must handle the watcher's termination signal, poll for input with a
-bounded delay, and return through the normal terminal cleanup guard before
-cargo-watch rebuilds it. Do not apply this restart model to the production live
-runtime.
+Preview fake telemetry is feature-gated and visibly labelled. Production
+rendering uses only live providers.
 
-Browser preview fonts are pinned remote assets and require network access in
-the reviewing browser. A font must load at regular and bold weights and pass the
-terminal-grid glyph checks before frames are shown. Font loading or metric
-failure must block visual review instead of silently using a platform fallback.
-When typography changes, manually check descenders and vertically joined rails
-at every selectable size in a browser reached through the normal port-forwarded
-workflow.
+## Manual Acceptance
+
+- Install the matching `golem` dev-release binary from this checkout.
+- Use the matching `golem-00` playground, custom ports, and an isolated data
+  directory.
+- Exercise few, hundreds, and thousands of Agents from the demo population
+  scripts.
+- Verify Dashboard, Explore, exact and mixed Oplog, background Stream, revision
+  navigation, all Configuration scopes, mouse scrolling/dragging, compact
+  layout, command palette, and Dev↔Ops restoration.
+- Finish with package formatting checks and `git diff --check`.

@@ -1,190 +1,67 @@
-# TUI Rebuild Phases
+# Implementation Checkpoints
 
-This file is the concise checkpoint map. Its numbers match tasks.md exactly.
-A checkpoint starts only after its named planning prerequisites are checked and
-ends only after behavior, rendering, focused tests, and its recommended commit
-boundary are complete.
+Each checkpoint must compile, pass focused tests, and form a meaningful commit.
 
-Implementation checkpoint `721390b80` completes the accepted local Dev and
-initial read-only Ops subset across checkpoints 1-5. The current work extends
-that base with resource catalogs, bounded Activity snapshots, and minimal local
-Metrics acquisition. `tasks.md` is authoritative for partial items and open
-gates.
+## 1. Lock the contract
 
-## 0. Contract And Readiness
+- Replace the retired subject/view plan with stable Ops destinations.
+- Record page contracts, protocols, deferred work, and acceptance coverage.
 
-Deliverables:
+Gate: the implementation requires no product decisions not recorded here.
 
-- synchronized product, UI, architecture, task, testing, review, and progress
-  documents;
-- one visible readiness ledger with locked and open decisions;
-- no inherited commitment to the previous embedded observability backend.
+## 2. Stable Ops foundation
 
-Gate: the user confirms that the ledger accurately reflects the discussion.
+- Introduce `OpsApp`, destination routes, tab bar, per-page state, and shared
+  collection/async/details/time/chart primitives.
+- Move Ops input/render/help/action ownership out of the shell.
+- Migrate Agents without a visual or behavioral regression.
+- Register deterministic roots for all destinations.
 
-## 1. Product State And Actions
+Gate: all destinations are directly navigable and safe at extreme sizes.
 
-Prerequisites: typed provider/order review and exact resource-action inventory.
+## 3. Metrics data foundation
 
-Deliverables:
+- Upgrade the local store to schema version 2.
+- Preserve counter temporality, add source oplog anchors, and implement bounded
+  SQL paging/bucketing plus typed Agent/Server dashboard snapshots.
+- Release OTLP exporter 1.6.0, rebuild its committed WASM, and regenerate
+  service configuration.
 
-- scalable Dev/Ops workspace, Dev view/layout, and Ops subject/view state;
-- selected target descriptor with provenance and per-view capabilities;
-- one action registry with hierarchical leader paths, palette relevance,
-  availability, target, risk, and review metadata;
-- switchable All/Context palettes over the same registry.
+Gate: typed backend tests prove truthful aggregation, gaps, resets, anchors,
+freshness, and approximation metadata.
 
-Acceptance:
+## 4. Metrics UI
 
-- current Agents behavior remains usable during the transition;
-- reducer tests cover product navigation, capability, palette, and stale-context
-  transitions;
-- replaced flat workspace and shortcut compatibility paths are removed.
+- Implement Dashboard/Explore and Agent/Server controls.
+- Add responsive panels, legends, axes, cursor inspection, expansion, time
+  ranges, live/pause, refresh, paging, and unavailable states.
 
-## 2. Shared Shell And Recursive Layout
+Gate: local demo data yields useful Agent and Server dashboards without fake or
+mislabelled values.
 
-Prerequisite: responsive shell-priority rules.
+## 5. Oplog and Stream
 
-Deliverables:
+- Add bounded structured Oplog search through executor, service, REST, client,
+  CLI, and TUI.
+- Add shared typed presentation, grouping, multi-Agent progress, Stop/Resume,
+  and metric correlation.
+- Extract the typed Stream transport and add the persistent TUI session.
 
-- responsive Dev/Ops shell with context, Jobs, Live, and remote-lock status;
-- ctrl+x w/v/l/a/j/e hierarchy;
-- recursive right/bottom Dev subviews and Ops Details layouts;
-- temporary Layout mode, mouse resizing, compact fallback, and persisted visual
-  preferences.
+Gate: exact index identity survives grouping/merge and sustained stream output
+does not starve input.
 
-Acceptance:
+## 6. Deployments and Configuration
 
-- every pane and overlay renders at wide, short, narrow, compact, and 1x1 sizes;
-- tab changes pane focus only and prohibited shortcut families are absent;
-- dividers, spines, hit regions, and structural scrollbars never overlap.
+- Add current deployment, history, revision, and compare routes.
+- Add lazy typed Environment, Account, and Server configuration inventories.
 
-## 3. Jobs, Sessions, And Safety
+Gate: sensitive values cannot render and every unavailable scope explains why.
 
-Prerequisite: exact action/risk inventory.
+## 7. Overview and acceptance
 
-Deliverables:
+- Wire independently loading status/routing cards and explicit handoffs.
+- Complete command palette, help, mouse, compact, preview, and documentation
+  coverage.
+- Install the matching dev-release CLI and exercise the local demo.
 
-- bounded global Jobs registry and overlay;
-- separate Server, REPL, and Live session lifecycles;
-- risk-class action policy and per-context remote write unlock;
-- context-switch and quit behavior;
-- one active mutating Job per environment with no automatic queue.
-
-Acceptance:
-
-- no mutation can bypass target review, remote lock, or risk confirmation;
-- active and failed work is globally visible;
-- target identity and secrets remain correct across navigation and errors.
-
-## 4. Minimal Dev Workspace
-
-Prerequisite: exact Dev view content, controls, states, and actions. Complete.
-
-Deliverables:
-
-- Build & Deploy with Plan, Build, Deploy, Clean, structured results, and Job
-  history projection;
-- Server with local lifecycle, process state, bound ports, data directory, and
-  logs;
-- REPL with explicit input ownership and persistent PTY state;
-- optional right/bottom subviews with no-subview first-run default.
-
-Acceptance:
-
-- a user can start a local server, plan/build/deploy, use the REPL, switch to
-  Ops, and return without losing session or layout state;
-- unavailable per-view capabilities show concrete reasons.
-
-## 5. Ops Resource Explorer
-
-Prerequisite: exact resource-action inventory.
-
-Deliverables:
-
-- root subjects Agents, Deployment, Environment, and Server;
-- resource drill-downs and breadcrumbs;
-- accepted collection/details behavior on every resource list;
-- Deployment history and revision diffs;
-- Environment resource catalog and homogeneous collections;
-- contextual resource actions using Jobs and safety policy.
-
-Acceptance:
-
-- resource navigation is complete by mouse, leader, and palette;
-- server Dataset paging and local Find remain visibly distinct and bounded;
-- local and remote mutations follow the same explicit risk contract.
-
-The implemented pass through this checkpoint is read-only: it adds the four
-root subjects, individual Agent Overview, current Deployment identity and
-resource catalog, selected Environment configuration and safe resource catalog,
-and Server target/capability information. History, Diff, deeper drilldowns, and
-mutations remain gated.
-
-## 6. Activity
-
-Prerequisite: concrete soft/default and hard Agent bounds plus overflow review.
-
-Deliverables:
-
-- direct typed oplog provider;
-- bounded multi-Agent scope resolver;
-- Timeline and Journal;
-- direct single-Agent Live session.
-
-Current implementation: the direct typed provider, fixed bounded Agent fan-out,
-Timeline rows, and Journal details are present. Server-side scope resolution,
-cursor paging, richer Timeline interpretation, and true transient Live remain
-open; Live is not emulated with oplog polling.
-
-Acceptance:
-
-- Journal never loses AgentID or per-Agent oplog index;
-- Timeline ordering is labelled as presentation rather than global causality;
-- Live remains visibly bound to one exact Agent and never silently retargets.
-
-## 7. Metrics UI
-
-Prerequisite: backend-independent range, aggregation, refresh, auto-refresh,
-and follow controls.
-
-Deliverables:
-
-- family then series navigation;
-- samples, attributes, details, filters, ranges, refresh, and sparklines;
-- distinct Golem service and Agent OTLP source availability;
-- truthful production availability states; focused synthetic fixtures are added
-  only for explicit Metrics UI review.
-
-Current implementation: local Agents, individual Agent, and Server views use a
-family→series→chart/details path over a fixed 15-minute range with five-second
-refresh. Filters, range/aggregation controls, follow, and high-cardinality
-continuation remain open.
-
-Acceptance:
-
-- the TUI interaction model is visually accepted without assuming receiver,
-  storage internals or companion tooling;
-- high-cardinality series do not flatten into an unbounded primary table.
-
-## 8. Minimal Local Metrics Acquisition
-
-The minimal local decision is implemented in the built-in `golem` server: an
-opt-out manifest setting, CLI override, private authenticated typed query
-routes, five-second service sampling, metrics-only deploy overlay, OTLP/HTTP
-JSON receiver, and bounded `observability.db`. It deliberately does not solve a
-general remote-provider architecture. Docker and a custom web UI remain
-unselected because the minimal local flow does not require them.
-
-## 9. Cleanup And Final Acceptance
-
-Deliverables:
-
-- removed dormant and replaced TUI paths;
-- stable module boundaries;
-- synchronized action/help metadata;
-- focused and complete TUI validation;
-- installed-binary terminal smoke test.
-
-Acceptance: product-contract.md, ui-system.md, code, help, previews, and tests
-describe the same minimal Golem TUI.
+Gate: automated matrix and final terminal review are clean.

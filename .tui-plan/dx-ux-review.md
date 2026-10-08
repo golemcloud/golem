@@ -20,27 +20,17 @@ does not retain candidate, comparison, coverage, or Frame Base machinery.
 
 ## Current Focus
 
-- Focus: accept the rebuilt local Dev and read-only Ops slice (`UX-024`)
-- Cases: the `ops-agents` production-rendered fixture plus the Production
-  runtime for Dev Build & Deploy, Server, REPL, Ops resources, compact layout,
-  and extreme shell fallbacks.
-- Decision: the planned slice is implemented and deterministic coverage is
-  green. Review now checks the real terminal workflow and visual continuity,
-  not another product-topology alternative.
-- Options: only fixes within the accepted slice are in scope. Remote writes,
-  Activity/Live, real Metrics providers, and companion tooling remain behind
-  their planning gates.
-- Scratch observations: the first terminal pass found that the rebuilt header,
-  Dev pane chrome, dividers, and lifecycle colors had drifted from the accepted
-  shared foundation. The correction restores the context-only header and shared
-  production primitives; terminal review must recheck both workspaces plus the
-  reviewed command forms, PTY focus/scrollback, right/bottom subviews,
-  four-direction resize, context switching, Jobs, read-only Ops documents, and
-  truthful Metrics unavailability.
-- Queued next: after acceptance, choose the next product gate; neutral target
-  materializers beyond resolved CLI flags remain architectural follow-up work.
-- Exit: terminal review is accepted, required fixes are implemented, and the
-  dev-release playground smoke test passes.
+- Focus: rebuild and accept stable destination-first Ops (`UX-025`).
+- Cases: production-rendered fixtures for every Ops destination at wide,
+  medium, narrow, short, and extreme terminal sizes.
+- Decision: the subject/view prototype is retired. The accepted Dev shell,
+  context header, footer, pane chrome, table language, notices, overlays, and
+  color tokens remain the only visual foundation.
+- Scope: stable tabs, explicit scope handoff, Dashboard/Explore, grouped and
+  exact Oplog, background Stream, Deployment history/diff, and typed
+  Environment/Account/Server Configuration.
+- Exit: all page/state fixtures are green, the local demo passes in a real
+  terminal, and no new page introduces an unreviewed visual language.
 
 ## Sources Of Truth
 
