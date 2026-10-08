@@ -4,8 +4,8 @@ use golem_common::schema::TypedSchemaValue;
 
 #[derive(Debug, Clone)]
 pub(crate) enum RequestClaimIdentity {
-    Exact(HostRequest),
-    EntityInvocation(EntityInvocationRequestIdentity),
+    Exact(Box<HostRequest>),
+    EntityInvocation(Box<EntityInvocationRequestIdentity>),
     ToolInvocation(Box<ToolInvocationClaimIdentity>),
 }
 
@@ -92,7 +92,7 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
 
@@ -105,7 +105,9 @@ impl StartClaim {
             function_name: function_name.clone(),
             function_type: function_type.clone(),
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
+                request.clone(),
+            ))),
         }
     }
 
@@ -137,7 +139,7 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::Exact(request.clone())),
+            matching_request: Some(RequestClaimIdentity::Exact(Box::new(request.clone()))),
         }
     }
 
@@ -152,7 +154,9 @@ impl StartClaim {
             function_type: function_type.clone(),
             parent_start_index,
             observational_owner: None,
-            matching_request: Some(RequestClaimIdentity::EntityInvocation(request.clone())),
+            matching_request: Some(RequestClaimIdentity::EntityInvocation(Box::new(
+                request.clone(),
+            ))),
         }
     }
 
@@ -1042,7 +1046,7 @@ impl ReplayState {
                                 let request_matches = recorded_request_payload_matches(
                                     tx.cursor.oplog.as_ref(),
                                     recorded_request,
-                                    &RequestClaimIdentity::Exact(expected_request.clone()),
+                                    &RequestClaimIdentity::Exact(Box::new(expected_request.clone())),
                                 )
                                 .await
                                 .map_err(|err| {
@@ -1209,7 +1213,7 @@ fn request_claim_identity_matches(
     expected: &RequestClaimIdentity,
 ) -> Result<bool, String> {
     match expected {
-        RequestClaimIdentity::Exact(expected) => Ok(value == expected),
+        RequestClaimIdentity::Exact(expected) => Ok(value == expected.as_ref()),
         RequestClaimIdentity::EntityInvocation(expected) => {
             let HostRequest::EntityInvocation(request) = value else {
                 return Ok(false);
@@ -1413,7 +1417,6 @@ mod tests {
         });
         let request = EntityInvocationRequest {
             entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            calling_principal: calling_principal.clone(),
             call_mode: EntityCallMode::Synchronous,
             operation: operation.clone(),
             principal: calling_principal.clone(),
@@ -1438,7 +1441,6 @@ mod tests {
         };
         let accepted = EntityInvocationRequestIdentity {
             entity: AgentEntity::Tool(ToolName::try_from("grep").unwrap()),
-            calling_principal,
             call_mode: request.call_mode,
             operation: (&operation).into(),
             plan_position: None,
@@ -1515,14 +1517,14 @@ mod tests {
         );
 
         let mut wrong_principal = request.clone();
-        wrong_principal.calling_principal = Principal::Agent(AgentPrincipal {
+        wrong_principal.principal = Principal::Agent(AgentPrincipal {
             agent_id: AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "Example(\"other\")".to_string(),
             },
         });
         assert!(
-            !request_claim_identity_matches(
+            request_claim_identity_matches(
                 &serialized_entity_request(&wrong_principal, recorded_input.clone()),
                 &expected,
             )

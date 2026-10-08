@@ -834,7 +834,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent,
                 call_mode,
                 activation: scope.activation().clone(),
-                calling_principal: scope.calling_principal().clone(),
                 principal: self.invocation_principal(),
                 descriptor: golem_common::model::entity::EntityInvocationDescriptor::Tool(
                     golem_common::model::entity::ToolInvocationDescriptor {
