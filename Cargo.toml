@@ -18,6 +18,7 @@ members = [
     "golem-worker-executor-test-utils",
     "golem-worker-service",
     "integration-tests",
+    "integration-tests/codec-measurements",
     "golem-schema",
     "golem-schema-derive",
     "golem-tool-metadata",

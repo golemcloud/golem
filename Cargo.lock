@@ -3961,6 +3961,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-codec-measurements"
+version = "0.0.0"
+dependencies = [
+ "golem-common",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "golem-common"
 version = "0.0.0"
 dependencies = [

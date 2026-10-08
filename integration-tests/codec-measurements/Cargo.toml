@@ -1,0 +1,15 @@
+[package]
+name = "golem-codec-measurements"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+golem-common = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "golem-codec-measurements"
+path = "src/main.rs"
+test = false
