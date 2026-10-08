@@ -301,15 +301,15 @@ impl StartSelection {
     ) -> Self {
         let filter = exclusions.filter(status, enabled, true);
         let (baseline, replay_revision_without_unavailable) = match frozen_baseline(status) {
-            Some(baseline) => {
+            Ok(baseline) => {
                 let revision = replay_revision(status, &baseline);
                 (baseline, revision)
             }
-            None => (
-                filtered_baseline(status, filter),
+            Err(head) => (
+                filtered_baseline(status, head, filter),
                 replay_revision(
                     status,
-                    &filtered_baseline(status, exclusions.filter(status, enabled, false)),
+                    &filtered_baseline(status, head, exclusions.filter(status, enabled, false)),
                 ),
             ),
         };
@@ -481,11 +481,23 @@ struct AutomaticSnapshotFilter<'a> {
     filesystem_snapshots_enabled: bool,
 }
 
+/// A head of the queue that froze no baseline.
+#[derive(Clone, Copy, Debug)]
+enum OpenHead<'a> {
+    /// No pending update, or a plain automatic update with its strategy entry: a start selects
+    /// a periodic record.
+    Periodic,
+    /// An automatic update without a strategy entry: a start selects the record of its
+    /// snapshot-assisted strategy.
+    UnselectedAutomatic(&'a PendingUpdateRef),
+}
+
 /// The baseline that the head of the queue of `status` froze, which no filter changes: the
-/// record of a snapshot-assisted head, or the record of a snapshot-based head.
-fn frozen_baseline(status: &AgentStatusRecord) -> Option<SelectedBaseline> {
+/// record of a snapshot-assisted head, or the record of a snapshot-based head. Any other head
+/// froze none, and the error gives it.
+fn frozen_baseline(status: &AgentStatusRecord) -> Result<SelectedBaseline, OpenHead<'_>> {
     match Head::of(status) {
-        Head::SelectedAssisted(head, selection) => Some(SelectedBaseline::AssistedPending {
+        Head::SelectedAssisted(head, selection) => Ok(SelectedBaseline::AssistedPending {
             snapshot: selection.snapshot.clone(),
             head: Arc::new(head.clone()),
         }),
@@ -494,36 +506,35 @@ fn frozen_baseline(status: &AgentStatusRecord) -> Option<SelectedBaseline> {
                 kind: PendingUpdateKind::SnapshotBased { .. },
                 ..
             },
-        ) => Some(SelectedBaseline::ManualPending {
+        ) => Ok(SelectedBaseline::ManualPending {
             head: Arc::new(head.clone()),
             previous: status.authoritative_snapshot.clone(),
         }),
-        Head::None | Head::UnselectedAutomatic(_) | Head::Other(_) => None,
+        Head::UnselectedAutomatic(head) => Err(OpenHead::UnselectedAutomatic(head)),
+        Head::None | Head::Other(_) => Err(OpenHead::Periodic),
     }
 }
 
-/// The baseline of a start of `status` under `filter` when the head of the queue froze none: a
-/// periodic record that passes, else the authoritative baseline, else the initial files. For an
-/// unselected automatic head, the record that passes is the record of its snapshot-assisted
-/// strategy.
+/// The baseline of a start of `status` with the open `head` under `filter`: a record that
+/// passes, else the authoritative baseline, else the initial files.
 fn filtered_baseline(
     status: &AgentStatusRecord,
+    head: OpenHead<'_>,
     filter: AutomaticSnapshotFilter<'_>,
 ) -> SelectedBaseline {
-    match Head::of(status) {
-        Head::UnselectedAutomatic(head) => select_automatic_snapshot(status, filter).map_or_else(
+    let selected = select_automatic_snapshot(status, filter);
+    match head {
+        OpenHead::UnselectedAutomatic(head) => selected.map_or_else(
             || authoritative_baseline(status),
             |snapshot| SelectedBaseline::AssistedPending {
                 snapshot,
                 head: Arc::new(head.clone()),
             },
         ),
-        Head::None | Head::SelectedAssisted(..) | Head::Other(_) => {
-            select_automatic_snapshot(status, filter).map_or_else(
-                || authoritative_baseline(status),
-                SelectedBaseline::Periodic,
-            )
-        }
+        OpenHead::Periodic => selected.map_or_else(
+            || authoritative_baseline(status),
+            SelectedBaseline::Periodic,
+        ),
     }
 }
 
@@ -875,7 +886,7 @@ mod tests {
         assert_eq!(
             replay_revision(
                 &status,
-                &filtered_baseline(&status, filter(&HashSet::new()))
+                &filtered_baseline(&status, OpenHead::Periodic, filter(&HashSet::new()))
             ),
             revision(1)
         );
@@ -923,7 +934,10 @@ mod tests {
             (Some(5), None)
         );
         assert_eq!(
-            replay_revision(&status, &filtered_baseline(&status, rejecting(&both))),
+            replay_revision(
+                &status,
+                &filtered_baseline(&status, OpenHead::Periodic, rejecting(&both))
+            ),
             revision(1)
         );
     }
