@@ -3918,8 +3918,9 @@ async fn manual_update_agent_with_load(
 }
 
 /// An interrupt during the snapshot load of a manual update leaves the update pending. The load is
-/// held at its wall-clock read while the interrupt arrives. The next start loads the snapshot
-/// again, and only that load applies the update.
+/// held at its wall-clock read while the interrupt arrives. The resume waits until the interrupted
+/// start has unloaded the agent: a resume while the agent is still loaded starts nothing. The next
+/// start loads the snapshot again, and only that load applies the update.
 #[test]
 #[timeout("120s")]
 async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next_start_loads_it_again(
@@ -3943,12 +3944,8 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
         .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
-    let mut first_load = executor
-        .gate_next_wall_clock_now(&OwnedAgentId::new(
-            context.default_environment_id,
-            &worker_id,
-        ))
-        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let mut first_load = executor.gate_next_wall_clock_now(&owned_agent_id).await?;
     executor
         .manual_update_worker(&worker_id, target.revision, false)
         .await?;
@@ -3969,6 +3966,12 @@ async fn an_interrupted_snapshot_load_keeps_a_manual_update_pending_and_the_next
             Duration::from_secs(30),
         )
         .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
 
     executor.resume(&worker_id, false).await?;
     executor
