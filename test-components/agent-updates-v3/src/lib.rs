@@ -33,17 +33,24 @@ impl UpdateTest for UpdateTestImpl {
         Ok(result)
     }
 
+    // The agent environment variable `LOAD_SNAPSHOT` steers the load: `exit` exits the guest,
+    // and `read-clock` reads the wall clock, where a test can hold the load.
     async fn load_snapshot(
         bytes: Vec<u8>,
         _context: golem_rust::agentic::SnapshotRestoreContext,
     ) -> Result<Self, String> {
-        if bytes.len() >= 8 {
-            Ok(Self {
-                last: u64::from_be_bytes(bytes[..8].try_into().unwrap()),
-            })
-        } else {
-            Err("Invalid snapshot - not enough bytes to read u64".to_string())
+        if bytes.len() < 8 {
+            return Err("Invalid snapshot - not enough bytes to read u64".to_string());
         }
+        let last = u64::from_be_bytes(bytes[..8].try_into().unwrap());
+        match std::env::var("LOAD_SNAPSHOT").as_deref() {
+            Ok("exit") => std::process::exit(1),
+            Ok("read-clock") => {
+                let _ = std::time::SystemTime::now();
+            }
+            _ => {}
+        }
+        Ok(Self { last })
     }
 }
 
