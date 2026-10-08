@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::types::ObjectMetadata;
 use golem_service_base::storage::blob::{
-    BlobMissingError, BlobNameError, BlobRangeError, BlobStorage, BlobStorageLabelledApi,
+    BlobFailure, BlobMissingError, BlobNameError, BlobStorage, BlobStorageLabelledApi,
     BlobStorageNamespace, ExistsResult, blob_file_name_to_string, blob_path_is_root,
     join_blob_path, normalized_blob_path_text,
 };
@@ -212,17 +212,20 @@ pub struct DefaultBlobStoreService {
 
 /// Gives the `BlobStoreError` of an error of the blob storage.
 ///
-/// A [`BlobRangeError`] and a [`BlobNameError`] are errors of the input of the guest, so they
-/// become [`BlobStoreError::InvalidInput`]. A [`BlobMissingError`] becomes
-/// [`BlobStoreError::NotFound`]. `classify_blob_store_error` in
-/// `crate::durable_host::blobstore` makes each of the three permanent. Each other error becomes
-/// [`BlobStoreError::TransientBackend`], which is transient, so the executor retries the
-/// operation. Each method of [`DefaultBlobStoreService`] maps its errors with this function,
-/// so an error of the input is permanent at each of them.
+/// [`BlobFailure::of`] tells a permanent error from a transient one. A transient error becomes
+/// [`BlobStoreError::TransientBackend`], so the executor retries the operation. Of the permanent
+/// errors, a [`BlobMissingError`] becomes [`BlobStoreError::NotFound`], and a
+/// [`BlobRangeError`](golem_service_base::storage::blob::BlobRangeError) and a
+/// [`BlobNameError`] are errors of the input of the guest, so they become
+/// [`BlobStoreError::InvalidInput`]. `classify_blob_store_error` in
+/// `crate::durable_host::blobstore` makes each of the two permanent. Each method of
+/// [`DefaultBlobStoreService`] maps its errors with this function, so an error of the input is
+/// permanent at each of them. The message of a permanent error is the message of the typed
+/// error, which is the root cause, without a context around it.
 ///
-/// [`BlobNameError`] has one downcast here and one rule: each of its variants is a name that
-/// the guest chose and that the storage cannot use, so each of them is permanent, whichever
-/// backend gives it. The path rules are in it too, so a `..` name and an absolute name are
+/// [`BlobFailure::of`] has one downcast for [`BlobNameError`] and one rule: each variant of that
+/// error is a name that the guest chose and that the storage cannot use, so each of them is
+/// permanent, whichever backend gives it. The path rules are in it too, so a `..` name and an absolute name are
 /// permanent like a name that S3 does not accept as an object key.
 ///
 /// [`BlobMissingError`] is not a name error: the storage accepts the name, and holds no blob at it.
@@ -234,14 +237,12 @@ pub struct DefaultBlobStoreService {
 /// where the storage gives [`BlobMissingError`]. A retry cannot make the storage hold that object,
 /// so the error is permanent.
 fn blob_store_error(err: anyhow::Error) -> BlobStoreError {
-    if let Some(range) = err.downcast_ref::<BlobRangeError>() {
-        BlobStoreError::InvalidInput(range.to_string())
-    } else if let Some(name) = err.downcast_ref::<BlobNameError>() {
-        BlobStoreError::InvalidInput(name.to_string())
-    } else if let Some(missing) = err.downcast_ref::<BlobMissingError>() {
-        BlobStoreError::NotFound(missing.to_string())
-    } else {
-        BlobStoreError::TransientBackend(err.to_string())
+    match BlobFailure::of(&err) {
+        BlobFailure::Transient => BlobStoreError::TransientBackend(err.to_string()),
+        BlobFailure::Permanent if err.is::<BlobMissingError>() => {
+            BlobStoreError::NotFound(err.root_cause().to_string())
+        }
+        BlobFailure::Permanent => BlobStoreError::InvalidInput(err.root_cause().to_string()),
     }
 }
 
@@ -1020,7 +1021,7 @@ mod tests {
         }
     }
 
-    /// `blob_store_error` has one downcast for `BlobNameError`, so each rule of a name is
+    /// `BlobFailure::of` has one downcast for `BlobNameError`, so each rule of a name is
     /// permanent, and the rules of the path are in it with the rules of the object key of S3.
     ///
     /// The filesystem backend gives the three errors of the path, so the test reads the real

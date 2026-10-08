@@ -1465,6 +1465,32 @@ pub enum BlobNameError {
     Reserved { marker: &'static str },
 }
 
+/// Tells if a later request can pass where an error of the blob storage failed.
+///
+/// This is the one list of the permanent errors of the blob storage. [`BlobRangeError`],
+/// [`BlobNameError`] and [`BlobMissingError`] are permanent, because a retry asks for the same
+/// byte, the same name or the same missing blob again. Each other error is of the backend, and is
+/// transient: the backend spent its retry budget on it, and a later request can pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlobFailure {
+    Transient,
+    Permanent,
+}
+
+impl BlobFailure {
+    /// The kind of `error`. A context around a permanent error keeps it permanent.
+    pub fn of(error: &Error) -> Self {
+        if error.is::<BlobRangeError>()
+            || error.is::<BlobNameError>()
+            || error.is::<BlobMissingError>()
+        {
+            Self::Permanent
+        } else {
+            Self::Transient
+        }
+    }
+}
+
 /// Gives the bytes from `start` to `end` of `blob`, which holds the full blob. Both offsets are
 /// inclusive.
 ///
@@ -1890,14 +1916,46 @@ pub(crate) fn blob_child_path(directory: &str, name: &str) -> Box<Path> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BlobNameError, BlobRangeError, agent_path_segment, blob_file_name_to_string,
-        blob_path_to_string, blob_range, join_blob_path, normalized_blob_path,
+        BlobFailure, BlobMissingError, BlobNameError, BlobRangeError, agent_path_segment,
+        blob_file_name_to_string, blob_path_to_string, blob_range, join_blob_path,
+        normalized_blob_path,
     };
+    use anyhow::{Context, anyhow};
     use golem_common::model::AgentId;
     use golem_common::model::component::ComponentId;
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
+
+    /// A range, a name and a missing blob are permanent, also under a context, and every other
+    /// error of the storage is transient.
+    #[test]
+    fn blob_failure_is_permanent_only_for_a_range_a_name_or_a_missing_blob() {
+        let permanent = || {
+            [
+                anyhow::Error::from(BlobRangeError { start: 3, end: 2 }),
+                anyhow::Error::from(BlobNameError::NulByte),
+                anyhow::Error::from(BlobMissingError {
+                    path: PathBuf::from("a"),
+                }),
+            ]
+        };
+
+        let plain = permanent().map(|error| BlobFailure::of(&error));
+        let wrapped = permanent()
+            .map(|error| BlobFailure::of(&Err::<(), _>(error).context("wrapped").unwrap_err()));
+
+        assert_eq!(plain, [BlobFailure::Permanent; 3]);
+        assert_eq!(wrapped, [BlobFailure::Permanent; 3]);
+        assert_eq!(
+            [
+                BlobFailure::of(&anyhow!("service unavailable")),
+                BlobFailure::of(&anyhow!("service unavailable").context("wrapped")),
+                BlobFailure::of(&anyhow::Error::from(std::io::Error::other("reset"))),
+            ],
+            [BlobFailure::Transient; 3]
+        );
+    }
 
     #[test]
     fn blob_range_gives_the_inclusive_range_or_a_range_error() {

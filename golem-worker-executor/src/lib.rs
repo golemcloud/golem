@@ -395,6 +395,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(DefaultKeyValueService::new(key_value_storage.clone()))
     }
 
+    /// Wraps the blob storage every service is built on. The default is the identity. The
+    /// in-process test harness uses it to inject blob storage failures above the retry budget of
+    /// the backend, standing in for an outage that outlived it.
+    fn wrap_blob_storage(&self, blob_storage: Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> {
+        blob_storage
+    }
+
     fn create_blob_store_service(
         &self,
         blob_storage: &Arc<dyn BlobStorage>,
@@ -885,6 +892,7 @@ pub async fn create_worker_executor_impl<
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
     };
+    let blob_storage = bootstrap.wrap_blob_storage(blob_storage);
 
     let initial_files_service = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 

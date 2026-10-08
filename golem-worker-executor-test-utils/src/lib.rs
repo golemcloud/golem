@@ -2174,6 +2174,7 @@ type WrapKeyValueServiceFn =
 type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> Arc<dyn KeyValueStorage + Send + Sync>
     + Send
     + Sync;
+type WrapBlobStorageFn = dyn Fn(Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> + Send + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
 type WrapComponentServiceFn =
@@ -2194,6 +2195,9 @@ pub struct TestExecutorOverrides {
     /// decorator, so injected failures reach the services as an outage that outlived the retry
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
+    /// Wraps the blob storage every executor service is built on, so injected failures reach
+    /// the services as an outage that outlived the retry budget of the backend would.
+    pub wrap_blob_storage: Option<Arc<WrapBlobStorageFn>>,
     pub wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
     pub wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     pub wrap_rpc: Option<Arc<WrapRpcFn>>,
@@ -3704,6 +3708,14 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             wrap(key_value_service)
         } else {
             key_value_service
+        }
+    }
+
+    fn wrap_blob_storage(&self, blob_storage: Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> {
+        if let Some(wrap) = &self.overrides.wrap_blob_storage {
+            wrap(blob_storage)
+        } else {
+            blob_storage
         }
     }
 
