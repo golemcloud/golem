@@ -12005,6 +12005,18 @@ impl RunningWorker {
                     .component_service()
                     .get_metadata(component_id, Some(component_revision))
                     .await;
+                if let Err(error) = &metadata
+                    && matches!(
+                        start_outcome::FetchProblem::of(error),
+                        start_outcome::FetchProblem::Unavailable
+                    )
+                {
+                    return Err(WorkerExecutorError::RecoveryRequired {
+                        retry_from: None,
+                        details: error.to_string(),
+                    }
+                    .into());
+                }
                 let problem = match &metadata {
                     Ok(metadata) => component_support_error(&metadata.metadata)
                         .map(start_outcome::RawStartError::TargetUnsupported),
