@@ -5158,6 +5158,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         )
                         .await?;
 
+                        self.state.automatic_update_unsettled = false;
                         debug!("Finalizing automatic update to revision {target_revision}");
                     }
 
@@ -11143,6 +11144,10 @@ struct PrivateDurableWorkerState {
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
     pending_update: tokio::sync::Mutex<Option<HydratedUpdate>>,
 
+    /// Remains set after finalization takes `pending_update`, until success is committed. Fresh
+    /// wallet-independent calls must not extend target-only history while that outcome is pending.
+    automatic_update_unsettled: bool,
+
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
@@ -11457,6 +11462,13 @@ impl PrivateDurableWorkerState {
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
+            automatic_update_unsettled: pending_update.as_ref().is_some_and(|update| {
+                matches!(
+                    update.description,
+                    UpdateDescription::Automatic { .. }
+                        | UpdateDescription::SnapshotAssistedAutomatic { .. }
+                )
+            }),
             pending_update: tokio::sync::Mutex::new(pending_update),
             current_retry_point: OplogIndex::INITIAL,
             active_atomic_regions: Vec::new(),
