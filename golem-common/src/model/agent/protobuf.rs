@@ -2,11 +2,11 @@ use super::{
     AgentConfigSource, AgentHttpAuthDetails, AgentInvocationMode, AgentMode, AgentPrincipal,
     CachePolicy, CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
     DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
-    DurableStreamSlotOptions, DurableStreamSlotSource, GolemUserPrincipal, HeaderVariable,
-    HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment,
-    PathVariable, Principal, QueryVariable, ReadOnlyConfig, RegisteredAgentType,
-    RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
-    SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
+    DurableStreamSlotOptions, DurableStreamSlotSource, FileResponseHeader, GolemUserPrincipal,
+    HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails, LiteralSegment,
+    OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable, ReadOnlyConfig,
+    RegisteredAgentType, RegisteredAgentTypeImplementer, Snapshotting, SnapshottingConfig,
+    SnapshottingEveryNInvocation, SnapshottingPeriodic, SystemVariable, SystemVariableSegment,
 };
 use crate::base_model::agent::{ExactFileMapping, FileMapping, SubtreeFileMapping};
 use crate::model::Empty;
@@ -224,6 +224,11 @@ impl TryFrom<golem_api_grpc::proto::golem::component::HttpMountDetails> for Http
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<_, _>>()?,
+            file_response_headers: value
+                .file_response_headers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             openapi_provider_method: value.openapi_provider_method,
         })
     }
@@ -243,7 +248,30 @@ impl From<HttpMountDetails> for golem_api_grpc::proto::golem::component::HttpMou
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            file_response_headers: value
+                .file_response_headers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::FileResponseHeader> for FileResponseHeader {
+    fn from(value: golem_api_grpc::proto::golem::component::FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
+impl From<FileResponseHeader> for golem_api_grpc::proto::golem::component::FileResponseHeader {
+    fn from(value: FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
         }
     }
 }

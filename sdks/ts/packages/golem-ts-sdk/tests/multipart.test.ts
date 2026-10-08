@@ -109,6 +109,18 @@ describe('multipart encode/decode', () => {
       ]),
     ).toThrow();
   });
+  it('rejects lossy names and malformed UTF-8 headers', () => {
+    for (const name of ['db:\uD800', 'db:\uDC00', 'db:\u0000', 'db:\u007f']) {
+      expect(() => encodeMultipart([binaryPart(name, new Uint8Array())])).toThrow();
+    }
+    const raw = textEncoder.encode(wire);
+    const position = wire.indexOf('part:index');
+    for (const invalid of [[255], [192, 175], [237, 160, 128]]) {
+      const malformed = raw.slice();
+      malformed.set(invalid, position);
+      expect(() => decodeMultipart(malformed, boundary)).toThrow('invalid UTF-8 header');
+    }
+  });
   for (const mime of [
     'multipart/mixedextra; boundary=b',
     'multipart/mixed; boundary=b; boundary=b',

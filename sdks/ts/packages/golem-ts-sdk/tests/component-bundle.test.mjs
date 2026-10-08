@@ -7,10 +7,15 @@ import fs from 'node:fs';
 import { z } from 'zod';
 import { compileSchema } from '../src/schema/adapter';
 import { typedSchemaValueToWit, schemaValueFromWit } from '../src/internal/schema-model';
+import { createToolClientRuntime } from '../src/bridge/tool';
+import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
 
 const fixtures = path.resolve('tests/components');
+const richToolContract = JSON.parse(
+  fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
+);
 const expected = {
   empty: { agents: false, tools: false, middleware: false, schemas: false },
   'tool-only': { agents: false, tools: true, middleware: false, schemas: false },
@@ -101,7 +106,7 @@ function instantiate(code, overrides = {}) {
   return module.exports;
 }
 
-describe('static component exports', () => {
+describe('component exports', () => {
   it('retains schema adapters for symbolic durable and storage forSchema APIs', async () => {
     const output = await build('symbolic-schema-apis');
     await instantiate(output.code);
@@ -145,6 +150,335 @@ describe('static component exports', () => {
     await expect(client.fail({})).rejects.toMatchObject({
       cause: { tag: 'tool', error: { name: 'broken', payload: { code: 41 } } },
     });
+  }, 30000);
+
+  it('keeps generated rich-tool clients equivalent to the definition-owned proxy', async () => {
+    const output = await build('gol-40-rich-tool');
+    const exports = await instantiate(output.code);
+    const conformance = globalThis.__golemGol40TypeScriptConformance;
+    delete globalThis.__golemGol40TypeScriptConformance;
+    const request = {
+      region: 'us-east-1',
+      trace: true,
+      profile: 'release',
+      request: {
+        source: 'src/main.wasm',
+        labels: new Map([
+          ['team', 'runtime'],
+          ['tier', 'gold'],
+        ]),
+      },
+      inputs: ['src/a.wasm', 'src/b.wat'],
+      format: 'json',
+      tag: ['release', 'signed'],
+      define: new Map([
+        ['opt', 3n],
+        ['workers', 2n],
+      ]),
+      color: 'never',
+      checksum: true,
+      verbose: 2,
+      stdin: new ReadableStream({
+        start(controller) {
+          controller.enqueue(Uint8Array.of(0, 97, 115, 109));
+          controller.close();
+        },
+      }),
+    };
+
+    const generated = await conformance.generated.render(request).collect();
+    const proxy = await conformance.definitionOwned.render(request).collect();
+    expect(generated).toEqual(proxy);
+    expect(generated).toEqual({
+      result: {
+        status: 'fulfilled',
+        value: {
+          artifactId: 18446744073709551614n,
+          digest: 'deadbeef',
+          labels: new Map([
+            ['tier', 'gold'],
+            ['team', 'runtime'],
+          ]),
+          warnings: ['unsigned metadata'],
+        },
+      },
+      stdout: {
+        status: 'fulfilled',
+        value: new TextEncoder().encode('compiled 2 inputs\n'),
+      },
+      stderr: {
+        status: 'fulfilled',
+        value: Uint8Array.of(0, 1, 2),
+      },
+    });
+    expect(
+      conformance.observations.map(({ path, stdout, stderr }) => ({ path, stdout, stderr })),
+    ).toEqual([
+      { path: ['render'], stdout: true, stderr: true },
+      { path: ['render'], stdout: true, stderr: true },
+    ]);
+    expect(conformance.observations[0].input).toEqual(conformance.observations[1].input);
+
+    const status = {
+      region: 'eu-west-1',
+      trace: false,
+      profile: 'release',
+      artifactId: 9223372036854775809n,
+    };
+    await expect(conformance.generated.render.status(status)).resolves.toBe('ready');
+    await expect(conformance.definitionOwned.render.status(status)).resolves.toBe('ready');
+    expect(conformance.observations.slice(-2).map(({ path }) => path)).toEqual([
+      ['render', 'status'],
+      ['render', 'status'],
+    ]);
+
+    conformance.failNext();
+    await expect(conformance.generated.render(request).result).rejects.toMatchObject({
+      cause: {
+        tag: 'tool',
+        error: {
+          name: 'invalid-request',
+          payload: {
+            field: 'request.source',
+            reason: 'unsupported module',
+            retryable: false,
+          },
+        },
+      },
+    });
+    conformance.failNext();
+    await expect(conformance.definitionOwned.render(request).result).rejects.toMatchObject({
+      cause: {
+        tag: 'tool',
+        error: {
+          name: 'invalid-request',
+          payload: {
+            field: 'request.source',
+            reason: 'unsupported module',
+            retryable: false,
+          },
+        },
+      },
+    });
+    const [metadata] = exports.tool.discoverTools();
+    const expectedMetadata = richToolContract.tool;
+    const expectedRender = expectedMetadata.commands.subcommands[0];
+    const expectedStatus = expectedRender.subcommands[0];
+    expect(metadata).toMatchObject({
+      version: expectedMetadata.version,
+      requiresFilesystem: expectedMetadata.requiresFilesystem,
+    });
+    expect(
+      metadata.commands.nodes.map(({ name, aliases, doc, subcommands }) => ({
+        name,
+        aliases,
+        doc,
+        subcommands,
+      })),
+    ).toEqual([
+      {
+        name: expectedMetadata.commands.name,
+        aliases: expectedMetadata.commands.aliases,
+        doc: expectedMetadata.commands.doc,
+        subcommands: [1],
+      },
+      {
+        name: expectedRender.name,
+        aliases: expectedRender.aliases,
+        doc: expectedRender.doc,
+        subcommands: [2],
+      },
+      {
+        name: expectedStatus.name,
+        aliases: expectedStatus.aliases,
+        doc: expectedStatus.doc,
+        subcommands: [],
+      },
+    ]);
+    const root = metadata.commands.nodes[0];
+    const render = metadata.commands.nodes[1];
+    const statusNode = metadata.commands.nodes[2];
+    expect(
+      root.globals.options.map(({ long, short, aliases, valueName, required, envVar, doc }) => ({
+        long,
+        short,
+        aliases,
+        valueName,
+        required,
+        envVar,
+        doc,
+      })),
+    ).toEqual(
+      expectedMetadata.commands.globals.options.map(
+        ({ shape: _shape, default: _default, ...option }) => option,
+      ),
+    );
+    expect(
+      root.globals.flags.map(({ long, short, aliases, envVar, doc, shape }) => ({
+        long,
+        short,
+        aliases,
+        envVar: envVar ?? null,
+        doc,
+        shape: {
+          kind: shape.tag,
+          default: shape.val.default_,
+          negatable: shape.val.negatable,
+        },
+      })),
+    ).toEqual(expectedMetadata.commands.globals.flags);
+    expect(render.globals.options[0]).toMatchObject({
+      long: expectedRender.globals.options[0].long,
+      short: expectedRender.globals.options[0].short,
+      aliases: expectedRender.globals.options[0].aliases,
+      valueName: expectedRender.globals.options[0].valueName,
+      required: expectedRender.globals.options[0].required,
+      doc: expectedRender.globals.options[0].doc,
+    });
+    expect(
+      render.body.positionals.fixed.map(({ name, valueName, required, acceptsStdio, doc }) => ({
+        name,
+        valueName,
+        required,
+        acceptsStdio,
+        doc,
+      })),
+    ).toEqual(
+      expectedRender.body.positionals.fixed.map(
+        ({ type: _type, default: _default, ...rest }) => rest,
+      ),
+    );
+    expect(render.body.positionals.tail).toMatchObject({
+      name: expectedRender.body.positionals.tail.name,
+      valueName: expectedRender.body.positionals.tail.valueName,
+      min: expectedRender.body.positionals.tail.min,
+      max: expectedRender.body.positionals.tail.max,
+      separator: expectedRender.body.positionals.tail.separator,
+      verbatim: expectedRender.body.positionals.tail.verbatim,
+      acceptsStdio: expectedRender.body.positionals.tail.acceptsStdio,
+      doc: expectedRender.body.positionals.tail.doc,
+    });
+    expect(
+      render.body.options.map(
+        ({ long, short, aliases, valueName, required, envVar, doc, shape }) => ({
+          long,
+          short: short ?? null,
+          aliases,
+          valueName,
+          required,
+          envVar: envVar ?? null,
+          doc,
+          shape: shape.tag,
+        }),
+      ),
+    ).toEqual(
+      expectedRender.body.options.map(({ shape, default: _default, ...option }) => ({
+        ...option,
+        shape: shape.kind,
+      })),
+    );
+    expect(
+      render.body.flags.map(({ long, short, aliases, envVar, doc, shape }) => ({
+        long,
+        short: short ?? null,
+        aliases,
+        envVar: envVar ?? null,
+        doc,
+        shape: shape.tag,
+      })),
+    ).toEqual(
+      expectedRender.body.flags.map(({ shape, ...flag }) => ({ ...flag, shape: shape.kind })),
+    );
+    expect(render.body.constraints.map(({ tag }) => tag)).toEqual(
+      expectedRender.body.constraints.map(({ kind }) => kind),
+    );
+    expect(render.body.stdin).toEqual(expectedRender.body.stdin);
+    expect(render.body.stdout).toEqual(expectedRender.body.stdout);
+    expect(render.body.stderr).toEqual(expectedRender.body.stderr);
+    expect(render.body.result).toMatchObject({
+      doc: expectedRender.body.result.doc,
+      formatters: expectedRender.body.result.formatters,
+      defaultFormatter: expectedRender.body.result.defaultFormatter,
+    });
+    expect(
+      render.body.errors.map(({ name, kind, exitCode, doc }) => ({
+        name,
+        kind,
+        exitCode,
+        doc,
+      })),
+    ).toEqual(expectedRender.body.errors.map(({ payload: _payload, ...error }) => error));
+    expect(render.body.annotations).toEqual(expectedRender.body.annotations);
+    expect(statusNode.body.annotations).toEqual(expectedStatus.body.annotations);
+
+    const schemaTag = (index) => metadata.schema.typeNodes[index].body.tag;
+    expect(schemaTag(render.body.positionals.fixed[0].type)).toBe('record-type');
+    expect(metadata.schema.typeNodes[render.body.positionals.tail.itemType].body).toEqual({
+      tag: 'path-type',
+      val: {
+        direction: 'input',
+        kind: 'file',
+        allowedMimeTypes: undefined,
+        allowedExtensions: ['wasm', 'wat'],
+      },
+    });
+    expect(schemaTag(render.body.result.type)).toBe('record-type');
+    const resultFields = metadata.schema.typeNodes[render.body.result.type].body.val;
+    const digest = resultFields.find(({ name }) => name === 'digest');
+    expect(metadata.schema.typeNodes[digest.body].body).toEqual({
+      tag: 'text-type',
+      val: expectedMetadata.schemaDefinitions.ArtifactReport.fields.find(
+        ({ name }) => name === 'digest',
+      ).type.restrictions,
+    });
+    expect(statusNode.body.positionals.fixed[0].name).toBe('artifact-id');
+    expect(schemaTag(statusNode.body.positionals.fixed[0].type)).toBe('u64-type');
+    expect(metadata.schema.typeNodes[statusNode.body.result.type].body).toEqual({
+      tag: 'enum-type',
+      val: expectedStatus.body.result.type.cases,
+    });
+
+    const reflected = new ToolType(
+      {
+        lookupName: 'artifact',
+        definition: metadata,
+        implementedBy: { uuid: { highBits: 0n, lowBits: 1n } },
+      },
+      createToolClientRuntime('artifact', conformance.transport),
+    );
+    await expect(
+      reflected.client.command(['build', 'show']).invokeJson({
+        region: 'eu-west-1',
+        trace: false,
+        profile: 'release',
+        'artifact-id': '9223372036854775809',
+      }),
+    ).resolves.toBe('ready');
+    conformance.failNext();
+    await expect(
+      reflected.client.command(['render']).startJson(
+        {
+          region: 'us-east-1',
+          trace: true,
+          profile: 'release',
+          request: {
+            source: 'src/main.wasm',
+            labels: [
+              ['team', 'runtime'],
+              ['tier', 'gold'],
+            ],
+          },
+          inputs: ['src/a.wasm', 'src/b.wat'],
+          format: 'text',
+          tag: ['release', 'signed'],
+          define: [],
+          color: 'never',
+          checksum: true,
+          verbose: 2,
+        },
+        request.stdin,
+      ).result,
+    ).rejects.toMatchObject({ cause: { tag: 'tool', error: { name: 'invalid-request' } } });
   }, 30000);
 
   it('shares a runtime agent definition between dispatch and clients, including config and typed streams', async () => {
@@ -576,6 +910,7 @@ describe('static component exports', () => {
           version: 1,
           principal: { tag: 'anonymous' },
           state: { count: 18 },
+          fileDatabases: {},
         });
         const restored = await instantiate(output.code);
         await restored.loadSnapshot.load(snapshot);

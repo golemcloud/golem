@@ -31,6 +31,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::time::Duration;
 use uuid::uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -235,6 +236,8 @@ pub struct RegistryServiceConfig {
     pub environment: String,
     pub workspace: String,
     pub http_port: u16,
+    #[serde(with = "humantime_serde")]
+    pub runtime_metrics_sampling_interval: Duration,
     pub grpc: GrpcApiConfig,
     pub db: DbConfig,
     pub login: LoginConfig,
@@ -267,6 +270,11 @@ impl SafeDisplay for RegistryServiceConfig {
         let _ = writeln!(&mut result, "environment: {}", self.environment);
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(
+            &mut result,
+            "runtime metrics sampling interval: {}s",
+            self.runtime_metrics_sampling_interval.as_secs()
+        );
 
         let _ = writeln!(&mut result, "grpc:");
         let _ = writeln!(&mut result, "{}", self.grpc.to_safe_string_indented());
@@ -437,6 +445,7 @@ impl Default for RegistryServiceConfig {
             environment: "dev".to_string(),
             workspace: "release".to_string(),
             http_port: 8081,
+            runtime_metrics_sampling_interval: Duration::from_secs(5),
             grpc: GrpcApiConfig::default(),
             db: DbConfig::Sqlite(DbSqliteConfig {
                 database: "golem_registry_service.db".to_string(),

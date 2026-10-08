@@ -1,5 +1,7 @@
+use super::tests::{no_initial_files, scratch_directory};
 use super::*;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
+use crate::services::golem_config::FilesystemStorageMode;
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::AtomicResourceEntry;
@@ -144,9 +146,14 @@ async fn create_benchmark_filesystem(
     limits: ResolvedStorageLimits,
     filesystem_metering: bool,
 ) -> BenchmarkFilesystem {
-    let created = create_fresh(provisioning, agent.clone(), limits)
-        .await
-        .unwrap();
+    let created = create_fresh(
+        provisioning,
+        scratch_directory().await,
+        agent.clone(),
+        limits,
+    )
+    .await
+    .unwrap();
     let (account, entry) = benchmark_account();
     let reconstructing = bind_configured_resource_usage_metering(
         created,
@@ -158,9 +165,13 @@ async fn create_benchmark_filesystem(
         },
     )
     .unwrap();
-    let reconstructing = materialize_initial_files(reconstructing, PreparedInitialFiles::empty())
-        .await
-        .unwrap();
+    let reconstructing = materialize_baseline(
+        reconstructing,
+        no_initial_files().await,
+        None::<std::convert::Infallible>,
+    )
+    .await
+    .unwrap();
     let reconstructing = finish_replay(reconstructing).await.unwrap();
     let resident = finish_reconstruction(reconstructing).await.unwrap();
     let window = open_resource_usage_window(&resident, benchmark_permit(&entry, &agent).await)
@@ -960,7 +971,7 @@ fn verify_managed_workload_gate(
 #[derive(Clone, Copy)]
 struct BenchmarkIsolationControls {
     disable_root_capability_reuse: bool,
-    disable_managed_xfs_name_mode_shortcut: bool,
+    disable_xfs_name_mode_shortcut: bool,
     eager_append_coordination: bool,
 }
 
@@ -972,8 +983,8 @@ impl BenchmarkIsolationControls {
             )
             .as_deref()
                 == Ok("1"),
-            disable_managed_xfs_name_mode_shortcut: std::env::var(
-                "GOLEM_FILESYSTEM_DISABLE_MANAGED_XFS_NAME_MODE_SHORTCUT",
+            disable_xfs_name_mode_shortcut: std::env::var(
+                "GOLEM_FILESYSTEM_DISABLE_XFS_NAME_MODE_SHORTCUT",
             )
             .as_deref()
                 == Ok("1"),
@@ -987,15 +998,15 @@ impl BenchmarkIsolationControls {
 
     fn uses_production_behavior(self) -> bool {
         !self.disable_root_capability_reuse
-            && !self.disable_managed_xfs_name_mode_shortcut
+            && !self.disable_xfs_name_mode_shortcut
             && !self.eager_append_coordination
     }
 
     fn record_fields(self) -> String {
         format!(
-            "\"disable_root_capability_reuse\":{},\"disable_managed_xfs_name_mode_shortcut\":{},\"eager_append_coordination\":{}",
+            "\"disable_root_capability_reuse\":{},\"disable_xfs_name_mode_shortcut\":{},\"eager_append_coordination\":{}",
             self.disable_root_capability_reuse,
-            self.disable_managed_xfs_name_mode_shortcut,
+            self.disable_xfs_name_mode_shortcut,
             self.eager_append_coordination,
         )
     }
@@ -1065,7 +1076,7 @@ fn report(
 fn production_benchmark_records_enforce_thresholds() {
     let controls = BenchmarkIsolationControls {
         disable_root_capability_reuse: false,
-        disable_managed_xfs_name_mode_shortcut: false,
+        disable_xfs_name_mode_shortcut: false,
         eager_append_coordination: false,
     };
     assert!(
@@ -1076,7 +1087,7 @@ fn production_benchmark_records_enforce_thresholds() {
     );
     assert_eq!(
         controls.record_fields(),
-        "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false"
+        "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false"
     );
 }
 
@@ -1086,26 +1097,26 @@ fn isolated_baseline_records_bypass_production_thresholds() {
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: true,
-                disable_managed_xfs_name_mode_shortcut: false,
+                disable_xfs_name_mode_shortcut: false,
                 eager_append_coordination: false,
             },
-            "\"disable_root_capability_reuse\":true,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false",
+            "\"disable_root_capability_reuse\":true,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":false",
         ),
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: false,
-                disable_managed_xfs_name_mode_shortcut: true,
+                disable_xfs_name_mode_shortcut: true,
                 eager_append_coordination: false,
             },
-            "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":true,\"eager_append_coordination\":false",
+            "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":true,\"eager_append_coordination\":false",
         ),
         (
             BenchmarkIsolationControls {
                 disable_root_capability_reuse: false,
-                disable_managed_xfs_name_mode_shortcut: false,
+                disable_xfs_name_mode_shortcut: false,
                 eager_append_coordination: true,
             },
-            "\"disable_root_capability_reuse\":false,\"disable_managed_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":true",
+            "\"disable_root_capability_reuse\":false,\"disable_xfs_name_mode_shortcut\":false,\"eager_append_coordination\":true",
         ),
     ] {
         assert!(
@@ -1122,7 +1133,7 @@ fn isolated_baseline_records_bypass_production_thresholds() {
 fn quick_benchmark_records_keep_thresholds_disabled() {
     let controls = BenchmarkIsolationControls {
         disable_root_capability_reuse: false,
-        disable_managed_xfs_name_mode_shortcut: false,
+        disable_xfs_name_mode_shortcut: false,
         eager_append_coordination: false,
     };
     assert!(
@@ -1251,8 +1262,13 @@ async fn filesystem_workload_benchmark() {
     let quick = std::env::var_os("GOLEM_FILESYSTEM_BENCH_QUICK").is_some_and(|value| value == "1");
     let (provisioning, limits, filesystem_metering) = match mode.as_str() {
         "managed" => (
-            SandboxFilesystemProvisioning::new(None, Some(managed_root), RetryConfig::default())
-                .unwrap(),
+            SandboxFilesystemProvisioning::new(
+                &FilesystemStorageMode::ManagedXfs {
+                    root: managed_root.into(),
+                },
+                RetryConfig::default(),
+            )
+            .unwrap(),
             ResolvedStorageLimits::Finite(FilesystemLimits {
                 allocated_bytes: STORAGE_LIMIT_BYTES,
                 filesystem_objects: STORAGE_LIMIT_OBJECTS,
@@ -1260,8 +1276,13 @@ async fn filesystem_workload_benchmark() {
             true,
         ),
         "managed-unmetered" => (
-            SandboxFilesystemProvisioning::new(None, Some(managed_root), RetryConfig::default())
-                .unwrap(),
+            SandboxFilesystemProvisioning::new(
+                &FilesystemStorageMode::ManagedXfs {
+                    root: managed_root.into(),
+                },
+                RetryConfig::default(),
+            )
+            .unwrap(),
             ResolvedStorageLimits::Finite(FilesystemLimits {
                 allocated_bytes: STORAGE_LIMIT_BYTES,
                 filesystem_objects: STORAGE_LIMIT_OBJECTS,
@@ -1272,8 +1293,11 @@ async fn filesystem_workload_benchmark() {
             let root = managed_root.join("unmanaged-workload-benchmark");
             std::fs::create_dir_all(&root).unwrap();
             (
-                SandboxFilesystemProvisioning::new(Some(root), None, RetryConfig::default())
-                    .unwrap(),
+                SandboxFilesystemProvisioning::new(
+                    &FilesystemStorageMode::Directory { root: root.into() },
+                    RetryConfig::default(),
+                )
+                .unwrap(),
                 ResolvedStorageLimits::Unlimited,
                 false,
             )

@@ -27,12 +27,13 @@ import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart, extractBoundary } from './internal/multipart';
 import { normalizeContentType, SnapshotError, validatePartName } from './snapshot';
 import type { SnapshotPart } from './snapshot';
+import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import {
   encodeDeclaredToolErrorPayload,
-  encodeToolValue,
+  encodeToolValueAsync,
   invalidToolResult,
   isDeclaredToolError,
 } from './internal/tool/invocationResult';
@@ -63,6 +64,7 @@ export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
+export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -83,7 +85,13 @@ export type {
   RawHttpRouterHandler,
 } from './defineHttpRouter';
 export { withRawHeaders } from './httpRouterWeb';
-export type { HttpRequest, HttpResponse, HttpHeader, FileExposure } from './httpRouterContract';
+export type {
+  HttpRequest,
+  HttpResponse,
+  HttpHeader,
+  FileExposure,
+  FileResponseHeaders,
+} from './httpRouterContract';
 export type {
   AgentDefinition,
   MethodOnlyAgentClientDefinition,
@@ -401,7 +409,7 @@ async function invokeTool(
 
     const outcome = await prepared.invoke(context);
     await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
-    const result = projectToolOutcome(body, outcome);
+    const result = await projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
@@ -414,7 +422,10 @@ async function invokeTool(
   }
 }
 
-function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
+async function projectToolOutcome(
+  body: ExtendedCommandBody,
+  outcome: unknown,
+): Promise<InvocationResult> {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -430,7 +441,7 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       return { result: undefined };
     }
     return {
-      result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
+      result: await encodeToolValueAsync(body.result.codec, outcome.value, 'tool result'),
     };
   }
 
@@ -851,7 +862,12 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
   const serializedPrincipal = serializePrincipal(principal);
 
   if (transport.kind === 'multipart') {
-    const envelope = { version: 1, principal: serializedPrincipal, state: transport.state };
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state: transport.state,
+      ...(transport.fileDatabases === undefined ? {} : { fileDatabases: transport.fileDatabases }),
+    };
     const { data, boundary } = encodeMultipart([
       {
         name: 'state',
@@ -865,9 +881,14 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: `multipart/mixed; boundary=${boundary}`,
     };
   } else if (transport.kind === 'json') {
-    // JSON snapshot: wrap in envelope { version, principal, state }
+    // JSON snapshot: wrap typed state and database metadata in its envelope.
     const state = JSON.parse(new TextDecoder().decode(transport.data));
-    const envelope = { version: 1, principal: serializedPrincipal, state };
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state,
+      fileDatabases: transport.fileDatabases,
+    };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
@@ -906,7 +927,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+  let databases: SnapshotDatabases | undefined = { inMemory: [], fileDatabases: {} };
   const userParts = new Map<string, SnapshotPart>();
 
   const decodeJsonEnvelope = (data: Uint8Array, description: string, strict = false) => {
@@ -981,18 +1002,21 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
           contentType: normalizeContentType(part.contentType),
         });
       } else if (part.name.startsWith('db:')) {
-        const name = part.name.slice(3);
         if (part.contentType !== 'application/x-sqlite3')
           throw new SnapshotError('database part must be application/x-sqlite3');
-        databases.push({ name, bytes: part.body });
       } else throw new SnapshotError(`unknown snapshot namespace '${part.name}'`);
     }
+    databases =
+      Object.hasOwn(envelope, 'fileDatabases') || parts.some((part) => part.name.startsWith('db:'))
+        ? decodeSnapshotDatabases(parts, envelope, 'multipart state part')
+        : undefined;
   } else if (snapshot.mimeType === 'application/json') {
-    // JSON snapshot: unwrap envelope { version, principal, state }
+    // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
+    databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {

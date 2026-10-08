@@ -15,8 +15,10 @@ import {
   preflightWitTypedSchemaValue,
   typedSchemaValueFromWit,
   typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
   type TypedSchemaValue,
 } from '../internal/schema-model';
+import { relinquishSchemaValueCapabilities } from '../schema/codec';
 import {
   mapSettledToolResult,
   settleToolResult,
@@ -159,31 +161,93 @@ export function createToolClientRuntime(
 ): ToolClientRuntime {
   return {
     start(commandPath, input, stdin, stdout, stderr) {
-      let invocation: RawToolInvocation;
       try {
-        invocation = transport.start(
-          commandPath,
-          typedSchemaValueToWit(input),
-          stdin,
-          stdout,
-          stderr,
-        );
+        return start(typedSchemaValueToWit(input));
       } catch (reason) {
+        if (requiresAsyncSchemaStreamEncoding(reason)) {
+          const invocation = typedSchemaValueToWitAsync(input)
+            .then(start)
+            .catch((reason) => {
+              relinquishSchemaValueCapabilities(input.value);
+              return {
+                settledResult: Promise.resolve({ status: 'rejected' as const, reason }),
+                cancel() {},
+              };
+            });
+          return deferredInvocation(invocation, stdout, stderr);
+        }
         return {
           settledResult: Promise.resolve({ status: 'rejected', reason }),
           cancel() {},
         };
       }
-      return {
-        stdout: invocation.stdout,
-        stderr: invocation.stderr,
-        settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
-          result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
-        })),
-        cancel: () => invocation.cancel(),
-      };
+
+      function start(wireInput: Parameters<ToolClientTransport['start']>[1]) {
+        let invocation: RawToolInvocation;
+        try {
+          invocation = transport.start(commandPath, wireInput, stdin, stdout, stderr);
+        } catch (reason) {
+          return {
+            settledResult: Promise.resolve({ status: 'rejected' as const, reason }),
+            cancel() {},
+          };
+        }
+        return {
+          stdout: invocation.stdout,
+          stderr: invocation.stderr,
+          settledResult: mapSettledToolResult(invocation.settledResult, (value) => ({
+            result: value.result === undefined ? undefined : typedSchemaValueFromWit(value.result),
+          })),
+          cancel: () => invocation.cancel(),
+        };
+      }
     },
   };
+}
+
+function deferredInvocation(
+  invocation: Promise<ReturnType<ToolClientRuntime['start']>>,
+  hasStdout: boolean,
+  hasStderr: boolean,
+): ReturnType<ToolClientRuntime['start']> {
+  let cancelled = false;
+  let started: ReturnType<ToolClientRuntime['start']> | undefined;
+  void invocation.then(
+    (value) => {
+      started = value;
+      if (cancelled) value.cancel();
+    },
+    () => {},
+  );
+  return {
+    stdout: hasStdout ? deferredOutput(invocation, 'stdout') : undefined,
+    stderr: hasStderr ? deferredOutput(invocation, 'stderr') : undefined,
+    settledResult: invocation.then((started) => started.settledResult),
+    cancel() {
+      if (started) started.cancel();
+      else cancelled = true;
+    },
+  };
+}
+
+function deferredOutput(
+  invocation: Promise<ReturnType<ToolClientRuntime['start']>>,
+  channel: 'stdout' | 'stderr',
+): AsyncIterable<ByteStreamItem> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const output = (await invocation)[channel];
+      if (!output) throw new TypeError(`required ${channel} stream is missing`);
+      yield* output;
+    },
+  };
+}
+
+function requiresAsyncSchemaStreamEncoding(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('native schema value streams require asynchronous encoding')
+  );
 }
 
 export type ToolRuntimeError<Declared> =

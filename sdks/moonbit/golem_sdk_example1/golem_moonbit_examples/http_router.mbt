@@ -4,6 +4,8 @@
 #derive.mount("/site")
 #derive.static_file("/assets/*", "/preferred/$1")
 #derive.static_file("/assets/*", "/public/$1")
+#derive.file_response_header("content-security-policy", "default-src 'self'")
+#derive.file_response_header("referrer-policy", "same-origin")
 struct Site {}
 
 ///|
@@ -69,6 +71,8 @@ pub fn Site::describe(_self : Self) -> String raise @http.OpenApiJsonError {
 #derive.agent
 #derive.mount("/files/{name}")
 #derive.expose_files("/value", "/value.txt")
+#derive.file_response_header("referrer-policy", "no-referrer")
+#derive.file_response_header("x-files", "live")
 struct FileOwner {}
 
 ///|

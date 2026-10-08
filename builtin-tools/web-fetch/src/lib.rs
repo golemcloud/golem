@@ -817,7 +817,7 @@ impl From<&WebFetchError> for WebFetchError {
     }
 }
 
-#[tool_definition(version = "0.1.0")]
+#[tool_definition(version = "0.1.1")]
 pub trait WebFetch {
     /// Retrieves text-oriented content with GET from an HTTP or HTTPS URL. Non-success statuses
     /// are returned normally when their bodies are supported. HTML is returned as decoded source

@@ -312,10 +312,15 @@ const routes = Layer.mergeAll(
 )
 
 HttpRouter.define("Web", {
-  mount: Http.mount("/web"),
+  mount: Http.mount("/web", {
+    fileResponseHeaders: { "content-security-policy": "default-src 'self'" },
+  }),
   static: [{ route: "/assets/*", path: "/public/$1" }],
 }).implement(Routes.toHttpEffect(routes))
 ```
+
+`fileResponseHeaders` applies the supplied headers whenever the host serves live-agent exposed
+files or router static files.
 
 The framework sees mount-relative URLs. `yield* HttpRouter.request` exposes the original scheme,
 authority, path, optional query, ordered byte headers, and the same single-consumer body. An absent

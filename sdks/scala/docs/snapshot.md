@@ -215,8 +215,9 @@ local computation, read configuration, and use other permitted reads. Mutating h
 agent RPC calls are rejected before they take effect.
 
 If loading fails, the partial instance is discarded. A manual update remains on the previous component version.
-During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does
-not try an older automatic snapshot.
+During automatic recovery, Golem rejects the automatic snapshot that failed and starts the agent again. It then tries
+the previous usable automatic snapshot. After that, it uses the snapshot of the last successful manual update or
+snapshot-assisted automatic update. Without one, it replays the full history.
 
 ---
 

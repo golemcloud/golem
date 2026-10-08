@@ -90,20 +90,25 @@ fn emit_wire_tool_node(
   })
   let root = tool.root_command
   let root_args = root.map(i => plans[i]).unwrap_or([])
+  let namespace_root_globals = root_global_args(tool, plans)
   let mount_globals = without_captured_args(
     mount.map(command => project_command(command, true)).unwrap_or([]),
     projected_identity_names(ancestors),
   )
-  let root_ancestors = ancestors.concat(mount_globals)
+  let root_ancestors = ancestors
+    .concat(namespace_root_globals)
+    .concat(mount_globals)
   let local_root = without_captured_args(
     root_args,
     projected_identity_names(root_ancestors),
   )
-  let globals = mount_globals.concat(
-    local_root
-    .filter(arg => arg.placement is GlobalOption)
-    .concat(local_root.filter(arg => arg.placement is GlobalFlag)),
-  )
+  let globals = namespace_root_globals
+    .concat(mount_globals)
+    .concat(
+      local_root
+      .filter(arg => arg.placement is GlobalOption)
+      .concat(local_root.filter(arg => arg.placement is GlobalFlag)),
+    )
   let inherited = ancestors.concat(globals)
   let children : Array[String] = []
   for command_index, command in tool.commands {
@@ -151,7 +156,7 @@ fn emit_wire_tool_node(
   }
   let aliases = match mount {
     Some(command) if !command.aliases.is_empty() => command.aliases
-    _ => root.map(i => tool.commands[i].aliases).unwrap_or([])
+    _ => root.map(i => tool.commands[i].aliases).unwrap_or(tool.aliases)
   }
   let description = match mount {
     Some(command) if !command.description.is_empty() => command.description

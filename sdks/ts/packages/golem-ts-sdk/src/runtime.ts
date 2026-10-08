@@ -39,6 +39,7 @@ import {
   SchemaGraph,
   schemaShapesMatch,
   schemaValueFromWit,
+  schemaValueToWit,
   schemaValueToWitAsync,
 } from './internal/schema-model';
 import { AgentClassName } from './agentClassName';
@@ -48,15 +49,7 @@ import { getRawSelfAgentId } from './host/hostapi';
 import { createCustomError, invalidInput, invalidMethod } from './internal/agentError';
 import { sdkPrincipalFromHost } from './principal';
 import { ParsedAgentId } from './agentId';
-import {
-  DatabaseSync,
-  Session,
-  SQLTagStore,
-  StatementSync,
-  isAutocommitDatabaseSync,
-  restoreDatabaseSync,
-  serializeDatabaseSync,
-} from './internal/sqlite';
+import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/databaseSnapshot';
 import { MultipartPart } from './internal/multipart';
 import type { SnapshotTransport } from './internal/resolvedAgent';
 import {
@@ -273,43 +266,47 @@ export function registerAgentType(
     configTree,
     snapshotStateSchema,
     multipartSnapshotSchema,
-    readId: (input, principal) => readNamedInputs(idCodecs, input, principal),
+    readId: compileNamedInputReader(idCodecs),
     runtimeMethods: new Map(
-      [...methodCodecs].map(([methodName, mc]) => [
-        methodName,
-        {
-          hasInput: mc.inputCodecs.length !== 0,
-          read: (input: SchemaValueTree, principal: HostPrincipal) =>
-            readNamedInputs(mc.inputCodecs, input, principal),
-          write: async (value: unknown) =>
-            mc.output.tag === 'unit'
-              ? undefined
-              : schemaValueToWitAsync(mc.output.codec.toValue(value)),
-        },
-      ]),
+      [...methodCodecs].map(([methodName, mc]) => {
+        const output = mc.output;
+        // Direct codecs cannot contain owned resources, so no asynchronous
+        // stream preparation is needed. Retain the ordinary value codec.
+        const encode =
+          output.tag === 'single' && output.codec.direct ? schemaValueToWit : schemaValueToWitAsync;
+        return [
+          methodName,
+          {
+            hasInput: mc.inputCodecs.length !== 0,
+            read: compileNamedInputReader(mc.inputCodecs),
+            write: async (value: unknown) =>
+              output.tag === 'unit' ? undefined : encode(output.codec.toValue(value)),
+          },
+        ];
+      }),
     ),
     configAccessor: () => buildConfigAccessor(configTree),
   };
 }
 
-function readNamedInputs(
+function compileNamedInputReader(
   codecs: NamedCodec[],
-  input: SchemaValueTree,
-  principal: HostPrincipal,
-): Record<string, unknown> {
-  const value = schemaValueFromWit(input);
+): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
   const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
-  if (value.tag !== 'record' || value.fields.length !== expected)
-    throw new TypeError(`expected a record with ${expected} user-supplied fields`);
-  let index = 0;
-  return Object.fromEntries(
-    codecs.map(({ name, codec }) => [
-      name,
-      codec.autoInjected === 'principal'
-        ? sdkPrincipalFromHost(principal)
-        : codec.fromValue(value.fields[index++]),
-    ]),
-  );
+  return (input, principal) => {
+    const value = schemaValueFromWit(input);
+    if (value.tag !== 'record' || value.fields.length !== expected)
+      throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+    let index = 0;
+    return Object.fromEntries(
+      codecs.map(({ name, codec }) => [
+        name,
+        codec.autoInjected === 'principal'
+          ? sdkPrincipalFromHost(principal)
+          : codec.fromValue(value.fields[index++]),
+      ]),
+    );
+  };
 }
 
 /**
@@ -715,7 +712,8 @@ class ResolvedAgentImpl {
   // Snapshot serialization. Two modes:
   //  - custom (`implement({ snapshot })`): user save/load own the bytes verbatim.
   //  - typed  (`snapshotting: { state }`): JSON of ONLY the schema-validated state
-  //           fields of `this`, plus a `db:<field>` SQLite part per DatabaseSync.
+  //           fields of `this`, plus a `db:<field>` part per in-memory SQLite
+  //           database and the location of each file-backed database.
   // The principal/version envelope is added by the guest (`src/index.ts`).
   async saveSnapshot(): Promise<SnapshotTransport> {
     if (this.reg.multipartSnapshotSchema) {
@@ -750,73 +748,24 @@ class ResolvedAgentImpl {
       throw 'snapshot saving requires a declared state schema or custom save/load functions';
     }
 
-    const databases: Array<{ name: string; bytes: Uint8Array }> = [];
-    const ordinaryState: Record<string, unknown> = {};
-    const seen = new Set<unknown>();
-    for (const [k, val] of Object.entries(this.instance)) {
-      if (k === 'config' || k === 'getId' || k === 'getPhantomId' || k === 'getPrincipal') continue;
-      if (isDatabaseSync(val)) {
-        if (seen.has(val)) {
-          throw `Multiple agent fields reference the same DatabaseSync instance (field "${k}").`;
-        }
-        seen.add(val);
-        if (!isAutocommitDatabaseSync(val)) {
-          throw `Cannot snapshot database "${k}": an open transaction exists. Commit or rollback before saving.`;
-        }
-        databases.push({ name: k, bytes: serializeDatabaseSync(val) });
-        continue;
-      }
-      if (
-        isInstance(val, StatementSync) ||
-        isInstance(val, Session) ||
-        isInstance(val, SQLTagStore)
-      ) {
-        throw `Cannot automatically snapshot resource field "${k}"; use custom save/load functions.`;
-      }
+    const { ordinary, databaseParts, fileDatabases } = takeDatabases(
+      Object.entries(this.instance).filter(
+        ([k]) => k !== 'config' && k !== 'getId' && k !== 'getPhantomId' && k !== 'getPrincipal',
+      ),
+    );
+    for (const [k, val] of Object.entries(ordinary)) {
       assertNoNestedSnapshotResources(val, k);
-      ordinaryState[k] = val;
     }
 
-    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinaryState, true);
+    const state = await validateSnapshotState(this.reg.snapshotStateSchema, ordinary, true);
     assertJsonSnapshotValue(state, 'state');
 
     const stateJson = new TextEncoder().encode(JSON.stringify(state));
-    if (databases.length === 0) {
-      return { kind: 'json', data: stateJson, mimeType: 'application/json' };
+    if (databaseParts.length === 0) {
+      return { kind: 'json', data: stateJson, mimeType: 'application/json', fileDatabases };
     }
-    const parts: MultipartPart[] = databases.map((db) => ({
-      name: `db:${db.name}`,
-      contentType: 'application/x-sqlite3',
-      body: db.bytes,
-    }));
-    return { kind: 'multipart', state, parts };
+    return { kind: 'multipart', state, parts: databaseParts, fileDatabases };
   }
-}
-
-function isDatabaseSync(val: unknown): val is DatabaseSync {
-  return val instanceof DatabaseSync;
-}
-
-/**
- * Restores `db` from snapshot bytes and leaves the connection warm.
- *
- * `restoreDatabaseSync` copies the pages into the open connection with SQLite's backup API, which
- * bumps the schema cookie and discards the connection's cached schema. Left like that, the first
- * statement run after the restore would reload the schema in a read transaction of its own before
- * executing in a second one, while the same statement on the live (pre-snapshot) connection ran in
- * a single read transaction. For a file-backed database each read transaction is a distinct
- * sequence of filesystem host calls, and the invocations recorded after the snapshot are replayed
- * against the recorded host calls, so the restored connection must behave like the live one did.
- * Reading the schema here, while snapshot loading is not recorded, does exactly that.
- */
-function restoreDatabase(db: DatabaseSync, bytes: Uint8Array): void {
-  restoreDatabaseSync(db, bytes);
-  db.prepare('SELECT count(*) FROM sqlite_master').get();
-}
-
-/** `val instanceof Ctor`, including builtins whose constructors are not public. */
-function isInstance(val: unknown, Ctor: Function): boolean {
-  return typeof Ctor === 'function' && val instanceof Ctor;
 }
 
 function assertNoNestedSnapshotResources(
@@ -828,12 +777,7 @@ function assertNoNestedSnapshotResources(
     throw `Cannot automatically snapshot function field "${path}"; use custom save/load functions.`;
   }
   if (value === null || typeof value !== 'object') return;
-  if (
-    isDatabaseSync(value) ||
-    isInstance(value, StatementSync) ||
-    isInstance(value, Session) ||
-    isInstance(value, SQLTagStore)
-  ) {
+  if (isSqliteResource(value)) {
     throw `Cannot automatically snapshot nested resource field "${path}"; use custom save/load functions.`;
   }
   if (ancestors.has(value)) return;
@@ -1025,9 +969,9 @@ export function registerAgentInitiator(
       let state: object;
       try {
         if (reg.multipartSnapshotSchema) {
-          if (mimeType !== 'multipart/mixed' || databases.length > 0) {
+          if (mimeType !== 'multipart/mixed' || databases !== undefined) {
             throw new SnapshotError(
-              'explicit multipart restoration requires multipart without database parts',
+              'explicit multipart restoration requires multipart without database metadata',
             );
           }
           const savedState = await validateSnapshotState(
@@ -1053,40 +997,35 @@ export function registerAgentInitiator(
               config,
             },
           );
-        } else if (parts.size > 0) {
-          throw new SnapshotError('simple snapshot modes cannot restore user parts');
-        } else if (impl.snapshot?.load) {
-          const snapshot = impl.snapshot as NonNullable<
-            AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
-          >;
-          const load = snapshot.load;
-          state = await load(bytes, {
-            id: idRecord as never,
-            agentId: resolved.val.agentId,
-            principal: sdkPrincipal,
-            phantomId,
-            config,
-          });
-        } else if (reg.snapshotStateSchema) {
-          state = await validateSnapshotState(
-            reg.snapshotStateSchema,
-            JSON.parse(new TextDecoder().decode(bytes)),
-          );
         } else {
-          throw new Error('snapshot restoration is not configured');
-        }
+          if (parts.size > 0) {
+            throw new SnapshotError('simple snapshot modes cannot restore user parts');
+          }
+          if (databases === undefined) {
+            throw new SnapshotError("typed snapshot missing 'fileDatabases' field");
+          }
+          if (impl.snapshot?.load) {
+            const snapshot = impl.snapshot as NonNullable<
+              AgentImplementation<IdRecord, MethodsRecord, ConfigSpec, object, boolean>['snapshot']
+            >;
+            const load = snapshot.load;
+            state = await load(bytes, {
+              id: idRecord as never,
+              agentId: resolved.val.agentId,
+              principal: sdkPrincipal,
+              phantomId,
+              config,
+            });
+          } else if (reg.snapshotStateSchema) {
+            state = await validateSnapshotState(
+              reg.snapshotStateSchema,
+              JSON.parse(new TextDecoder().decode(bytes)),
+            );
+          } else {
+            throw new Error('snapshot restoration is not configured');
+          }
 
-        const restored = state as Record<string, unknown>;
-        for (const database of databases) {
-          let target = restored[database.name];
-          if (target === undefined) {
-            target = new DatabaseSync(':memory:');
-            restored[database.name] = target;
-          }
-          if (!isDatabaseSync(target)) {
-            throw new Error(`snapshot database field "${database.name}" is not a DatabaseSync`);
-          }
-          restoreDatabase(target, database.bytes);
+          restoreDatabases(state as Record<string, unknown>, databases);
         }
       } catch (e) {
         return {

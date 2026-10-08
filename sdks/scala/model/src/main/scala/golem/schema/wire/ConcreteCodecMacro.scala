@@ -94,10 +94,13 @@ private[wire] object ConcreteCodecMacro {
                 }
               }
             case None =>
-              val mirror = Expr.summon[Mirror.SumOf[T]].getOrElse {
-                report.errorAndAbort(s"Cannot structurally derive a concrete wire codec for ${tpe.show}")
-              }
-              val cases = tpe.typeSymbol.children.map { c =>
+              val sumMirror = Expr.summon[Mirror.SumOf[T]]
+              if (sumMirror.isEmpty)
+                return Expr.summon[ConcreteCodec[T]].getOrElse {
+                  report.errorAndAbort(s"Cannot structurally derive a concrete wire codec for ${tpe.show}")
+                }
+              val mirror = sumMirror.get
+              val cases  = tpe.typeSymbol.children.map { c =>
                 val caseTpe            = if (c.isTerm) c.termRef else c.typeRef
                 val fields             = c.caseFields
                 val caseName           = c.name.stripSuffix("$")

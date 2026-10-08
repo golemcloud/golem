@@ -402,7 +402,7 @@ describe('agent metadata (Phase 3)', () => {
       `AtomicSnapshotRestore(${JSON.stringify(schemaValueToWit(idValue))})`;
     const envelope = (state: object) => ({
       payload: new TextEncoder().encode(
-        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state }),
+        JSON.stringify({ version: 1, principal: { tag: 'anonymous' }, state, fileDatabases: {} }),
       ),
       mimeType: 'application/json',
     });
@@ -463,6 +463,15 @@ describe('agent metadata (Phase 3)', () => {
       [{ version: 2, principal: { tag: 'anonymous' }, state: {} }, 'version must be 1'],
       [{ version: 1, state: {} }, "missing 'principal' field"],
       [{ version: 1, principal: { tag: 'anonymous' } }, "missing 'state' field"],
+      [{ version: 1, principal: { tag: 'anonymous' }, state: {} }, "missing 'fileDatabases' field"],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: { db: 1 } },
+        "'fileDatabases' must map field names to locations",
+      ],
+      [
+        { version: 1, principal: { tag: 'anonymous' }, state: {}, fileDatabases: ['db'] },
+        "'fileDatabases' must map field names to locations",
+      ],
     ];
     for (const [envelope, message] of invalidJsonEnvelopes) {
       await expect(isolatedGuest.loadSnapshot.load(jsonSnapshot(envelope))).rejects.toContain(

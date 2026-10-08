@@ -1,0 +1,39 @@
+manifestVersion: 1.6.0
+
+app: scala-tool-sources
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    version: v0.0.0
+    componentPresets: quick
+    tools:
+      middleware:
+        - name: scala-source-middleware
+          filesystemAccess: allowed
+
+components:
+  scala-tool-sources:consumer:
+    dir: .
+    templates: scala
+    dependencies:
+      tools: [catalog-lookup]
+
+mcp:
+  imports:
+    local:
+      - url: __MCP_URL__
+        auth:
+          bearer: scala-mcp-token
+
+tools:
+  middleware:
+    scala-source-middleware:
+      component: scala-tool-sources:consumer
+
+bridge:
+  scala:
+    internal:
+      tools: [catalog-lookup]

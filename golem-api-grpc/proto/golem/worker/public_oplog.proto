@@ -82,6 +82,7 @@ message OplogEntry {
     DurableStreamRecordParameters StreamSession = 64;
     TimestampParameter Resumed = 65;
     TimestampParameter RecoverySucceeded = 66;
+    SnapshotConfirmedParameters SnapshotConfirmed = 67;
   }
 }
 
@@ -586,6 +587,7 @@ message PendingAgentInvocationParameters {
 message SnapshotBasedUpdateParameters {
   bytes payload = 1;
   string mime_type = 2;
+  optional string filesystem_snapshot = 3;
 }
 
 message UpdateDescription {
@@ -630,8 +632,7 @@ message FailedSnapshotAssistedUpdateDetails {
   uint64 pending_update_index = 1;
   uint64 source_component_revision = 2;
   uint64 source_revision_start_index = 3;
-  optional uint64 snapshot_index = 4;
-  optional string ineligibility_reason = 5;
+  uint64 snapshot_index = 4;
 }
 
 message GrowMemoryParameters {
@@ -709,6 +710,12 @@ message SnapshotDataParameters {
     JsonSnapshotData json = 3;
     MultipartSnapshotData multipart = 4;
   }
+  optional string filesystem_snapshot = 5;
+}
+
+message SnapshotConfirmedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string filesystem_snapshot = 2;
 }
 
 message RawSnapshotData {

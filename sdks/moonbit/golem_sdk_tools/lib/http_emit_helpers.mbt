@@ -197,9 +197,20 @@ fn http_mount_str(mount : HttpMountInfo?) -> String {
           path_segments_str(s)
         }
       }
-      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)} })"
+      "Some({ path_prefix: \{path_prefix}, auth_details: \{auth_details_str(info.auth)}, phantom_agent: \{info.phantom}, cors_options: \{cors_options_str(info.cors)}, webhook_suffix: \{webhook_suffix}, static_bindings: \{file_mappings_str(info.static_bindings)}, filesystem_bindings: \{file_mappings_str(info.filesystem_bindings)}, file_response_headers: \{file_response_headers_str(info.file_response_headers)}, openapi_provider_method: \{opt_string_lit(info.openapi_provider_method)} })"
     }
   }
+}
+
+///|
+fn file_response_headers_str(headers : Array[(String, String)]) -> String {
+  "[" +
+  headers
+  .map(h => {
+    "{ name: \"\{escape_string_lit(h.0)}\", value: \"\{escape_string_lit(h.1)}\" }"
+  })
+  .join(", ") +
+  "]"
 }
 
 ///|

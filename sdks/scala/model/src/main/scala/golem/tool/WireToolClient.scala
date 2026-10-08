@@ -10,7 +10,14 @@
 
 package golem.tool
 
-import golem.schema.wire.{ConcreteCodec, WitSchemaGraph, WitTypedSchemaValue}
+import golem.schema.wire.{
+  ConcreteCodec,
+  WitSchemaGraph,
+  WitSchemaTypeBody,
+  WitSchemaValueNode,
+  WitSchemaValueTree,
+  WitTypedSchemaValue
+}
 
 import scala.concurrent.Future
 import scala.util.control.NonFatal
@@ -25,6 +32,7 @@ object WireToolRpcFailure {
   final case class NotFound(message: String)                   extends WireToolRpcFailure
   final case class RemoteInternalError(message: String)        extends WireToolRpcFailure
   final case class RemoteToolError(error: WireCustomToolError) extends WireToolRpcFailure
+  final case class InvalidInput(message: String)               extends WireToolRpcFailure
   final case class InvalidRemoteToolError(message: String)     extends WireToolRpcFailure
   case object Cancelled                                        extends WireToolRpcFailure
   final case class ResourceExhausted(message: String)          extends WireToolRpcFailure
@@ -69,7 +77,39 @@ object WireToolClientRuntime {
   ): Either[ToolError[Nothing], WitTypedSchemaValue] = {
     val codecs = fields.iterator.map(field => field.name -> field.codec).toVector
     val values = fields.iterator.map(_.value).toVector
-    input(ConcreteCodec.record(codecs), graph, values)
+    input(ConcreteCodec.record(codecs), graph, values).map { typed =>
+      typed.copy(value = alignCanonicalOptions(graph, typed.value))
+    }
+  }
+
+  private def alignCanonicalOptions(graph: WitSchemaGraph, value: WitSchemaValueTree): WitSchemaValueTree = {
+    def resolve(index: Int): WitSchemaTypeBody =
+      graph.typeNodes(index).body match {
+        case WitSchemaTypeBody.RefType(defIndex) => resolve(graph.defs(defIndex).body)
+        case body                                => body
+      }
+
+    (resolve(graph.root), value.valueNodes(value.root)) match {
+      case (WitSchemaTypeBody.RecordType(expected), WitSchemaValueNode.RecordValue(actual))
+          if expected.length == actual.length =>
+        val nodes = Vector.newBuilder[WitSchemaValueNode]
+        nodes ++= value.valueNodes
+        var nextIndex = value.valueNodes.length
+        val adjusted  = expected.zip(actual).map { case (field, valueIndex) =>
+          resolve(field.body) match {
+            case WitSchemaTypeBody.OptionType(_)
+                if !value.valueNodes(valueIndex).isInstanceOf[WitSchemaValueNode.OptionValue] =>
+              val optionIndex = nextIndex
+              nodes += WitSchemaValueNode.OptionValue(Some(valueIndex))
+              nextIndex += 1
+              optionIndex
+            case _ => valueIndex
+          }
+        }
+        val all = nodes.result()
+        value.copy(valueNodes = all.updated(value.root, WitSchemaValueNode.RecordValue(adjusted)))
+      case _ => value
+    }
   }
 
   def run[E](
@@ -153,6 +193,7 @@ object WireToolClientRuntime {
       case WireToolRpcFailure.RemoteInternalError(m)    => ToolError.Rpc(RpcError.RemoteInternal(m))
       case WireToolRpcFailure.Cancelled                 => ToolError.Rpc(RpcError.Cancelled)
       case WireToolRpcFailure.ResourceExhausted(m)      => ToolError.Rpc(RpcError.ResourceExhausted(m))
+      case WireToolRpcFailure.InvalidInput(m)           => ToolError.InvalidInput(m)
       case WireToolRpcFailure.InvalidRemoteToolError(m) => ToolError.Rpc(RpcError.Protocol(m))
       case WireToolRpcFailure.RemoteToolError(error)    =>
         decode(error).fold(m => ToolError.Rpc(RpcError.Protocol(m)), ToolError.Tool(_))

@@ -189,7 +189,7 @@ async fn fan_out_with_errors(&mut self, items: Vec<String>) -> (Vec<String>, Vec
 
 ## Approach 2: `fork()`
 
-`fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Use Golem promises to synchronize between the original and forked agents.
+`fork()` clones the current agent at the current execution point, creating a new agent instance with the same state but a unique phantom ID. Only a durable agent can fork, and the forked agent is durable too. Use Golem promises to synchronize between the original and forked agents.
 
 ### Basic Fork Pattern
 
@@ -263,7 +263,7 @@ async fn multi_fork(&mut self, n: u32) -> Vec<String> {
 |----------|-------------|----------|
 | Work is **independent** and stateless | ✅ Best fit | Works but overkill |
 | Need to **share current state** with workers | ❌ Must pass via args | ✅ Forked copy inherits state |
-| Workers need **persistent identity** | ✅ Each has own ID | ❌ Forked agents are ephemeral phantoms |
+| Workers need **persistent identity** | ✅ Each has own ID | ❌ Each forked agent gets a generated phantom ID |
 | Number of parallel tasks is **dynamic** | ✅ Spawn as many as needed | ✅ Fork in a loop |
 | Need **simple error isolation** | ✅ Child failure doesn't crash parent | ⚠️ Forked agent shares oplog lineage |
 

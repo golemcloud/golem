@@ -4,19 +4,52 @@ fn emit_wire_client_error_decoder(command : ToolCommandInfo) -> String {
     return "fn(_, _) { None }"
   }
   let cases = command.errors.map(error => {
-    let payload_type = error.payload.map(emit_type).unwrap_or("Unit")
-    let value = match (error.payload, error.payload_label) {
-      (Some(_), Some(label)) => error.name + "(" + label + "=__golem_payload)"
-      (Some(_), None) => error.name + "(__golem_payload)"
-      (None, _) => error.name
+    let wire_name = escape_string_lit(moonbit_name_to_kebab_case(error.name))
+    let decode = match error.payload {
+      VariantPayload::None =>
+        "let __golem_payload : Unit = @schema.from_wire(__golem_value.value) catch { error => return Some(Err(repr(error))) }; Some(Ok(" +
+        error.name +
+        "))"
+      Single(pt) =>
+        "let __golem_payload : " +
+        emit_type(pt) +
+        " = @schema.from_wire(__golem_value.value) catch { error => return Some(Err(repr(error))) }; Some(Ok(" +
+        error.name +
+        "(" +
+        error.payload_label.map(label => label + "=").unwrap_or("") +
+        "__golem_payload)))"
+      Multi(fields, _) => {
+        let lines = StringBuilder()
+        lines.write_string(
+          "let __golem_reader = @schema.WireReader::new(__golem_value.value); let __golem_fields = @schema.wire_record(__golem_reader, __golem_value.value.root, " +
+          fields.length().to_string() +
+          ", \"" +
+          wire_name +
+          "\") catch { error => return Some(Err(repr(error))) }; ",
+        )
+        for index, field in fields {
+          lines.write_string(
+            "let " +
+            error_payload_binding_name(index) +
+            " : " +
+            emit_type(field.1) +
+            " = @schema.FromWire::read_wire(__golem_reader, __golem_fields[" +
+            index.to_string() +
+            "]) catch { error => return Some(Err(repr(error))) }; ",
+          )
+        }
+        let args = error_payload_bindings(error)
+        lines.write_string(
+          "__golem_reader.finish() catch { error => return Some(Err(repr(error))) }; Some(Ok(" +
+          error.name +
+          "(" +
+          args +
+          ")))",
+        )
+        lines.to_string()
+      }
     }
-    "\"" +
-    escape_string_lit(moonbit_name_to_kebab_case(error.name)) +
-    "\" => { let __golem_payload : " +
-    payload_type +
-    " = @schema.from_wire(__golem_value.value) catch { error => return Some(Err(repr(error))) }; Some(Ok(" +
-    value +
-    ")) }"
+    "\"" + wire_name + "\" => { " + decode + " }"
   })
   "fn(__golem_name, __golem_value) { match __golem_name { " +
   cases.join("\n") +
@@ -31,6 +64,7 @@ fn emit_client_wire_input(
   has_prefix : Bool,
   asynchronous : Bool,
   stdin : String?,
+  optional_stdin : Bool,
 ) -> Unit {
   let schemas = fields.map(arg => {
     let schema = wire_client_field_type(arg, arg.type_.unwrap())
@@ -53,7 +87,17 @@ fn emit_client_wire_input(
   } else {
     "@schema.into_wire_record"
   }
-  let cleanup = stdin.map(source => source + ".drop_sync(); ").unwrap_or("")
+  let cleanup = stdin
+    .map(source => {
+      if optional_stdin {
+        "match " +
+        source +
+        " { Some(__golem_stdin) => __golem_stdin.drop_sync()\nNone => ()\n }\n"
+      } else {
+        source + ".drop_sync(); "
+      }
+    })
+    .unwrap_or("")
   buf.write_string(
     "  let __golem_schema = @schema.WireTypeEncoder::new()\n" +
     "  let __golem_root = __golem_schema.push(@types.RecordType([" +

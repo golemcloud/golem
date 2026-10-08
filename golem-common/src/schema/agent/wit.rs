@@ -35,9 +35,9 @@ use crate::base_model::agent::{
     CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
     DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
     DurableStreamSlotOptions, DurableStreamSlotSource, ExactFileMapping, FileMapping,
-    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    LiteralSegment, OidcPrincipal, PathSegment, PathVariable, Principal, QueryVariable,
-    ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
+    FileResponseHeader, GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod,
+    HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment, PathVariable, Principal,
+    QueryVariable, ReadOnlyConfig, Snapshotting, SnapshottingConfig, SnapshottingEveryNInvocation,
     SnapshottingPeriodic, SubtreeFileMapping, SystemVariable, SystemVariableSegment,
 };
 use crate::schema::agent::{
@@ -639,6 +639,11 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            file_response_headers: value
+                .file_response_headers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             openapi_provider_method: value.openapi_provider_method,
         }
     }
@@ -658,7 +663,30 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            file_response_headers: value
+                .file_response_headers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             openapi_provider_method: value.openapi_provider_method,
+        }
+    }
+}
+
+impl From<FileResponseHeader> for wire::FileResponseHeader {
+    fn from(value: FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
+impl From<wire::FileResponseHeader> for FileResponseHeader {
+    fn from(value: wire::FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
         }
     }
 }
@@ -1315,6 +1343,16 @@ mod tests {
                     public_path: vec!["report".into()],
                     file_path: "/data/report.txt".into(),
                 })],
+                file_response_headers: vec![
+                    FileResponseHeader {
+                        name: "Content-Security-Policy".into(),
+                        value: "default-src 'none'".into(),
+                    },
+                    FileResponseHeader {
+                        name: "Referrer-Policy".into(),
+                        value: "no-referrer".into(),
+                    },
+                ],
                 openapi_provider_method: Some("describe-site".into()),
             });
             // Transport round trips preserve metadata independently of role validation.

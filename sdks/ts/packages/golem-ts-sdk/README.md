@@ -58,7 +58,9 @@ export const Web = defineHttpRouter('Web', { config: { greeting: z.string() } })
   );
 
 export const Assets = defineHttpRouter('Assets')
-  .mount('/assets')
+  .mount('/assets', {
+    fileResponseHeaders: { 'content-security-policy': "default-src 'self'" },
+  })
   .static('/*', '/assets/$1')
   .implement();
 export const Docs = defineHttpRouter('Docs')
@@ -76,6 +78,8 @@ provider-only, or empty router without a dummy method. OpenAPI providers run laz
 registration. Supply files and configuration through the normal application manifest and list
 the router in the HTTP API deployment's `agents` map. Static mappings read immutable deployed
 files; they do not expose files written by an invocation.
+Set `fileResponseHeaders` on either an agent mount or router mount to add those headers when the
+host serves exposed or static files.
 
 Web `Headers` normalizes names and combines repeated values; `Request` normalizes URLs and some
 standard methods and forbids bodies on GET/HEAD. `context.rawRequest` exposes the original head

@@ -1,4 +1,6 @@
-use crate::tool::definition::{build_tool_definition_ir, parse_version, strip_helper_attrs};
+use crate::tool::definition::{
+    build_tool_definition_ir, parse_tool_definition_options, strip_helper_attrs,
+};
 use crate::tool::helpers::{
     fresh_internal_ident, normalize_sdk_paths_in_item_trait, resolve_generated_sdk_paths,
 };
@@ -15,7 +17,7 @@ pub fn native_tool_definition_impl(
     native: &syn::Ident,
 ) -> TokenStream {
     let mut item_trait = syn::parse_macro_input!(item as ItemTrait);
-    let (version, requires_filesystem) = match parse_version(attrs.into()) {
+    let options = match parse_tool_definition_options(attrs.into()) {
         Ok(options) => options,
         Err(error) => return error.to_compile_error().into(),
     };
@@ -35,11 +37,12 @@ pub fn native_tool_definition_impl(
         Err(error) => return error.to_compile_error().into(),
     };
     remove_host_result_wrappers(&mut metadata_trait);
-    let mut ir = match build_tool_definition_ir(&metadata_trait, version) {
+    let mut ir = match build_tool_definition_ir(&metadata_trait, options.version) {
         Ok(ir) => ir,
         Err(error) => return error.to_compile_error().into(),
     };
-    ir.requires_filesystem = requires_filesystem;
+    ir.requires_filesystem = options.requires_filesystem;
+    ir.aliases = options.aliases;
     let mut descriptor_ir = ir.clone();
     if let Err(error) = remove_cancellation_parameters(&mut descriptor_ir) {
         return error.to_compile_error().into();

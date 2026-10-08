@@ -20,8 +20,19 @@ import type { MultipartPart } from './multipart';
 
 /** Unenveloped transport: principal metadata is added once by the guest. */
 export type SnapshotTransport =
-  | { kind: 'binary' | 'json'; data: Uint8Array; mimeType: string }
-  | { kind: 'multipart'; state: unknown; parts: MultipartPart[] };
+  | { kind: 'binary'; data: Uint8Array; mimeType: 'application/octet-stream' }
+  | {
+      kind: 'json';
+      data: Uint8Array;
+      mimeType: 'application/json';
+      fileDatabases: Record<string, string>;
+    }
+  | {
+      kind: 'multipart';
+      state: unknown;
+      parts: MultipartPart[];
+      fileDatabases?: Record<string, string>;
+    };
 
 /**
  * The minimal resolved-agent contract the guest runtime (`src/index.ts`) drives:

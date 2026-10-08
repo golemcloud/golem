@@ -15,12 +15,13 @@ const principal = {
 const wireSnapshot = (
   state: unknown,
   extras: Array<{ name: string; contentType: string; body: Uint8Array }> = [],
+  metadata: Record<string, unknown> = {},
 ) => {
   const { data, boundary } = encodeMultipart([
     {
       name: 'state',
       contentType: 'application/json',
-      body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state })),
+      body: new TextEncoder().encode(JSON.stringify({ version: 1, principal, state, ...metadata })),
     },
     ...extras,
   ]);
@@ -94,6 +95,7 @@ describe('explicit multipart snapshots', () => {
       principal,
       state: { revision: '17' },
     });
+    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).not.toHaveProperty('fileDatabases');
     expect(parts[1]).toEqual({
       name: 'part:index',
       contentType: 'application/octet-stream',
@@ -118,7 +120,10 @@ describe('explicit multipart snapshots', () => {
     (globalThis as { currentAgentId?: string }).currentAgentId =
       `NullParts(${JSON.stringify(input)})`;
     await sdk.loadSnapshot.load(wireSnapshot(null));
-    expect((await sdk.saveSnapshot.save()).mimeType).toMatch(/^multipart\/mixed;/);
+    const saved = await sdk.saveSnapshot.save();
+    expect(saved.mimeType).toMatch(/^multipart\/mixed;/);
+    const parts = decodeMultipart(saved.payload, extractBoundary(saved.mimeType)!);
+    expect(JSON.parse(new TextDecoder().decode(parts[0].body))).not.toHaveProperty('fileDatabases');
   });
 
   it('validates mode, DB inventory, schema and namespaces before load, and publishes only after success', async () => {
@@ -154,6 +159,11 @@ describe('explicit multipart snapshots', () => {
         mimeType: 'application/json',
       },
       wireSnapshot(null, [{ name: 'db:main', contentType: 'application/x-sqlite3', body: bytes }]),
+      wireSnapshot(null, [], { fileDatabases: {} }),
+      wireSnapshot(null, [], { fileDatabases: { main: '/data/app.db' } }),
+      wireSnapshot(null, [{ name: 'db:main', contentType: 'application/x-sqlite3', body: bytes }], {
+        fileDatabases: {},
+      }),
       wireSnapshot(7),
       wireSnapshot(null, [{ name: 'unknown:x', contentType: 'text/plain', body: bytes }]),
       wireSnapshot(null, [{ name: 'part:a/b', contentType: 'text/plain', body: bytes }]),
@@ -230,6 +240,33 @@ describe('explicit multipart snapshots', () => {
     ).rejects.toContain('cannot restore user parts');
   });
 
+  it('requires database metadata in typed multipart, including state-only snapshots', async () => {
+    const sdk = await import('../src');
+    sdk
+      .defineAgent({
+        name: 'TypedInventoryParts',
+        id: {},
+        methods: {},
+        snapshotting: { state: z.object({ count: z.number() }) },
+      })
+      .implement({ init: () => ({ count: 0 }), methods: {} });
+    (globalThis as { currentAgentId?: string }).currentAgentId =
+      `TypedInventoryParts(${JSON.stringify(input)})`;
+    await expect(sdk.loadSnapshot.load(wireSnapshot({ count: 3 }))).rejects.toContain(
+      "missing 'fileDatabases'",
+    );
+    await expect(
+      sdk.loadSnapshot.load(
+        wireSnapshot({ count: 3 }, [
+          { name: 'db:main', contentType: 'application/x-sqlite3', body: bytes },
+        ]),
+      ),
+    ).rejects.toBeDefined();
+    await sdk.loadSnapshot.load(wireSnapshot({ count: 3 }, [], { fileDatabases: {} }));
+    const saved = await sdk.saveSnapshot.save();
+    expect(JSON.parse(new TextDecoder().decode(saved.payload)).state).toEqual({ count: 3 });
+  });
+
   it('validates JSON projection and user part metadata on save', async () => {
     const sdk = await import('../src');
     let state: unknown = null;
@@ -258,7 +295,7 @@ describe('explicit multipart snapshots', () => {
       await expect(sdk.saveSnapshot.save()).rejects.toBeDefined();
     }
     state = null;
-    for (const invalid of ['', 'a/b', 'db:main', '-leading']) {
+    for (const invalid of ['', 'a/b', 'db:main', '-leading', 'db😀', 'cache db', 'db\\cache']) {
       name = invalid;
       await expect(sdk.saveSnapshot.save()).rejects.toBeDefined();
     }
@@ -420,51 +457,65 @@ describe('explicit multipart snapshots', () => {
     }
   });
 
-  it('preserves automatic SQLite field names outside the user-part grammar', async () => {
-    class DatabaseSync {
-      prepare() {
-        return { get() {} };
+  it.each(['$db', 'db😀', 'cache db', 'db\\cache'])(
+    'preserves automatic SQLite field name %s outside the user-part grammar',
+    async (fieldName) => {
+      class DatabaseSync {
+        isOpen = true;
+        location() {
+          return null;
+        }
+        prepare() {
+          return { get() {} };
+        }
       }
-    }
-    const restore = vi.fn();
-    vi.doMock('../src/internal/sqlite', () => ({
-      DatabaseSync,
-      StatementSync: class {},
-      Session: class {},
-      SQLTagStore: class {},
-      isAutocommitDatabaseSync: () => true,
-      serializeDatabaseSync: () => bytes,
-      restoreDatabaseSync: restore,
-    }));
-    try {
-      const register = async () => {
-        const sdk = await import('../src');
-        sdk
-          .defineAgent({
-            name: 'DollarDbParts',
-            id: {},
-            methods: {},
-            snapshotting: { state: z.object({ count: z.number() }) },
-          })
-          .implement({ init: () => ({ count: 17, $db: new DatabaseSync() }), methods: {} });
-        return sdk;
-      };
-      (globalThis as { currentAgentId?: string }).currentAgentId =
-        `DollarDbParts(${JSON.stringify(input)})`;
-      const initial = await register();
-      await initial.golemAgent200Guest.initialize('DollarDbParts', input, { tag: 'anonymous' });
-      const snapshot = await initial.saveSnapshot.save();
-      const parts = decodeMultipart(snapshot.payload, extractBoundary(snapshot.mimeType)!);
-      expect(parts[1].name).toBe('db:$db');
-      vi.resetModules();
-      const restored = await register();
-      await restored.loadSnapshot.load(snapshot);
-      expect(restore).toHaveBeenCalledTimes(1);
-      expect(restore.mock.calls[0][1]).toEqual(bytes);
-    } finally {
-      vi.doUnmock('../src/internal/sqlite');
-    }
-  });
+      const restore = vi.fn();
+      vi.doMock('../src/internal/sqlite', () => ({
+        DatabaseSync,
+        StatementSync: class {},
+        Session: class {},
+        SQLTagStore: class {},
+        isAutocommitDatabaseSync: () => true,
+        serializeDatabaseSync: () => bytes,
+        restoreDatabaseSync: restore,
+      }));
+      try {
+        const register = async () => {
+          const sdk = await import('../src');
+          sdk
+            .defineAgent({
+              name: 'DollarDbParts',
+              id: {},
+              methods: {},
+              snapshotting: { state: z.object({ count: z.number() }) },
+            })
+            .implement({
+              init: () => ({ count: 17, [fieldName]: new DatabaseSync() }),
+              methods: {},
+            });
+          return sdk;
+        };
+        (globalThis as { currentAgentId?: string }).currentAgentId =
+          `DollarDbParts(${JSON.stringify(input)})`;
+        const initial = await register();
+        await initial.golemAgent200Guest.initialize('DollarDbParts', input, { tag: 'anonymous' });
+        const snapshot = await initial.saveSnapshot.save();
+        const parts = decodeMultipart(snapshot.payload, extractBoundary(snapshot.mimeType)!);
+        expect(parts[1].name).toBe(`db:${fieldName}`);
+        vi.resetModules();
+        const restored = await register();
+        await restored.loadSnapshot.load(snapshot);
+        expect(restore).toHaveBeenCalledTimes(1);
+        expect(restore.mock.calls[0][1]).toEqual(bytes);
+        const resaved = await restored.saveSnapshot.save();
+        const restoredParts = decodeMultipart(resaved.payload, extractBoundary(resaved.mimeType)!);
+        expect(restoredParts[1].name).toBe(`db:${fieldName}`);
+        expect(restoredParts[1].body).toEqual(bytes);
+      } finally {
+        vi.doUnmock('../src/internal/sqlite');
+      }
+    },
+  );
 
   it('requires parts with normalized bare MIME and throws SnapshotError', () => {
     const parts = new Map([['index', { bytes, contentType: 'Application/Octet-Stream' }]]);

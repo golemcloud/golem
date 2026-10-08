@@ -42,7 +42,7 @@ pub struct LsResult {
     pub next_cursor: Option<LsCursor>,
 }
 
-#[tool_definition(version = "0.1.0", requires_filesystem = true)]
+#[tool_definition(version = "0.1.1", requires_filesystem = true)]
 pub trait Ls {
     /// Lists a directory in deterministic depth-first order without following symbolic links.
     /// The selected directory is depth zero; the default maximum depth lists its immediate

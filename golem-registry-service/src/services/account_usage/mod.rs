@@ -645,9 +645,9 @@ async fn reconcile_blob_storage_usage(
                 Path::new(""),
             )
             .await?;
-        total = blobs.iter().fold(total, |sum, (_, metadata)| {
-            sum.saturating_add(metadata.size)
-        });
+        total = blobs
+            .iter()
+            .fold(total, |sum, blob| sum.saturating_add(blob.size));
     }
     account_usage_repo
         .set_total_usage(account_id.0, UsageType::TotalBlobStorageBytes, total)

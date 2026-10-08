@@ -14,7 +14,7 @@
 
 /** Byte-preserving multipart/mixed framing shared by snapshot modes. */
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+const decoder = new TextDecoder('utf-8', { fatal: true });
 const CRLF = '\r\n';
 
 export class MultipartCodecError extends Error {
@@ -95,7 +95,11 @@ const containsBoundary = (parts: ReadonlyArray<MultipartPart>, boundary: string)
 };
 
 const validateHeaderValues = (part: MultipartPart): void => {
-  if (!/^[\x21-\x7e]+$/.test(part.name) || /["\\]/.test(part.name)) {
+  if (
+    part.name.length === 0 ||
+    /[\x00-\x1f\x7f"]/.test(part.name) ||
+    decoder.decode(encoder.encode(part.name)) !== part.name
+  ) {
     throw new MultipartCodecError('invalid part name');
   }
   if (!/^[\x20-\x7e]+$/.test(part.contentType) || part.contentType.trim() !== part.contentType) {
@@ -156,13 +160,16 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
       if (end < 0) throw new MultipartCodecError('could not find end of headers in part');
       const lineEnd = data[end - 1] === 13 ? end - 1 : end;
       const bytes = data.subarray(pos, lineEnd);
-      if (bytes.some((b) => b < 32 || b > 126))
-        throw new MultipartCodecError('invalid ASCII header');
-      const line = decoder.decode(bytes);
+      if (bytes.some((b) => b < 32 || b === 127)) throw new MultipartCodecError('invalid header');
+      let line: string;
+      try {
+        line = decoder.decode(bytes);
+      } catch {
+        throw new MultipartCodecError('invalid UTF-8 header');
+      }
       pos = end + 1;
       if (line === '') break;
-      if (!/^[\x20-\x7e]+$/.test(line) || /^\s/.test(line))
-        throw new MultipartCodecError('invalid header');
+      if (/^\s/.test(line)) throw new MultipartCodecError('invalid header');
       const colon = line.indexOf(':');
       if (colon < 0) throw new MultipartCodecError('invalid header');
       const key = line.slice(0, colon).toLowerCase();
@@ -172,7 +179,7 @@ export const decodeMultipart = (data: Uint8Array, boundary: string): Array<Multi
         contentType = value;
       } else if (key === 'content-disposition') {
         if (name !== undefined) throw new MultipartCodecError('duplicate Content-Disposition');
-        const match = /^attachment;\s*name="([^"\\]+)"$/i.exec(value);
+        const match = /^attachment;\s*name="([^"]+)"$/i.exec(value);
         if (!match)
           throw new MultipartCodecError('part missing or invalid name in Content-Disposition');
         name = match[1]!;
