@@ -5218,10 +5218,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             debug!("Update {new_revision} was already applied, skipping");
             return Ok(());
         };
-        let update = revision_update::prepare_revision_update(
-            revision_update::RevisionUpdateInputs::of(self),
-            new_revision,
-        )
+        let inputs = revision_update::RevisionUpdateInputs::of(self);
+        let this = &mut *self;
+        let update = revision_update::prepare_revision_update(inputs, new_revision, move || {
+            revision_update::AgentInputs::of(this)
+        })
         .await?;
         revision_update::apply_revision_update(self, update)
             .map_err(revision_update::UpdateStateError::WalletCards)

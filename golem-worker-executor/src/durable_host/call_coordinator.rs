@@ -1444,12 +1444,14 @@ where
     Ctx: WorkerCtx,
 {
     use crate::durable_host::revision_update::{
-        RevisionUpdateInputs, UpdateStateError, apply_revision_update, prepare_revision_update,
+        AgentInputs, RevisionUpdateInputs, UpdateStateError, apply_revision_update,
+        prepare_revision_update,
     };
-    let (inputs, current_revision) = store.with(|mut access| {
+    let (inputs, agent, current_revision) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
         (
             RevisionUpdateInputs::of(ctx),
+            AgentInputs::of(ctx),
             ctx.component_metadata().revision,
         )
     });
@@ -1459,7 +1461,7 @@ where
         return Ok(());
     }
 
-    let update = prepare_revision_update(inputs, new_revision).await?;
+    let update = prepare_revision_update(inputs, new_revision, || agent).await?;
     store.with(|mut access| {
         apply_revision_update(get_ctx(access.data_mut()), update)
             .map_err(UpdateStateError::WalletCards)

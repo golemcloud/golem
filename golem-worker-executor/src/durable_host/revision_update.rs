@@ -25,10 +25,10 @@ use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
 use crate::workerctx::WorkerCtx;
-use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::card::{CardId, StoredCard};
-use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
@@ -72,14 +72,14 @@ impl Display for UpdateStateError {
     }
 }
 
-/// What the update of an instance reads from its worker context.
+/// What the update of an instance reads from its worker context before it fetches the metadata of
+/// the revision.
 pub(crate) struct RevisionUpdateInputs {
     pub(crate) component_service: Arc<dyn ComponentService>,
     pub(crate) file_loader: Arc<FileLoader>,
     pub(crate) filesystem_generation_handle: FilesystemGenerationHandle,
-    pub(crate) owned_agent_id: OwnedAgentId,
-    pub(crate) agent_id: Option<ParsedAgentId>,
-    pub(crate) initial_agent_config: Vec<TypedAgentConfigEntry>,
+    pub(crate) component_id: ComponentId,
+    pub(crate) environment_id: EnvironmentId,
 }
 
 impl RevisionUpdateInputs {
@@ -89,7 +89,23 @@ impl RevisionUpdateInputs {
             component_service: ctx.state.component_service.clone(),
             file_loader: ctx.state.file_loader.clone(),
             filesystem_generation_handle: ctx.filesystem_generation_handle(),
-            owned_agent_id: ctx.owned_agent_id.clone(),
+            component_id: ctx.owned_agent_id.component_id(),
+            environment_id: ctx.owned_agent_id.environment_id,
+        }
+    }
+}
+
+/// What the update of an instance reads from its worker context after it has fetched the metadata
+/// of the revision: the parsed agent id and the initial agent config.
+pub(crate) struct AgentInputs {
+    pub(crate) agent_id: Option<ParsedAgentId>,
+    pub(crate) initial_agent_config: Vec<TypedAgentConfigEntry>,
+}
+
+impl AgentInputs {
+    /// The inputs of `ctx`.
+    pub(crate) fn of<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> Self {
+        Self {
             agent_id: ctx.parsed_agent_id(),
             initial_agent_config: ctx.state.initial_agent_config.clone(),
         }
@@ -109,23 +125,27 @@ pub(crate) struct RevisionUpdate {
 
 /// Prepares the update of an instance to `new_revision`: it fetches the metadata, builds the agent
 /// config and wallet cards of the agent type, and applies the initial-file rule to the agent
-/// filesystem.
+/// filesystem. It calls `agent` only after the metadata fetch has succeeded.
 pub(crate) async fn prepare_revision_update(
     inputs: RevisionUpdateInputs,
     new_revision: ComponentRevision,
+    agent: impl FnOnce() -> AgentInputs,
 ) -> Result<RevisionUpdate, UpdateStateError> {
     let RevisionUpdateInputs {
         component_service,
         file_loader,
         filesystem_generation_handle,
-        owned_agent_id,
-        agent_id,
-        initial_agent_config,
+        component_id,
+        environment_id,
     } = inputs;
     let metadata = component_service
-        .get_metadata(owned_agent_id.component_id(), Some(new_revision))
+        .get_metadata(component_id, Some(new_revision))
         .await
         .map_err(UpdateStateError::Metadata)?;
+    let AgentInputs {
+        agent_id,
+        initial_agent_config,
+    } = agent();
 
     let provision_config = agent_id.as_ref().and_then(|agent_id| {
         metadata
@@ -166,7 +186,7 @@ pub(crate) async fn prepare_revision_update(
     update_initial_files(
         &filesystem_generation_handle,
         file_loader,
-        owned_agent_id.environment_id,
+        environment_id,
         provision_config
             .as_ref()
             .map(|config| config.files.clone())
