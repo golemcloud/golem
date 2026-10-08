@@ -1276,7 +1276,8 @@ pub(crate) mod tests {
                 if let RuntimeObservation::ActivityStarted { activity, .. } = event {
                     observed.lock().unwrap().push(activity);
                 }
-            }));
+            }))
+            .unwrap();
         for _ in 0..count {
             store.as_context_mut().spawn(PendingTask);
         }
@@ -1619,6 +1620,17 @@ pub(crate) mod tests {
     #[test]
     fn delegated_driver_wake_return_and_drop_revoke_suspension() {
         use std::sync::atomic::{AtomicBool, Ordering};
+        struct ParentWake {
+            owner: Arc<OwnerSuspension>,
+            called: AtomicBool,
+        }
+        impl std::task::Wake for ParentWake {
+            fn wake(self: Arc<Self>) {
+                assert!(self.owner.state.try_lock().is_ok());
+                assert!(self.owner.prepare(Instant::now(), Duration::ZERO).is_none());
+                self.called.store(true, Ordering::SeqCst);
+            }
+        }
         for complete in [false, true] {
             let owner = OwnerSuspension::new();
             let runtime = RuntimeStore::new(owner.clone());
@@ -1628,7 +1640,10 @@ pub(crate) mod tests {
             config.wasm_component_model_async(true);
             let engine = Engine::new(&config).unwrap();
             let mut store = Store::new(&engine, ());
-            store.as_context_mut().set_runtime_observer(runtime.clone());
+            store
+                .as_context_mut()
+                .set_runtime_observer(runtime.clone())
+                .unwrap();
             let ready = Arc::new(AtomicBool::new(false));
             let saved = Arc::new(Mutex::new(None));
             let ready_inner = ready.clone();
@@ -1651,9 +1666,21 @@ pub(crate) mod tests {
                 .await
             });
             let mut driver = Box::pin(runtime.drive(future, Some(&invocation), None));
-            assert!(poll_once(driver.as_mut()).is_pending());
+            let parent = Arc::new(ParentWake {
+                owner: owner.clone(),
+                called: AtomicBool::new(false),
+            });
+            let parent_waker = Waker::from(parent.clone());
+            assert!(
+                driver
+                    .as_mut()
+                    .poll(&mut Context::from_waker(&parent_waker))
+                    .is_pending()
+            );
             let attempt = owner.prepare(Instant::now(), Duration::ZERO).unwrap();
-            saved.lock().unwrap().take().unwrap().wake();
+            let wake = saved.lock().unwrap().take().unwrap();
+            std::thread::spawn(move || wake.wake()).join().unwrap();
+            assert!(parent.called.load(Ordering::SeqCst));
             assert!(!owner.commit(&attempt, Instant::now(), Duration::ZERO));
             assert!(owner.prepare(Instant::now(), Duration::ZERO).is_none());
             assert!(poll_once(driver.as_mut()).is_pending());
@@ -1666,6 +1693,96 @@ pub(crate) mod tests {
             assert!(!owner.commit(&attempt, Instant::now(), Duration::ZERO));
             assert!(owner.prepare(Instant::now(), Duration::ZERO).is_none());
         }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn parked_borrowed_fiber_drop_releases_observer_lock() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use wasmtime::component::{Component, Linker};
+
+        struct HostDrop {
+            owner: Arc<OwnerSuspension>,
+            dropped: Arc<AtomicBool>,
+        }
+        impl Drop for HostDrop {
+            fn drop(&mut self) {
+                assert!(self.owner.state.try_lock().is_ok());
+                self.dropped.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let owner = OwnerSuspension::new();
+        let runtime = RuntimeStore::new(owner.clone());
+        let mut config = Config::new();
+        config
+            .wasm_component_model_async(true)
+            .concurrency_support(true);
+        let engine = Engine::new(&config).unwrap();
+        let component = Component::new(
+            &engine,
+            r#"
+            (component
+                (import "park" (func $park))
+                (core func $park (canon lower (func $park)))
+                (core module $m
+                    (import "" "park" (func $park))
+                    (func (export "run") call $park))
+                (core instance $i (instantiate $m
+                    (with "" (instance (export "park" (func $park))))))
+                (func (export "run") async (canon lift (core func $i "run"))))
+        "#,
+        )
+        .unwrap();
+        let entered = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut linker = Linker::<()>::new(&engine);
+        let host_owner = owner.clone();
+        let host_entered = entered.clone();
+        let host_dropped = dropped.clone();
+        linker
+            .root()
+            .func_wrap_async("park", move |store, (): ()| {
+                let guard = HostDrop {
+                    owner: host_owner.clone(),
+                    dropped: host_dropped.clone(),
+                };
+                let entered = host_entered.clone();
+                Box::new(async move {
+                    let _guard = guard;
+                    entered.store(true, Ordering::SeqCst);
+                    pending::<()>().await;
+                    let _ = store.data();
+                    Ok(())
+                })
+            })
+            .unwrap();
+        let mut store = Store::new(&engine, ());
+        store
+            .as_context_mut()
+            .set_runtime_observer(runtime.clone())
+            .unwrap();
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .unwrap();
+        let run = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .unwrap();
+        let mut driver = Box::pin(runtime.drive(run.call_async(&mut store, ()), None, None));
+        assert!(poll_once(driver.as_mut()).is_pending());
+        assert!(entered.load(Ordering::SeqCst));
+        assert!(!dropped.load(Ordering::SeqCst));
+        assert!(owner.prepare(Instant::now(), Duration::ZERO).is_none());
+        drop(driver);
+        assert!(owner.prepare(Instant::now(), Duration::ZERO).is_none());
+        drop(store);
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(
+            owner.state.lock().unwrap().stores[&runtime.store_id]
+                .activities
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1682,10 +1799,12 @@ pub(crate) mod tests {
         let mut child_store = Store::new(&engine, ());
         parent_store
             .as_context_mut()
-            .set_runtime_observer(parent_runtime.clone());
+            .set_runtime_observer(parent_runtime.clone())
+            .unwrap();
         child_store
             .as_context_mut()
-            .set_runtime_observer(child_runtime.clone());
+            .set_runtime_observer(child_runtime.clone())
+            .unwrap();
         let saved = Arc::new(Mutex::new(None));
         let saved_child = saved.clone();
         let observed = child_runtime.clone();

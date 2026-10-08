@@ -651,7 +651,10 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let mut store = Store::new(&engine, context);
         let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
-        store.as_context_mut().set_runtime_observer(runtime);
+        store
+            .as_context_mut()
+            .set_runtime_observer(runtime)
+            .map_err(anyhow::Error::from)?;
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
