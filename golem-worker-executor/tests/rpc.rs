@@ -93,7 +93,238 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[timeout("2 minutes")]
-async fn raw_sync_rpc_resumes_after_suspension(
+async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.rpc_suspend_after = Duration::from_secs(1);
+                config.suspend.rpc_resume_after = Duration::from_secs(3);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let target_id = agent_id!("RpcBlockingCounter", "unobserved-target");
+    executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_id = agent_id!("CancelTester", "unobserved-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let loads = executor.instance_load_count(&caller);
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &caller_id,
+        "await_counter_after_timer",
+        data_value!("unobserved-target", promise.clone()),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => panic!("caller finished before suspension: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(15), async {
+            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller)).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    executor.complete_promise(&promise, vec![]).await?;
+    let value = tokio::time::timeout(Duration::from_secs(45), invocation)
+        .await??
+        .into_typed::<u64>()?;
+    assert_eq!(value, 7);
+    assert!(executor.instance_load_count(&caller) > loads);
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 7);
+    let name = executor
+        .invoke_and_await_agent(&component, &caller_id, "name", data_value!())
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(name, "unobserved-caller");
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let attempts = Arc::new(Mutex::new(Vec::new()));
+    let recorded_attempts = attempts.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.rpc_suspend_after = Duration::from_secs(1);
+                config.suspend.rpc_resume_after = Duration::from_secs(3);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            wrap_rpc: Some(Arc::new(move |rpc| {
+                Arc::new(RecordingRpc::new(
+                    rpc,
+                    "inc_after_promise",
+                    recorded_attempts.clone(),
+                ))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let target_name = "sync-timer-target";
+    let target_id = agent_id!("RpcBlockingCounter", target_name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_id = agent_id!("CancelTester", "sync-timer-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &caller_id,
+        "sync_counter_with_pending_timer",
+        data_value!(target_name, promise.clone()),
+    );
+    tokio::pin!(invocation);
+    // Dispatch is the deterministic marker: the guest has already polled its timer.
+    tokio::select! {
+        result = &mut invocation => panic!("caller returned before dispatch: {result:?}"),
+        dispatched = tokio::time::timeout(Duration::from_secs(10), async {
+            while attempts.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }) => { dispatched?; }
+    }
+    let loads = executor.instance_load_count(&caller);
+    let owned_caller = OwnedAgentId::new(context.default_environment_id, &caller);
+    tokio::select! {
+        result = &mut invocation => panic!("caller returned before promise release: {result:?}"),
+        resident = async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+            while tokio::time::Instant::now() < deadline {
+                assert!(executor.worker_is_loaded(&owned_caller).await);
+                assert_eq!(executor.get_worker_metadata(&caller).await?.status, AgentStatus::Running);
+                assert_eq!(executor.instance_load_count(&caller), loads);
+                assert!(!executor.get_oplog(&caller, OplogIndex::INITIAL).await?.iter()
+                    .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))));
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        } => { resident?; }
+    }
+    assert_eq!(attempts.lock().unwrap().len(), 1);
+    executor.complete_promise(&promise, vec![]).await?;
+    // Once the borrowed call returns, the same long timer may release the Store.
+    tokio::select! {
+        result = &mut invocation => panic!("timer finished before suspension: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
+            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(8)).await?;
+            while executor.worker_is_loaded(&owned_caller).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let value = tokio::time::timeout(Duration::from_secs(45), invocation)
+        .await??
+        .into_typed::<u64>()?;
+    assert_eq!(value, 7);
+    assert!(executor.instance_load_count(&caller) > loads);
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        target_oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                if method.method_name == "inc_after_promise"))
+            })
+            .count(),
+        1
+    );
+    {
+        let attempts = attempts.lock().unwrap();
+        assert_eq!(
+            attempts.len(),
+            1,
+            "completed borrowed RPC must not redispatch on timer replay"
+        );
+        assert!(attempts[0].is_some());
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        7
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &caller_id, "name", data_value!())
+            .await?
+            .into_typed::<String>()?,
+        "sync-timer-caller"
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &caller_id,
+                "await_counter",
+                data_value!(target_name, promise, false)
+            )
+            .await?
+            .into_typed::<u64>()?,
+        14
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        14
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn raw_sync_rpc_stays_resident_beyond_suspension_grace(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
@@ -832,11 +1063,23 @@ async fn raw_rpc_suspension_case(
     };
 
     if suspend {
-        executor
-            .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
-            .await?;
+        if asynchronous {
+            executor
+                .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+                .await?;
+        } else {
+            executor
+                .wait_for_status(&target, AgentStatus::Suspended, Duration::from_secs(30))
+                .await?;
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            assert!(!invocation.is_finished());
+            assert_eq!(
+                executor.get_worker_metadata(&caller).await?.status,
+                AgentStatus::Running
+            );
+        }
         let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-        eprintln!("Suspended caller (async={asynchronous}):");
+        eprintln!("Pending caller (async={asynchronous}):");
         print_rpc_memory_oplog(&prefix);
         let starts: Vec<_> = prefix
             .iter()
@@ -846,10 +1089,15 @@ async fn raw_rpc_suspension_case(
                 .then_some(entry.oplog_index)
             })
             .collect();
-        assert_eq!(starts.len(), 1);
-        assert!(!prefix.iter().any(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
-        }));
+        if asynchronous {
+            assert_eq!(starts.len(), 1);
+            assert!(!prefix.iter().any(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
+            }));
+        } else {
+            // The resident caller need not have flushed its buffered RPC Start yet.
+            assert_eq!(attempts.lock().unwrap().len(), 1);
+        }
         executor.complete_promise(&promise, vec![]).await?;
     }
 
@@ -899,7 +1147,7 @@ async fn raw_rpc_suspension_case(
         caller_oplog
             .iter()
             .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))),
-        suspend,
+        suspend && asynchronous,
     );
     if asynchronous {
         assert_converted_rpc_span_lifecycle(&caller_oplog, 1);
@@ -1650,6 +1898,213 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
 
 #[test]
 #[timeout("2 minutes")]
+async fn durable_output_producer_suspends_after_result_and_autonomously_resumes(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_secs(1);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed_id = agent_id!("StreamingRpcTarget", "post-result-timer");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_id.clone())
+        .await?;
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+    let loads = executor.instance_load_count(&agent_id);
+    let (_, input) = data_value!().into_parts();
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(agent_id.clone().into()),
+            method_name: Some("produce_after_timer".to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let stream_id = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = responses
+                .message()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("closed before result"))?;
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Result(result)) => {
+                    let value = match result.result {
+                        Some(invocation_session_result::Result::MethodResult(value)) => value,
+                        other => anyhow::bail!("expected method result: {other:?}"),
+                    };
+                    let stream_id = match value.value {
+                        Some(schema_value::Value::StreamReference(reference)) => {
+                            reference.stream_id
+                        }
+                        other => anyhow::bail!("expected output stream: {other:?}"),
+                    };
+                    let [mapping] = result.new_stream_mappings.as_slice() else {
+                        anyhow::bail!("expected exactly one output mapping");
+                    };
+                    assert_eq!(mapping.transport_stream_id, stream_id);
+                    assert!(
+                        mapping
+                            .handle
+                            .as_ref()
+                            .and_then(|handle| handle.stream_id)
+                            .is_some()
+                    );
+                    return Ok::<_, anyhow::Error>(stream_id);
+                }
+                other => anyhow::bail!("unexpected response before result: {other:?}"),
+            }
+        }
+    })
+    .await??;
+    // The synchronous method has returned, but its spawned producer still owns the timer.
+    assert_ne!(
+        executor.get_worker_metadata(&agent_id).await?.status,
+        AgentStatus::Suspended
+    );
+    assert!(
+        executor
+            .worker_is_loaded(&OwnedAgentId::new(
+                context.default_environment_id,
+                &agent_id
+            ))
+            .await
+    );
+    tokio::select! {
+        response = responses.message() => anyhow::bail!("output advanced before observed unload: {response:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
+            executor.wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &agent_id)).await {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let mut values = Vec::new();
+    let mut offsets = BTreeSet::new();
+    let mut ends = 0;
+    let mut finishes = 0;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(response) = responses.message().await? {
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    assert_eq!(item.transport_stream_id, stream_id);
+                    assert_eq!(item.producer_sequence, values.len() as u64);
+                    assert_eq!(ends, 0);
+                    assert!(offsets.insert(item.durable_offset));
+                    let value = match item.value.and_then(|value| value.value) {
+                        Some(schema_value::Value::U32Value(value)) => value,
+                        other => anyhow::bail!("expected u32 output: {other:?}"),
+                    };
+                    values.push(value);
+                }
+                Some(invocation_response::Response::OutputEnd(end)) => {
+                    assert_eq!(end.transport_stream_id, stream_id);
+                    assert_eq!(end.producer_sequence, 3);
+                    assert!(offsets.insert(end.durable_offset));
+                    assert_eq!(values, vec![23, 169, 7]);
+                    ends += 1;
+                }
+                Some(invocation_response::Response::Finished(finished)) => {
+                    assert_eq!(ends, 1);
+                    assert!(matches!(
+                        finished.outcome,
+                        Some(invocation_session_completion::Outcome::Success(_))
+                    ));
+                    finishes += 1;
+                }
+                other => anyhow::bail!("unexpected resumed output response: {other:?}"),
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    assert!(state.is_complete());
+    assert_eq!(values, vec![23, 169, 7]);
+    assert_eq!(ends, 1);
+    assert_eq!(finishes, 1);
+    assert_eq!(offsets.len(), 4);
+    assert!(executor.instance_load_count(&agent_id) > loads);
+    let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+    let mut recorded_offsets = BTreeSet::new();
+    let mut recorded_ends = 0;
+    for entry in &oplog {
+        match &entry.entry {
+            PublicOplogEntry::StreamItems(params) => {
+                let record = StreamItemsRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                for offset in record.offsets {
+                    assert!(recorded_offsets.insert(offset.as_bytes().to_vec()));
+                }
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                recorded_ends += 1;
+                let record = golem_common::model::durable_stream::StreamEndRecord::from_value(
+                    params.record.value(),
+                )
+                .map_err(anyhow::Error::msg)?;
+                assert_eq!(record.sequence, 3);
+                assert!(recorded_offsets.insert(record.offset.as_bytes().to_vec()));
+            }
+            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_) => {
+                anyhow::bail!("producer failed or cancelled: {:?}", entry.entry);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(recorded_ends, 1);
+    assert_eq!(offsets, recorded_offsets);
+    let ping = executor
+        .invoke_and_await_agent(&component, &parsed_id, "ping", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(ping, 42);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
 async fn ephemeral_output_producer_can_be_interrupted_after_result(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1657,6 +2112,507 @@ async fn ephemeral_output_producer_can_be_interrupted_after_result(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     interrupt_output_producer_after_result(last_unique_id, deps, agent_rpc_rust, true, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn durable_byte_output_prefix_survives_autonomous_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    output_prefix_survives_autonomous_suspension(last_unique_id, deps, fixture, false).await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn durable_nested_output_prefix_survives_autonomous_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    output_prefix_survives_autonomous_suspension(last_unique_id, deps, fixture, true).await
+}
+
+async fn output_prefix_survives_autonomous_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    nested: bool,
+) -> anyhow::Result<()> {
+    use golem_common::model::durable_stream::{
+        StreamEndResult, StreamId, StreamItemsPayload, StreamRecordReference,
+    };
+    use prost::Message;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_secs(1);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed_id = agent_id!("StreamingRpcTarget", "prefix-timer");
+    let agent_id = executor
+        .start_agent(&component.id, parsed_id.clone())
+        .await?;
+    let metadata = executor.get_worker_metadata(&agent_id).await?;
+    let loads = executor.instance_load_count(&agent_id);
+    let (_, input) = data_value!().into_parts();
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(agent_id.clone().into()),
+            method_name: Some(
+                if nested {
+                    "produce_nested_after_prefix_timer"
+                } else {
+                    "produce_bytes_after_prefix_timer"
+                }
+                .to_string(),
+            ),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let mut root = None;
+    let mut nested_id = None;
+    let mut handles = BTreeMap::new();
+    let mut sequences = BTreeMap::<u64, u64>::new();
+    let mut offsets = BTreeSet::new();
+    let mut values = Vec::new();
+    let mut ends = BTreeSet::new();
+    let mut wire_items = Vec::new();
+    let mut wire_ends = Vec::new();
+    let mut finished = 0;
+    let mut unloaded = false;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(response) = responses.message().await? {
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            match response.response {
+                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Result(result)) => {
+                    let Some(invocation_session_result::Result::MethodResult(value)) =
+                        result.result
+                    else {
+                        anyhow::bail!("missing result")
+                    };
+                    let Some(schema_value::Value::StreamReference(reference)) = value.value else {
+                        anyhow::bail!("missing root stream")
+                    };
+                    assert!(root.replace(reference.stream_id).is_none());
+                    let [mapping] = result.new_stream_mappings.as_slice() else {
+                        anyhow::bail!("missing root mapping")
+                    };
+                    assert_eq!(mapping.transport_stream_id, reference.stream_id);
+                    assert!(mapping.handle.as_ref().and_then(|h| h.stream_id).is_some());
+                    handles.insert(mapping.transport_stream_id, mapping.handle.clone());
+                }
+                Some(invocation_response::Response::OutputItem(item)) => {
+                    wire_items.push(item.clone());
+                    assert!(!ends.contains(&item.transport_stream_id));
+                    assert_eq!(
+                        item.durable_stream_id,
+                        handles[&item.transport_stream_id]
+                            .as_ref()
+                            .and_then(|h| h.stream_id)
+                    );
+                    let sequence = sequences.entry(item.transport_stream_id).or_default();
+                    assert_eq!(item.producer_sequence, *sequence);
+                    *sequence += item.logical_item_count;
+                    assert!(offsets.insert(item.durable_offset));
+                    match item.value.and_then(|v| v.value) {
+                        Some(schema_value::Value::RecordValue(record)) if nested => {
+                            assert_eq!(Some(item.transport_stream_id), root);
+                            let [label, stream] = record.fields.as_slice() else {
+                                anyhow::bail!("invalid record")
+                            };
+                            assert_eq!(
+                                label.value,
+                                Some(schema_value::Value::StringValue("asymmetric".to_string()))
+                            );
+                            let Some(schema_value::Value::StreamReference(reference)) =
+                                &stream.value
+                            else {
+                                anyhow::bail!("missing nested reference")
+                            };
+                            assert!(nested_id.replace(reference.stream_id).is_none());
+                            let [mapping] = item.new_stream_mappings.as_slice() else {
+                                anyhow::bail!("missing nested mapping")
+                            };
+                            assert_eq!(mapping.transport_stream_id, reference.stream_id);
+                            assert!(mapping.handle.as_ref().and_then(|h| h.stream_id).is_some());
+                            assert!(
+                                handles
+                                    .insert(mapping.transport_stream_id, mapping.handle.clone())
+                                    .is_none()
+                            );
+                        }
+                        Some(schema_value::Value::U32Value(value)) if nested => {
+                            assert_eq!(Some(item.transport_stream_id), nested_id);
+                            assert!(item.new_stream_mappings.is_empty());
+                            values.push(value);
+                        }
+                        Some(schema_value::Value::U8Value(value)) if !nested => {
+                            assert_eq!(Some(item.transport_stream_id), root);
+                            assert!(item.new_stream_mappings.is_empty());
+                            values.push(value);
+                        }
+                        None if !nested => {
+                            assert_eq!(Some(item.transport_stream_id), root);
+                            assert!(item.new_stream_mappings.is_empty());
+                            assert!(!item.packed_u8.is_empty());
+                            assert_eq!(item.logical_item_count, item.packed_u8.len() as u64);
+                            values.extend(item.packed_u8.into_iter().map(u32::from));
+                        }
+                        other => anyhow::bail!("unexpected prefix output: {other:?}"),
+                    }
+                }
+                Some(invocation_response::Response::OutputEnd(end)) => {
+                    assert!(unloaded, "terminal before suspension");
+                    wire_ends.push(end.clone());
+                    assert!(handles.contains_key(&end.transport_stream_id));
+                    assert_eq!(
+                        end.durable_stream_id,
+                        handles[&end.transport_stream_id]
+                            .as_ref()
+                            .and_then(|h| h.stream_id)
+                    );
+                    assert_eq!(end.producer_sequence, sequences[&end.transport_stream_id]);
+                    assert!(offsets.insert(end.durable_offset));
+                    assert!(ends.insert(end.transport_stream_id));
+                }
+                Some(invocation_response::Response::Finished(completion)) => {
+                    assert_eq!(ends.len(), handles.len());
+                    assert!(matches!(
+                        completion.outcome,
+                        Some(invocation_session_completion::Outcome::Success(_))
+                    ));
+                    finished += 1;
+                }
+                other => anyhow::bail!("unexpected output: {other:?}"),
+            }
+            if !unloaded
+                && if nested {
+                    nested_id.is_some()
+                } else {
+                    values.len() == 2
+                }
+            {
+                assert_eq!(values, if nested { vec![] } else { vec![23, 169] });
+                assert!(
+                    executor
+                        .worker_is_loaded(&OwnedAgentId::new(
+                            context.default_environment_id,
+                            &agent_id
+                        ))
+                        .await
+                );
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    executor
+                        .wait_for_status(&agent_id, AgentStatus::Suspended, Duration::from_secs(8))
+                        .await?;
+                    while executor
+                        .worker_is_loaded(&OwnedAgentId::new(
+                            context.default_environment_id,
+                            &agent_id,
+                        ))
+                        .await
+                    {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await??;
+                let mut prefix = BTreeMap::new();
+                for entry in executor.get_oplog(&agent_id, OplogIndex::INITIAL).await? {
+                    match entry.entry {
+                        PublicOplogEntry::StreamItems(params) => {
+                            let record = StreamItemsRecord::from_value(params.record.value())
+                                .map_err(anyhow::Error::msg)?;
+                            let id = StreamId::derive(
+                                context.default_environment_id,
+                                &agent_id,
+                                metadata.fingerprint,
+                                record.stream_id.0,
+                            )?;
+                            prefix.entry(id.0).or_insert_with(Vec::new).push(record);
+                        }
+                        PublicOplogEntry::StreamEnd(_)
+                        | PublicOplogEntry::StreamCancel(_)
+                        | PublicOplogEntry::Error(_) => {
+                            anyhow::bail!("terminal or failure while unloaded")
+                        }
+                        _ => {}
+                    }
+                }
+                let leaf = if nested {
+                    nested_id.unwrap()
+                } else {
+                    root.unwrap()
+                };
+                let leaf_id: uuid::Uuid =
+                    handles[&leaf].as_ref().unwrap().stream_id.unwrap().into();
+                let records = &prefix[&leaf_id];
+                assert_eq!(
+                    records
+                        .iter()
+                        .map(|record| record.payload.logical_item_count())
+                        .sum::<usize>(),
+                    if nested { 1 } else { 2 }
+                );
+                if nested {
+                    assert_eq!(records.len(), 1);
+                    assert_eq!(records[0].first_sequence, 0);
+                    let StreamItemsPayload::Values(encoded) = &records[0].payload else {
+                        anyhow::bail!("child prefix is not a value");
+                    };
+                    assert_eq!(encoded.len(), 1);
+                    assert_eq!(
+                        golem_schema::proto::golem::schema::SchemaValue::decode(
+                            encoded[0].as_slice()
+                        )?
+                        .value,
+                        Some(schema_value::Value::U32Value(169))
+                    );
+                    let root_id: uuid::Uuid = handles[&root.unwrap()]
+                        .as_ref()
+                        .unwrap()
+                        .stream_id
+                        .unwrap()
+                        .into();
+                    assert_eq!(prefix[&root_id].len(), 1);
+                    assert_eq!(prefix[&root_id][0].first_sequence, 0);
+                    let parent = &prefix[&root_id][0];
+                    let StreamItemsPayload::Values(encoded) = &parent.payload else {
+                        anyhow::bail!("parent prefix is not a value");
+                    };
+                    assert_eq!(encoded.len(), 1);
+                    let value = golem_schema::proto::golem::schema::SchemaValue::decode(
+                        encoded[0].as_slice(),
+                    )?;
+                    let Some(schema_value::Value::RecordValue(record)) = value.value else {
+                        anyhow::bail!("parent prefix is not a record");
+                    };
+                    let [label, child] = record.fields.as_slice() else {
+                        anyhow::bail!("invalid persisted parent");
+                    };
+                    assert_eq!(
+                        label.value,
+                        Some(schema_value::Value::StringValue("asymmetric".to_string()))
+                    );
+                    let Some(schema_value::Value::StreamReference(reference)) = &child.value else {
+                        anyhow::bail!("persisted parent omitted child");
+                    };
+                    let child_id = match &parent.nested_stream_ids[reference.stream_id as usize] {
+                        StreamRecordReference::Local(local) => {
+                            StreamId::derive(
+                                context.default_environment_id,
+                                &agent_id,
+                                metadata.fingerprint,
+                                local.0,
+                            )?
+                            .0
+                        }
+                        StreamRecordReference::Foreign(handle) => handle.stream_id.0,
+                    };
+                    assert_eq!(child_id, leaf_id);
+                }
+                unloaded = true;
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    })
+    .await??;
+    assert!(unloaded);
+    assert!(state.is_complete());
+    assert_eq!(finished, 1);
+    assert_eq!(
+        values,
+        if nested {
+            vec![169, 7, 201]
+        } else {
+            vec![23, 169, 7, 201]
+        }
+    );
+    assert_eq!(handles.len(), if nested { 2 } else { 1 });
+    assert!(executor.instance_load_count(&agent_id) > loads);
+    let mut recorded_offsets = BTreeSet::new();
+    let mut journal_items = BTreeMap::new();
+    let mut journal_ends = BTreeMap::new();
+    let mut recorded_ends = 0;
+    for entry in executor.get_oplog(&agent_id, OplogIndex::INITIAL).await? {
+        match entry.entry {
+            PublicOplogEntry::StreamItems(params) => {
+                let record = StreamItemsRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                let id = StreamId::derive(
+                    context.default_environment_id,
+                    &agent_id,
+                    metadata.fingerprint,
+                    record.stream_id.0,
+                )?
+                .0;
+                let decoded = match &record.payload {
+                    StreamItemsPayload::Values(values) => values
+                        .iter()
+                        .map(|encoded| {
+                            golem_schema::proto::golem::schema::SchemaValue::decode(
+                                encoded.as_slice(),
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                    StreamItemsPayload::PackedU8(bytes) => bytes
+                        .iter()
+                        .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
+                            value: Some(schema_value::Value::U8Value(u32::from(*byte))),
+                        })
+                        .collect(),
+                };
+                assert_eq!(decoded.len(), record.offsets.len());
+                for (index, (mut value, offset)) in
+                    decoded.into_iter().zip(&record.offsets).enumerate()
+                {
+                    if let Some(schema_value::Value::RecordValue(fields)) = &mut value.value {
+                        let Some(schema_value::Value::StreamReference(reference)) =
+                            &mut fields.fields[1].value
+                        else {
+                            anyhow::bail!("persisted parent omitted child");
+                        };
+                        let child_id = match &record.nested_stream_ids[reference.stream_id as usize]
+                        {
+                            StreamRecordReference::Local(local) => {
+                                StreamId::derive(
+                                    context.default_environment_id,
+                                    &agent_id,
+                                    metadata.fingerprint,
+                                    local.0,
+                                )?
+                                .0
+                            }
+                            StreamRecordReference::Foreign(handle) => handle.stream_id.0,
+                        };
+                        let child = nested_id.unwrap();
+                        let announced: uuid::Uuid =
+                            handles[&child].as_ref().unwrap().stream_id.unwrap().into();
+                        assert_eq!(child_id, announced);
+                        reference.stream_id = child;
+                    }
+                    assert!(
+                        journal_items
+                            .insert(
+                                (id, record.first_sequence + index as u64),
+                                (value, offset.as_bytes().to_vec())
+                            )
+                            .is_none()
+                    );
+                    assert!(recorded_offsets.insert(offset.as_bytes().to_vec()));
+                }
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                let record = golem_common::model::durable_stream::StreamEndRecord::from_value(
+                    params.record.value(),
+                )
+                .map_err(anyhow::Error::msg)?;
+                let id = StreamId::derive(
+                    context.default_environment_id,
+                    &agent_id,
+                    metadata.fingerprint,
+                    record.stream_id.0,
+                )?
+                .0;
+                assert_eq!(record.result, StreamEndResult::Ok);
+                assert!(
+                    journal_ends
+                        .insert((id, record.sequence), record.offset.as_bytes().to_vec())
+                        .is_none()
+                );
+                assert!(recorded_offsets.insert(record.offset.as_bytes().to_vec()));
+                recorded_ends += 1;
+            }
+            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_) => {
+                anyhow::bail!("producer failed or cancelled")
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(recorded_offsets.len(), if nested { 6 } else { 5 });
+    assert!(offsets.is_subset(&recorded_offsets));
+    if nested {
+        assert_eq!(recorded_offsets, offsets);
+    }
+    assert_eq!(recorded_ends, handles.len());
+    let mut covered = 0;
+    for item in wire_items {
+        let id: uuid::Uuid = item.durable_stream_id.unwrap().into();
+        let frame_values = if let Some(value) = item.value {
+            vec![value]
+        } else {
+            item.packed_u8
+                .iter()
+                .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
+                    value: Some(schema_value::Value::U8Value(u32::from(*byte))),
+                })
+                .collect()
+        };
+        assert_eq!(frame_values.len() as u64, item.logical_item_count);
+        for (index, value) in frame_values.into_iter().enumerate() {
+            let (recorded, offset) = &journal_items[&(id, item.producer_sequence + index as u64)];
+            assert_eq!(&value, recorded);
+            if index as u64 + 1 == item.logical_item_count {
+                assert_eq!(&item.durable_offset, offset);
+            }
+            covered += 1;
+        }
+    }
+    assert_eq!(covered, journal_items.len());
+    for end in wire_ends {
+        let id: uuid::Uuid = end.durable_stream_id.unwrap().into();
+        assert_eq!(
+            end.durable_offset,
+            journal_ends[&(id, end.producer_sequence)]
+        );
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &parsed_id, "ping", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        42
+    );
+    Ok(())
 }
 
 #[test]
@@ -4170,6 +5126,779 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
         .count();
     assert_eq!(starts, 1, "ResumeAttach must not restart transform");
     Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn consumed_scalar_input_survives_automatic_unload(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    consumed_input_boundary(last_unique_id, deps, fixture, "scalar").await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn consumed_byte_input_survives_automatic_unload(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    consumed_input_boundary(last_unique_id, deps, fixture, "byte").await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn consumed_nested_input_survives_automatic_unload(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    consumed_input_boundary(last_unique_id, deps, fixture, "nested").await
+}
+
+#[test]
+#[timeout("2 minutes")]
+async fn generated_input_source_timer_suspends_in_flight_transfer(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_secs(1);
+                config.suspend.rpc_suspend_after = Duration::from_secs(1);
+                config.suspend.rpc_resume_after = Duration::from_secs(3);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed = agent_id!("StreamingRpcCaller", "input-source-timer");
+    let caller = executor.start_agent(&component.id, parsed.clone()).await?;
+    let loads = executor.instance_load_count(&caller);
+    let metadata = executor.get_worker_metadata(&caller).await?;
+    let target_parsed = agent_id!("StreamingRpcTarget", "input-source-timer");
+    let target = executor
+        .start_agent(&component.id, target_parsed.clone())
+        .await?;
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &parsed,
+        "transfer_input_after_timer",
+        data_value!(),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => anyhow::bail!("transfer completed before unload: {result:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(12), async {
+            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(10)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &caller)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let before = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+            let count = input_consumer_history(&oplog)?
+                .iter()
+                .map(|record| match record {
+                    StreamSessionRecord::ConsumerItemValue(record) => record.logical_item_count(),
+                    _ => 0,
+                })
+                .sum::<usize>();
+            if count >= 2 {
+                return Ok::<_, anyhow::Error>(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    assert!(before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+                if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "consume"))
+    ));
+    assert!(!before.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(end)
+                if end.method_name.as_deref() == Some("consume"))
+    ));
+    let prefix = input_consumer_history(&before)?;
+    assert_eq!(
+        prefix
+            .iter()
+            .map(|record| match record {
+                StreamSessionRecord::ConsumerItemValue(record) => record.logical_item_count(),
+                _ => 0,
+            })
+            .sum::<usize>(),
+        2
+    );
+    assert!(
+        !prefix
+            .iter()
+            .any(|record| matches!(record, StreamSessionRecord::ConsumerTerminal(_)))
+    );
+    let values = tokio::time::timeout(Duration::from_secs(60), invocation)
+        .await??
+        .into_typed::<Vec<u32>>()?;
+    assert_eq!(values, vec![23, 169, 7, 201]);
+    assert!(executor.instance_load_count(&caller) > loads);
+    assert_eq!(
+        executor.get_worker_metadata(&caller).await?.fingerprint,
+        metadata.fingerprint
+    );
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let target_history = input_consumer_history(&target_oplog)?;
+    assert!(target_history.starts_with(&prefix));
+    let observed = input_observations(
+        &target_oplog,
+        context.default_environment_id,
+        &target,
+        executor.get_worker_metadata(&target).await?.fingerprint,
+    )?;
+    let prefix_observed = input_observations(
+        &before,
+        context.default_environment_id,
+        &target,
+        executor.get_worker_metadata(&target).await?.fingerprint,
+    )?;
+    assert_eq!(
+        prefix_observed
+            .values()
+            .map(|(value, _)| value.clone())
+            .collect::<Vec<_>>(),
+        vec![Some(SchemaValue::U32(23)), Some(SchemaValue::U32(169))]
+    );
+    let mut produced = BTreeMap::new();
+    for entry in executor.get_oplog(&caller, OplogIndex::INITIAL).await? {
+        use golem_common::model::durable_stream::{
+            StreamEndRecord, StreamEndResult, StreamId, StreamItemsPayload,
+        };
+        match entry.entry {
+            PublicOplogEntry::StreamItems(params) => {
+                let record = StreamItemsRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                let stream = StreamId::derive(
+                    context.default_environment_id,
+                    &caller,
+                    metadata.fingerprint,
+                    record.stream_id.0,
+                )?
+                .0;
+                let values = match record.payload {
+                    StreamItemsPayload::Values(values) => values
+                        .iter()
+                        .map(|value| decode_input_value(value))
+                        .collect::<anyhow::Result<Vec<_>>>()?,
+                    StreamItemsPayload::PackedU8(bytes) => {
+                        bytes.into_iter().map(SchemaValue::U8).collect()
+                    }
+                };
+                assert_eq!(values.len(), record.offsets.len());
+                for (index, (value, offset)) in values.into_iter().zip(record.offsets).enumerate() {
+                    assert!(
+                        produced
+                            .insert(
+                                (stream, record.first_sequence + index as u64),
+                                (Some(value), offset.as_bytes().to_vec())
+                            )
+                            .is_none()
+                    );
+                }
+            }
+            PublicOplogEntry::StreamEnd(params) => {
+                let record = StreamEndRecord::from_value(params.record.value())
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(record.result, StreamEndResult::Ok);
+                let stream = StreamId::derive(
+                    context.default_environment_id,
+                    &caller,
+                    metadata.fingerprint,
+                    record.stream_id.0,
+                )?
+                .0;
+                assert!(
+                    produced
+                        .insert(
+                            (stream, record.sequence),
+                            (None, record.offset.as_bytes().to_vec())
+                        )
+                        .is_none()
+                );
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(observed, produced);
+    let mut source_offsets = BTreeSet::new();
+    let mut items = 0;
+    let mut ends = 0;
+    for record in &target_history {
+        match record {
+            StreamSessionRecord::ConsumerItemValue(record) => {
+                for index in 0..record.logical_item_count() {
+                    assert!(source_offsets.insert(record.source_offset_at(index).unwrap()));
+                }
+                items += record.logical_item_count();
+            }
+            StreamSessionRecord::ConsumerTerminal(record) => {
+                assert!(matches!(
+                    record.terminal,
+                    golem_common::model::durable_stream::StreamConsumerTerminal::End(_)
+                ));
+                assert!(source_offsets.insert(record.source_offset));
+                ends += 1;
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!((items, ends), (4, 1));
+    for (id, method_name) in [
+        (&caller, "transfer_input_after_timer"),
+        (&target, "consume"),
+    ] {
+        let oplog = executor.get_oplog(id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(start)
+                    if matches!(&start.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == method_name)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(
+                    |entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(end)
+                    if end.method_name.as_deref() == Some(method_name))
+                )
+                .count(),
+            1
+        );
+        assert!(!oplog.iter().any(|entry| matches!(
+            entry.entry,
+            PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_)
+        )));
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &parsed, "call_stream_free", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        1
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &target_parsed, "ping", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        42
+    );
+    Ok(())
+}
+
+async fn consumed_input_boundary(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    fixture: &PrecompiledComponent,
+    kind: &str,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = Duration::from_secs(1);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let parsed = agent_id!("StreamingRpcTarget", format!("consumed-{kind}"));
+    let id = executor.start_agent(&component.id, parsed.clone()).await?;
+    let metadata = executor.get_worker_metadata(&id).await?;
+    let loads = executor.instance_load_count(&id);
+    let wire = |value: SchemaValue| value.try_into().map_err(anyhow::Error::msg);
+    let stream = |stream_id| golem_schema::proto::golem::schema::SchemaValue {
+        value: Some(schema_value::Value::StreamReference(
+            SchemaValueStreamReference { stream_id },
+        )),
+    };
+    let numbers = [23, 169, 7, 201];
+    let (method, argument, streams, expected) = match kind {
+        "byte" => {
+            let values = numbers
+                .iter()
+                .map(|value| SchemaValue::U8(*value as u8))
+                .collect::<Vec<_>>();
+            (
+                "consume_bytes_before_timer",
+                stream(1),
+                vec![values.clone()],
+                SchemaValue::List { elements: values },
+            )
+        }
+        "nested" => {
+            let labels = vec![
+                SchemaValue::String("left".into()),
+                SchemaValue::String("right".into()),
+            ];
+            let values = numbers
+                .iter()
+                .map(|value| SchemaValue::U32(*value))
+                .collect::<Vec<_>>();
+            let argument = golem_schema::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::RecordValue(RecordValue {
+                    fields: vec![
+                        stream(1),
+                        golem_schema::proto::golem::schema::SchemaValue {
+                            value: Some(schema_value::Value::OptionValue(Box::new(
+                                golem_schema::proto::golem::schema::OptionValue {
+                                    inner: Some(Box::new(stream(2))),
+                                },
+                            ))),
+                        },
+                    ],
+                })),
+            };
+            (
+                "consume_nested_before_timer",
+                argument,
+                vec![labels.clone(), values.clone()],
+                SchemaValue::Tuple {
+                    elements: vec![
+                        SchemaValue::List { elements: labels },
+                        SchemaValue::List { elements: values },
+                    ],
+                },
+            )
+        }
+        _ => {
+            let values = numbers
+                .iter()
+                .map(|value| SchemaValue::U32(*value))
+                .collect::<Vec<_>>();
+            (
+                "consume_before_timer",
+                stream(1),
+                vec![values.clone()],
+                SchemaValue::List { elements: values },
+            )
+        }
+    };
+    let start = InvocationRequest {
+        request: Some(invocation_request::Request::Start(InvocationStart {
+            agent_id: Some(id.clone().into()),
+            method_name: Some(method.into()),
+            input: Some(golem_schema::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::RecordValue(RecordValue {
+                    fields: vec![argument],
+                })),
+            }),
+            idempotency_key: Some(IdempotencyKey::fresh().into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            environment_id: Some(component.environment_id.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
+            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+            ..Default::default()
+        })),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&start)
+        .map_err(anyhow::Error::msg)?;
+    let (requests, receiver) = mpsc::channel(8);
+    requests.send(start).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let response = responses.message().await?.unwrap();
+    state
+        .validate_response(&response)
+        .map_err(anyhow::Error::msg)?;
+    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
+        anyhow::bail!("not accepted")
+    };
+    assert_eq!(accepted.stream_mappings.len(), streams.len());
+    let mut acknowledged = BTreeMap::new();
+    for (index, values) in streams.iter().enumerate() {
+        let transport_stream_id = index as u64 + 1;
+        let mapping = accepted
+            .stream_mappings
+            .iter()
+            .find(|mapping| mapping.transport_stream_id == transport_stream_id)
+            .unwrap();
+        let durable_stream_id = mapping.handle.as_ref().unwrap().stream_id;
+        for (sequence, value) in values.iter().enumerate() {
+            let item = InvocationRequest {
+                request: Some(invocation_request::Request::InputItem(InputStreamItem {
+                    transport_stream_id,
+                    sequence: sequence as u64,
+                    payload: Some(input_stream_item::Payload::Value(wire(value.clone())?)),
+                    durable_stream_id,
+                    epoch: accepted.epoch,
+                })),
+            };
+            state
+                .validate_trusted_request(&item)
+                .map_err(anyhow::Error::msg)?;
+            requests.send(item).await?;
+            let response = responses.message().await?.unwrap();
+            state
+                .validate_response(&response)
+                .map_err(anyhow::Error::msg)?;
+            let Some(invocation_response::Response::InputAck(ack)) = response.response else {
+                anyhow::bail!("expected item ACK")
+            };
+            assert_eq!(ack.highest_contiguous_sequence, sequence as u64);
+            assert_eq!(ack.logical_item_count, 1);
+            assert!(!ack.resulting_offset.is_empty());
+            let stream_uuid: uuid::Uuid = durable_stream_id.unwrap().into();
+            assert!(
+                acknowledged
+                    .insert(
+                        (stream_uuid, sequence as u64),
+                        (Some(value.clone()), ack.resulting_offset)
+                    )
+                    .is_none()
+            );
+            if index == 0 && sequence == 0 {
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    loop {
+                        if input_consumer_history(
+                            &executor.get_oplog(&id, OplogIndex::INITIAL).await?,
+                        )?
+                        .iter()
+                        .any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_)))
+                        {
+                            return Ok::<(), anyhow::Error>(());
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await??;
+                // Outstanding external input is Unknown and must remain resident.
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                assert!(
+                    executor
+                        .worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id))
+                        .await
+                );
+                assert_eq!(executor.instance_load_count(&id), loads);
+                assert_eq!(
+                    executor.get_worker_metadata(&id).await?.status,
+                    AgentStatus::Running
+                );
+                assert!(
+                    !executor
+                        .get_oplog(&id, OplogIndex::INITIAL)
+                        .await?
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Suspend(_)))
+                );
+            }
+        }
+        let end = InvocationRequest {
+            request: Some(invocation_request::Request::InputEnd(InputStreamEnd {
+                transport_stream_id,
+                sequence: values.len() as u64,
+                durable_stream_id,
+                epoch: accepted.epoch,
+            })),
+        };
+        state
+            .validate_trusted_request(&end)
+            .map_err(anyhow::Error::msg)?;
+        requests.send(end).await?;
+        let response = responses.message().await?.unwrap();
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        let Some(invocation_response::Response::InputAck(ack)) = response.response else {
+            anyhow::bail!("expected terminal ACK")
+        };
+        assert_eq!(ack.highest_contiguous_sequence, values.len() as u64);
+        assert!(!ack.resulting_offset.is_empty());
+        let stream_uuid: uuid::Uuid = durable_stream_id.unwrap().into();
+        assert!(
+            acknowledged
+                .insert(
+                    (stream_uuid, values.len() as u64),
+                    (None, ack.resulting_offset)
+                )
+                .is_none()
+        );
+    }
+    tokio::select! {
+        response = responses.message() => anyhow::bail!("result before unload: {response:?}"),
+        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
+            executor.wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(8)).await?;
+            while executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, &id)).await { tokio::time::sleep(Duration::from_millis(10)).await; }
+            Ok::<(), anyhow::Error>(())
+        }) => { unloaded??; }
+    }
+    let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+    assert!(!oplog.iter().any(
+        |entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(end)
+                if end.method_name.as_deref() == Some(method))
+    ));
+    let consumed = input_consumer_history(&oplog)?;
+    let mut item_count = 0;
+    let mut terminals = 0;
+    let mut journal_offsets = BTreeSet::new();
+    for record in &consumed {
+        match record {
+            StreamSessionRecord::ConsumerItemValue(record) => {
+                for index in 0..record.logical_item_count() {
+                    assert!(
+                        journal_offsets
+                            .insert(record.source_offset_at(index).unwrap().as_bytes().to_vec())
+                    );
+                }
+                item_count += record.logical_item_count();
+            }
+            StreamSessionRecord::ConsumerTerminal(record) => {
+                assert!(matches!(
+                    record.terminal,
+                    golem_common::model::durable_stream::StreamConsumerTerminal::End(_)
+                ));
+                assert!(journal_offsets.insert(record.source_offset.as_bytes().to_vec()));
+                terminals += 1;
+            }
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(item_count, streams.iter().map(Vec::len).sum::<usize>());
+    assert_eq!(terminals, streams.len());
+    assert_eq!(
+        input_observations(
+            &oplog,
+            context.default_environment_id,
+            &id,
+            metadata.fingerprint
+        )?,
+        acknowledged
+    );
+    let mut results = 0;
+    let mut finishes = 0;
+    while !state.is_complete() {
+        let response = responses.message().await?.unwrap();
+        state
+            .validate_response(&response)
+            .map_err(anyhow::Error::msg)?;
+        match response.response {
+            Some(invocation_response::Response::Result(result)) => {
+                let Some(invocation_session_result::Result::MethodResult(value)) = result.result
+                else {
+                    anyhow::bail!("failed result")
+                };
+                assert_eq!(
+                    SchemaValue::try_from(value).map_err(anyhow::Error::msg)?,
+                    expected
+                );
+                results += 1;
+            }
+            Some(invocation_response::Response::Finished(finished)) => {
+                assert!(matches!(
+                    finished.outcome,
+                    Some(invocation_session_completion::Outcome::Success(_))
+                ));
+                finishes += 1;
+            }
+            other => anyhow::bail!("unexpected resumed response: {other:?}"),
+        }
+    }
+    assert_eq!((results, finishes), (1, 1));
+    assert!(executor.instance_load_count(&id) > loads);
+    assert_eq!(
+        executor.get_worker_metadata(&id).await?.fingerprint,
+        metadata.fingerprint
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &parsed, "scalar_value", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        1
+    );
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &parsed, "ping", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        42
+    );
+    let oplog = executor.get_oplog(&id, OplogIndex::INITIAL).await?;
+    assert_eq!(input_consumer_history(&oplog)?, consumed);
+    let mut consumed_count = 0;
+    for entry in &oplog {
+        if let PublicOplogEntry::StreamSession(session) = &entry.entry {
+            match StreamSessionRecord::from_value(session.record.value())
+                .map_err(anyhow::Error::msg)?
+            {
+                StreamSessionRecord::ConsumerItemValue(record) => {
+                    consumed_count += record.logical_item_count()
+                }
+                StreamSessionRecord::ConsumerTerminal(_) => consumed_count += 1,
+                _ => {}
+            }
+        }
+        if matches!(entry.entry, PublicOplogEntry::Suspend(_)) {
+            assert_eq!(
+                consumed_count,
+                acknowledged.len(),
+                "suspended with outstanding external input"
+            );
+        }
+    }
+    assert!(!oplog.iter().any(|entry| matches!(
+        entry.entry,
+        PublicOplogEntry::Error(_) | PublicOplogEntry::StreamCancel(_)
+    )));
+    Ok(())
+}
+
+fn decode_input_value(bytes: &[u8]) -> anyhow::Result<SchemaValue> {
+    use prost::Message;
+    SchemaValue::try_from(golem_schema::proto::golem::schema::SchemaValue::decode(
+        bytes,
+    )?)
+    .map_err(anyhow::Error::msg)
+}
+
+type InputObservations = BTreeMap<(uuid::Uuid, u64), (Option<SchemaValue>, Vec<u8>)>;
+
+fn input_observations(
+    oplog: &[PublicOplogEntryWithIndex],
+    environment: golem_common::model::environment::EnvironmentId,
+    agent: &AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+) -> anyhow::Result<InputObservations> {
+    use golem_common::model::durable_stream::{
+        StreamConsumerTerminal, StreamEndResult, StreamId, StreamRecordReference,
+    };
+    let mut result = BTreeMap::new();
+    let mut next_ordinals = BTreeMap::new();
+    for observation in input_consumer_history(oplog)? {
+        let (reader, ordinal, values) = match observation {
+            StreamSessionRecord::ConsumerItemValue(record) => {
+                let values: Vec<SchemaValue> = if record.packed_u8 {
+                    record.value.iter().copied().map(SchemaValue::U8).collect()
+                } else {
+                    vec![decode_input_value(&record.value)?]
+                };
+                let values = values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        (
+                            Some(value),
+                            record.source_offset_at(index).unwrap().as_bytes().to_vec(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (record.reader_id, record.consumer_read_ordinal, values)
+            }
+            StreamSessionRecord::ConsumerTerminal(record) => {
+                assert_eq!(
+                    record.terminal,
+                    StreamConsumerTerminal::End(StreamEndResult::Ok)
+                );
+                (
+                    record.reader_id,
+                    record.consumer_read_ordinal,
+                    vec![(None, record.source_offset.as_bytes().to_vec())],
+                )
+            }
+            _ => unreachable!(),
+        };
+        let introducing = oplog
+            .iter()
+            .find(|entry| entry.oplog_index == reader.introducing_oplog_index)
+            .ok_or_else(|| anyhow::anyhow!("consumer reader binding entry missing"))?;
+        let PublicOplogEntry::StreamSession(session) = &introducing.entry else {
+            anyhow::bail!("consumer reader was not introduced by a session binding");
+        };
+        let bindings = match StreamSessionRecord::from_value(session.record.value())
+            .map_err(anyhow::Error::msg)?
+        {
+            StreamSessionRecord::Prepared(record) => record.stream_mappings,
+            StreamSessionRecord::Mapping(record) => vec![record.mapping],
+            StreamSessionRecord::InvocationResult(record) => record.stream_mappings,
+            StreamSessionRecord::ConsumerItemValue(record) => record.recursive_mappings,
+            _ => anyhow::bail!("consumer reader entry has no binding table"),
+        };
+        let binding = bindings
+            .get(reader.binding_slot as usize)
+            .ok_or_else(|| anyhow::anyhow!("consumer binding slot missing"))?;
+        let stream = match &binding.source {
+            StreamRecordReference::Local(local) => {
+                StreamId::derive(environment, agent, fingerprint, local.0)?.0
+            }
+            StreamRecordReference::Foreign(handle) => handle.stream_id.0,
+        };
+        // Ordinals count logical items, including each byte in a packed read, not batches.
+        let next = next_ordinals.entry(stream).or_insert(0);
+        assert_eq!(ordinal, *next);
+        *next += values.len() as u64;
+        for (index, value) in values.into_iter().enumerate() {
+            assert!(
+                result
+                    .insert((stream, ordinal + index as u64), value)
+                    .is_none()
+            );
+        }
+    }
+    Ok(result)
+}
+
+fn input_consumer_history(
+    oplog: &[PublicOplogEntryWithIndex],
+) -> anyhow::Result<Vec<StreamSessionRecord>> {
+    let mut result = Vec::new();
+    for entry in oplog {
+        if let PublicOplogEntry::StreamSession(session) = &entry.entry {
+            let record = StreamSessionRecord::from_value(session.record.value())
+                .map_err(anyhow::Error::msg)?;
+            if matches!(
+                record,
+                StreamSessionRecord::ConsumerItemValue(_)
+                    | StreamSessionRecord::ConsumerTerminal(_)
+            ) {
+                result.push(record);
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[test]
@@ -7670,6 +9399,155 @@ async fn callee_recovery_continues_output_after_committed_item(
         .map_err(|error| anyhow::anyhow!("callee recovery invocation failed: {error}"))?
         .into_typed::<Vec<u32>>()?;
     assert_eq!(result, vec![10, 20, 30]);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn durable_rpc_stream_reads_unload_and_recheck_both_owners(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    for independent_output in [false, true] {
+        let context = TestContext::new(last_unique_id);
+        let executor = start_with_overrides(
+            deps,
+            &context,
+            TestExecutorOverrides {
+                configure: Some(Arc::new(|config| {
+                    config.suspend.wait_suspend_grace = Duration::from_millis(100);
+                    config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
+                    config.suspend.rpc_resume_after = Duration::from_secs(2);
+                })),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, fixture)
+            .store()
+            .await?;
+        let name = format!("durable-read-{independent_output}");
+        let caller_id = agent_id!("StreamingRpcCaller", name.clone());
+        let target_id = agent_id!("StreamingRpcTarget", name);
+        let caller = executor
+            .start_agent(&component.id, caller_id.clone())
+            .await?;
+        let target = executor
+            .start_agent(&component.id, target_id.clone())
+            .await?;
+        wait_for_agent_initialization(&executor, &caller).await?;
+        wait_for_agent_initialization(&executor, &target).await?;
+        let (gate_owner, gate_method) = if independent_output {
+            (&target_id, "create_output_gate")
+        } else {
+            (&caller_id, "create_input_gate")
+        };
+        let gate = executor
+            .invoke_and_await_agent(&component, gate_owner, gate_method, data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let (method, input) = if independent_output {
+            (
+                "fork_drop_inherited_output",
+                data_value!(gate.clone(), caller.agent_id.clone(), false),
+            )
+        } else {
+            (
+                "recover_input_after_caller_crash",
+                data_value!(gate.clone()),
+            )
+        };
+        let invocation = executor.invoke_and_await_agent(&component, &caller_id, method, input);
+        tokio::pin!(invocation);
+        let consumer = if independent_output { &caller } else { &target };
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            established = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let history = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+                    let rpc_start = history.iter().find_map(|entry| match &entry.entry {
+                        PublicOplogEntry::Start(start)
+                            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await" => Some(entry.oplog_index),
+                        _ => None,
+                    });
+                    let rpc_ended = rpc_start.is_some_and(|start| history.iter().any(|entry|
+                        matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)));
+                    let consumed = input_consumer_history(&executor.get_oplog(consumer, OplogIndex::INITIAL).await?)?;
+                    if rpc_ended && consumed.iter().any(|record| matches!(record, StreamSessionRecord::ConsumerItemValue(_))) {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { established??; }
+        }
+        let mut observed_unloaded = [false; 2];
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            parked = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    for (index, owner) in [&caller, &target].into_iter().enumerate() {
+                        if executor.get_worker_metadata(owner).await?.status == AgentStatus::Suspended
+                            && !executor.worker_is_loaded(&OwnedAgentId::new(context.default_environment_id, owner)).await
+                        {
+                            observed_unloaded[index] = true;
+                        }
+                    }
+                    if observed_unloaded == [true, true] { return Ok::<(), anyhow::Error>(()); }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { parked??; }
+        }
+        // A promise wakes its waiter, not an arbitrary remote stream consumer. The consumer
+        // must independently reconstruct from its persisted recheck before the gate is released.
+        let loads = executor.instance_load_count(consumer);
+        tokio::select! {
+            result = &mut invocation => panic!("stream completed before its gate: {result:?}"),
+            resumed = tokio::time::timeout(Duration::from_secs(15), async {
+                while executor.instance_load_count(consumer) <= loads {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }) => { resumed?; }
+        }
+        executor.complete_promise(&gate, Vec::new()).await?;
+        let result = tokio::time::timeout(Duration::from_secs(30), invocation).await??;
+        if independent_output {
+            assert_eq!(result.into_typed::<Vec<u64>>()?, vec![1, 1]);
+        } else {
+            assert_eq!(result.into_typed::<Vec<u32>>()?, vec![10, 20, 30]);
+        }
+        let history =
+            input_consumer_history(&executor.get_oplog(consumer, OplogIndex::INITIAL).await?)?;
+        let expected_items = if independent_output { 2 } else { 3 };
+        assert_eq!(history.len(), expected_items + 1);
+        for (ordinal, record) in history.iter().enumerate() {
+            match record {
+                StreamSessionRecord::ConsumerItemValue(item) => {
+                    assert_eq!(item.consumer_read_ordinal, ordinal as u64);
+                    assert!(ordinal < expected_items);
+                }
+                StreamSessionRecord::ConsumerTerminal(terminal) => {
+                    assert_eq!(terminal.consumer_read_ordinal, expected_items as u64);
+                    assert_eq!(ordinal, expected_items);
+                    assert_eq!(
+                        terminal.terminal,
+                        golem_common::model::durable_stream::StreamConsumerTerminal::End(
+                            golem_common::model::durable_stream::StreamEndResult::Ok,
+                        ),
+                    );
+                }
+                _ => unreachable!(),
+            }
+        }
+        let follow_up = executor
+            .invoke_and_await_agent(&component, &caller_id, "call_stream_free", data_value!())
+            .await?
+            .into_typed::<u64>()?;
+        assert_eq!(follow_up, if independent_output { 2 } else { 1 });
+    }
     Ok(())
 }
 

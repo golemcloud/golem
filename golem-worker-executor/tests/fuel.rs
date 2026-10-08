@@ -13,14 +13,19 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::account::AccountId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationFinishedParams;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::{AgentStatus, OwnedAgentId};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies,
-    start_with_fuel_tracking,
+    start_with_fuel_tracking, start_with_resource_limits,
 };
+use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -92,6 +97,86 @@ async fn fuel_is_consumed_during_invocation(
     assert!(
         fuel_values.iter().any(|&f| f > 0),
         "expected consumed_fuel > 0 after a real invocation, got: {fuel_values:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn zero_fuel_suspends_and_unloads_runnable_constructor(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    struct FixedLimits(Arc<AtomicResourceEntry>);
+
+    #[async_trait::async_trait]
+    impl ResourceLimits for FixedLimits {
+        async fn initialize_account(
+            &self,
+            _account_id: AccountId,
+        ) -> Result<
+            Arc<AtomicResourceEntry>,
+            golem_service_base::error::worker_executor::WorkerExecutorError,
+        > {
+            Ok(self.0.clone())
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let entry = Arc::new(AtomicResourceEntry::new(
+        0,
+        usize::MAX,
+        usize::MAX,
+        u64::MAX,
+        AtomicResourceEntry::UNLIMITED_CONCURRENT_AGENTS,
+    ));
+    let executor =
+        start_with_resource_limits(deps, &context, Arc::new(FixedLimits(entry.clone()))).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    // Clocks::new only stores its name: it is runnable and has no guest wait
+    // that could cause voluntary suspension. Do not invoke a sleeping method.
+    let worker_id = tokio::time::timeout(
+        Duration::from_secs(30),
+        executor.start_agent(
+            &component.id,
+            agent_id!("Clocks", "zero-fuel-runnable-constructor"),
+        ),
+    )
+    .await??;
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while executor.worker_is_loaded(&owned_agent_id).await {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+
+    let oplog = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.get_oplog(&worker_id, OplogIndex::INITIAL),
+    )
+    .await??;
+    assert_eq!(
+        consumed_fuel_from_oplog(&oplog).len(),
+        0,
+        "zero fuel must prevent constructor completion, not suspend after it succeeds"
+    );
+    assert!(!entry.has_effective_fuel());
+    assert!(
+        !executor.worker_is_loaded(&owned_agent_id).await,
+        "mandatory fuel suspension must actually unload the instance"
     );
 
     Ok(())
