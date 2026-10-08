@@ -597,6 +597,26 @@ Other durability controls remain under `Durability`: persistence and idempotence
 regions, checkpoint/revert/compensable helpers, oplog commits, and `FunctionType` constructors.
 `Saga` provides fallible/infallible compensating transactions; compensations run in reverse order.
 
+`Durability.checkpoint` captures an invocation-local oplog position when the Effect runs:
+
+```ts
+const program = Effect.gen(function* () {
+  const cp = yield* Durability.checkpoint
+  const value = yield* cp.runOrRevert(doWork)
+  yield* cp.assertOrRevert(value.isValid)
+  return value
+})
+```
+
+`cp.revert` rewinds with `Oplog.setIndex` and never returns on successful rollback.
+`Durability.unwrapOrRevert(doWork)` captures a checkpoint and runs the same typed-failure
+policy. Defects and interruption propagate without rollback. Host errors remain typed
+`OplogHostError` failures; a host that returns after rollback causes an unreachable defect.
+There is no returned `reverted` result. Do not persist a checkpoint or use it in another
+invocation. Rollback does not undo external side effects; `Durability.compensable` runs its
+compensation before rewind on typed body failure. `Agents.revertAgent` manages other agents;
+management self-revert is unsupported.
+
 ## Existing Effect integrations
 
 - `Http`: agent HTTP mount/endpoint metadata, auth/CORS/header/query bindings, and verb helpers.

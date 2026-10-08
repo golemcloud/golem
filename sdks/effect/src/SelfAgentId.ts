@@ -12,8 +12,9 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
  * at agent `initialize` / `load-snapshot`) and provided to all
  * subsequent constructor (`impl`) and per-method effects. Resolving
  * this is free — no host call, no oplog entry — which makes it the
- * right primitive for self-targeting wrappers like
- * {@link Durability.unwrapOrRevert} and `Agents.fork` defaults.
+ * right primitive for identity-aware wrappers such as `Agents.fork` defaults.
+ * Management self-revert is unsupported; `Durability.checkpoint` uses the oplog
+ * cursor directly and does not require this service.
  *
  * For richer fields (component revision, status, retry count, env,
  * config), use `Agents.getSelfMetadata` directly.
