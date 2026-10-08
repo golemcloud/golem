@@ -255,7 +255,7 @@ golem agent cancel-invocation 'CounterAgent("my-counter")' my-key
 golem ssh 'MyAgent("m1")'
 ```
 
-The manifest needs no text for this. `golem deploy` binds the bash tool to every agent type of the application, with access to the agent's files, as a [default tool](/next/app-manifest#default-tools). An agent that existed before that deployment gets the tool on its next call, or when it is updated if the deployment also changed its component.
+`golem deploy` automatically binds the bash tool to every agent type of the application, with access to the agent's files, as a [default tool](/next/app-manifest#default-tools). An agent that existed before that deployment gets the tool on its next call, or when it is updated if the deployment also changed its component.
 
 <Callout type="warning">
 With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it, and those commands can read and change the agent's files. Set `defaultTools: []` for an environment in the application manifest to turn them off; `golem ssh` then says that `bash` is not bound to the agent. To keep the shell but withhold the files, bind `bash` with `filesystemAccess: denied`, on the environment for every agent type or under one agent type.

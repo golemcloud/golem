@@ -7,8 +7,8 @@ captured stdout, captured stderr, the exit code and the directory the script end
 
 ## Enable and invoke
 
-The manifest needs no text for this tool. `golem deploy` adds it to every deployment as a default
-tool: it selects the release, grants it to the environment and binds it to every agent type with
+`golem deploy` automatically adds this tool to every deployment as a default tool: it selects the
+release, grants it to the environment and binds it to every agent type with
 `filesystemAccess: allowed` and no key scope, so the tool reads the config keys and secrets that
 its agent reads.
 

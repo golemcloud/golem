@@ -298,7 +298,7 @@ Runtime discovery and admission use the consumer deployment snapshot and the cal
 
 Golem can ship two kinds of system-provided tool. A component-implemented built-in tool is a protected, immutable, grantable release. It behaves like any other registry release at consumption time: select its exact published coordinate with `tools.<name>.release`, then add a separate `agents.<agent-type>.tools.<name>` binding to make it available to that agent. Selecting a release does not itself bind the tool to an agent.
 
-The [default tools](#default-tools) are the exception: the CLI selects and binds them by itself.
+The [default tools](#default-tools) are the exception: the CLI selects and binds them automatically.
 
 A native tool is compiled into the Golem host and provisioned as ambient. Do not declare it in the top-level `tools` map and do not specify a release coordinate. It is available to agents in the environment by default; an agent binding with the native tool's name can narrow its parameters and policies.
 
@@ -335,7 +335,7 @@ Completed results and typed errors are durable and replay without another HTTP r
 
 ### Default tools
 
-`golem deploy` adds the built-in `bash` tool to every deployment, with no text in the manifest. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the tool reads the config keys and secrets that its agent reads. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
+`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the tool reads the config keys and secrets that its agent reads. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
 
 With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it, and those commands can read and change the agent's files. The binding does not limit the agent's config keys and secrets for the tool. To turn the default tools off for an environment, set `defaultTools` to an empty list:
 
