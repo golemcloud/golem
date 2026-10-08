@@ -95,7 +95,7 @@ func init() {
 }
 ```
 
-`golem.Must` unwraps `(value, error)` and panics on error (aborting the invocation, which then retries per the agent's policy); `golem.Must0` does the same for an error-only return like `Scan`.
+`golem.Must` unwraps `(value, error)` and panics on error (failing the agent, or retrying the invocation inside `durability.Atomically`); `golem.Must0` does the same for an error-only return like `Scan`.
 
 ## Parameters and Row Getters
 

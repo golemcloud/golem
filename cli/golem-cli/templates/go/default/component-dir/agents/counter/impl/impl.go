@@ -15,9 +15,8 @@ type state struct{ value int64 }
 func (s *state) current() int64 { return s.value }
 
 // Implement binds the constructor and returns a handle; Handle registers each
-// method on it. Handlers return only their output value; signal failure by
-// panicking (the SDK recovers it into an agent-error). Model expected outcomes as
-// a golem.Result.
+// method on it. Handlers return only their output value; a panic fails the
+// agent. Model expected outcomes as a golem.Result.
 var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
 
 func init() {

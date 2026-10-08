@@ -172,7 +172,7 @@ type ResizeIn struct {
 
 Handlers return only their output value. Signal failure two ways:
 
-- **Uncaught errors** — a `panic` (e.g. from `golem.Must(...)` on an unexpected error) is treated as a crash: the invocation is retried per the agent's retry policy, and if retries are exhausted the agent becomes failed. The caller does **not** see it as a normal result.
+- **Uncaught errors** — a `panic` (e.g. from `golem.Must(...)` on an unexpected error) traps the component, as in the other SDKs: the agent becomes failed and the caller gets an error, not a result. Inside `durability.Atomically` the invocation is instead retried per the agent's retry policy.
 - **Domain errors** the caller should observe as a value — model them in the method's output type with `golem.Result[Ok, Err]`:
 
 ```go
@@ -189,7 +189,7 @@ agent.Handle(Record, func(ctx *golem.Context[state], in RecordIn) golem.Result[i
 })
 ```
 
-Returning `golem.Err(...)` completes the invocation successfully — the caller receives the error as a value (and can unwrap with `.MustOk()`). Panicking instead triggers a retry and can fail the whole agent.
+Returning `golem.Err(...)` completes the invocation successfully — the caller receives the error as a value (and can unwrap with `.MustOk()`). Panicking instead fails the whole agent.
 
 ## Key Constraints
 

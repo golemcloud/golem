@@ -41,7 +41,8 @@ const (
 	stageEncode  = "encoding output"
 )
 
-// PanicError is a recovered panic, attributed to the stage it occurred in.
+// PanicError is an agent method's panic, attributed to the stage it occurred
+// in.
 type PanicError struct {
 	Method string
 	Stage  string
@@ -107,8 +108,6 @@ func toAgentError(err error) common.AgentError {
 	if errors.As(err, &de) {
 		return common.MakeAgentErrorInvalidInput(de.Error())
 	}
-	// Panics and errors returned deliberately by agent code are both
-	// "something went wrong", not malformed input.
 	return customError(err.Error())
 }
 

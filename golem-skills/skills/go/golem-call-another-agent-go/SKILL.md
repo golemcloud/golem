@@ -86,7 +86,7 @@ default:
     _ = total
 }
 
-// Or fail loud (panic on Err, which the SDK turns into an agent-error):
+// Or fail loud (panic on Err, which fails the calling agent):
 total := ledger.Record.Call(c, in).MustOk()
 ```
 

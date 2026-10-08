@@ -112,7 +112,7 @@ The following are retried transparently:
 - **HTTP requests** to external services (via `wasi:http` and friends)
 - **RPC calls** between agents
 - **Database / storage calls** — `golem:rdbms/postgres`, `golem:rdbms/mysql`, `wasi:blobstore`, `wasi:keyvalue`
-- **Panics** escaping an agent method (e.g. from `golem.Must` on an unexpected error) — the worker is restarted and the invocation is replayed from the oplog, with all previously-recorded side effects skipped
+- **Panics** inside `durability.Atomically` — the invocation is retried from the start of the region. A panic anywhere else fails the agent
 
 Only customize when the *strategy* needs to change (different backoff, give-up conditions, per-status-code policies). For that, see the Go SDK's retry-policy helpers.
 

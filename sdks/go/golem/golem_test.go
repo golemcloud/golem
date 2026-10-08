@@ -1,6 +1,7 @@
 package golem
 
 import (
+	"errors"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	"strings"
 	"testing"
@@ -172,19 +173,16 @@ func TestDiscoverAgentTypes(t *testing.T) {
 	}
 }
 
-func TestPanicBecomesCustomErrorAndAgentSurvives(t *testing.T) {
+func TestPanicTrapsWithAttribution(t *testing.T) {
 	initAgent(t)
-	res := guestExports.Invoke("boom", params(), common.MakePrincipalAnonymous())
-	if !res.IsErr() {
-		t.Fatal("a panicking method must surface as an agent-error")
-	}
-	if tag := res.Err().Tag(); tag != common.AgentErrorCustomError {
-		t.Fatalf("panic mapped to tag %d, want custom-error", tag)
-	}
-	// the component must still be usable afterwards
-	if got := invokeInt(t, "value", params()); got != 0 {
-		t.Fatalf("agent unusable after panic; value = %d", got)
-	}
+	defer func() {
+		var pe *PanicError
+		if r := recover(); !errors.As(asError(r), &pe) || pe.Method != "boom" || pe.Stage != stageHandler || pe.Value != "kaboom from agent code" {
+			t.Fatalf("a panicking method must trap with an attributed PanicError, got %#v", r)
+		}
+	}()
+	guestExports.Invoke("boom", params(), common.MakePrincipalAnonymous())
+	t.Fatal("a panicking method must not return")
 }
 
 func TestUnknownMethodAndBadInputAreDistinguished(t *testing.T) {

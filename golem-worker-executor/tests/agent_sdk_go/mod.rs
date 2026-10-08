@@ -34,12 +34,15 @@ pub mod transactions;
 pub mod websocket;
 
 use crate::Tracing;
+use golem_common::model::AgentStatus;
+use golem_common::model::oplog::{LogLevel, OplogIndex, PublicOplogEntry};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
 };
 use std::collections::HashMap;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -93,5 +96,61 @@ async fn go_counter_basic_invoke(
         .into_typed::<i64>()?;
     assert_eq!(v3, 6);
 
+    Ok(())
+}
+
+/// A panic in a handler traps the component, as in the other SDKs: the agent
+/// fails rather than exiting, and the panic is reported on stderr in one entry.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_handler_panic_fails_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+
+    let agent_id = agent_id!("CounterAgent", "go-counter-panic-1");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(&component, &agent_id, "fail", data_value!())
+        .await;
+    let err = format!(
+        "{:#}",
+        result.expect_err("a panicking handler must not return")
+    );
+    assert!(err.contains("unreachable"), "unexpected error: {err}");
+
+    executor
+        .wait_for_status(&worker_id, AgentStatus::Failed, Duration::from_secs(10))
+        .await?;
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let stderr: Vec<&str> = oplog
+        .iter()
+        .filter_map(|e| match &e.entry {
+            PublicOplogEntry::Log(log) if log.level == LogLevel::Stderr => {
+                Some(log.message.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stderr.len(), 1, "unexpected stderr: {stderr:?}");
+    assert!(
+        stderr[0].starts_with("panic: agent method \"fail\" panicked: counter gave up"),
+        "unexpected stderr: {}",
+        stderr[0]
+    );
     Ok(())
 }

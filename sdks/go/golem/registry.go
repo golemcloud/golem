@@ -365,13 +365,14 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	}
 
 	me.invoke = func(inst *instance, principal Principal, tree types.SchemaValueTree) (out *types.SchemaValueTree, err error) {
-		// Panic hardening: a panic becomes an agent-error instead of killing the
-		// component. stage attributes it, so an SDK bug is not reported as if it
-		// were the agent's fault.
+		// A panic traps the component, as in the other SDKs: the executor fails the
+		// agent, or retries the invocation inside an atomic region. The stage
+		// attributes it, so an SDK bug is not reported as if it were the agent's
+		// fault.
 		stage := stageDecode
 		defer func() {
 			if r := recover(); r != nil {
-				out, err = nil, &PanicError{Method: me.name, Stage: stage, Value: r}
+				trap(&PanicError{Method: me.name, Stage: stage, Value: r})
 			}
 		}()
 

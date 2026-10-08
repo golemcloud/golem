@@ -9,7 +9,7 @@ Use the **standard library `net/http`** package directly. The SDK routes `net/ht
 1. **Import `net/http`** (and `io` to read the body).
 2. **Make the request** — `http.Get(url)`, or build an `*http.Request` and use `http.DefaultClient.Do`.
 3. **Read the response body**, then `Close` it.
-4. Let failures propagate (panic) — Golem retries transparently; do **not** add manual retry loops.
+4. Do **not** add manual retry loops — Golem retries transient HTTP failures per the agent's retry policy. A panic fails the agent (see [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) → Returning Failures).
 
 ## Example
 
@@ -33,8 +33,8 @@ var agent = fetcher.Agent.Implement(func(fetcher.ID) *state { return &state{} })
 func init() {
 	agent.Handle(fetcher.Fetch, func(_ *golem.Context[state], in fetcher.FetchIn) string {
 		url := "https://api.example.com/thing?q=" + in.Query
-		// golem.Must panics on error (the SDK turns the panic into an agent-error
-		// and retries per policy). Use it for calls that shouldn't fail normally.
+		// golem.Must panics on error, which fails the agent. Use it for calls that
+		// should not fail normally.
 		resp := golem.Must(http.Get(url))
 		defer resp.Body.Close()
 		return string(golem.Must(io.ReadAll(resp.Body)))
@@ -42,7 +42,7 @@ func init() {
 }
 ```
 
-`golem.Must(v, err)` returns `v` or panics on `err` — the fail-loud idiom for operations Golem should retry. To surface an HTTP failure to the caller as a *value* instead, return a `golem.Result` and inspect the error yourself (see [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) → Returning Failures).
+`golem.Must(v, err)` returns `v` or panics on `err` — the fail-loud idiom for errors the agent cannot handle. To surface an HTTP failure to the caller as a *value* instead, return a `golem.Result` and inspect the error yourself (see [`golem-add-agent-go`](/next/how-to-guides/go/golem-add-agent-go) → Returning Failures).
 
 ## POST / custom requests
 

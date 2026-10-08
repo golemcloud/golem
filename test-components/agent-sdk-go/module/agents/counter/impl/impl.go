@@ -24,4 +24,7 @@ func init() {
 		return ctx.State.value
 	})
 	agent.Handle(counter.Value, golem.Adapt0((*state).current)) // method-expression binding
+	agent.Handle(counter.Fail, func(*golem.Context[state], golem.Unit) int64 {
+		panic("counter gave up")
+	})
 }

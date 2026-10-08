@@ -21,4 +21,5 @@ var (
 	Increment = Agent.Method[golem.Unit, int64]("increment", golem.Desc("Increase the count by one"))
 	Add       = Agent.Method[AddIn, int64]("add", golem.Desc("Add to the count"))
 	Value     = Agent.Method[golem.Unit, int64]("value", golem.Desc("Return the current value"))
+	Fail      = Agent.Method[golem.Unit, int64]("fail", golem.Desc("Panic in the handler"))
 )
