@@ -36,7 +36,7 @@
 - [x] Implement Agent stats and six curated panels.
 - [x] Implement Server stats and nine curated panels.
 - [~] Add responsive chart grid, cursor inspection, expansion, and handoff.
-- [ ] Add paged Explore families/series and six-series compatibility checks.
+- [x] Add paged Explore families/series and six-series compatibility checks.
 
 ## Oplog and Stream
 

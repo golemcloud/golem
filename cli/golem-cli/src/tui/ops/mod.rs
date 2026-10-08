@@ -76,6 +76,7 @@ pub(super) struct AgentIdentity {
 pub(super) enum OpsRoute {
     Root,
     Agent(AgentIdentity),
+    MetricsPanel(String),
 }
 
 #[derive(Debug)]
@@ -143,6 +144,11 @@ impl OpsApp {
         self.routes[OpsDestination::Agents.index()].push(OpsRoute::Agent(agent));
     }
 
+    pub(super) fn open_metrics_panel(&mut self, panel_id: String) {
+        self.active = OpsDestination::Metrics;
+        self.routes[OpsDestination::Metrics.index()].push(OpsRoute::MetricsPanel(panel_id));
+    }
+
     pub(super) fn pop_route(&mut self) -> bool {
         let route = &mut self.routes[self.active.index()];
         if route.len() <= 1 {
@@ -183,6 +189,14 @@ mod tests {
         app.select(super::OpsDestination::Metrics);
         assert_eq!(app.current_route(), &super::OpsRoute::Root);
 
+        app.select(super::OpsDestination::Agents);
+        assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
+
+        app.open_metrics_panel("invocation-rate".to_string());
+        assert_eq!(
+            app.current_route(),
+            &super::OpsRoute::MetricsPanel("invocation-rate".to_string())
+        );
         app.select(super::OpsDestination::Agents);
         assert!(matches!(app.current_route(), super::OpsRoute::Agent(_)));
         app.reset_routes();

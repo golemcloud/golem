@@ -54,7 +54,8 @@ use crate::tui::ops::activity::{
     self, ActivityAgent, ActivityRefreshPayload, ActivityRepresentation, ActivityState,
 };
 use crate::tui::ops::metrics::{
-    self, MetricsFocus, MetricsMode, MetricsQuery, MetricsRefreshPayload, MetricsState,
+    self, MAX_EXPLORE_SERIES, MetricsFocus, MetricsLoad, MetricsMode, MetricsQuery,
+    MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
 use crate::tui::ops::{AgentIdentity, OpsApp, OpsDestination, OpsRoute};
@@ -551,7 +552,7 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Metrics
                     && self.metrics.live
                 {
-                    self.refresh_metrics(Some(event_tx));
+                    self.refresh_metrics_live(Some(event_tx));
                 }
             }
             TuiEvent::MetricsRefreshFinished { generation, result } => {
@@ -686,27 +687,49 @@ impl TuiApp {
             }
             KeyCode::Left
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Metrics =>
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics_chart_inspection_active()
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.move_metrics_chart_cursor(false)
+            }
+            KeyCode::Right
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics_chart_inspection_active()
+                    && key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.move_metrics_chart_cursor(true)
+            }
+            KeyCode::Left
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && key.modifiers.is_empty()
+                    && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
                 self.metrics.mode = self.metrics.mode.previous();
                 self.reload_metrics(event_tx);
             }
             KeyCode::Right
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Metrics =>
+                    && self.ops.active() == OpsDestination::Metrics
+                    && key.modifiers.is_empty()
+                    && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
                 self.metrics.mode = self.metrics.mode.next();
                 self.reload_metrics(event_tx);
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Metrics =>
+                    && self.ops.active() == OpsDestination::Metrics
+                    && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
                 self.move_metrics_selection(false, event_tx)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
-                    && self.ops.active() == OpsDestination::Metrics =>
+                    && self.ops.active() == OpsDestination::Metrics
+                    && matches!(self.ops.current_route(), OpsRoute::Root) =>
             {
                 self.move_metrics_selection(true, event_tx)
             }
@@ -727,6 +750,14 @@ impl TuiApp {
             }
             KeyCode::Esc if self.active_workspace == Workspace::Ops => {
                 self.ops.pop_route();
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics.mode == MetricsMode::Dashboard
+                    && matches!(self.ops.current_route(), OpsRoute::Root) =>
+            {
+                self.open_selected_metric_panel()
             }
             KeyCode::Enter if self.focused_terminal_is_running() => self.enter_terminal_input(),
             KeyCode::PageUp if self.active_workspace == Workspace::Dev => {
@@ -855,8 +886,17 @@ impl TuiApp {
             {
                 self.metrics.live = !self.metrics.live;
                 if self.metrics.live {
-                    self.refresh_metrics(event_tx);
+                    self.refresh_metrics_live(event_tx);
                 }
+            }
+            KeyCode::Char(' ')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics.mode == MetricsMode::Explore
+                    && self.metrics.focus == MetricsFocus::Series
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.toggle_metrics_series(event_tx);
             }
             KeyCode::Char(' ')
                 if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -1455,6 +1495,12 @@ impl TuiApp {
                     self.scroll_agent_details_down(amount);
                 }
             }
+            Some(RegionKind::MetricsChart)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.move_metrics_chart_cursor(!up)
+            }
             _ => {}
         }
     }
@@ -1506,7 +1552,7 @@ impl TuiApp {
     fn click_hit(
         &mut self,
         hit: Option<RegionKind>,
-        _x: u16,
+        x: u16,
         y: u16,
         event_tx: Option<&TuiEventSender>,
     ) {
@@ -1568,6 +1614,19 @@ impl TuiApp {
             }
             Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::Details
+            }
+            Some(RegionKind::MetricsChart)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.select_metrics_chart_at(x)
+            }
+            Some(RegionKind::MetricsPanel(index))
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.metrics.selected_panel = index;
+                self.open_selected_metric_panel();
             }
             Some(RegionKind::ContextPickerRow(index)) => {
                 self.context_switcher.selected = index;
@@ -2116,7 +2175,11 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + 1) % visible.len()];
             }
-            Workspace::Ops if self.ops.active() == OpsDestination::Metrics => {
+            Workspace::Ops
+                if self.ops.active() == OpsDestination::Metrics
+                    && matches!(self.ops.current_route(), OpsRoute::Root)
+                    && self.metrics.mode == MetricsMode::Explore =>
+            {
                 self.metrics.focus = self.metrics.focus.next()
             }
             Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
@@ -2136,7 +2199,11 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + visible.len() - 1) % visible.len()];
             }
-            Workspace::Ops if self.ops.active() == OpsDestination::Metrics => {
+            Workspace::Ops
+                if self.ops.active() == OpsDestination::Metrics
+                    && matches!(self.ops.current_route(), OpsRoute::Root)
+                    && self.metrics.mode == MetricsMode::Explore =>
+            {
                 self.metrics.focus = self.metrics.focus.previous()
             }
             Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
@@ -2614,7 +2681,7 @@ impl TuiApp {
         }
     }
 
-    fn metrics_query(&self) -> Option<MetricsQuery> {
+    fn metrics_query(&self, load: MetricsLoad) -> Option<MetricsQuery> {
         let source = self.metrics.source;
         let agent_ids = match (source, self.ops.current_agent()) {
             (crate::model::local_observability::LocalMetricSource::Agents, Some(agent)) => {
@@ -2628,11 +2695,34 @@ impl TuiApp {
             agent_ids,
             selected_family: self.metrics.selected_family_name(),
             selected_series: self.metrics.selected_series_key(),
+            selected_series_keys: self.metrics.selected_series_keys.clone(),
             range: self.metrics.range,
+            load,
+            families_cursor: (load == MetricsLoad::AppendFamilies)
+                .then(|| self.metrics.families_next_cursor.clone())
+                .flatten(),
+            series_cursor: (load == MetricsLoad::AppendSeries)
+                .then(|| self.metrics.series_next_cursor.clone())
+                .flatten(),
         })
     }
 
     fn refresh_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.refresh_metrics_with_load(MetricsLoad::Replace, event_tx);
+    }
+
+    fn refresh_metrics_live(&mut self, event_tx: Option<&TuiEventSender>) {
+        let load = if self.metrics.mode == MetricsMode::Explore
+            && !self.metrics.selected_series_keys.is_empty()
+        {
+            MetricsLoad::Samples
+        } else {
+            MetricsLoad::Replace
+        };
+        self.refresh_metrics_with_load(load, event_tx);
+    }
+
+    fn refresh_metrics_with_load(&mut self, load: MetricsLoad, event_tx: Option<&TuiEventSender>) {
         if self.metrics.loading {
             return;
         }
@@ -2642,7 +2732,7 @@ impl TuiApp {
             );
             return;
         }
-        let Some(query) = self.metrics_query() else {
+        let Some(query) = self.metrics_query(load) else {
             self.metrics.error =
                 Some("Metrics are available for Agents, individual Agents, and Server".to_string());
             return;
@@ -2680,12 +2770,19 @@ impl TuiApp {
     fn reload_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
         self.metrics.generation = self.metrics.generation.saturating_add(1);
         self.metrics.loading = false;
+        self.metrics.notice = None;
+        self.metrics.chart_cursor = None;
+        self.metrics.time_range = None;
         match self.metrics.mode {
             MetricsMode::Dashboard => self.metrics.dashboard = None,
             MetricsMode::Explore => {
                 self.metrics.families.clear();
                 self.metrics.series.clear();
                 self.metrics.samples.clear();
+                self.metrics.series_samples.clear();
+                self.metrics.selected_series_keys.clear();
+                self.metrics.families_next_cursor = None;
+                self.metrics.series_next_cursor = None;
                 self.metrics.selected_family = 0;
                 self.metrics.selected_series = 0;
             }
@@ -2711,12 +2808,67 @@ impl TuiApp {
                 self.metrics.capability = Some(payload.capability);
                 self.metrics.source = payload.source;
                 self.metrics.mode = payload.mode;
-                self.metrics.dashboard = payload.dashboard;
-                self.metrics.families = payload.families;
-                self.metrics.series = payload.series;
-                self.metrics.samples = payload.samples;
-                self.metrics.selected_family = payload.selected_family;
-                self.metrics.selected_series = payload.selected_series;
+                self.metrics.time_range = Some(payload.time_range);
+                match payload.load {
+                    MetricsLoad::Replace => {
+                        self.metrics.dashboard = payload.dashboard;
+                        self.metrics.families = payload.families;
+                        self.metrics.series = payload.series;
+                        self.metrics.samples = payload.samples;
+                        self.metrics.series_samples = payload.series_samples;
+                        self.metrics.selected_series_keys = payload.selected_series_keys;
+                        self.metrics.families_next_cursor = payload.families_next_cursor;
+                        self.metrics.series_next_cursor = payload.series_next_cursor;
+                        self.metrics.selected_family = payload.selected_family;
+                        self.metrics.selected_series = payload.selected_series;
+                    }
+                    MetricsLoad::AppendFamilies => {
+                        for family in payload.families {
+                            if !self
+                                .metrics
+                                .families
+                                .iter()
+                                .any(|loaded| loaded.name == family.name)
+                            {
+                                self.metrics.families.push(family);
+                            }
+                        }
+                        self.metrics.families_next_cursor = payload.families_next_cursor;
+                        self.metrics.selected_family = self
+                            .metrics
+                            .selected_family
+                            .min(self.metrics.families.len().saturating_sub(1));
+                    }
+                    MetricsLoad::SelectFamily => {
+                        self.metrics.series = payload.series;
+                        self.metrics.samples = payload.samples;
+                        self.metrics.series_samples = payload.series_samples;
+                        self.metrics.selected_series_keys = payload.selected_series_keys;
+                        self.metrics.series_next_cursor = payload.series_next_cursor;
+                        self.metrics.selected_series = payload.selected_series;
+                    }
+                    MetricsLoad::AppendSeries => {
+                        let first_new = self.metrics.series.len();
+                        for series in payload.series {
+                            if !self
+                                .metrics
+                                .series
+                                .iter()
+                                .any(|loaded| loaded.series_key == series.series_key)
+                            {
+                                self.metrics.series.push(series);
+                            }
+                        }
+                        self.metrics.series_next_cursor = payload.series_next_cursor;
+                        self.metrics.selected_series =
+                            first_new.min(self.metrics.series.len().saturating_sub(1));
+                    }
+                    MetricsLoad::Samples => {
+                        self.metrics.samples = payload.samples;
+                        self.metrics.series_samples = payload.series_samples;
+                        self.metrics.selected_series_keys = payload.selected_series_keys;
+                    }
+                }
                 self.metrics.error = None;
             }
             Err(error) => self.metrics.error = Some(agent_refresh_error(error, logs)),
@@ -2746,20 +2898,46 @@ impl TuiApp {
             } else {
                 self.metrics.selected_panel.saturating_sub(1)
             };
+            self.metrics.chart_cursor = None;
             return;
         }
         match self.metrics.focus {
             MetricsFocus::Families => {
                 let last = self.metrics.families.len().saturating_sub(1);
+                if down
+                    && self.metrics.selected_family == last
+                    && self.metrics.families_next_cursor.is_some()
+                {
+                    self.refresh_metrics_with_load(MetricsLoad::AppendFamilies, event_tx);
+                    return;
+                }
+                let previous = self.metrics.selected_family;
                 self.metrics.selected_family = if down {
                     self.metrics.selected_family.saturating_add(1).min(last)
                 } else {
                     self.metrics.selected_family.saturating_sub(1)
                 };
-                self.metrics.selected_series = 0;
+                if previous != self.metrics.selected_family {
+                    self.metrics.notice = None;
+                    self.metrics.chart_cursor = None;
+                    self.metrics.selected_series = 0;
+                    self.metrics.series.clear();
+                    self.metrics.samples.clear();
+                    self.metrics.series_samples.clear();
+                    self.metrics.selected_series_keys.clear();
+                    self.metrics.series_next_cursor = None;
+                    self.refresh_metrics_with_load(MetricsLoad::SelectFamily, event_tx);
+                }
             }
             MetricsFocus::Series => {
                 let last = self.metrics.series.len().saturating_sub(1);
+                if down
+                    && self.metrics.selected_series == last
+                    && self.metrics.series_next_cursor.is_some()
+                {
+                    self.refresh_metrics_with_load(MetricsLoad::AppendSeries, event_tx);
+                    return;
+                }
                 self.metrics.selected_series = if down {
                     self.metrics.selected_series.saturating_add(1).min(last)
                 } else {
@@ -2768,7 +2946,148 @@ impl TuiApp {
             }
             MetricsFocus::Chart => return,
         }
-        self.refresh_metrics(event_tx);
+    }
+
+    fn toggle_metrics_series(&mut self, event_tx: Option<&TuiEventSender>) {
+        if self.metrics.mode != MetricsMode::Explore || self.metrics.focus != MetricsFocus::Series {
+            return;
+        }
+        let Some(series_key) = self.metrics.selected_series_key() else {
+            return;
+        };
+        if let Some(index) = self
+            .metrics
+            .selected_series_keys
+            .iter()
+            .position(|selected| selected == &series_key)
+        {
+            self.metrics.selected_series_keys.remove(index);
+            self.metrics.notice = None;
+        } else if self
+            .metrics
+            .selected_series_keys
+            .first()
+            .and_then(|selected| {
+                self.metrics
+                    .series
+                    .iter()
+                    .find(|series| &series.series_key == selected)
+            })
+            .zip(
+                self.metrics
+                    .series
+                    .iter()
+                    .find(|series| series.series_key == series_key),
+            )
+            .is_some_and(|(selected, candidate)| {
+                selected.statistic != candidate.statistic
+                    || selected.temporality != candidate.temporality
+            })
+        {
+            self.metrics.notice = Some(
+                "Only series with the same statistic and temporality can share a chart".to_string(),
+            );
+            return;
+        } else if self.metrics.selected_series_keys.len() >= MAX_EXPLORE_SERIES {
+            self.metrics.notice = Some(format!(
+                "Explore overlays are limited to {MAX_EXPLORE_SERIES} compatible series"
+            ));
+            return;
+        } else {
+            self.metrics.selected_series_keys.push(series_key);
+            self.metrics.notice = None;
+        }
+        self.metrics.chart_cursor = None;
+        self.refresh_metrics_with_load(MetricsLoad::Samples, event_tx);
+    }
+
+    fn open_selected_metric_panel(&mut self) {
+        let Some(panel_id) = self.metrics.dashboard.as_ref().and_then(|dashboard| {
+            dashboard
+                .panels
+                .get(self.metrics.selected_panel)
+                .map(|panel| panel.id.clone())
+        }) else {
+            return;
+        };
+        self.metrics.chart_cursor = None;
+        self.ops.open_metrics_panel(panel_id);
+    }
+
+    fn metrics_chart_inspection_active(&self) -> bool {
+        matches!(self.ops.current_route(), OpsRoute::MetricsPanel(_))
+            || (matches!(self.ops.current_route(), OpsRoute::Root)
+                && self.metrics.mode == MetricsMode::Explore
+                && self.metrics.focus == MetricsFocus::Chart)
+    }
+
+    fn metrics_chart_timestamps(&self) -> Vec<i64> {
+        let mut timestamps: Vec<i64> = match self.ops.current_route() {
+            OpsRoute::MetricsPanel(panel_id) => self
+                .metrics
+                .dashboard
+                .as_ref()
+                .and_then(|dashboard| dashboard.panels.iter().find(|panel| panel.id == *panel_id))
+                .into_iter()
+                .flat_map(|panel| panel.series.iter())
+                .flat_map(|series| series.samples.iter())
+                .map(|sample| sample.timestamp_unix_nanos)
+                .collect(),
+            _ => self
+                .metrics
+                .series_samples
+                .iter()
+                .flat_map(|series| series.response.samples.iter())
+                .map(|sample| sample.timestamp_unix_nanos)
+                .collect(),
+        };
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        timestamps
+    }
+
+    fn move_metrics_chart_cursor(&mut self, right: bool) {
+        let timestamps = self.metrics_chart_timestamps();
+        if timestamps.is_empty() {
+            return;
+        }
+        let current = self
+            .metrics
+            .chart_cursor
+            .unwrap_or(timestamps.len() - 1)
+            .min(timestamps.len() - 1);
+        self.metrics.chart_cursor = Some(if right {
+            current.saturating_add(1).min(timestamps.len() - 1)
+        } else {
+            current.saturating_sub(1)
+        });
+    }
+
+    fn select_metrics_chart_at(&mut self, x: u16) {
+        let Some(area) = self.geometry.region(RegionKind::MetricsChart) else {
+            return;
+        };
+        let timestamps = self.metrics_chart_timestamps();
+        if timestamps.is_empty() {
+            return;
+        }
+        let offset = x.saturating_sub(area.x).min(area.width.saturating_sub(1));
+        let index = if area.width <= 1 {
+            0
+        } else {
+            let first = timestamps[0] as i128;
+            let span = timestamps[timestamps.len() - 1] as i128 - first;
+            let target =
+                first + span * offset as i128 / area.width.saturating_sub(1).max(1) as i128;
+            timestamps
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, timestamp)| (**timestamp as i128 - target).abs())
+                .map(|(index, _)| index)
+                .unwrap_or(0)
+        };
+        self.metrics.chart_cursor = Some(index);
+        self.metrics.focus = MetricsFocus::Chart;
     }
 
     fn dev_panel_focused(&self, panel: DevView) -> bool {
@@ -2830,10 +3149,16 @@ impl TuiApp {
                     self.mode.replace(InteractionMode::Normal);
                 }
             }
-            OpsDestination::Metrics => self.metrics.focus = self.metrics.focus.next(),
+            OpsDestination::Metrics
+                if matches!(self.ops.current_route(), OpsRoute::Root)
+                    && self.metrics.mode == MetricsMode::Explore =>
+            {
+                self.metrics.focus = self.metrics.focus.next()
+            }
             OpsDestination::Configuration => self.resources.focus_rows = !self.resources.focus_rows,
             OpsDestination::Overview
             | OpsDestination::Agents
+            | OpsDestination::Metrics
             | OpsDestination::Oplog
             | OpsDestination::Stream
             | OpsDestination::Deployments => {}
@@ -7515,7 +7840,12 @@ fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         },
         OpsDestination::Oplog => render_ops_activity(frame, content, app),
         OpsDestination::Stream => render_ops_stream(frame, content, app),
-        OpsDestination::Metrics => render_ops_metrics(frame, content, app),
+        OpsDestination::Metrics => match app.ops.current_route() {
+            OpsRoute::MetricsPanel(panel_id) => {
+                render_ops_metric_panel_route(frame, content, app, panel_id)
+            }
+            _ => render_ops_metrics(frame, content, app),
+        },
         OpsDestination::Deployments => render_ops_deployment_overview(frame, content, app),
         OpsDestination::Configuration => render_ops_resources(frame, content, app),
     }
@@ -8023,6 +8353,184 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_metrics_chart(frame, areas[2], app);
 }
 
+fn render_ops_metric_panel_route(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, panel_id: &str) {
+    let [header, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    let panel = app
+        .metrics
+        .dashboard
+        .as_ref()
+        .and_then(|dashboard| dashboard.panels.iter().find(|panel| panel.id == panel_id));
+    let title = panel
+        .map(|panel| format!("Metrics / {} · Esc back", panel.title))
+        .unwrap_or_else(|| "Metrics / unavailable panel · Esc back".to_string());
+    PaneHeader {
+        title: &title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    let Some(panel) = panel else {
+        render_metrics_notice(
+            frame,
+            body,
+            NoticeKind::Warning,
+            "This dashboard snapshot no longer contains the opened panel",
+        );
+        return;
+    };
+    if panel.series.is_empty() {
+        render_metrics_notice(
+            frame,
+            body,
+            NoticeKind::Empty,
+            panel
+                .empty_reason
+                .as_deref()
+                .unwrap_or("No samples in this range"),
+        );
+        return;
+    }
+
+    let mut timestamps = panel
+        .series
+        .iter()
+        .flat_map(|series| series.samples.iter())
+        .map(|sample| sample.timestamp_unix_nanos)
+        .collect::<Vec<_>>();
+    timestamps.sort_unstable();
+    timestamps.dedup();
+    let cursor_timestamp = metrics_cursor_timestamp(app, &timestamps);
+    let value_min = panel
+        .series
+        .iter()
+        .flat_map(|series| series.samples.iter())
+        .map(|sample| sample.value)
+        .fold(f64::INFINITY, f64::min);
+    let value_max = panel
+        .series
+        .iter()
+        .flat_map(|series| series.samples.iter())
+        .map(|sample| sample.value)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let (value_min, value_max) = if value_min.is_finite() && value_max.is_finite() {
+        (value_min, value_max)
+    } else {
+        (0.0, 0.0)
+    };
+    let dashboard_range = app
+        .metrics
+        .dashboard
+        .as_ref()
+        .map(|dashboard| dashboard.range);
+    let time_from = dashboard_range
+        .map(|range| range.from_unix_nanos)
+        .or(panel.observed_from_unix_nanos)
+        .or_else(|| timestamps.first().copied())
+        .unwrap_or(0);
+    let time_to = dashboard_range
+        .map(|range| range.to_unix_nanos)
+        .or(panel.observed_to_unix_nanos)
+        .or_else(|| timestamps.last().copied())
+        .unwrap_or(time_from);
+    let chart_region = metric_chart_region(body, 22, 1);
+    app.geometry
+        .add_region(RegionKind::MetricsChart, chart_region);
+    let unit = panel
+        .series
+        .first()
+        .map(|series| series.unit.as_str())
+        .filter(|unit| *unit != "1")
+        .unwrap_or("");
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(
+                "y {}{unit} … {}{unit} · x {} → {} · gaps · shared scale{}",
+                format_metric_value(value_min),
+                format_metric_value(value_max),
+                metric_timestamp_label(time_from),
+                metric_timestamp_label(time_to),
+                if panel.approximate {
+                    " · ≈ bounded"
+                } else {
+                    " · exact"
+                },
+            ),
+            Style::default().fg(theme().text_muted),
+        )),
+        Line::default(),
+    ];
+    let colors = [
+        theme().accent,
+        theme().info,
+        theme().success,
+        theme().marker,
+        theme().accent_hover,
+        theme().text_secondary,
+    ];
+    for (index, series) in panel.series.iter().enumerate() {
+        let chart = metric_sparkline_with_bounds(
+            &series.samples,
+            chart_region.width.max(1) as usize,
+            time_from,
+            time_to,
+            value_min,
+            value_max,
+            cursor_timestamp,
+        );
+        let latest = series
+            .latest_value
+            .map(format_metric_value)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} ", fit(&series.label, 20)),
+                Style::default().fg(colors[index % colors.len()]),
+            ),
+            Span::styled(chart, Style::default().fg(colors[index % colors.len()])),
+            Span::styled(
+                format!("  {latest}{unit}"),
+                Style::default().fg(theme().text_secondary),
+            ),
+        ]));
+    }
+    if let Some(timestamp) = cursor_timestamp {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::styled(
+            format!("cursor {}", metric_timestamp_label(timestamp)),
+            Style::default()
+                .fg(theme().accent_hover)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for series in &panel.series {
+            let sample = series
+                .samples
+                .iter()
+                .find(|sample| sample.timestamp_unix_nanos == timestamp);
+            let series_unit = if series.unit == "1" {
+                ""
+            } else {
+                series.unit.as_str()
+            };
+            lines.push(metric_cursor_value_line(&series.label, series_unit, sample));
+        }
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "Shift+←/→ or click chart to inspect · Esc back",
+        Style::default().fg(theme().text_muted),
+    )));
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(surface_style())
+            .wrap(Wrap { trim: false }),
+        body,
+    );
+}
+
 fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     let Some(dashboard) = &app.metrics.dashboard else {
         return;
@@ -8062,6 +8570,8 @@ fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .direction(Direction::Horizontal)
             .constraints((0..columns).map(|_| Constraint::Ratio(1, columns as u32)))
             .split(row_areas[row]);
+        app.geometry
+            .add_region(RegionKind::MetricsPanel(panel_index), column_areas[column]);
         render_metric_dashboard_panel(
             frame,
             column_areas[column],
@@ -8158,7 +8668,42 @@ fn render_metric_dashboard_panel(
         for series in panel.series.iter().take(inner.height.max(1) as usize) {
             if !series.samples.is_empty() && inner.width >= 24 {
                 let sparkline_width = (inner.width as usize / 3).clamp(8, 20);
-                let chart = metric_sparkline(&series.samples, sparkline_width);
+                let value_min = series
+                    .samples
+                    .iter()
+                    .map(|sample| sample.value)
+                    .fold(f64::INFINITY, f64::min);
+                let value_max = series
+                    .samples
+                    .iter()
+                    .map(|sample| sample.value)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let time_range = app
+                    .metrics
+                    .dashboard
+                    .as_ref()
+                    .map(|dashboard| dashboard.range);
+                let time_from = time_range
+                    .map(|range| range.from_unix_nanos)
+                    .unwrap_or(series.samples[0].timestamp_unix_nanos);
+                let time_to = time_range
+                    .map(|range| range.to_unix_nanos)
+                    .unwrap_or_else(|| {
+                        series
+                            .samples
+                            .last()
+                            .map(|sample| sample.timestamp_unix_nanos)
+                            .unwrap_or(time_from)
+                    });
+                let chart = metric_sparkline_with_bounds(
+                    &series.samples,
+                    sparkline_width,
+                    time_from,
+                    time_to,
+                    value_min,
+                    value_max,
+                    None,
+                );
                 let value = series
                     .latest_value
                     .map(format_metric_value)
@@ -8230,8 +8775,17 @@ fn render_metrics_families(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
+    let title = format!(
+        "Families · {} loaded{}",
+        app.metrics.families.len(),
+        if app.metrics.families_next_cursor.is_some() {
+            " · more"
+        } else {
+            ""
+        }
+    );
     PaneHeader {
-        title: "Families",
+        title: &title,
         focus: if app.metrics.focus == MetricsFocus::Families {
             PaneFocus::Active
         } else {
@@ -8265,8 +8819,19 @@ fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
+    let title = format!(
+        "Series · {} loaded · {}/{} shown{}",
+        app.metrics.series.len(),
+        app.metrics.selected_series_keys.len(),
+        MAX_EXPLORE_SERIES,
+        if app.metrics.series_next_cursor.is_some() {
+            " · more"
+        } else {
+            ""
+        }
+    );
     PaneHeader {
-        title: "Series",
+        title: &title,
         focus: if app.metrics.focus == MetricsFocus::Series {
             PaneFocus::Active
         } else {
@@ -8296,8 +8861,18 @@ fn render_metrics_series(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 .latest_value
                 .map(format_metric_value)
                 .unwrap_or_else(|| "—".to_string());
+            let shown = if app
+                .metrics
+                .selected_series_keys
+                .iter()
+                .any(|selected| selected == &series.series_key)
+            {
+                "[x]"
+            } else {
+                "[ ]"
+            };
             metric_selection_line(
-                format!("{identity}  {value}"),
+                format!("{shown} {identity}  {value}"),
                 index == app.metrics.selected_series,
                 body.width,
             )
@@ -8323,6 +8898,15 @@ fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
     .render(frame, header, &theme());
     let mut lines = Vec::new();
+    if let Some(notice) = &app.metrics.notice {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Info,
+                message: notice,
+            }
+            .line(&theme()),
+        );
+    }
     if let Some(family) = app.metrics.families.get(app.metrics.selected_family) {
         lines.push(Line::from(Span::styled(
             fit(&family.name, body.width as usize),
@@ -8340,37 +8924,148 @@ fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             ));
         }
     }
-    if !app.metrics.samples.is_empty() {
+    if !app.metrics.series_samples.is_empty() {
+        let chart_region = metric_chart_region(body, 19, 3);
+        app.geometry
+            .add_region(RegionKind::MetricsChart, chart_region);
         lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            metric_sparkline(&app.metrics.samples, body.width as usize),
-            Style::default().fg(theme().accent),
-        )));
-        let first = app.metrics.samples.first().unwrap().value;
-        let last = app.metrics.samples.last().unwrap().value;
-        let min = app
+        let value_min = app
             .metrics
-            .samples
+            .series_samples
             .iter()
+            .flat_map(|samples| samples.response.samples.iter())
             .map(|sample| sample.value)
             .fold(f64::INFINITY, f64::min);
-        let max = app
+        let value_max = app
             .metrics
-            .samples
+            .series_samples
             .iter()
+            .flat_map(|samples| samples.response.samples.iter())
             .map(|sample| sample.value)
             .fold(f64::NEG_INFINITY, f64::max);
-        lines.push(Line::from(format!(
-            "first {}  last {}  min {}  max {}",
-            format_metric_value(first),
-            format_metric_value(last),
-            format_metric_value(min),
-            format_metric_value(max)
+        let (value_min, value_max) = if value_min.is_finite() && value_max.is_finite() {
+            (value_min, value_max)
+        } else {
+            (0.0, 0.0)
+        };
+        let time_from = app
+            .metrics
+            .time_range
+            .map(|range| range.from_unix_nanos)
+            .or_else(|| {
+                app.metrics
+                    .series_samples
+                    .iter()
+                    .filter_map(|samples| samples.response.observed_from_unix_nanos)
+                    .min()
+            })
+            .unwrap_or(0);
+        let time_to = app
+            .metrics
+            .time_range
+            .map(|range| range.to_unix_nanos)
+            .or_else(|| {
+                app.metrics
+                    .series_samples
+                    .iter()
+                    .filter_map(|samples| samples.response.observed_to_unix_nanos)
+                    .max()
+            })
+            .unwrap_or(time_from);
+        let unit = app
+            .metrics
+            .families
+            .get(app.metrics.selected_family)
+            .map(|family| family.unit.as_str())
+            .unwrap_or("1");
+        let unit = if unit == "1" { "" } else { unit };
+        let timestamps = app.metrics_chart_timestamps();
+        let cursor_timestamp = metrics_cursor_timestamp(app, &timestamps);
+        lines.push(Line::from(Span::styled(
+            format!(
+                "y {}{unit} … {}{unit} · x -{} → now · gaps · shared scale",
+                format_metric_value(value_min),
+                format_metric_value(value_max),
+                app.metrics.range.label(),
+            ),
+            Style::default().fg(theme().text_muted),
         )));
+        let colors = [
+            theme().accent,
+            theme().info,
+            theme().success,
+            theme().marker,
+            theme().accent_hover,
+            theme().text_secondary,
+        ];
+        for (index, samples) in app.metrics.series_samples.iter().enumerate() {
+            let label = app
+                .metrics
+                .series
+                .iter()
+                .find(|series| series.series_key == samples.series_key)
+                .map(metric_series_short_label)
+                .unwrap_or_else(|| samples.series_key.clone());
+            let chart_width = chart_region.width.max(1) as usize;
+            let chart = metric_sparkline_with_bounds(
+                &samples.response.samples,
+                chart_width,
+                time_from,
+                time_to,
+                value_min,
+                value_max,
+                cursor_timestamp,
+            );
+            let approximation = if samples.response.approximate {
+                "≈"
+            } else {
+                ""
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{} ", fit(&label, 18)),
+                    Style::default().fg(colors[index % colors.len()]),
+                ),
+                Span::styled(chart, Style::default().fg(colors[index % colors.len()])),
+                Span::styled(
+                    format!(" {approximation}"),
+                    Style::default().fg(theme().text_muted),
+                ),
+            ]));
+        }
+        let total_points = app
+            .metrics
+            .series_samples
+            .iter()
+            .map(|samples| samples.response.samples.len())
+            .sum::<usize>();
         lines.push(Line::from(format!(
-            "{} points · refresh 5s",
-            app.metrics.samples.len()
+            "{} series · {total_points} visible points · refresh 5s",
+            app.metrics.series_samples.len()
         )));
+        if let Some(timestamp) = cursor_timestamp {
+            lines.push(Line::from(Span::styled(
+                format!("cursor {}", metric_timestamp_label(timestamp)),
+                Style::default()
+                    .fg(theme().accent_hover)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for samples in &app.metrics.series_samples {
+                let label = app
+                    .metrics
+                    .series
+                    .iter()
+                    .find(|series| series.series_key == samples.series_key)
+                    .map(metric_series_short_label)
+                    .unwrap_or_else(|| samples.series_key.clone());
+                let sample = samples
+                    .response
+                    .samples
+                    .iter()
+                    .find(|sample| sample.timestamp_unix_nanos == timestamp);
+                lines.push(metric_cursor_value_line(&label, unit, sample));
+            }
+        }
     }
     if let Some(series) = app.metrics.series.get(app.metrics.selected_series) {
         lines.push(Line::default());
@@ -8384,6 +9079,78 @@ fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             .wrap(Wrap { trim: false }),
         body,
     );
+}
+
+fn metric_chart_region(area: Rect, leading: u16, trailing: u16) -> Rect {
+    if area.width <= leading.saturating_add(trailing) {
+        return area;
+    }
+    Rect {
+        x: area.x.saturating_add(leading),
+        width: area.width.saturating_sub(leading).saturating_sub(trailing),
+        ..area
+    }
+}
+
+fn metrics_cursor_timestamp(app: &TuiApp, timestamps: &[i64]) -> Option<i64> {
+    if timestamps.is_empty() {
+        return None;
+    }
+    Some(
+        timestamps[app
+            .metrics
+            .chart_cursor
+            .unwrap_or(timestamps.len() - 1)
+            .min(timestamps.len() - 1)],
+    )
+}
+
+fn metric_timestamp_label(timestamp_unix_nanos: i64) -> String {
+    let seconds = timestamp_unix_nanos.div_euclid(1_000_000_000);
+    let nanos = timestamp_unix_nanos.rem_euclid(1_000_000_000) as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
+        .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S%.3fZ").to_string())
+        .unwrap_or_else(|| format!("{timestamp_unix_nanos} ns"))
+}
+
+fn metric_cursor_value_line(
+    label: &str,
+    unit: &str,
+    sample: Option<&crate::model::local_observability::LocalMetricSample>,
+) -> Line<'static> {
+    let value = sample
+        .map(|sample| format_metric_value(sample.value))
+        .unwrap_or_else(|| "—".to_string());
+    let anchor = sample
+        .and_then(|sample| sample.source_oplog_index)
+        .map(|index| format!(" · oplog #{index}"))
+        .unwrap_or_default();
+    Line::from(vec![
+        Span::styled(
+            format!("{}  ", fit(label, 18)),
+            Style::default().fg(theme().text_secondary),
+        ),
+        Span::styled(
+            format!("{value}{unit}{anchor}"),
+            Style::default().fg(theme().text),
+        ),
+    ])
+}
+
+fn metric_series_short_label(
+    series: &crate::model::local_observability::LocalMetricSeries,
+) -> String {
+    let identity = series
+        .agent_id
+        .as_deref()
+        .or(series.agent_type.as_deref())
+        .or_else(|| series.attributes.values().next().map(String::as_str))
+        .unwrap_or("service");
+    if series.statistic == "value" {
+        identity.to_string()
+    } else {
+        format!("{identity}/{}", series.statistic)
+    }
 }
 
 fn render_ops_resources(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -8568,23 +9335,34 @@ fn metric_selection_line(text: String, selected: bool, width: u16) -> Line<'stat
     ))
 }
 
-fn metric_sparkline(
+fn metric_sparkline_with_bounds(
     samples: &[crate::model::local_observability::LocalMetricSample],
     width: usize,
+    time_from: i64,
+    time_to: i64,
+    min: f64,
+    max: f64,
+    cursor_timestamp: Option<i64>,
 ) -> String {
     const BARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     let width = width.max(1);
-    let step = samples.len().div_ceil(width).max(1);
-    let values = samples
-        .iter()
-        .step_by(step)
-        .map(|sample| sample.value)
-        .collect::<Vec<_>>();
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    values
+    if samples.is_empty() || !min.is_finite() || !max.is_finite() {
+        return "·".repeat(width);
+    }
+    let span = time_to.saturating_sub(time_from).max(1);
+    let mut values = vec![None; width];
+    for sample in samples {
+        let offset = sample.timestamp_unix_nanos.saturating_sub(time_from);
+        let column = ((offset as i128 * width.saturating_sub(1) as i128) / span as i128)
+            .clamp(0, width.saturating_sub(1) as i128) as usize;
+        values[column] = Some(sample.value);
+    }
+    let mut rendered = values
         .into_iter()
         .map(|value| {
+            let Some(value) = value else {
+                return '·';
+            };
             let index = if (max - min).abs() < f64::EPSILON {
                 3
             } else {
@@ -8592,7 +9370,17 @@ fn metric_sparkline(
             };
             BARS[index.min(7)]
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if let Some(timestamp) = cursor_timestamp
+        && timestamp >= time_from
+        && timestamp <= time_to
+    {
+        let offset = timestamp.saturating_sub(time_from);
+        let column = ((offset as i128 * width.saturating_sub(1) as i128) / span as i128)
+            .clamp(0, width.saturating_sub(1) as i128) as usize;
+        rendered[column] = '│';
+    }
+    rendered.into_iter().collect()
 }
 
 fn format_metric_value(value: f64) -> String {
@@ -9992,14 +10780,47 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops.active() == OpsDestination::Metrics {
         push_section_break(&mut lines, width, "Metrics");
-        push_raw_help(&mut lines, width, "left / right", "Dashboard or Explore");
-        push_raw_help(
-            &mut lines,
-            width,
-            "tab / shift+tab",
-            "Focus family, series, or chart",
-        );
-        push_raw_help(&mut lines, width, "up / down", "Select family or series");
+        if matches!(app.ops.current_route(), OpsRoute::MetricsPanel(_)) {
+            push_raw_help(
+                &mut lines,
+                width,
+                "shift+left / shift+right",
+                "Inspect chart samples",
+            );
+            push_raw_help(&mut lines, width, "click / wheel", "Inspect chart sample");
+            push_raw_help(&mut lines, width, "esc", "Return to dashboard");
+        } else {
+            push_raw_help(&mut lines, width, "left / right", "Dashboard or Explore");
+            if app.metrics.mode == MetricsMode::Dashboard {
+                push_raw_help(&mut lines, width, "up / down", "Select dashboard panel");
+                push_raw_help(&mut lines, width, "enter / click", "Expand selected panel");
+            } else {
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "tab / shift+tab",
+                    "Focus family, series, or chart",
+                );
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "up / down",
+                    "Select; at the end load the next page",
+                );
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "ctrl+space",
+                    "Show or hide selected series (maximum six)",
+                );
+                push_raw_help(
+                    &mut lines,
+                    width,
+                    "shift+left / shift+right",
+                    "Inspect focused chart",
+                );
+            }
+        }
         push_raw_help(&mut lines, width, "ctrl+s", "Switch Agents / Server source");
         push_raw_help(&mut lines, width, "ctrl+t", "Cycle time range");
         push_raw_help(&mut lines, width, "ctrl+l", "Toggle Live / Paused");
@@ -12746,8 +13567,10 @@ mod tests {
     use crate::log::{LogContext, Output, logln};
     use crate::model::local_observability::{
         LocalMetricDashboardPanel, LocalMetricDashboardPanelKind, LocalMetricDashboardResponse,
-        LocalMetricDashboardSeries, LocalMetricDashboardStat, LocalMetricSample, LocalMetricSource,
-        LocalMetricTimeRange,
+        LocalMetricDashboardSeries, LocalMetricDashboardStat, LocalMetricFamily, LocalMetricKind,
+        LocalMetricSample, LocalMetricSamplesResponse, LocalMetricSeries, LocalMetricSource,
+        LocalMetricTemporality, LocalMetricTimeRange, LocalObservabilityCapability,
+        LocalObservabilityStatus,
     };
     use clap::Parser;
     use ratatui::Terminal;
@@ -15173,6 +15996,94 @@ mod tests {
     }
 
     #[test]
+    fn metrics_dashboard_panel_expands_and_inspects_exact_samples() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.dashboard = Some(LocalMetricDashboardResponse {
+            source: LocalMetricSource::Agents,
+            range: LocalMetricTimeRange {
+                from_unix_nanos: 10,
+                to_unix_nanos: 20,
+            },
+            generated_at_unix_nanos: 20,
+            freshest_sample_unix_nanos: Some(20),
+            stats: Vec::new(),
+            panels: vec![LocalMetricDashboardPanel {
+                id: "invocation-rate".to_string(),
+                title: "Invocation rate".to_string(),
+                kind: LocalMetricDashboardPanelKind::TimeSeries,
+                series: vec![LocalMetricDashboardSeries {
+                    key: "all".to_string(),
+                    label: "All invocations".to_string(),
+                    unit: "invocations/s".to_string(),
+                    samples: vec![
+                        LocalMetricSample {
+                            timestamp_unix_nanos: 10,
+                            value: 1.0,
+                            statistic: "rate".to_string(),
+                            source_oplog_index: Some(7),
+                        },
+                        LocalMetricSample {
+                            timestamp_unix_nanos: 20,
+                            value: 2.0,
+                            statistic: "rate".to_string(),
+                            source_oplog_index: Some(8),
+                        },
+                    ],
+                    latest_value: Some(2.0),
+                    approximate: false,
+                }],
+                empty_reason: None,
+                observed_from_unix_nanos: Some(10),
+                observed_to_unix_nanos: Some(20),
+                approximate: false,
+            }],
+        });
+
+        render_app_text_at(&app, 120, 28);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            app.ops.current_route(),
+            &OpsRoute::MetricsPanel("invocation-rate".to_string())
+        );
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("Metrics / Invocation rate"), "{frame}");
+        assert!(frame.contains("oplog #8"), "{frame}");
+
+        app.handle_key(modified_key(KeyCode::Left, KeyModifiers::SHIFT));
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("oplog #7"), "{frame}");
+
+        let chart = snapshot_region(&app, RegionKind::MetricsChart);
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                chart.x + chart.width.saturating_sub(1),
+                chart.y,
+            ),
+            None,
+        );
+        assert_eq!(app.metrics.chart_cursor, Some(1));
+
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.ops.current_route(), &OpsRoute::Root);
+        render_app_text_at(&app, 120, 28);
+        let panel = snapshot_region(&app, RegionKind::MetricsPanel(0));
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                panel.x + 1,
+                panel.y + 1,
+            ),
+            None,
+        );
+        assert!(matches!(
+            app.ops.current_route(),
+            OpsRoute::MetricsPanel(panel_id) if panel_id == "invocation-rate"
+        ));
+    }
+
+    #[test]
     fn metrics_live_mode_is_visible_and_modifier_toggleable() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Metrics);
@@ -15188,6 +16099,206 @@ mod tests {
         assert!(app.metrics.live);
         let frame = render_app_text_at(&app, 120, 28);
         assert!(frame.contains("[Live]"), "{frame}");
+    }
+
+    #[test]
+    fn metrics_explore_marks_and_limits_compatible_series_overlays() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.mode = MetricsMode::Explore;
+        app.metrics.focus = MetricsFocus::Series;
+        app.metrics.families = vec![LocalMetricFamily {
+            name: "golem.agent.counter".to_string(),
+            description: "Counter events".to_string(),
+            unit: "1".to_string(),
+            kind: LocalMetricKind::Counter,
+            temporality: LocalMetricTemporality::Delta,
+            category: "agent".to_string(),
+            series_count: 2,
+            latest_value: Some(2.0),
+            latest_unix_nanos: Some(20),
+        }];
+        let series = |key: &str, statistic: &str| LocalMetricSeries {
+            series_key: key.to_string(),
+            statistic: statistic.to_string(),
+            temporality: LocalMetricTemporality::Delta,
+            attributes: BTreeMap::new(),
+            environment_id: None,
+            component_id: None,
+            agent_id: Some(key.to_string()),
+            agent_type: Some("Counter".to_string()),
+            latest_value: Some(2.0),
+            latest_unix_nanos: Some(20),
+        };
+        app.metrics.series = vec![series("agent-a", "value"), series("agent-b", "value")];
+        app.metrics.selected_series = 1;
+        app.metrics.selected_series_keys = vec!["agent-a".to_string()];
+        app.metrics.series_samples = vec![metrics::MetricsSeriesSamples {
+            series_key: "agent-a".to_string(),
+            response: LocalMetricSamplesResponse {
+                samples: vec![LocalMetricSample {
+                    timestamp_unix_nanos: 10,
+                    value: 1.0,
+                    statistic: "value".to_string(),
+                    source_oplog_index: Some(7),
+                }],
+                observed_from_unix_nanos: Some(10),
+                observed_to_unix_nanos: Some(10),
+                original_point_count: 1,
+                approximate: false,
+            },
+        }];
+
+        app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+
+        assert_eq!(
+            app.metrics.selected_series_keys,
+            vec!["agent-a".to_string(), "agent-b".to_string()]
+        );
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("2/6 shown"), "{frame}");
+        assert_eq!(frame.matches("[x]").count(), 2, "{frame}");
+
+        app.metrics.series.push(series("sum-series", "sum"));
+        app.metrics.selected_series = 2;
+        app.handle_key(modified_key(KeyCode::Char(' '), KeyModifiers::CONTROL));
+
+        assert_eq!(app.metrics.selected_series_keys.len(), 2);
+        assert!(
+            app.metrics
+                .notice
+                .as_deref()
+                .is_some_and(|notice| notice.contains("same statistic and temporality"))
+        );
+    }
+
+    #[test]
+    fn metrics_append_pages_preserve_selection_and_deduplicate_rows() {
+        let family = |name: &str| LocalMetricFamily {
+            name: name.to_string(),
+            description: String::new(),
+            unit: "1".to_string(),
+            kind: LocalMetricKind::Counter,
+            temporality: LocalMetricTemporality::Delta,
+            category: "agent".to_string(),
+            series_count: 1,
+            latest_value: Some(1.0),
+            latest_unix_nanos: Some(10),
+        };
+        let series = |key: &str| LocalMetricSeries {
+            series_key: key.to_string(),
+            statistic: "value".to_string(),
+            temporality: LocalMetricTemporality::Delta,
+            attributes: BTreeMap::new(),
+            environment_id: None,
+            component_id: None,
+            agent_id: Some(key.to_string()),
+            agent_type: None,
+            latest_value: Some(1.0),
+            latest_unix_nanos: Some(10),
+        };
+        let capability = || LocalObservabilityCapability {
+            status: LocalObservabilityStatus::Ready,
+            message: None,
+            exporter_name: "test".to_string(),
+            exporter_version: "1".to_string(),
+            sample_interval_seconds: 5,
+            retention_days: 7,
+            retention_bytes: 1024,
+            discarded_points: 0,
+            last_service_sample_unix_nanos: Some(10),
+            last_agent_ingest_unix_nanos: Some(10),
+        };
+        let mut app = test_app();
+        app.metrics.generation = 3;
+        app.metrics.context_id = Some(TuiContextId::new(9));
+        app.metrics.loading = true;
+        app.metrics.families = vec![family("a")];
+        app.metrics.series = vec![series("one")];
+
+        app.finish_metrics_refresh(
+            3,
+            TuiContextTaskResult::new(
+                TuiContextId::new(9),
+                Ok(MetricsRefreshPayload {
+                    capability: capability(),
+                    source: LocalMetricSource::Agents,
+                    mode: MetricsMode::Explore,
+                    load: MetricsLoad::AppendFamilies,
+                    time_range: LocalMetricTimeRange {
+                        from_unix_nanos: 0,
+                        to_unix_nanos: 10,
+                    },
+                    dashboard: None,
+                    families: vec![family("a"), family("b")],
+                    series: Vec::new(),
+                    samples: Vec::new(),
+                    series_samples: Vec::new(),
+                    selected_series_keys: Vec::new(),
+                    families_next_cursor: Some("family-next".to_string()),
+                    series_next_cursor: None,
+                    selected_family: 0,
+                    selected_series: 0,
+                }),
+                Vec::new(),
+            ),
+        );
+
+        assert_eq!(
+            app.metrics
+                .families
+                .iter()
+                .map(|family| family.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(
+            app.metrics.families_next_cursor.as_deref(),
+            Some("family-next")
+        );
+        assert_eq!(app.metrics.selected_family, 0);
+
+        app.finish_metrics_refresh(
+            3,
+            TuiContextTaskResult::new(
+                TuiContextId::new(9),
+                Ok(MetricsRefreshPayload {
+                    capability: capability(),
+                    source: LocalMetricSource::Agents,
+                    mode: MetricsMode::Explore,
+                    load: MetricsLoad::AppendSeries,
+                    time_range: LocalMetricTimeRange {
+                        from_unix_nanos: 0,
+                        to_unix_nanos: 10,
+                    },
+                    dashboard: None,
+                    families: Vec::new(),
+                    series: vec![series("one"), series("two")],
+                    samples: Vec::new(),
+                    series_samples: Vec::new(),
+                    selected_series_keys: Vec::new(),
+                    families_next_cursor: None,
+                    series_next_cursor: Some("series-next".to_string()),
+                    selected_family: 0,
+                    selected_series: 0,
+                }),
+                Vec::new(),
+            ),
+        );
+
+        assert_eq!(
+            app.metrics
+                .series
+                .iter()
+                .map(|series| series.series_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["one", "two"]
+        );
+        assert_eq!(
+            app.metrics.series_next_cursor.as_deref(),
+            Some("series-next")
+        );
+        assert_eq!(app.metrics.selected_series, 1);
     }
 
     #[test]

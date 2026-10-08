@@ -19,9 +19,14 @@
 - Rewired the Metrics dashboard to consume typed snapshots instead of guessing
   panels from the currently selected Explore family. Dashboard/Explore and
   Agent/Server changes now reload the corresponding backend view.
+- Added cursor-backed Metrics inspection with keyboard, mouse, exact values,
+  and source-oplog anchors. Dashboard panels now open as retained typed routes;
+  Explore pages on demand, overlays up to six compatible series, preserves
+  visible gaps on a shared scale, and refreshes live samples without discarding
+  loaded catalogue pages.
 
-Still open in this slice: custom absolute ranges, chart cursor inspection and
-expansion, Explore paging/multi-series overlays, and visual axes/gap rendering.
+Still open in this slice: custom absolute ranges, cross-destination metric to
+Oplog handoff, richer axis decoration, and final terminal visual acceptance.
 
 ## 2026-10-08: Stable Ops Rebuild Contract
 

@@ -130,6 +130,8 @@ pub(super) enum RegionKind {
     OpsList,
     OpsDetails,
     OpsDetailsSplit,
+    MetricsPanel(usize),
+    MetricsChart,
     Scrollbar(ScrollbarTarget),
     DevSessionStatus(DevView),
     ContextPickerRow(usize),
