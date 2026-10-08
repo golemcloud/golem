@@ -7956,6 +7956,7 @@ mod update_entry_sequences {
     use super::*;
     use crate::services::worker_fork::ForkUpdates;
     use crate::worker::cut_point::validate_snapshot_update_boundaries;
+    use crate::worker::status::skipped_regions;
     use crate::worker::status::update_queue::{UpdateStep, manual_update_target_revision_of};
     use proptest::prelude::*;
     use test_r::test;
@@ -8127,9 +8128,11 @@ mod update_entry_sequences {
             let status = fold_status(list.clone());
             let regions = fold_regions(&AgentStatusRecord::default(), &list);
 
-            // The region fold is the status's.
+            // The region fold is the status's, and the fold of the skipped regions alone, which
+            // keeps no manual admission and no step, gives the same skipped regions.
             prop_assert_eq!(&regions.skipped, &status.skipped_regions);
             prop_assert_eq!(&regions.deleted, &status.deleted_regions);
+            prop_assert_eq!(&skipped_regions(&list), &regions.skipped);
 
             // A fold split at every checkpoint gives the same status, or refuses the baseline.
             list.keys().try_for_each(|checkpoint| {
