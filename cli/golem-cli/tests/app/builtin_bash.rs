@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Golem Cloud
 // Licensed under the Golem Source License v1.1
 
-use super::{RawOutput, TestContext, cmd, flag};
+use super::{Output, RawOutput, TestContext, cmd, flag};
 use crate::workspace_path;
 use axum::{
     Router,
@@ -34,6 +34,100 @@ pub(super) struct BashResult {
 // Start an isolated server with three owners: full access, no sibling binding, and denied sibling files.
 pub(super) async fn context() -> TestContext {
     let mut ctx = TestContext::new();
+    write_component(&ctx);
+    write_manifest(
+        &ctx,
+        indoc! {r#"
+            tools:
+              bash:
+                release:
+                  account: builtin-tool-owner@golem.cloud
+                  name: bash
+                  version: "0.2.1"
+              fixture: {}
+            agents:
+              BashOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+                  fixture:
+                    filesystemAccess: allowed
+              BashOnlyOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+              DeniedFilesOwner:
+                tools:
+                  bash:
+                    filesystemAccess: allowed
+                  fixture:
+                    filesystemAccess: denied
+            environments:
+              local:
+                server: local
+                componentPresets: release
+        "#},
+    );
+    ctx.start_server().await;
+    deploy(&ctx).await;
+    create_owners(
+        &ctx,
+        &[
+            OWNER,
+            r#"BashOnlyOwner("isolated")"#,
+            r#"DeniedFilesOwner("denied")"#,
+        ],
+    )
+    .await;
+    ctx
+}
+
+// Start an isolated server for the same application with a manifest that does not declare bash:
+// only the sibling tool is declared, and it is bound to one owner. `environment_options` are
+// further lines of the environment.
+pub(super) async fn context_without_bash_in_the_manifest(environment_options: &str) -> TestContext {
+    let mut ctx = TestContext::new();
+    write_component(&ctx);
+    write_manifest_without_bash(&ctx, "", environment_options);
+    ctx.start_server().await;
+    deploy(&ctx).await;
+    create_owners(&ctx, &[OWNER, r#"BashOnlyOwner("isolated")"#]).await;
+    ctx
+}
+
+// `owner_tools` are further lines of the tool bindings of `BashOwner`.
+pub(super) fn write_manifest_without_bash(
+    ctx: &TestContext,
+    owner_tools: &str,
+    environment_options: &str,
+) {
+    write_manifest(
+        ctx,
+        &formatdoc! {r#"
+            tools:
+              fixture: {{}}
+            agents:
+              BashOwner:
+                tools:
+                  fixture:
+                    filesystemAccess: allowed
+                  {owner_tools}
+            environments:
+              local:
+                server: local
+                componentPresets: release
+                {environment_options}
+        "#},
+    );
+}
+
+pub(super) async fn deploy(ctx: &TestContext) -> Output {
+    let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
+    assert!(deployed.success_or_dump());
+    deployed
+}
+
+fn write_component(ctx: &TestContext) {
     let component_dir = ctx.cwd_path_join("component");
     fs::create_dir_all(component_dir.join("src")).unwrap();
     fs::copy(
@@ -62,75 +156,47 @@ pub(super) async fn context() -> TestContext {
         "#, sdk = workspace_path().join("sdks/rust/golem-rust").display()},
     )
     .unwrap();
+}
+
+// `tools_agents_and_environments` are the manifest sections that differ between the contexts.
+fn write_manifest(ctx: &TestContext, tools_agents_and_environments: &str) {
+    let components = formatdoc! {r#"
+        manifestVersion: {manifest_version}
+        app: builtin-bash-acceptance
+
+        componentTemplates:
+          rust-test:
+            build:
+            - command: cargo build --target wasm32-wasip2 --release
+              sources:
+              - "{{{{ componentDir }}}}/src"
+              - "{{{{ componentDir }}}}/Cargo.toml"
+              targets:
+              - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
+            componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
+            outputWasm: "{{{{ golemTempDir }}}}/agents/builtin_bash_fixture.wasm"
+        components:
+          builtin-bash:owner:
+            dir: component
+            templates: rust-test
+            presets:
+              release: {{}}
+    "#, manifest_version = versions::sdk::MANIFEST};
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
-        formatdoc! {r#"
-            manifestVersion: {manifest_version}
-            app: builtin-bash-acceptance
-
-            componentTemplates:
-              rust-test:
-                build:
-                - command: cargo build --target wasm32-wasip2 --release
-                  sources:
-                  - "{{{{ componentDir }}}}/src"
-                  - "{{{{ componentDir }}}}/Cargo.toml"
-                  targets:
-                  - "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
-                componentWasm: "{{{{ cargoTarget }}}}/wasm32-wasip2/release/builtin_bash_fixture.wasm"
-                outputWasm: "{{{{ golemTempDir }}}}/agents/builtin_bash_fixture.wasm"
-            components:
-              builtin-bash:owner:
-                dir: component
-                templates: rust-test
-                presets:
-                  release: {{}}
-            tools:
-              bash:
-                release:
-                  account: builtin-tool-owner@golem.cloud
-                  name: bash
-                  version: "0.2.1"
-              fixture: {{}}
-            agents:
-              BashOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-                  fixture:
-                    filesystemAccess: allowed
-              BashOnlyOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-              DeniedFilesOwner:
-                tools:
-                  bash:
-                    filesystemAccess: allowed
-                  fixture:
-                    filesystemAccess: denied
-            environments:
-              local:
-                server: local
-                componentPresets: release
-        "#, manifest_version = versions::sdk::MANIFEST},
+        format!("{components}{tools_agents_and_environments}"),
     )
     .unwrap();
-    ctx.start_server().await;
-    let deployed = ctx.cli([cmd::DEPLOY, flag::YES]).await;
-    assert!(deployed.success_or_dump());
-    // External tool invocation needs an existing owner; calling name creates each agent.
-    for owner in [
-        OWNER,
-        r#"BashOnlyOwner("isolated")"#,
-        r#"DeniedFilesOwner("denied")"#,
-    ] {
+}
+
+// External tool invocation needs an existing owner; calling name creates each agent.
+async fn create_owners(ctx: &TestContext, owners: &[&str]) {
+    for owner in owners {
         let created = ctx
             .cli([flag::YES, cmd::AGENT, cmd::INVOKE, owner, "name"])
             .await;
         assert!(created.success_or_dump());
     }
-    ctx
 }
 
 // Every call is a fresh shell starting in `cwd` (empty for the default). Each call gets a new

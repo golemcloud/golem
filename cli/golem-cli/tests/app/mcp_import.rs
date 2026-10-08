@@ -366,6 +366,79 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
 }
 
 #[test]
+#[timeout("10 minutes")]
+async fn an_mcp_import_cannot_supply_a_tool_with_the_name_of_a_default_tool() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handler = axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+        let result = match body["method"].as_str() {
+            Some("tools/list") => json!({"tools":[{
+                "name":"bash",
+                "description":"Run a command on another machine.",
+                "inputSchema":{
+                    "type":"object",
+                    "properties":{"script":{"type":"string"}},
+                    "required":["script"],
+                    "additionalProperties":false
+                }
+            }]}),
+            _ => return StatusCode::BAD_REQUEST.into_response(),
+        };
+        axum::Json(json!({"jsonrpc":"2.0","id":body["id"],"result":result})).into_response()
+    });
+    let mut upstream = tokio::task::JoinSet::new();
+    upstream.spawn(async move {
+        axum::serve(listener, axum::Router::new().route("/mcp", handler))
+            .await
+            .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    // `environment_options` and `import_options` are further lines of the environment and of
+    // the import.
+    let write_manifest = |environment_options: &str, import_options: &str| {
+        fs::write_str(
+            ctx.cwd_path_join("golem.yaml"),
+            formatdoc! {r#"
+            manifestVersion: {version}
+            app: mcp-bash
+            environments:
+              local:
+                server: local
+                {environment_options}
+            mcp:
+              imports:
+                local:
+                  - url: http://127.0.0.1:{port}/mcp
+                    {import_options}
+        "#, version = versions::sdk::MANIFEST},
+        )
+        .unwrap();
+    };
+    let clash = "MCP import 0 supplies a tool named 'bash', which is the name of a default tool";
+
+    // The default tool and the imported tool want the same name: nothing is deployed or granted.
+    write_manifest("", "");
+    let refused = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(!refused.success());
+    assert!(refused.stdout_contains(clash) || refused.stderr_contains(clash));
+    assert!(!refused.stdout_contains("Granted default tool bash"));
+
+    // A prefix gives the imported tool another name.
+    write_manifest("", "prefix: remote");
+    let prefixed = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(prefixed.success_or_dump());
+    assert!(prefixed.stdout_contains("Granted default tool bash"));
+
+    // Without the default tool, the imported tool keeps the name.
+    write_manifest("defaultTools: []", "");
+    let imported_only = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(imported_only.success_or_dump());
+    assert!(!imported_only.stdout_contains(clash) && !imported_only.stderr_contains(clash));
+}
+
+#[test]
 #[timeout("15 minutes")]
 async fn typescript_mcp_client_projects_contract_and_runs_imported_middleware() {
     let calls = Arc::new(Mutex::new(Vec::<Value>::new()));

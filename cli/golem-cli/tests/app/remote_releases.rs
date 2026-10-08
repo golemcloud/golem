@@ -480,7 +480,10 @@ environments:
         .client
         .list_environment_tool_grants(&consumer_environment.id.0)
         .await?
-        .values;
+        .values
+        .into_iter()
+        .filter(|grant| grant.release.id == release.id)
+        .collect::<Vec<_>>();
     assert_eq!(
         stale_grants.len(),
         1,
