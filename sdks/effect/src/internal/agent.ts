@@ -6,6 +6,7 @@ import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as ApiHost from "golem:api/host@1.5.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import type { DatabaseSync } from "node:sqlite"
+import { existsSync } from "node:fs"
 import * as AgentIdentity from "../AgentIdentity.js"
 import { AgentHostClient } from "../host/AgentHostClient.js"
 import { EnvironmentClient } from "../host/EnvironmentClient.js"
@@ -1321,6 +1322,48 @@ const resolveSqliteHostExtSync = (): {
     }),
   )
 
+/** Validate the same managed-connection restrictions during save and restoration. */
+const snapshotDatabaseLocation = (
+  agentName: string,
+  name: string,
+  handle: DatabaseSync,
+  sqliteExt: ReturnType<typeof resolveSqliteHostExtSync>,
+): string | null => {
+  if (!handle.isOpen)
+    throw new SnapshotEnvelopeError(`agent '${agentName}' database '${name}' is closed`)
+  if (!sqliteExt.isAutocommitDatabaseSync(handle))
+    throw new SnapshotDatabaseNotInAutocommitError(agentName, name)
+  const rows = handle.prepare("PRAGMA database_list").all()
+  const extra = rows
+    .map((row) => String(Array.isArray(row) ? row[1] : row.name))
+    .filter((schema) => schema !== "main" && schema !== "temp")
+  if (extra.length > 0) throw new SnapshotDatabaseHasAttachmentsError(agentName, name, extra)
+  return handle.location()
+}
+
+/** Rebuild the connection cache before recorded suffix replay begins. */
+const warmSnapshotDatabase = (
+  handle: DatabaseSync,
+  fileBacked: boolean,
+  sqliteExt: ReturnType<typeof resolveSqliteHostExtSync>,
+): void => {
+  handle.prepare("SELECT count(*) FROM sqlite_master").get()
+  if (!fileBacked) return
+  const pragma = (name: string): number => {
+    const row = handle.prepare(`PRAGMA ${name}`).get()
+    return Number(Array.isArray(row) ? row[0] : row?.[name])
+  }
+  const pageCount = pragma("page_count")
+  const pageSize = pragma("page_size")
+  const cacheSize = pragma("cache_size")
+  // wasm32 SQLite keeps 88 bytes of page metadata and recycles before the cache limit.
+  const limit = cacheSize < 0 ? Math.floor((-cacheSize * 1024) / (pageSize + 88)) : cacheSize
+  if (pageCount > 0 && pageCount <= limit - 1) {
+    // Discarded read for cache warming, not a captured application snapshot image.
+    sqliteExt.serializeDatabaseSync(handle)
+  }
+}
+
 /**
  * Encode the schema-driven snapshot state and optional SQLite images.
  */
@@ -1349,24 +1392,24 @@ const encodeAutoSnapshot = async (
   }
   const sqliteExt = snap.declaredDatabases.length > 0 ? resolveSqliteHostExtSync() : undefined
   const dbParts: Array<{ name: string; bytes: Uint8Array }> = []
+  const fileDatabases: Array<[string, string]> = []
   for (const dbName of snap.declaredDatabases) {
     const handle = snap.databases.get(dbName)
     if (handle === undefined) {
       throw new SnapshotDatabaseMissingPartError(agent.name, dbName, "save")
     }
-    if (!sqliteExt!.isAutocommitDatabaseSync(handle)) {
-      throw new SnapshotDatabaseNotInAutocommitError(agent.name, dbName)
-    }
-    const rows = handle.prepare("PRAGMA database_list").all() as Array<{ name?: string }>
-    const extra = rows
-      .map((r) => String(r.name ?? ""))
-      .filter((n) => n !== "main" && n !== "temp" && n !== "")
-    if (extra.length > 0) {
-      throw new SnapshotDatabaseHasAttachmentsError(agent.name, dbName, extra)
-    }
-    dbParts.push({ name: dbName, bytes: sqliteExt!.serializeDatabaseSync(handle) })
+    const location = snapshotDatabaseLocation(agent.name, dbName, handle, sqliteExt!)
+    if (location === null)
+      dbParts.push({ name: dbName, bytes: sqliteExt!.serializeDatabaseSync(handle) })
+    else fileDatabases.push([dbName, location])
   }
-  return encodeMultipartJsonEnvelope(agent.principal, encoded, dbParts, bundle?.parts)
+  return encodeMultipartJsonEnvelope(
+    agent.principal,
+    encoded,
+    dbParts,
+    bundle?.parts,
+    snap.declaredDatabases.length > 0 ? Object.fromEntries(fileDatabases) : undefined,
+  )
 }
 
 /**
@@ -1501,13 +1544,26 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
         )
       }
       const declared = new Set(config.declaredDatabases)
-      const received = new Set(decoded.databases.map((part) => part.name))
+      const received = new Set([
+        ...decoded.databases.map((part) => part.name),
+        ...Object.keys(decoded.fileDatabases ?? {}),
+      ])
       for (const name of received) {
         if (!declared.has(name)) throw new SnapshotDatabaseUnknownPartError(agentTypeName, name)
       }
       for (const name of declared) {
         if (!received.has(name))
           throw new SnapshotDatabaseMissingPartError(agentTypeName, name, "load-envelope")
+      }
+      if (declared.size > 0 && decoded.fileDatabases === undefined)
+        throw new SnapshotEnvelopeError(
+          `agent '${agentTypeName}' managed snapshot missing 'fileDatabases'`,
+        )
+      for (const [name, location] of Object.entries(decoded.fileDatabases ?? {})) {
+        if (!existsSync(location))
+          throw new SnapshotEnvelopeError(
+            `agent '${agentTypeName}' database '${name}' file does not exist at '${location}'`,
+          )
       }
     }
     const state = await Effect.runPromise(
@@ -1544,22 +1600,33 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
             `agent '${agentTypeName}' expects a multipart/mixed envelope (declared databases: ${declared.join(", ")}) but received ${snapshot.mimeType}`,
           )
         }
-        // Validate that the user attached every declared database.
+        const sqliteExt = resolveSqliteHostExtSync()
+        // Validate every handle before hydrating any image.
         for (const dbName of declared) {
-          if (!bound.databases.has(dbName)) {
+          const handle = bound.databases.get(dbName)
+          if (handle === undefined) {
             throw new SnapshotDatabaseMissingPartError(agentTypeName, dbName, "load-attach")
           }
+          const location = snapshotDatabaseLocation(agentTypeName, dbName, handle, sqliteExt)
+          const expected = Object.hasOwn(decoded.fileDatabases!, dbName)
+            ? decoded.fileDatabases![dbName]
+            : null
+          if (location !== expected)
+            throw new SnapshotEnvelopeError(
+              `agent '${agentTypeName}' database '${dbName}' location '${location}' does not match snapshot location '${expected}'`,
+            )
         }
-        // Restore each DB in place via the wasm-rquickjs extension.
-        const sqliteExt = resolveSqliteHostExtSync()
+        // Hydrate only memory/temp databases; files were restored by the host.
         for (const part of decoded.databases) {
           const handle = bound.databases.get(part.name)!
           sqliteExt.restoreDatabaseSync(handle, part.bytes)
-          // Restoring invalidates SQLite's connection-local schema cache. Warm
-          // it while load-snapshot is unrecorded so replay sees the same host
-          // call sequence as the live connection did after the snapshot.
-          handle.prepare("SELECT count(*) FROM sqlite_master").get()
         }
+        for (const dbName of declared)
+          warmSnapshotDatabase(
+            bound.databases.get(dbName)!,
+            Object.hasOwn(decoded.fileDatabases!, dbName),
+            sqliteExt,
+          )
       }
     } else {
       if (decoded.kind !== "binary") {

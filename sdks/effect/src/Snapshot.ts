@@ -151,7 +151,7 @@ export class SnapshotDatabaseNotDeclaredError {
  * Raised when, at save or load time, a declared database name has no
  * corresponding database exposed by the state strategy (`phase: "save"` or
  * `phase: "load-attach"`) or no corresponding
- * part in the loaded envelope (`phase: "load-envelope"`).
+ * image or file location in the loaded envelope (`phase: "load-envelope"`).
  *
  * @since 1.5.0
  * @category errors
@@ -172,15 +172,15 @@ export class SnapshotDatabaseMissingPartError {
         this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: declared database '${databaseName}' but the restored state's snapshot strategy did not expose it`
         break
       case "load-envelope":
-        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: snapshot envelope is missing required 'db:${databaseName}' part`
+        this.message = `SnapshotDatabaseMissingPartError: agent '${agentName}' load: snapshot envelope is missing the image or file location for database '${databaseName}'`
         break
     }
   }
 }
 
 /**
- * Raised at load time when a snapshot envelope contains a `db:<name>`
- * part whose `<name>` is not in the agent's declared `databases`
+ * Raised at load time when a snapshot envelope contains an image or file location
+ * whose name is not in the agent's declared `databases`
  * tuple.
  *
  * @since 1.5.0
@@ -193,12 +193,12 @@ export class SnapshotDatabaseUnknownPartError {
     readonly agentName: string,
     readonly databaseName: string,
   ) {
-    this.message = `SnapshotDatabaseUnknownPartError: agent '${agentName}' load: snapshot envelope carries 'db:${databaseName}' but the agent did not declare a database with that name`
+    this.message = `SnapshotDatabaseUnknownPartError: agent '${agentName}' load: snapshot envelope carries database '${databaseName}' but the agent did not declare a database with that name`
   }
 }
 
 /**
- * Raised at save time when a declared database has an open transaction
+ * Raised when a declared database has an open transaction
  * (`isAutocommitDatabaseSync` returns false).
  *
  * @since 1.5.0
@@ -211,12 +211,12 @@ export class SnapshotDatabaseNotInAutocommitError {
     readonly agentName: string,
     readonly databaseName: string,
   ) {
-    this.message = `SnapshotDatabaseNotInAutocommitError: agent '${agentName}' database '${databaseName}' has an open transaction; commit or rollback before snapshot save`
+    this.message = `SnapshotDatabaseNotInAutocommitError: agent '${agentName}' database '${databaseName}' has an open transaction; snapshot connections must be in autocommit mode`
   }
 }
 
 /**
- * Raised at save time when a declared database has ATTACHed schemas
+ * Raised when a declared database has ATTACHed schemas
  * beyond the default `main`/`temp` (PRAGMA database_list).
  *
  * @since 1.5.0
@@ -252,9 +252,10 @@ const DB_NAME_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
  *
  * The optional `databases` tuple declares one or more SQLite databases
  * that may be exposed by the state strategy and captured alongside the auto
- * state. When `databases` is non-empty the
- * envelope on the wire becomes `multipart/mixed` with one
- * `application/x-sqlite3` part per declared database.
+ * state. When `databases` is non-empty the wire envelope is `multipart/mixed`.
+ * In-memory/temp databases have `application/x-sqlite3` image parts;
+ * file-backed databases have location metadata only. Filesystem snapshots own
+ * their contents, and the restore factory must reopen each recorded location.
  *
  * @since 1.5.0
  * @category models
@@ -463,8 +464,10 @@ export const custom = (spec: { readonly policy: SnapshotPolicy }): CustomSnapsho
  * Save schema-encoded state together with opaque named bytes. Uses whole buffers,
  * not streaming; payload and framing copies amplify memory use. Hooks run outside
  * the invocation journal and must tolerate reconstruction/retry. Restore creates
- * fresh state; declared SQLite images hydrate after restore and before methods,
- * so DB-dependent reconstruction belongs in the methods factory.
+ * fresh state; declared in-memory/temp SQLite images hydrate after restore and
+ * before methods. File-backed handles must reopen the recorded locations whose
+ * contents the host filesystem snapshot restored. DB-dependent reconstruction
+ * belongs in the methods factory, after hydration and connection-cache warming.
  * @since 1.6.0
  * @category constructors
  */

@@ -243,7 +243,7 @@ definition.implement({
 ```
 
 For SQLite snapshots, add `databases: state => ({ main: state.database })` to the snapshot strategy;
-the SDK restores each declared image before constructing methods. DDL must be idempotent. A
+the SDK hydrates in-memory/temp images before constructing methods. DDL must be idempotent. A
 `Snapshot.custom(...)` implementation uses `{ save(state), restore(saved, context) }` with raw
 bytes. Snapshot schema evolution remains the application's responsibility.
 
@@ -262,9 +262,23 @@ and MIME type. Binary-only applications use `Schema.Null` state. Logical names a
 The SDK owns the envelope and principal, always emits multipart (including zero parts), and never
 interprets user parts as resources. Existing JSON and byte-only modes are unchanged.
 
-Optional managed SQLite composition uses the same `databases` accessor as above. Images are
-validated before `restore`, then hydrated before `methods`; restored contents are not available
-inside the user restore effect. Snapshot hooks run unpersisted and may be retried. Whole-buffer
+Optional managed SQLite composition uses the same `databases` accessor in both `Snapshot.define`
+and `Snapshot.multipart`. `DatabaseSync.location()` classifies each handle: `null` means an
+in-memory/temp image; a non-null location is recorded in `fileDatabases` metadata only. Host
+filesystem snapshots exclusively own file-backed contents. The SDK never captures those contents
+as application parts or hydrates them from bytes, even when filesystem snapshotting is disabled.
+Filesystem snapshot availability is controlled by the host; without it, changed files prevent
+periodic snapshots and snapshot-based manual updates.
+
+The SDK validates the complete, disjoint image/location inventory and checks recorded files exist
+before `restore`. That factory must reopen the recorded locations. All returned handles must match
+their recorded categories and locations. Memory/temp images hydrate and connection caches warm
+before `methods`; defer database-dependent reconstruction until then. Small nonempty file databases
+may be read in full during cache warming, with the bytes discarded rather than stored in the
+application snapshot. Use scoped database acquisition for cleanup if restoration fails. Raw
+handles and `SqliteClient.fromDatabase` wrappers remain externally owned unless you register a
+finalizer or request `closeOnScopeClose: true`. Arbitrary user parts remain application-owned.
+Snapshot hooks run unpersisted and may be retried. Whole-buffer
 copies amplify peak memory use; the host's 64 KiB inline/blob-spill threshold is not a size cap.
 See the [multipart examples](https://learn.golem.cloud/next/develop/snapshotting) for all SDKs.
 

@@ -114,6 +114,7 @@ const Envelope = Schema.Struct({
   version: Schema.Literal(1),
   principal: SerializedPrincipal,
   state: Schema.Unknown,
+  fileDatabases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 })
 
 const EnvelopeFromString = Schema.fromJsonString(Envelope)
@@ -271,15 +272,19 @@ export const encodeBinaryEnvelope = (
 
 /**
  * Encode a SQLite-aware `multipart/mixed` envelope. The `state` part
- * carries `{ version: 1, principal, state }` as JSON; each entry in
+ * carries `{ version: 1, principal, state, fileDatabases? }` as JSON; each entry in
  * `databases` becomes a `db:<name>` part with `application/x-sqlite3`
- * content-type. Bit-compatible with `golem-ts-sdk`.
+ * content-type. File-backed database contents belong to filesystem snapshots;
+ * only their logical names and locations belong in `fileDatabases`.
  */
 export const encodeMultipartJsonEnvelope = (
   principal: AgentCommon.Principal,
   state: unknown,
   databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>,
   userParts: ReadonlyMap<string, SnapshotPart> = new Map(),
+  fileDatabases: Readonly<Record<string, string>> | undefined = databases.length > 0
+    ? {}
+    : undefined,
 ): ApiHost.Snapshot => {
   if (state === undefined)
     throw new SnapshotEnvelopeError(
@@ -289,6 +294,7 @@ export const encodeMultipartJsonEnvelope = (
     version: 1,
     principal: serializePrincipal(principal),
     state,
+    ...(fileDatabases === undefined ? {} : { fileDatabases }),
   })
   const stateBody = encoder.encode(stateJson)
   const parts = [
@@ -343,14 +349,15 @@ export interface DecodedBinaryEnvelope {
  * {@link encodeMultipartJsonEnvelope} (or by the official
  * `golem-ts-sdk`). The `state` is the user-state JSON value (the
  * outer `{version, principal, state}` envelope has already been
- * stripped); each `databases` entry carries the raw SQLite file bytes
- * for one declared `db:<name>` part.
+ * stripped); each `databases` entry carries an in-memory/temp SQLite image.
+ * File-backed databases carry locations only, never contents.
  */
 export interface DecodedMultipartEnvelope {
   readonly kind: "multipart"
   readonly principal: AgentCommon.Principal
   readonly state: unknown
   readonly databases: ReadonlyArray<{ readonly name: string; readonly bytes: Uint8Array }>
+  readonly fileDatabases: Readonly<Record<string, string>> | undefined
   readonly parts: ReadonlyMap<string, SnapshotPart>
 }
 
@@ -486,7 +493,24 @@ const decodeMultipartEnvelope = (payload: Uint8Array, mime: string): DecodedMult
     databases.push({ name: dbName, bytes: part.body })
   }
 
-  return { kind: "multipart", principal, state: env.state, databases, parts: userParts }
+  if (env.fileDatabases !== undefined) {
+    for (const [name, location] of Object.entries(env.fileDatabases)) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+        throw new SnapshotEnvelopeError(`invalid database name '${name}'`)
+      if (location.length === 0 || location === ":memory:" || location.includes("\0"))
+        throw new SnapshotEnvelopeError(`invalid file database location for '${name}'`)
+      if (databases.some((part) => part.name === name))
+        throw new SnapshotEnvelopeError(`database '${name}' has both an image and a file location`)
+    }
+  }
+  return {
+    kind: "multipart",
+    principal,
+    state: env.state,
+    databases,
+    fileDatabases: env.fileDatabases,
+    parts: userParts,
+  }
 }
 
 const decodeBinaryEnvelope = (

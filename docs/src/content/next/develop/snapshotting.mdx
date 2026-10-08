@@ -273,7 +273,11 @@ These examples save a revision counter and an in-memory binary index. The loader
         }
         ```
 
-        To compose managed SQLite images, add `databases: ["main"] as const` to `Snapshot.multipart` and expose `databases: live => ({ main: live.database })` on the strategy. Before user restoration, the SDK validates the complete declared database part set and content types. Your restore strategy constructs database handles, then the SDK hydrates their images and warms schema caches **before** constructing method handlers. Do not query restored database contents inside `restore`: hydration has not happened yet. Existing autocommit and attached-schema restrictions still apply.
+        To compose managed SQLite databases, add `databases: ["main"] as const` to `Snapshot.multipart` or `Snapshot.define` and expose `databases: live => ({ main: live.database })` on the strategy. The SDK checks `DatabaseSync.location()`: memory/temp databases carry `db:` images, while file-backed databases carry only logical-name-to-location `fileDatabases` metadata. **Host filesystem snapshots exclusively own file-backed contents.** Arbitrary user `part:` bytes remain application-owned.
+
+        Before user restoration, the SDK validates the complete, disjoint image/location inventory and checks that recorded database files exist. Your restore strategy must reopen those locations. The SDK validates all returned handles, hydrates only memory/temp images, and warms connection caches **before** constructing method handlers. Defer database-dependent reconstruction until the methods factory. Small nonempty file-backed databases may be read in full for cache warming; those bytes are discarded, not stored in the application snapshot. Autocommit and attached-schema restrictions apply during save and restoration.
+
+        Use scoped acquisitions for cleanup if restoration fails. Raw handles and `SqliteClient.fromDatabase` wrappers are externally owned unless you register a finalizer or set `closeOnScopeClose: true`. Filesystem snapshot availability is host-controlled: there is no fallback application capture of file contents when it is disabled. Without filesystem snapshots, changed files prevent periodic snapshots and snapshot-based manual updates.
     </Tabs.Tab>
     <Tabs.Tab>
         Define both async hooks inside the `#[agent_implementation]` block. The live implementation does not need Serde; only the saved projection does.
