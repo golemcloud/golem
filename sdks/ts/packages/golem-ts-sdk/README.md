@@ -58,7 +58,9 @@ export const Web = defineHttpRouter('Web', { config: { greeting: z.string() } })
   );
 
 export const Assets = defineHttpRouter('Assets')
-  .mount('/assets')
+  .mount('/assets', {
+    fileResponseHeaders: { 'content-security-policy': "default-src 'self'" },
+  })
   .static('/*', '/assets/$1')
   .implement();
 export const Docs = defineHttpRouter('Docs')
@@ -76,6 +78,8 @@ provider-only, or empty router without a dummy method. OpenAPI providers run laz
 registration. Supply files and configuration through the normal application manifest and list
 the router in the HTTP API deployment's `agents` map. Static mappings read immutable deployed
 files; they do not expose files written by an invocation.
+Set `fileResponseHeaders` on either an agent mount or router mount to add those headers when the
+host serves exposed or static files.
 
 Web `Headers` normalizes names and combines repeated values; `Request` normalizes URLs and some
 standard methods and forbids bodies on GET/HEAD. `context.rawRequest` exposes the original head
@@ -459,9 +463,13 @@ discovery/error implementations; no role or alternate world is selected.
 
 The application bundles the SDK's preserved runtime modules, rather than importing a complete
 SDK embedded in the wrapper. Rollup can therefore remove absent registries and agent snapshot,
-principal serialization, and lifecycle code. Unused builder registration methods are removed
-before linking because class methods cannot otherwise be tree-shaken. Opaque registration
-helpers and computed SDK access conservatively retain capabilities. Host modules remain external.
+principal serialization, and lifecycle code when they are unreachable. Builder methods are not
+rewritten or removed by the build. Opaque registration helpers and computed SDK access conservatively
+retain capabilities. Host modules remain external.
+
+Agent, configuration, schema, and tool definitions are evaluated normally at runtime, including
+metadata computed by application functions. Component builds do not statically evaluate or rewrite
+these definitions.
 
 After building the SDK and agent template, run `node scripts/measure-components.mjs` from this
 package to build the five capability fixtures, check their full-world ABI, and record JS,

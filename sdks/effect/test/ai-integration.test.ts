@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { Effect, Schema, Stream } from "effect"
-import { LanguageModel } from "effect/unstable/ai"
+import { LanguageModel } from "effect/ai"
 import { command, reflectedToolkit, typedToolkit } from "../src/Ai.js"
 import { ToolClient } from "../src/host/ToolClient.js"
 import { compileDefinition, toolDefinition } from "../src/internal/tool/model.js"

@@ -81,10 +81,145 @@ pub async fn MoonBitStreaming::stream(
 
 ///|
 #derive.golem_schema
+pub(all) struct MatrixDimensions {
+  width : UInt
+  height : UInt
+}
+
+///|
+#derive.golem_schema
+pub(all) struct MatrixRequest {
+  source : String
+  dimensions : MatrixDimensions
+  labels : Array[String]
+}
+
+///|
+#derive.golem_schema
+pub(all) struct MatrixResult {
+  provider : String
+  command : String
+  normalizedSource : String
+  weightedSize : Int64
+  labelSummary : String
+  principal : String
+  ownerAgentId : String
+}
+
+///|
+#derive.golem_schema
+pub(all) struct MatrixRejectedPayload {
+  field : String
+  reason : String
+  retryable : Bool
+}
+
+///|
+#derive.golem_schema
+enum MatrixCoreError {
+  #derive.error(kind="usage-error", exit_code="2")
+  Rejected(MatrixRejectedPayload)
+}
+
+///|
+#derive.tool("matrix-core", version="1.0.0")
+struct MatrixCore {}
+
+///|
+#derive.command(subtree="MatrixCoreArtifact")
+pub fn MatrixCore::artifact() -> Unit {
+
+}
+
+///|
+#derive.tool("artifact")
+struct MatrixCoreArtifact {}
+
+///|
+fn matrix_core_inspect(
+  request : MatrixRequest,
+  multiplier : Int64,
+  principal : @tool.Principal,
+  owner_agent_id : String,
+) -> Result[MatrixResult, MatrixCoreError] {
+  if request.source == "reject.me" {
+    return Err(
+      Rejected({
+        field: "request.source",
+        reason: "unsupported source",
+        retryable: false,
+      }),
+    )
+  }
+  let principal = match principal {
+    Anonymous => "anonymous"
+    Oidc(oidc) => "oidc:" + oidc.sub
+    Agent(_) => "agent"
+    GolemUser(_) => "golem-user"
+  }
+  let weighted_size = request.dimensions.width.to_int64() *
+    request.dimensions.height.to_int64() *
+    multiplier +
+    request.labels.length().to_int64()
+  Ok({
+    provider: "moonbit",
+    command: "artifact/inspect",
+    normalizedSource: request.source.to_upper(),
+    weightedSize: weighted_size,
+    labelSummary: request.labels.rev().join("|"),
+    principal,
+    ownerAgentId: owner_agent_id,
+  })
+}
+
+///|
+pub fn MatrixCoreArtifact::inspect(
+  request : MatrixRequest,
+  multiplier : Int64,
+  principal : @tool.Principal,
+) -> Result[MatrixResult, MatrixCoreError] {
+  matrix_core_inspect(
+    request,
+    multiplier,
+    principal,
+    @api.get_self_metadata().agent_id.agent_id,
+  )
+}
+
+///|
+#derive.golem_schema
 struct MoonBitDualOutputEvidence {
   stdout : Array[Byte]
   stderr : Array[Byte]
   result : String
+}
+
+///|
+#derive.golem_schema
+struct MatrixCoreObservation {
+  provider : String
+  command : String
+  normalizedSource : String
+  weightedSize : Int64
+  labelSummary : String
+  principal : String
+  ownerAgentId : String
+  errorField : String
+  errorReason : String
+  errorRetryable : Bool
+}
+
+///|
+#derive.golem_schema
+struct MatrixReflectionObservation {
+  generatedProvider : String
+  generatedPrincipal : String
+  generatedOwnerAgentId : String
+  reflectedJson : String
+  reflectedErrorName : String
+  reflectedErrorField : String
+  reflectedErrorReason : String
+  reflectedErrorRetryable : Bool
 }
 
 ///|
@@ -96,6 +231,149 @@ struct MoonBitToolStreamingCaller {
 ///|
 fn MoonBitToolStreamingCaller::new(name : String) -> MoonBitToolStreamingCaller {
   { name, }
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::matrix_core_observation(
+  self : Self,
+) -> MatrixCoreObservation {
+  ignore(self)
+  let client = MatrixCoreClient::new()
+  matrix_core_observe_with_client(client)
+}
+
+///|
+async fn matrix_core_observe_with_client(
+  client : MatrixCoreClient,
+) -> MatrixCoreObservation {
+  let artifact = client.artifact()
+  defer artifact.drop()
+  let dimensions : MatrixDimensions = { width: 3U, height: 5U, }
+  let success_request : MatrixRequest = {
+    source: "matrix.sample",
+    dimensions,
+    labels: ["north", "east", "south"],
+  }
+  let success = match artifact.inspect(success_request, 7L) {
+    Ok(result) => result
+    Err(_) => abort("matrix-core asymmetric success call failed")
+  }
+  let rejected_request : MatrixRequest = {
+    source: "reject.me",
+    dimensions: { width: 2U, height: 5U, },
+    labels: ["not", "used"],
+  }
+  let rejected = match artifact.inspect(rejected_request, 9L) {
+    Err(@tool.ToolError::Tool(Rejected(payload))) => payload
+    Err(_) => abort("matrix-core reject.me returned an unexpected error")
+    Ok(_) => abort("matrix-core reject.me unexpectedly succeeded")
+  }
+  {
+    provider: success.provider,
+    command: success.command,
+    normalizedSource: success.normalizedSource,
+    weightedSize: success.weightedSize,
+    labelSummary: success.labelSummary,
+    principal: success.principal,
+    ownerAgentId: success.ownerAgentId,
+    errorField: rejected.field,
+    errorReason: rejected.reason,
+    errorRetryable: rejected.retryable,
+  }
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::matrix_core_definition_observation(
+  self : Self,
+) -> MatrixCoreObservation {
+  ignore(self)
+  let definition = @reflection.ToolClientDefinition::named("matrix-core", fn(
+    name,
+  ) {
+    MatrixCoreClient::new_for(name)
+  })
+  let client = definition.client() catch {
+    _ => abort("matrix-core definition-owned client construction failed")
+  }
+  matrix_core_observe_with_client(client)
+}
+
+///|
+pub async fn MoonBitToolStreamingCaller::matrix_core_reflection_observation(
+  self : Self,
+) -> MatrixReflectionObservation {
+  ignore(self)
+  let generated = matrix_core_observe_with_client(MatrixCoreClient::new())
+  let tool = @reflection.get_tool_type("matrix-core") catch {
+    _ => abort("matrix-core reflection discovery failed")
+  }
+  let command = tool.command(["artifact", "inspect"]) catch {
+    _ => abort("matrix-core reflected command lookup failed")
+  }
+  let success_input = Json::object({
+    "request": Json::object({
+      "source": Json::string("matrix.sample"),
+      "dimensions": Json::object({
+        "width": Json::number(3.0),
+        "height": Json::number(5.0),
+      }),
+      "labels": Json::array([
+        Json::string("north"),
+        Json::string("east"),
+        Json::string("south"),
+      ]),
+    }),
+    "multiplier": Json::string("7"),
+  })
+  let reflectedJson = match command.invoke_json(success_input) {
+    Ok(Some(value)) => value.stringify()
+    _ => abort("matrix-core reflected success failed")
+  }
+  let rejected_input = Json::object({
+    "request": Json::object({
+      "source": Json::string("reject.me"),
+      "dimensions": Json::object({
+        "width": Json::number(2.0),
+        "height": Json::number(5.0),
+      }),
+      "labels": Json::array([Json::string("not"), Json::string("used")]),
+    }),
+    "multiplier": Json::string("9"),
+  })
+  let (
+    reflectedErrorName,
+    reflectedErrorField,
+    reflectedErrorReason,
+    reflectedErrorRetryable,
+  ) = match command.invoke_json(rejected_input) {
+    Err(@tool.ToolError::Tool(error)) => {
+      let (field, reason, retryable) = match error.payload.value {
+        @model.SchemaValue::Record(
+          [
+            @model.SchemaValue::String(field),
+            @model.SchemaValue::String(reason),
+            @model.SchemaValue::Bool(retryable),
+          ]
+        ) => (field, reason, retryable)
+        value => {
+          @model.drop_owned_capabilities(value)
+          abort("matrix-core reflected error payload shape changed")
+        }
+      }
+      (error.name, field, reason, retryable)
+    }
+    _ => abort("matrix-core reflected rejection failed")
+  }
+  {
+    generatedProvider: generated.provider,
+    generatedPrincipal: generated.principal,
+    generatedOwnerAgentId: generated.ownerAgentId,
+    reflectedJson,
+    reflectedErrorName,
+    reflectedErrorField,
+    reflectedErrorReason,
+    reflectedErrorRetryable,
+  }
 }
 
 ///|

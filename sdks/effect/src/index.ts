@@ -224,6 +224,9 @@ export * as Quota from "./Quota.js"
  */
 export * as Retry from "./Retry.js"
 
+/** Opaque secret revelation through an explicit payload schema. @since 1.6.0 @category modules */
+export * as Secrets from "./Secrets.js"
+
 /**
  * Effect-idiomatic multi-step transactions on top of the Golem oplog
  * (`withCompensation`, `withFallibleCompensation`, `operation`,
@@ -301,7 +304,7 @@ export * as Webhook from "./Webhook.js"
 
 /**
  * Effect-typed bridge from the host `golem:websocket/client@1.5.0` resource
- * to the canonical `effect/unstable/socket` `Socket` abstraction.
+ * to the canonical `effect/socket` `Socket` abstraction.
  *
  * @since 1.5.0
  * @category modules

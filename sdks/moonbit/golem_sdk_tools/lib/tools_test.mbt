@@ -29,6 +29,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "HTTPAPI",
       #|    name: "httpapi",
+      #|    aliases: [],
       #|    version: None,
       #|    requires_filesystem: false,
       #|    description: "HTTP API tool.",
@@ -84,6 +85,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "CustomTool",
       #|    name: "custom",
+      #|    aliases: [],
       #|    version: Some("2.0.0"),
       #|    requires_filesystem: true,
       #|    description: "",
@@ -94,6 +96,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "EmptyDispatcher",
       #|    name: "empty-dispatcher",
+      #|    aliases: [],
       #|    version: None,
       #|    requires_filesystem: false,
       #|    description: "",
@@ -220,7 +223,7 @@ test "typed raise and suberror variants" {
   )
   debug_inspect(
     tools[0].commands[0].errors[0].payload,
-    content="Some(Simple(\"String\"))",
+    content="Single(Simple(\"String\"))",
   )
   debug_inspect(tools[0].commands[0].errors[0].payload_label, content="None")
 }
@@ -236,6 +239,10 @@ test "labelled tool error payload" {
     #|  Broken(message~ : String)
     #|}
   let tools = @lib.parse_tools([("tool.mbt", source)])
+  debug_inspect(
+    tools[0].commands[0].errors[0].payload,
+    content="Single(Simple(\"String\"))",
+  )
   debug_inspect(
     tools[0].commands[0].errors[0].payload_label,
     content="Some(\"message\")",

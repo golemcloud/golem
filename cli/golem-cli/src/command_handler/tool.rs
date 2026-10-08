@@ -24,10 +24,11 @@ use crate::context::Context;
 use crate::error::PipedExitCode;
 use crate::error::service::MapServiceError;
 use crate::log::{LogColorize, log_action};
+use crate::model::agent::RawAgentId;
 use crate::model::environment::{
     EnvironmentResolveMode, EnvironmentToolGrantCreateView, EnvironmentToolGrantDeleteView,
     EnvironmentToolGrantGetView, EnvironmentToolGrantListView, EnvironmentToolGrantRestoreView,
-    EnvironmentToolGrantView,
+    EnvironmentToolGrantView, ResolvedEnvironmentIdentity,
 };
 use crate::model::format::Format;
 use crate::model::tool_deployment::{DeployedToolListView, DeployedToolView};
@@ -35,6 +36,7 @@ use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeView};
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use anyhow::{anyhow, bail};
+use chrono::{DateTime, Utc};
 use golem_client::api::{
     AgentClient, EnvironmentClient, EnvironmentToolGrantsClient,
     EnvironmentToolMiddlewareGrantsClient, ToolMiddlewareReleasesClient, ToolReleasesClient,
@@ -43,8 +45,8 @@ use golem_client::invocation_session::{
     InvocationSession, InvocationSessionStateSnapshot, drive_native_tool_session_until,
 };
 use golem_client::model::{
-    NativeToolDescribeRequest, NativeToolInvocationMode, NativeToolInvocationRequest,
-    NativeToolResult,
+    NativeToolDefinition, NativeToolDescribeRequest, NativeToolInvocationMode,
+    NativeToolInvocationRequest, NativeToolInvocationResponse, NativeToolResult,
 };
 use golem_common::base_model::environment_tool_grant::{
     EnvironmentToolGrantCreation, EnvironmentToolGrantDeletion,
@@ -52,6 +54,9 @@ use golem_common::base_model::environment_tool_grant::{
 use golem_common::base_model::tool_release::{
     ToolReleaseByCoordinates, ToolReleaseById, ToolReleaseReference,
 };
+use golem_common::model::application::ApplicationName;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentName;
 use golem_common::model::environment_tool_middleware_grant::{
     EnvironmentToolMiddlewareGrantCreation, EnvironmentToolMiddlewareGrantDeletion,
 };
@@ -63,19 +68,28 @@ use golem_common::model::tool_middleware_release::{
     ToolMiddlewareReleaseByCoordinates, ToolMiddlewareReleaseById, ToolMiddlewareReleaseReference,
 };
 use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
+use golem_schema::tool::argv as arguments;
 use std::io::Read;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-mod arguments;
-#[cfg(test)]
-mod arguments_tests;
-
 pub struct ToolCommandHandler {
     ctx: Arc<Context>,
+}
+
+/// The resolved target of a native tool call: an existing agent, or a component baseline.
+#[derive(Clone)]
+pub(crate) struct ToolOwner {
+    pub application_name: ApplicationName,
+    pub environment_name: EnvironmentName,
+    pub agent_id: Option<AgentId>,
+    pub component_id: Option<ComponentId>,
+    /// The environment the owner lives in.
+    pub environment: ResolvedEnvironmentIdentity,
 }
 
 impl ToolCommandHandler {
@@ -343,22 +357,8 @@ impl ToolCommandHandler {
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-        let (target_environment, agent_id, component_id) = if let Some(raw) = args.agent {
-            let matched = self.ctx.agent_handler().match_agent_id(raw).await?;
-            let component = self
-                .ctx
-                .component_handler()
-                .resolve_component(&matched.environment, &matched.component_name, None)
-                .await?
-                .ok_or_else(|| anyhow!("Component '{}' is not deployed", matched.component_name))?;
-            (
-                matched.environment,
-                Some(AgentId {
-                    component_id: component.id,
-                    agent_id: matched.agent_id.0,
-                }),
-                None,
-            )
+        let owner = if let Some(raw) = args.agent {
+            self.resolve_tool_owner(raw).await?
         } else if let Some(name) = args.component {
             let component = self
                 .ctx
@@ -366,7 +366,13 @@ impl ToolCommandHandler {
                 .resolve_component(&environment, &name, None)
                 .await?
                 .ok_or_else(|| anyhow!("Component '{name}' is not deployed"))?;
-            (environment.clone(), None, Some(component.id))
+            ToolOwner {
+                application_name: environment.application_name.clone(),
+                environment_name: environment.environment_name.clone(),
+                agent_id: None,
+                component_id: Some(component.id),
+                environment,
+            }
         } else {
             unreachable!("clap requires exactly one native tool target")
         };
@@ -374,19 +380,8 @@ impl ToolCommandHandler {
             (args.tool_args, None)
         } else {
             let definition = self
-                .ctx
-                .golem_clients()
-                .await?
-                .agent
-                .describe_tool(&NativeToolDescribeRequest {
-                    app_name: target_environment.application_name.to_string(),
-                    env_name: target_environment.environment_name.to_string(),
-                    agent_id: agent_id.clone(),
-                    component_id: component_id.map(|id| id.0),
-                    tool_name: args.tool_name.to_string(),
-                })
-                .await
-                .map_service_error()?;
+                .describe_bound_tool(&owner, args.tool_name.as_str())
+                .await?;
             match arguments::parse(&definition.definition, &args.tool_args)
                 .map_err(anyhow::Error::msg)?
             {
@@ -413,7 +408,7 @@ impl ToolCommandHandler {
         );
         let live = args.stdin.is_some() || args.stdout || args.stderr;
         if live {
-            let public_target = match (&agent_id, component_id) {
+            let public_target = match (&owner.agent_id, owner.component_id) {
                 (Some(agent_id), None) => PublicNativeToolTarget::Agent {
                     component_id: agent_id.component_id.0,
                     agent_id: agent_id.agent_id.clone(),
@@ -429,8 +424,8 @@ impl ToolCommandHandler {
                 stable_stream_bindings: Default::default(),
                 pending_operation: Some(PublicClientMessage::ToolStart {
                     attempt_id: uuid::Uuid::new_v4(),
-                    application: target_environment.application_name.to_string(),
-                    environment: target_environment.environment_name.to_string(),
+                    application: owner.application_name.to_string(),
+                    environment: owner.environment_name.to_string(),
                     idempotency_key: key.value.clone(),
                     tool_name: args.tool_name.to_string(),
                     command_path: command_path.clone(),
@@ -537,31 +532,129 @@ impl ToolCommandHandler {
                     .map_err(anyhow::Error::msg)?,
             )
         };
-        let clients = self.ctx.golem_clients().await?;
-        let response = clients
-            .agent
-            .invoke_tool(
-                Some(&key.value),
-                &NativeToolInvocationRequest {
-                    app_name: target_environment.application_name.to_string(),
-                    env_name: target_environment.environment_name.to_string(),
-                    agent_id,
-                    component_id: component_id.map(|id| id.0),
-                    tool_name: args.tool_name.to_string(),
-                    command_path,
-                    input,
-                    mode,
-                    schedule_at: args.schedule_at,
-                    idempotency_key: Some(key.value.clone()),
-                },
+        let response = self
+            .invoke_tool_scalar(
+                &owner,
+                args.tool_name.as_str(),
+                command_path,
+                input,
+                &key,
+                mode,
+                args.schedule_at,
             )
-            .await
-            .map_service_error()?;
+            .await?;
         let failed = native_tool_result_failed(response.result.as_ref());
         self.ctx
             .log_handler()
             .log_output(ToolInvokeView { response })?;
         finish_tool_report(failed)
+    }
+
+    /// Resolves an existing agent as a tool owner, the same way for every native tool client.
+    /// It never creates the agent and never falls back to a component target.
+    pub(crate) async fn resolve_tool_owner(&self, agent: RawAgentId) -> anyhow::Result<ToolOwner> {
+        let matched = self.ctx.agent_handler().match_agent_id(agent).await?;
+        let component = self
+            .ctx
+            .component_handler()
+            .resolve_component(&matched.environment, &matched.component_name, None)
+            .await?
+            .ok_or_else(|| anyhow!("Component '{}' is not deployed", matched.component_name))?;
+        let environment = matched.environment;
+        Ok(ToolOwner {
+            application_name: environment.application_name.clone(),
+            environment_name: environment.environment_name.clone(),
+            agent_id: Some(AgentId {
+                component_id: component.id,
+                agent_id: matched.agent_id.0,
+            }),
+            component_id: None,
+            environment,
+        })
+    }
+
+    /// Returns the effective definition of a tool bound to the owner, as middleware presents it.
+    pub(crate) async fn describe_bound_tool(
+        &self,
+        owner: &ToolOwner,
+        tool_name: &str,
+    ) -> anyhow::Result<NativeToolDefinition> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .agent
+            .describe_tool(&NativeToolDescribeRequest {
+                app_name: owner.application_name.to_string(),
+                env_name: owner.environment_name.to_string(),
+                agent_id: owner.agent_id.clone(),
+                component_id: owner.component_id.map(|id| id.0),
+                tool_name: tool_name.to_string(),
+            })
+            .await
+            .map_service_error()?)
+    }
+
+    /// The definitions of the tools registered in the owner's environment, from its current
+    /// deployment. Which of them are bound to the owner is a separate question; see
+    /// [`Self::describe_bound_tool`].
+    pub(crate) async fn registered_tools(&self, owner: &ToolOwner) -> anyhow::Result<Vec<Tool>> {
+        let environment = &owner.environment;
+        environment
+            .with_current_deployment_revision_or_default_warn(|revision| async move {
+                Ok(self
+                    .ctx
+                    .golem_clients()
+                    .await?
+                    .environment
+                    .list_deployment_registered_tools(
+                        &environment.environment_id.0,
+                        revision.into(),
+                    )
+                    .await
+                    .map_service_error()?
+                    .values
+                    .into_iter()
+                    .map(|tool| tool.definition)
+                    .collect())
+            })
+            .await
+    }
+
+    /// Submits one scalar tool invocation under the given idempotency key.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn invoke_tool_scalar(
+        &self,
+        owner: &ToolOwner,
+        tool_name: &str,
+        command_path: Vec<String>,
+        input: Option<ExternalTypedSchemaValue>,
+        key: &IdempotencyKey,
+        mode: NativeToolInvocationMode,
+        schedule_at: Option<DateTime<Utc>>,
+    ) -> anyhow::Result<NativeToolInvocationResponse> {
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .agent
+            .invoke_tool(
+                Some(&key.value),
+                &NativeToolInvocationRequest {
+                    app_name: owner.application_name.to_string(),
+                    env_name: owner.environment_name.to_string(),
+                    agent_id: owner.agent_id.clone(),
+                    component_id: owner.component_id.map(|id| id.0),
+                    tool_name: tool_name.to_string(),
+                    command_path,
+                    input,
+                    mode,
+                    schedule_at,
+                    idempotency_key: Some(key.value.clone()),
+                },
+            )
+            .await
+            .map_service_error()?)
     }
 
     async fn cmd_list(&self) -> anyhow::Result<()> {

@@ -1304,7 +1304,10 @@ pub mod oplog {
         static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
             "oplog_epoch_fence_total",
             "Oplog operations checked against the shard epoch: `op` is `record` for an open \
-             recording its epoch and `append` for a write, `outcome` is `accepted` or `refused`",
+             recording its epoch, `append` for a write and `drop_prefix` for a trim after \
+             archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
+             `archive_delete_empty` for the same on a compressed archive level or a blob level's \
+             manifest; `outcome` is `accepted` or `refused`",
             &["op", "outcome"]
         )
         .unwrap();
@@ -1799,5 +1802,130 @@ pub mod storage {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
+    }
+}
+
+pub mod filesystem_snapshots {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
+
+    lazy_static! {
+        static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_capture_seconds",
+            "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
+             without filesystem snapshots, stops the file calls, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOAD_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_upload_seconds",
+            "Time of an upload of a filesystem snapshot, with its retries, by kind and outcome",
+            &["kind", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOADED_BYTES: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_uploaded_bytes_total",
+            "Bytes of the trees of the uploaded filesystem snapshots, by kind",
+            &["kind"]
+        )
+        .unwrap();
+        static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
+            "filesystem_snapshot_uploads_in_progress",
+            "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
+        )
+        .unwrap();
+        static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_restore_seconds",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DROPPED_CONFIRMATIONS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_dropped_confirmations_total",
+            "Uploaded filesystem snapshots that no confirmation record names, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_leaked_cleanups_total",
+            "Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref CLEANUPS_PENDING: Gauge = register_gauge!(
+            "filesystem_snapshot_cleanups_pending",
+            "Number of agents with pending or running clean-up work of filesystem snapshots"
+        )
+        .unwrap();
+        static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_copy_seconds",
+            "Time of a copy of the filesystem snapshots of a fork source, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref FAILED_SPACE_RECLAIMS: Counter = register_counter!(
+            "filesystem_snapshot_failed_space_reclaims_total",
+            "Deletes of filesystem snapshots whose release of unused storage failed; the next delete tries again"
+        )
+        .unwrap();
+    }
+
+    pub fn set_cleanups_pending(agents: usize) {
+        CLEANUPS_PENDING.set(agents as f64);
+    }
+
+    pub fn record_copy(outcome: &'static str, elapsed: Duration) {
+        COPY_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_failed_space_reclaim() {
+        FAILED_SPACE_RECLAIMS.inc();
+    }
+
+    pub fn record_capture(outcome: &'static str, elapsed: Duration) {
+        CAPTURE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_upload(kind: &'static str, outcome: &'static str, elapsed: Duration) {
+        UPLOAD_SECONDS
+            .with_label_values(&[kind, outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_uploaded_bytes(kind: &'static str, bytes: u64) {
+        UPLOADED_BYTES
+            .with_label_values(&[kind])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn inc_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.inc();
+    }
+
+    pub fn dec_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.dec();
+    }
+
+    pub fn record_restore(outcome: &'static str, elapsed: Duration) {
+        RESTORE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_dropped_confirmation(reason: &'static str) {
+        DROPPED_CONFIRMATIONS.with_label_values(&[reason]).inc();
+    }
+
+    pub fn record_leaked_cleanup(operation: &'static str) {
+        LEAKED_CLEANUPS.with_label_values(&[operation]).inc();
     }
 }

@@ -35,6 +35,25 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
 
     def body(tpe: TypeRepr): SchemaType = {
       val ty = tpe.dealias
+      if (ty.typeSymbol.fullName == "golem.schema.GuestSecretHandle")
+        return t.secret(t.string)
+      if (ty.typeSymbol.fullName == "golem.schema.GuestPermissionCardHandle")
+        return SchemaType(SchemaTypeBody.PermissionCardType(PermissionCardSpec(polymorphic = false)))
+      if (
+        ty.typeSymbol.fullName == "golem.host.QuotaApi.NamedQuotaToken" ||
+        ty.show.startsWith("golem.host.QuotaApi.NamedQuotaToken[")
+      ) {
+        val resourceName = ty.typeArgs match {
+          case List(ConstantType(StringConstant(value))) => value
+          case _                                         => report.errorAndAbort(s"NamedQuotaToken requires a literal resource-name type, found ${ty.show}")
+        }
+        return SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec(Some(resourceName))))
+      }
+      if (
+        ty.typeSymbol.fullName == "golem.host.QuotaApi.QuotaToken" ||
+        ty.show == "golem.host.QuotaApi.QuotaToken"
+      )
+        return SchemaType(SchemaTypeBody.QuotaTokenType(QuotaTokenSpec()))
       ty.asType match {
         case '[Unit]                               => t.tuple(Nil)
         case '[Boolean]                            => t.bool
@@ -235,6 +254,14 @@ private[macros] final class CompiledWireMetadata[C <: ToolMacroCore](val core: C
       case v: Vector[?] =>
         expected.typeArgs.head.asType match {
           case '[a] => '{ ${ Expr.ofList(v.toList.map(x => lift(x, TypeRepr.of[a]).asExprOf[a])) }.toVector }.asTerm
+        }
+      case v: scala.collection.immutable.ListMap[?, ?] =>
+        (expected.typeArgs(0).asType, expected.typeArgs(1).asType) match {
+          case ('[k], '[a]) =>
+            val entries = Expr.ofList(v.toList.map { case (key, value) =>
+              '{ (${ lift(key, TypeRepr.of[k]).asExprOf[k] }, ${ lift(value, TypeRepr.of[a]).asExprOf[a] }) }
+            })
+            '{ scala.collection.immutable.ListMap.from($entries) }.asTerm
         }
       case v: Product =>
         val className = v.getClass.getName

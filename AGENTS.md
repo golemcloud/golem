@@ -164,8 +164,10 @@ Load these skills for guided workflows on complex tasks:
 | `modifying-service-configs` | Changing service configuration structs, defaults, or adding new config fields |
 | `db-migration-scripts` | Writing PostgreSQL and SQLite migration scripts under a `db/migration/` root |
 | `logging` | Adding or reviewing `tracing` statements and following the structured logging conventions |
-| `modifying-builtin-plugins` | Changing built-in plugin source, committed WASM, descriptors, versions, or provisioning |
-| `creating-new-builtin-plugins` | Adding a new built-in WASM plugin embedded in and provisioned by the registry service |
+| `modifying-builtin-plugins` | Changing built-in plugin source, release artifacts, descriptors, versions, or provisioning |
+| `creating-new-builtin-plugins` | Adding a new externally released built-in WASM plugin provisioned by the registry service |
+| `developing-builtin-tools` | Creating or modifying externally released component-backed built-in tools |
+| `publishing-builtin-artifacts` | Publishing immutable built-in tool/plugin WASMs and updating their pinned URLs and checksums |
 | `sdk-development` | Working on the Rust, TypeScript, or MoonBit SDKs in `sdks/` |
 | `migrate-ts-decorator-sdk` | Porting a TypeScript agent from the removed decorator/`BaseAgent` API to `defineAgent` |
 | `golem-scala-development` | Compile, publish, and test the Golem Scala SDK in `sdks/scala/` |
@@ -193,6 +195,47 @@ When changing SDK code generation, guest bridge generation, canonical ABI wrappe
 Do not run `cargo make fix` by default. It mutates the entire root and `dev-tools` workspaces and does not validate the separately built SDKs. Use scoped auto-fix commands only when needed, and inspect their diff afterward.
 
 Load the `pre-pr-checklist` skill for the change-scope matrix and escalation rules. Repository-wide CI remains the final broad safety net; local verification must still cover the affected code and behavior before opening a PR.
+
+### Writing the PR description
+
+Describe what the change does, then why, in enough detail that a reviewer understands the decisions
+behind it. The description exists to help someone read the diff, not to prove the work happened.
+
+Write it in ASD-STE100 Simplified Technical English, in the ubiquitous language of the code it
+describes.
+
+Simplified Technical English means one word for one meaning, and one meaning for one word. Use the
+active voice. Write short sentences that each carry one idea. Use the simple verb tenses. Keep the
+article: write "the blob at the path", not "blob at path". Do not build a noun cluster longer than
+three words. Prefer a plain verb to a participle.
+
+The ubiquitous language is the vocabulary of the code itself. A blob is a blob in the trait, in the
+test and in the description. Do not invent a second name for a thing that already has one, and do
+not borrow a word that the code uses for something else. Where the domain has no word yet, choose
+one, use it everywhere, and put it in the code too.
+
+Leave out:
+
+- Test and assertion counts, timings and pass/fail tallies. CI reports these, and a number tells a
+  reviewer nothing about whether the change is right.
+- Verification transcripts: the fmt, clippy, build and test commands that were run, red proofs,
+  mutation-gate results, CI run numbers and attempt histories.
+- Commit SHAs. A rebase or a squash merge invalidates them, and a stale hash is worse than none
+  because it resolves to nothing.
+
+Include, where they apply:
+
+- The reasoning a reviewer would otherwise have to reconstruct: why an approach was chosen over the
+  obvious alternative, why a trait method is required rather than defaulted, why one backend needs a
+  guard the others do not.
+- Behaviour changes, especially where a caller's failure mode changes rather than its return value.
+- Anything that makes the diff read as larger or stranger than it is, such as a file whose tests
+  moved out of line, or a rename that touches many call sites.
+- Where the change sits in a stack, and what has to land before it.
+
+Prefer a claim a reviewer can check by opening a file over a number they have to take on trust. When
+a pull request is restacked or rebased, reread the description: anything naming a commit, a branch
+or another pull request may have gone stale with the move.
 
 ### Deployment diff model versioning
 

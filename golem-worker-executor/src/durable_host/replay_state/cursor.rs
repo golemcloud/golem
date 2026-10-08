@@ -818,7 +818,7 @@ impl CursorTx<'_> {
     /// head is reported as the divergence it is. The invocation-boundary reader never waits on
     /// another Store: every entity body of the invocation has terminated before
     /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history.
-    pub(super) fn check_parked_positional_read(
+    pub(super) async fn check_parked_positional_read(
         &self,
         reader: PositionalReader,
     ) -> Result<(), WorkerExecutorError> {
@@ -843,7 +843,10 @@ impl CursorTx<'_> {
         };
         let owner_can_consume = self.st.retained_starts.contains_key(&owner)
             || self.st.claimed_starts.contains(&owner)
-            || self.cursor.reconstruction_claims.is_body_active(owner);
+            || self.cursor.reconstruction_claims.is_body_active(owner)
+            || self
+                .future_entity_start_can_be_claimed(*head_idx, owner)
+                .await;
         if owner_can_consume {
             Ok(())
         } else {
@@ -854,6 +857,33 @@ impl CursorTx<'_> {
                 ),
             ))
         }
+    }
+
+    /// An entity Store can append its first positional record before the asynchronously enqueued
+    /// invocation `Start` is assigned its oplog index. The record carries that reserved future
+    /// index as its owner, so leave it for the body while the identity claim scans ahead to the
+    /// `Start`. This is accepted only when the referenced index is replay-visible and names an
+    /// entity invocation claim; arbitrary forward attribution must not turn corrupt history into
+    /// a wait.
+    async fn future_entity_start_can_be_claimed(
+        &self,
+        head_idx: OplogIndex,
+        owner: OplogIndex,
+    ) -> bool {
+        if owner <= head_idx
+            || owner > self.cursor.replay_target()
+            || self.st.skipped_regions.is_in_deleted_region(owner)
+        {
+            return false;
+        }
+        matches!(
+            self.cursor.oplog.read(owner).await,
+            OplogEntry::Start {
+                function_name: HostFunctionName::GolemEntityInvoke
+                    | HostFunctionName::GolemToolInvocationRejected,
+                ..
+            }
+        )
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -2732,78 +2762,6 @@ impl ReplayState {
         false
     }
 
-    /// Projects history abandoned by this entity's earliest uncommitted atomic block. Called
-    /// before body reconstruction, so none of the affected descendants has a replay claim yet.
-    pub(crate) async fn entity_atomic_rollback_regions(
-        &self,
-        entity_start_index: OplogIndex,
-    ) -> Vec<OplogRegion> {
-        let replay_target = self.replay_target();
-        let skipped_regions = {
-            let state = self.cursor.state.lock().await;
-            state.skipped_regions.clone()
-        };
-        let mut projection = OplogScopeProjection::new(entity_start_index);
-        let mut open_regions = std::collections::BTreeSet::new();
-        let mut owned_indices = Vec::new();
-        let mut next = entity_start_index;
-        while next <= replay_target {
-            let available = u64::from(replay_target) - u64::from(next) + 1;
-            let entries = self
-                .cursor
-                .oplog
-                .read_exact(next, CHUNK_SIZE.min(available))
-                .await;
-            let last_read = *entries.last_key_value().unwrap().0;
-            for (index, entry) in entries {
-                if index > replay_target {
-                    break;
-                }
-                // A crash can persist only some rollback Jumps. Deleted Starts still establish
-                // ownership of descendants whose discontiguous regions have not been deleted yet.
-                let included = projection.includes(index, &entry);
-                if skipped_regions.is_in_deleted_region(index) {
-                    continue;
-                }
-                match &entry {
-                    OplogEntry::BeginAtomicRegion {
-                        entity_parent_start_index: Some(parent),
-                        ..
-                    } if *parent == entity_start_index => {
-                        open_regions.insert(index);
-                    }
-                    OplogEntry::EndAtomicRegion { begin_index, .. } => {
-                        open_regions.remove(begin_index);
-                    }
-                    _ => {}
-                }
-                let entity_terminal = terminal_start_index(&entry) == Some(entity_start_index);
-                if included && !entity_terminal && !matches!(entry, OplogEntry::Jump { .. }) {
-                    owned_indices.push(index);
-                }
-            }
-            next = last_read.next();
-        }
-
-        let Some(begin_index) = open_regions.first() else {
-            return Vec::new();
-        };
-        let mut regions: Vec<OplogRegion> = Vec::new();
-        for index in owned_indices
-            .into_iter()
-            .filter(|index| index > begin_index)
-        {
-            match regions.last_mut() {
-                Some(region) if region.end.next() == index => region.end = index,
-                _ => regions.push(OplogRegion {
-                    start: index,
-                    end: index,
-                }),
-            }
-        }
-        regions
-    }
-
     /// Makes Jumps appended during replay effective in the shared cursor. Positional readers skip
     /// the deleted regions (a deleted cursor head is skipped immediately), retained `Start`s
     /// inside them are dropped because they belong to the abandoned attempt the Jump hides, and
@@ -3205,6 +3163,15 @@ impl ReplayState {
         .await
     }
 
+    /// Snapshots replay's deleted regions for readers that also scan the live oplog suffix.
+    pub(crate) async fn skipped_regions(&self) -> Result<DeletedRegions, WorkerExecutorError> {
+        self.run_owned_cursor_op(move |state| async move {
+            let st = state.cursor.state.lock().await;
+            Ok(st.skipped_regions.clone())
+        })
+        .await
+    }
+
     /// Whether `oplog_index` lies in a deleted (skipped) oplog region. Used as a validity guard
     /// (e.g. rejecting jumps into deleted regions), so a failed cursor read propagates as an error
     /// rather than defaulting to an answer.
@@ -3443,7 +3410,8 @@ impl ReplayState {
                         .try_get_oplog_entry(positional_reader_accepts(scope))
                         .await?;
                     if entry.is_none() {
-                        tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                        tx.check_parked_positional_read(PositionalReader::Ordinary)
+                            .await?;
                     }
                     Ok(entry)
                 })
@@ -3481,7 +3449,8 @@ impl ReplayState {
                         Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
                         None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
                         None => {
-                            tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                            tx.check_parked_positional_read(PositionalReader::Ordinary)
+                                .await?;
                             None
                         }
                     })
@@ -3554,6 +3523,29 @@ impl ReplayState {
             .store(!log_hashes.is_empty(), Ordering::Relaxed);
     }
 
+    /// Includes foreign work: another scope may have observed bytes from the incomplete attempt.
+    pub async fn has_attempt_suffix(&self, start: OplogIndex) -> bool {
+        !matches!(
+            self.lookup_oplog_entry_with_condition(
+                start,
+                |entry, _| !matches!(
+                    entry,
+                    OplogEntry::Jump { .. }
+                        | OplogEntry::Suspend { .. }
+                        | OplogEntry::Interrupted { .. }
+                        | OplogEntry::Restart { .. }
+                        | OplogEntry::Error { .. }
+                        | OplogEntry::RecoverySucceeded { .. }
+                ),
+                |_, _| true,
+            )
+            .await,
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: false
+            }
+        )
+    }
+
     pub async fn lookup_oplog_entry(
         &self,
         begin_idx: OplogIndex,
@@ -3606,13 +3598,7 @@ impl ReplayState {
         // The snapshot is taken on an owned task (see `run_owned_cursor_op`): this lookup is
         // called from accessor futures (e.g. the replay-side remote-write scope checks), which
         // must never queue on the cursor mutex directly.
-        let snapshot = self
-            .run_owned_cursor_op(|state| async move {
-                let cursor = &*state.cursor;
-                let st = cursor.state.lock().await;
-                Ok(st.skipped_regions.clone())
-            })
-            .await;
+        let snapshot = self.skipped_regions().await;
         let skipped_regions = match snapshot {
             Ok(snapshot) => snapshot,
             Err(err) => {
@@ -3764,7 +3750,8 @@ impl ReplayState {
                         )
                         .await?;
                     if entry.is_none() {
-                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)?;
+                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)
+                            .await?;
                     }
                     Ok(entry)
                 })
@@ -3918,6 +3905,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -3950,9 +3938,7 @@ fn historical_reconstruction_owner_failure(
             )
         }
         crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(kind) => {
-            WorkerExecutorError::runtime(format!(
-                "owner lifecycle changed while waiting for historical entity reconstruction: {kind:?}"
-            ))
+            WorkerExecutorError::Interrupted { kind }
         }
     }
 }
@@ -4008,6 +3994,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CommittedRemoteTransaction { .. }
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }

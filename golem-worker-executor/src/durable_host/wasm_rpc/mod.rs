@@ -4769,7 +4769,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                     let execution_status = retry_params.execution_status;
                     let current_retry_policy_state = retry_params
                         .worker
-                        .get_attached_last_known_status()
+                        .get_last_known_status()
                         .await
                         .current_retry_state
                         .get(&retry_params.retry_point)
@@ -4884,7 +4884,7 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 #[derive(Clone)]
 struct DurableStreamingTaskParams {
     streams: StreamSession,
-    input: golem_api_grpc::proto::golem::schema::SchemaValue,
+    input: golem_schema::proto::golem::schema::SchemaValue,
     input_mappings: Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
     expected_callee_fingerprint: AgentFingerprint,
     attempt_id: uuid::Uuid,
@@ -5581,6 +5581,40 @@ mod tests {
     use test_r::test;
     use uuid::Uuid;
     use wasmtime::component::ResourceTable;
+
+    #[test]
+    async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {
+        use crate::worker::suspension::OwnerSuspension;
+        use crate::worker::suspension::tests::{blocked_timer, eligible_now};
+        use std::future::{Future, pending};
+        use std::task::Context;
+        use std::time::Instant;
+
+        let owner = OwnerSuspension::new();
+        let (store, _, _timer) = blocked_timer(&owner, Instant::now() + Duration::from_secs(30));
+        let activity = store.rpc_activity(Duration::ZERO, Duration::from_secs(5));
+        let revoker = activity.revoker();
+        let remote = revoker.clone();
+        // Retain the coordinated future independently to delay background task cleanup.
+        let mut delayed_cleanup =
+            Box::pin(activity.coordinate(async move {
+                remote.remote_wait(pending::<anyhow::Result<()>>()).await
+            }));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(delayed_cleanup.as_mut().poll(&mut cx).is_pending());
+        assert!(eligible_now(&owner));
+        let task = RpcTask {
+            task: wasmtime_wasi::runtime::spawn(pending()),
+            revoker: Some(revoker),
+        };
+
+        drop(task);
+        assert!(!eligible_now(&owner));
+        assert!(delayed_cleanup.as_mut().poll(&mut cx).is_pending());
+        assert!(!eligible_now(&owner));
+        drop(delayed_cleanup);
+        assert!(eligible_now(&owner));
+    }
 
     #[test]
     fn logical_ephemeral_rpc_connection_creation_is_local_durability() {

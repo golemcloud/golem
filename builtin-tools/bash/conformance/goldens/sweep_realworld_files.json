@@ -1,0 +1,4868 @@
+{
+ "cases": {
+  "real tldr basename: file name of ''": {
+   "script": "2ff0e2a717302bd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of '-'": {
+   "script": "517d23c8d11287c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of '.hidden'": {
+   "script": "0ca687472da2133e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of '/'": {
+   "script": "88318c6a305c7799",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of '//'": {
+   "script": "b8a361e12258133b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of '/usr/lib/'": {
+   "script": "7937be4fdcd6063d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lib\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of 'a//b//'": {
+   "script": "376425439b6647eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of 'file'": {
+   "script": "1a480ac1ea231888",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of 'path/to/dir/'": {
+   "script": "d082b4aedfdfb1a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir\nstatus=0\n"
+   }
+  },
+  "real tldr basename: file name of 'path/to/file.txt'": {
+   "script": "edd3a26bba49f233",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file.txt\nstatus=0\n"
+   }
+  },
+  "real tldr basename: no operand": {
+   "script": "087f97e880fdf1bf",
+   "status": 1,
+   "stderr": {
+    "text": "basename: missing operand\nTry 'basename --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr basename: remove suffix .gz from archive.tar.gz": {
+   "script": "7f357944ae7af509",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "archive.tar\n"
+   }
+  },
+  "real tldr basename: remove suffix .md from x.txt": {
+   "script": "58024d38a734273e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x.txt\n"
+   }
+  },
+  "real tldr basename: remove suffix .txt from path/to/file.txt": {
+   "script": "dc4d5a77db37f09e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file\n"
+   }
+  },
+  "real tldr basename: remove suffix file.txt from file.txt": {
+   "script": "9b495b065ccdac1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file.txt\n"
+   }
+  },
+  "real tldr basename: remove suffix r from dir/": {
+   "script": "cef6687300afb76c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "di\n"
+   }
+  },
+  "real tldr basename: several with -a": {
+   "script": "e9deffe533253313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b\nd\ne\n"
+   }
+  },
+  "real tldr basename: suffix with -s": {
+   "script": "7ac700edf2a6ca7a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "main\nlib\n"
+   }
+  },
+  "real tldr basename: zero terminated": {
+   "script": "9ef3a2f57dde5c55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   b  \\0\n0000002\n"
+   }
+  },
+  "real tldr cmp: every difference": {
+   "script": "6dbe47ad4749934b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3 143 130\n"
+   }
+  },
+  "real tldr cmp: every difference (long)": {
+   "script": "c442c45a4dac11d3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": " 3 143 130\n"
+   }
+  },
+  "real tldr cmp: every difference of an empty file": {
+   "script": "3628d17dd742728b",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ which is empty\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: every difference of high bytes": {
+   "script": "23d495b71aceb8e5",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 351 352\n"
+   }
+  },
+  "real tldr cmp: every difference of identical files": {
+   "script": "3595db096b5423b8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: every difference on a later line": {
+   "script": "133ef7b577738a0b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 143 144\n"
+   }
+  },
+  "real tldr cmp: every difference where one is a prefix": {
+   "script": "26e9e187bef44651",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ after byte 3\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: every difference with a missing file": {
+   "script": "c38f89aa36e0001d",
+   "status": 2,
+   "stderr": {
+    "text": "cmp: f2: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: first difference": {
+   "script": "7f820d139494f525",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: char 3, line 1\n"
+   }
+  },
+  "real tldr cmp: first difference of an empty file": {
+   "script": "2e0c2c6b04090219",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ which is empty\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: first difference of high bytes": {
+   "script": "368f5e5dc94d5d71",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: char 2, line 1\n"
+   }
+  },
+  "real tldr cmp: first difference of identical files": {
+   "script": "ff7257a158f755fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: first difference on a later line": {
+   "script": "858764aa1909d961",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: char 5, line 3\n"
+   }
+  },
+  "real tldr cmp: first difference where one is a prefix": {
+   "script": "cd5289f0e3572618",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ after byte 3, in line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: first difference with a missing file": {
+   "script": "7d6122a208fab178",
+   "status": 2,
+   "stderr": {
+    "text": "cmp: f2: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: print bytes": {
+   "script": "580437110a9f5f78",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: byte 3, line 1 is 143 c 130 X\n"
+   }
+  },
+  "real tldr cmp: print bytes (long)": {
+   "script": "15e43c314739cb89",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: byte 3, line 1 is 143 c 130 X\n"
+   }
+  },
+  "real tldr cmp: print bytes of an empty file": {
+   "script": "78cd03da22883ce5",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ which is empty\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: print bytes of high bytes": {
+   "script": "469b6a760a495178",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: byte 2, line 1 is 351 M-i 352 M-j\n"
+   }
+  },
+  "real tldr cmp: print bytes of identical files": {
+   "script": "567f39d50e51535e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: print bytes on a later line": {
+   "script": "fca307af5539643a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1 f2 differ: byte 5, line 3 is 143 c 144 d\n"
+   }
+  },
+  "real tldr cmp: print bytes where one is a prefix": {
+   "script": "0942e36ee3a1c5d4",
+   "status": 1,
+   "stderr": {
+    "text": "cmp: EOF on ‘f1’ after byte 3, in line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: print bytes with a missing file": {
+   "script": "41b5e7494ab1eb90",
+   "status": 2,
+   "stderr": {
+    "text": "cmp: f2: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cmp: quiet": {
+   "script": "c58183bcf12fe4ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet (long)": {
+   "script": "5b91fd23f4e95274",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet of an empty file": {
+   "script": "3fe9cc804b30a4f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet of high bytes": {
+   "script": "8556bf030be8f6cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet of identical files": {
+   "script": "48e2bc15d4da59b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr cmp: quiet on a later line": {
+   "script": "d53f9da7a5328fef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet where one is a prefix": {
+   "script": "af531785ad29828e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr cmp: quiet with a missing file": {
+   "script": "47067ffe825f2e4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr cp: copy a directory without -r": {
+   "script": "7ad88b2928e07198",
+   "status": 1,
+   "stderr": {
+    "text": "cp: -r not specified; omitting directory 'dir'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy a file": {
+   "script": "7e7a0e590e318db7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: copy a file onto a directory name that is a file": {
+   "script": "616de64ddab4bdab",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot stat 'b.txt/': Not a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy a file onto itself": {
+   "script": "bf550ab7ff17cc6a",
+   "status": 1,
+   "stderr": {
+    "text": "cp: 'a.txt' and 'a.txt' are the same file\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy a file with spaces in its name": {
+   "script": "b0aab4faf034acb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "sp\n"
+   }
+  },
+  "real tldr cp: copy a missing file": {
+   "script": "08fb08a55fbe0669",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot stat 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy a symbolic link without -L": {
+   "script": "7912b5ba8b063bee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: copy an empty file": {
+   "script": "50835a9b92df2c68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "real tldr cp: copy into a directory": {
+   "script": "2af7aada32ea2e6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\none\n"
+   }
+  },
+  "real tldr cp: copy into a directory with a trailing slash": {
+   "script": "e2f73cb91324be51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\n"
+   }
+  },
+  "real tldr cp: copy into a missing directory": {
+   "script": "5955db04959717a9",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot create regular file 'nodir/c.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy into a missing directory with a trailing slash": {
+   "script": "99f573517d7eb354",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot create regular file 'nodir/': Not a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy multiple files to a non-directory": {
+   "script": "37b8bfa6497ac0ce",
+   "status": 1,
+   "stderr": {
+    "text": "cp: target 'c.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: copy multiple files to a target directory": {
+   "script": "23a7e7ec91b1c14b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\n"
+   }
+  },
+  "real tldr cp: copy multiple files to a target directory (long)": {
+   "script": "c1bacf3ac1a5f45a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\n"
+   }
+  },
+  "real tldr cp: copy over an existing file": {
+   "script": "bb10bf3dc26f7b78",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: copy with parents": {
+   "script": "bd86510f5e76c88d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dest\ndest/src\ndest/src/lib\ndest/src/lib/math.rs\n"
+   }
+  },
+  "real tldr cp: copy with parents to a missing directory": {
+   "script": "31d1958ab18c776d",
+   "status": 1,
+   "stderr": {
+    "text": "cp: with --parents, the destination must be a directory\nTry 'cp --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: follow a symbolic link": {
+   "script": "2891c1354e99fc4d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nnot-a-link\n"
+   }
+  },
+  "real tldr cp: follow a symbolic link (long)": {
+   "script": "48b9cb747f6003e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: interactive copy (long)": {
+   "script": "8af4df3ca81fc27f",
+   "status": 0,
+   "stderr": {
+    "text": "cp: overwrite 'b.txt'? "
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "real tldr cp: interactive copy accepted": {
+   "script": "907c2d53684cfa5c",
+   "status": 0,
+   "stderr": {
+    "text": "cp: overwrite 'dir/a.txt'? "
+   },
+   "stdout": {
+    "text": "new\n"
+   }
+  },
+  "real tldr cp: interactive copy declined": {
+   "script": "25fa161777deae51",
+   "status": 0,
+   "stderr": {
+    "text": "cp: overwrite 'dir/a.txt'? "
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: interactive copy with no conflict": {
+   "script": "c10b54b96c10dd6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr cp: recursive copy (long)": {
+   "script": "d3b6c9d1eb29933f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "copy/lib/math.rs\ncopy/main.rs\n"
+   }
+  },
+  "real tldr cp: recursive copy into an existing directory": {
+   "script": "8680c2bd1afb1cf6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dest\ndest/src\ndest/src/empty\ndest/src/lib\ndest/src/lib/math.rs\ndest/src/main.rs\n"
+   }
+  },
+  "real tldr cp: recursive copy into itself": {
+   "script": "12dd75019913fe5b",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot copy a directory, 'src', into itself, 'src/lib/src'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: recursive copy of a directory's contents": {
+   "script": "474900eb65913bea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dest\ndest/empty\ndest/lib\ndest/lib/math.rs\ndest/main.rs\n"
+   }
+  },
+  "real tldr cp: recursive copy of a missing directory": {
+   "script": "a7aa0adf4cd794b9",
+   "status": 1,
+   "stderr": {
+    "text": "cp: cannot stat 'nosrc': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: recursive copy of an empty directory": {
+   "script": "7a3f850ce27fa0ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n"
+   }
+  },
+  "real tldr cp: recursive copy of hidden files": {
+   "script": "3caf5c9e3d8a3b72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "secret\n"
+   }
+  },
+  "real tldr cp: recursive copy to a new directory": {
+   "script": "5e28c9ad63ad96fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "copy\ncopy/empty\ncopy/lib\ncopy/lib/math.rs\ncopy/main.rs\n"
+   }
+  },
+  "real tldr cp: recursive copy with a trailing slash": {
+   "script": "ec9711336f1916da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "copy/lib/math.rs\ncopy/main.rs\n"
+   }
+  },
+  "real tldr cp: target directory that is missing": {
+   "script": "28b149f55d022e54",
+   "status": 1,
+   "stderr": {
+    "text": "cp: target directory 'nodir': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr cp: verbose copy of one file": {
+   "script": "2a840075567b8f1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a.txt' -> 'c.txt'\n"
+   }
+  },
+  "real tldr cp: verbose recursive copy": {
+   "script": "ed7b67156890aa31",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'src' -> 'copy'\n'src/empty' -> 'copy/empty'\n'src/lib' -> 'copy/lib'\n'src/lib/math.rs' -> 'copy/lib/math.rs'\n'src/main.rs' -> 'copy/main.rs'\n"
+   }
+  },
+  "real tldr cp: verbose recursive copy (long)": {
+   "script": "27abe95eb3cd5710",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'docs' -> 'copy'\n'docs/README.md' -> 'copy/README.md'\n"
+   }
+  },
+  "real tldr cut: fields of NUL-terminated find output": {
+   "script": "e4166e3f516f03dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n.hidden\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr cut: fields of NUL-terminated find output (long)": {
+   "script": "76db80bc61061d32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n.hidden\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr diff: directories brief": {
+   "script": "f30615c25c98c2f0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files a/f and b/f differ\nOnly in b: newfile\nOnly in a: only\n"
+   }
+  },
+  "real tldr diff: directories brief (long)": {
+   "script": "9dfae2b56df8d107",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Files a/f and b/f differ\nOnly in b: newfile\nOnly in a: only\n"
+   }
+  },
+  "real tldr diff: directories recursively": {
+   "script": "980f04af070e7f15",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -r a/f b/f\n1c1\n< 1\n---\n> 2\nOnly in b: newfile\nOnly in a: only\n"
+   }
+  },
+  "real tldr diff: directories recursively (long)": {
+   "script": "91c193ab4710735e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff --recursive a/f b/f\n1c1\n< 1\n---\n> 2\nOnly in b: newfile\nOnly in a: only\n"
+   }
+  },
+  "real tldr diff: directories unified new-file": {
+   "script": "16ecb18f82de5362",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff -ruN a/f b/f\n--- a/f\t2020-01-01 00:00:00.000000000 +0000\n+++ b/f\t2020-01-01 00:00:00.000000000 +0000\n@@ -1 +1 @@\n-1\n+2\ndiff -ruN a/newfile b/newfile\n--- a/newfile\t1970-01-01 00:00:00.000000000 +0000\n+++ b/newfile\t2020-01-01 00:00:00.000000000 +0000\n@@ -0,0 +1 @@\n+x\n"
+   }
+  },
+  "real tldr diff: directories without -r": {
+   "script": "cde3bcc8d47177a7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "diff a/f b/f\n1c1\n< 1\n---\n> 2\nOnly in b: newfile\nOnly in a: only\nCommon subdirectories: a/sub and b/sub\n"
+   }
+  },
+  "real tldr diff: directory and file": {
+   "script": "8bb241a0482b51cf",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< 1\n---\n> 2\n"
+   }
+  },
+  "real tldr diff: identical directories": {
+   "script": "65baaaab8d9d395d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "same\n"
+   }
+  },
+  "real tldr diff: ignoring white space": {
+   "script": "1e4740bb749939d3",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< two\n---\n> 2\n4a5\n> five\n"
+   }
+  },
+  "real tldr diff: ignoring white space (long)": {
+   "script": "12915c400b29a5ef",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< two\n---\n> 2\n4a5\n> five\n"
+   }
+  },
+  "real tldr diff: ignoring white space of an empty file": {
+   "script": "cf36a16a17850779",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0a1\n> a\n"
+   }
+  },
+  "real tldr diff: ignoring white space of binary files": {
+   "script": "8f52d4c5fdabf104",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files old and new differ\n"
+   }
+  },
+  "real tldr diff: ignoring white space of identical files": {
+   "script": "02e55f5bc1c4e51d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: ignoring white space of whitespace-only changes": {
+   "script": "c20f503ce1ab065c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: ignoring white space with CRLF": {
+   "script": "54a4c179162cbee1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: ignoring white space with a missing file": {
+   "script": "b4f73b0b74f54d7d",
+   "status": 2,
+   "stderr": {
+    "text": "diff: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: ignoring white space without final newlines": {
+   "script": "f046519c50d5c899",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n\\ No newline at end of file\n---\n> c\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr diff: minimal (long)": {
+   "script": "0be3364646c2cd0d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m2,3c2,3\u001b[0m\n\u001b[31m< two\u001b[0m\n\u001b[31m< three\u001b[0m\n---\n\u001b[32m> 2\u001b[0m\n\u001b[32m> three  \u001b[0m\n\u001b[36m4a5\u001b[0m\n\u001b[32m> five\u001b[0m\n"
+   }
+  },
+  "real tldr diff: minimal in color": {
+   "script": "202ec73d6167b915",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m2,3c2,3\u001b[0m\n\u001b[31m< two\u001b[0m\n\u001b[31m< three\u001b[0m\n---\n\u001b[32m> 2\u001b[0m\n\u001b[32m> three  \u001b[0m\n\u001b[36m4a5\u001b[0m\n\u001b[32m> five\u001b[0m\n"
+   }
+  },
+  "real tldr diff: minimal in color of an empty file": {
+   "script": "7278950c0110470b",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m0a1\u001b[0m\n\u001b[32m> a\u001b[0m\n"
+   }
+  },
+  "real tldr diff: minimal in color of binary files": {
+   "script": "5d1092d9d66d6fc9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files old and new differ\n"
+   }
+  },
+  "real tldr diff: minimal in color of identical files": {
+   "script": "d7b2336d5d158efa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: minimal in color of whitespace-only changes": {
+   "script": "da96fd0bb48fa899",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m1,2c1,2\u001b[0m\n\u001b[31m< a b\u001b[0m\n\u001b[31m<   c\u001b[0m\n---\n\u001b[32m> a  b\u001b[0m\n\u001b[32m> c\u001b[0m\n"
+   }
+  },
+  "real tldr diff: minimal in color with CRLF": {
+   "script": "a5766c603a2dc9e8",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m1,2c1,2\u001b[0m\n\u001b[31m< a\r\u001b[0m\n\u001b[31m< b\r\u001b[0m\n---\n\u001b[32m> a\u001b[0m\n\u001b[32m> b\u001b[0m\n"
+   }
+  },
+  "real tldr diff: minimal in color with a missing file": {
+   "script": "2bdf84d59b64c10c",
+   "status": 2,
+   "stderr": {
+    "text": "diff: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: minimal in color without final newlines": {
+   "script": "c859733e0b11e852",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\u001b[36m2c2\u001b[0m\n\u001b[31m< b\u001b[0m\n\\ No newline at end of file\n---\n\u001b[32m> c\u001b[0m\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr diff: normal": {
+   "script": "8b8626ea5db8d44e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2,3c2,3\n< two\n< three\n---\n> 2\n> three  \n4a5\n> five\n"
+   }
+  },
+  "real tldr diff: normal of an empty file": {
+   "script": "ae4f15f7ac136380",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0a1\n> a\n"
+   }
+  },
+  "real tldr diff: normal of binary files": {
+   "script": "9d2f98117205ef82",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files old and new differ\n"
+   }
+  },
+  "real tldr diff: normal of identical files": {
+   "script": "2bc8348a2ac4aa96",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: normal of whitespace-only changes": {
+   "script": "f84d5ba4944f54c7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2c1,2\n< a b\n<   c\n---\n> a  b\n> c\n"
+   }
+  },
+  "real tldr diff: normal with CRLF": {
+   "script": "831a75d40960f0f7",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1,2c1,2\n< a\r\n< b\r\n---\n> a\n> b\n"
+   }
+  },
+  "real tldr diff: normal with a missing file": {
+   "script": "47524e253ffe2c53",
+   "status": 2,
+   "stderr": {
+    "text": "diff: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: normal without final newlines": {
+   "script": "d7241f0d24b5cdea",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2c2\n< b\n\\ No newline at end of file\n---\n> c\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr diff: patch (long)": {
+   "script": "506248846c4139ce",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ nope\t1970-01-01 00:00:00.000000000 +0000\n@@ -1,4 +0,0 @@\n-one\n-two\n-three\n-four\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty": {
+   "script": "383d7eb8b925d44b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,4 +1,5 @@\n one\n-two\n-three\n+2\n+three  \n four\n+five\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty of an empty file": {
+   "script": "af32204b02cf08ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -0,0 +1 @@\n+a\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty of binary files": {
+   "script": "7f086eeac582f97a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1 +1 @@\n-a\u0000b\n\\ No newline at end of file\n+a\u0000c\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty of identical files": {
+   "script": "00403984e90c13cb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty of whitespace-only changes": {
+   "script": "8826a96632d74eac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n-a b\n-  c\n+a  b\n+c\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty with CRLF": {
+   "script": "bcf3e5ad634c4524",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n-a\r\n-b\r\n+a\n+b\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty with a missing file": {
+   "script": "c8151faed6943ec9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t1970-01-01 00:00:00.000000000 +0000\n@@ -1 +0,0 @@\n-a\n"
+   }
+  },
+  "real tldr diff: patch treating missing files as empty without final newlines": {
+   "script": "564c1bc398e10d91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr diff: side by side": {
+   "script": "4fdfbf92bb330dfa",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\t\t\t\t\t\t\t\tone\ntwo\t\t\t\t\t\t\t      |\t2\nthree\t\t\t\t\t\t\t      |\tthree  \nfour\t\t\t\t\t\t\t\tfour\n\t\t\t\t\t\t\t      >\tfive\n"
+   }
+  },
+  "real tldr diff: side by side (long)": {
+   "script": "025675eccd5a086f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\t\t\t\t\t\t\t\tone\ntwo\t\t\t\t\t\t\t      |\t2\nthree\t\t\t\t\t\t\t      |\tthree  \nfour\t\t\t\t\t\t\t\tfour\n\t\t\t\t\t\t\t      >\tfive\n"
+   }
+  },
+  "real tldr diff: side by side of an empty file": {
+   "script": "1250b7473d9d7eb9",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "\t\t\t\t\t\t\t      >\ta\n"
+   }
+  },
+  "real tldr diff: side by side of binary files": {
+   "script": "de7bc62c7222e611",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files old and new differ\n"
+   }
+  },
+  "real tldr diff: side by side of identical files": {
+   "script": "1713b0bc442855cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\t\t\t\t\t\t\t\ta\nb\t\t\t\t\t\t\t\tb\n"
+   }
+  },
+  "real tldr diff: side by side of whitespace-only changes": {
+   "script": "c25e57f89e95de12",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\t\t\t\t\t\t\t      |\ta  b\n  c\t\t\t\t\t\t\t      |\tc\n"
+   }
+  },
+  "real tldr diff: side by side with CRLF": {
+   "script": "37ea923fbe3c8d60",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\r\t\t\t\t\t\t\t      |\ta\nb\r\t\t\t\t\t\t\t      |\tb\n"
+   }
+  },
+  "real tldr diff: side by side with a missing file": {
+   "script": "43350d50b63fcc3a",
+   "status": 2,
+   "stderr": {
+    "text": "diff: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: side by side without final newlines": {
+   "script": "8f5e0c14af72cf82",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\t\t\t\t\t\t\t\ta\nb\t\t\t\t\t\t\t      |\tc"
+   }
+  },
+  "real tldr diff: unified": {
+   "script": "dc6e5735417fbf4f",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,4 +1,5 @@\n one\n-two\n-three\n+2\n+three  \n four\n+five\n"
+   }
+  },
+  "real tldr diff: unified (long)": {
+   "script": "91cf441fc202b1bd",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,4 +1,5 @@\n one\n-two\n-three\n+2\n+three  \n four\n+five\n"
+   }
+  },
+  "real tldr diff: unified of an empty file": {
+   "script": "d2bab095a23e253a",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -0,0 +1 @@\n+a\n"
+   }
+  },
+  "real tldr diff: unified of binary files": {
+   "script": "d5f3308628c7c744",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Binary files old and new differ\n"
+   }
+  },
+  "real tldr diff: unified of identical files": {
+   "script": "78d5a3600a9cc001",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: unified of whitespace-only changes": {
+   "script": "3345f37922a4ca68",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n-a b\n-  c\n+a  b\n+c\n"
+   }
+  },
+  "real tldr diff: unified with CRLF": {
+   "script": "b2d8db35adf480df",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n-a\r\n-b\r\n+a\n+b\n"
+   }
+  },
+  "real tldr diff: unified with a missing file": {
+   "script": "ce67b2fd1d1cda39",
+   "status": 2,
+   "stderr": {
+    "text": "diff: new: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr diff: unified without final newlines": {
+   "script": "e3d4019707323921",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "--- old\t2020-01-01 00:00:00.000000000 +0000\n+++ new\t2020-01-01 00:00:00.000000000 +0000\n@@ -1,2 +1,2 @@\n a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+   }
+  },
+  "real tldr dirname: no operand": {
+   "script": "9789285ed79d6b29",
+   "status": 1,
+   "stderr": {
+    "text": "dirname: missing operand\nTry 'dirname --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr dirname: parent of ''": {
+   "script": "0b07ec72db5e1cc9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "real tldr dirname: parent of '../x/y'": {
+   "script": "1bcb042c759a2147",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../x\n"
+   }
+  },
+  "real tldr dirname: parent of './x'": {
+   "script": "a5dc83e694979937",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "real tldr dirname: parent of '/'": {
+   "script": "a5c350f0dba3326b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "real tldr dirname: parent of '//'": {
+   "script": "f672066880e5f9f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "real tldr dirname: parent of '/usr'": {
+   "script": "59a6bfe63416aa49",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n"
+   }
+  },
+  "real tldr dirname: parent of 'a//b//'": {
+   "script": "77f1064e3a3df56d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "real tldr dirname: parent of 'file'": {
+   "script": "33a8d8866aba9a71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n"
+   }
+  },
+  "real tldr dirname: parent of 'path/to/dir/'": {
+   "script": "9dace4dcca7128f0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "path/to\n"
+   }
+  },
+  "real tldr dirname: parent of 'path/to/file'": {
+   "script": "3dcd903d4f3ac152",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "path/to\n"
+   }
+  },
+  "real tldr dirname: several paths": {
+   "script": "b7824b3c1d56605f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nc/d\n/\n"
+   }
+  },
+  "real tldr dirname: zero delimited": {
+   "script": "5841969fc8cce9f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   a  \\0   c  \\0\n0000004\n"
+   }
+  },
+  "real tldr dirname: zero delimited (long)": {
+   "script": "4e96e41b7999a44f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n"
+   }
+  },
+  "real tldr file: a missing file": {
+   "script": "7843841a6322c49a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nope: cannot open `nope' (No such file or directory)\nstatus=0\n"
+   }
+  },
+  "real tldr file: brief (long)": {
+   "script": "d4d563dae18a4a81",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text\n"
+   }
+  },
+  "real tldr file: brief ascii text": {
+   "script": "321f997f7003d217",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text\n"
+   }
+  },
+  "real tldr file: brief binary zeros": {
+   "script": "c8d29db0f502d928",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "real tldr file: brief crlf text": {
+   "script": "7013800d5b5720fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text, with CRLF line terminators\n"
+   }
+  },
+  "real tldr file: brief directory": {
+   "script": "4bc9a5ce92c50214",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "directory\n"
+   }
+  },
+  "real tldr file: brief empty": {
+   "script": "4f4d4a58f0482227",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\n"
+   }
+  },
+  "real tldr file: brief gzip": {
+   "script": "4aa743ab31eb0850",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "gzip compressed data, from Unix, original size modulo 2^32 50331648\n"
+   }
+  },
+  "real tldr file: brief json": {
+   "script": "691548c131209408",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "JSON text data\n"
+   }
+  },
+  "real tldr file: brief no final newline": {
+   "script": "9db83658f4b45ec4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ASCII text, with no line terminators\n"
+   }
+  },
+  "real tldr file: brief pdf": {
+   "script": "27f7c905c5d81b99",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "PDF document, version 1.4\n"
+   }
+  },
+  "real tldr file: brief png": {
+   "script": "59a1dff3fb0c4581",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "PNG image data, 1 x 1, 8-bit/color RGBA, non-interlaced\n"
+   }
+  },
+  "real tldr file: brief shell script": {
+   "script": "9df5d8c67077fd75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "POSIX shell script, ASCII text executable\n"
+   }
+  },
+  "real tldr file: brief symbolic link": {
+   "script": "a53a346a67ffc4ae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "symbolic link to target\n"
+   }
+  },
+  "real tldr file: brief utf-8 text": {
+   "script": "4d09a3def97ecf34",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Unicode text, UTF-8 text\n"
+   }
+  },
+  "real tldr file: brief zip": {
+   "script": "ac184b211022e6f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\n"
+   }
+  },
+  "real tldr file: describe ascii text": {
+   "script": "839571486cb6f159",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text\n"
+   }
+  },
+  "real tldr file: describe binary zeros": {
+   "script": "d13a8215432bfa19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: data\n"
+   }
+  },
+  "real tldr file: describe crlf text": {
+   "script": "12f966b3ca6d06ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text, with CRLF line terminators\n"
+   }
+  },
+  "real tldr file: describe directory": {
+   "script": "7e3ff1cda7b359a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: directory\n"
+   }
+  },
+  "real tldr file: describe empty": {
+   "script": "6df6024e208fc7be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: empty\n"
+   }
+  },
+  "real tldr file: describe gzip": {
+   "script": "9dc0ed5a24b3d96d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: gzip compressed data, from Unix, original size modulo 2^32 50331648\n"
+   }
+  },
+  "real tldr file: describe json": {
+   "script": "6f68ec21416dccc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: JSON text data\n"
+   }
+  },
+  "real tldr file: describe no final newline": {
+   "script": "d7db98401f193c33",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text, with no line terminators\n"
+   }
+  },
+  "real tldr file: describe pdf": {
+   "script": "4005c157edacecbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: PDF document, version 1.4\n"
+   }
+  },
+  "real tldr file: describe png": {
+   "script": "dc272b1a34f07eeb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: PNG image data, 1 x 1, 8-bit/color RGBA, non-interlaced\n"
+   }
+  },
+  "real tldr file: describe shell script": {
+   "script": "c1e4f315b843bc4a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: POSIX shell script, ASCII text executable\n"
+   }
+  },
+  "real tldr file: describe symbolic link": {
+   "script": "7e3f6420cfcce27e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: symbolic link to target\n"
+   }
+  },
+  "real tldr file: describe utf-8 text": {
+   "script": "542ccb88b0b91e40",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: Unicode text, UTF-8 text\n"
+   }
+  },
+  "real tldr file: describe zip": {
+   "script": "7658931c4a1f5bbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: data\n"
+   }
+  },
+  "real tldr file: keep going": {
+   "script": "2386e82249a0e6b0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text\n"
+   }
+  },
+  "real tldr file: keep going (long)": {
+   "script": "d728b2cc8f9bd6c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: JSON text data\\012- , ASCII text\n"
+   }
+  },
+  "real tldr file: mime (long)": {
+   "script": "3c41baef587eaeb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/plain; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime ascii text": {
+   "script": "026925a2ccd48109",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/plain; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime binary zeros": {
+   "script": "3656cefd7736b1ac",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: application/octet-stream; charset=binary\n"
+   }
+  },
+  "real tldr file: mime crlf text": {
+   "script": "82cb38e2e5b37c7e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/plain; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime directory": {
+   "script": "ca384e57f3d5e6d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: inode/directory; charset=binary\n"
+   }
+  },
+  "real tldr file: mime empty": {
+   "script": "d98b888225e672f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: inode/x-empty; charset=binary\n"
+   }
+  },
+  "real tldr file: mime gzip": {
+   "script": "e75291101c7c1349",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: application/gzip; charset=binary\n"
+   }
+  },
+  "real tldr file: mime json": {
+   "script": "cb6b5a43ff3986e1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: application/json; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime no final newline": {
+   "script": "1760a1bc6e25a9d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/plain; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime pdf": {
+   "script": "4851dffe02400efb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: application/pdf; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime png": {
+   "script": "f7161a7c6b9464a1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: image/png; charset=binary\n"
+   }
+  },
+  "real tldr file: mime shell script": {
+   "script": "cc291ebbb071827b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/x-shellscript; charset=us-ascii\n"
+   }
+  },
+  "real tldr file: mime symbolic link": {
+   "script": "b55aa1299b8ad4f9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: inode/symlink; charset=binary\n"
+   }
+  },
+  "real tldr file: mime utf-8 text": {
+   "script": "527b6998a6b0ccd5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: text/plain; charset=utf-8\n"
+   }
+  },
+  "real tldr file: mime zip": {
+   "script": "b6cfaca68b577a95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: application/octet-stream; charset=binary\n"
+   }
+  },
+  "real tldr file: names from a pipe with -f": {
+   "script": "0f73b92ea148012c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a: ASCII text\nb: empty\n"
+   }
+  },
+  "real tldr file: several files": {
+   "script": "bec3b2cef191dc5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a: ASCII text\nb: empty\nc: directory\n"
+   }
+  },
+  "real tldr file: special files": {
+   "script": "461c69cd0e5230db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text\n"
+   }
+  },
+  "real tldr file: special files (long)": {
+   "script": "9e13405796c72bea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/dev/null: empty\n"
+   }
+  },
+  "real tldr file: uncompress (long)": {
+   "script": "3ef7ec7f35d00f32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t: ASCII text\n"
+   }
+  },
+  "real tldr file: uncompress a zip": {
+   "script": "a46e2290f6e01830",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "t.zip: ERROR:[gzip: ] (data)\n"
+   }
+  },
+  "real tldr find: directories case-insensitively": {
+   "script": "92e5256c919f4626",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib\n"
+   }
+  },
+  "real tldr find: directories case-insensitively with no match": {
+   "script": "60a658f81174a5a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "real tldr find: empty directories deleted verbosely": {
+   "script": "83f38ee4b643b628",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/empty\n./x\n./x/y\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr find: empty entries": {
+   "script": "42e96eee0755ed8b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./empty.txt\n./src/empty\n"
+   }
+  },
+  "real tldr find: empty files deleted verbosely": {
+   "script": "008cd31a1b13df51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./empty.txt\ndocs\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr find: excluding a path": {
+   "script": "2cef5cb1b963bd91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/main.rs\n"
+   }
+  },
+  "real tldr find: excluding a path with !": {
+   "script": "3f84fd780aaa22cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.hidden/key\n./docs/README.md\n./empty.txt\n./notes.txt\n"
+   }
+  },
+  "real tldr find: exec per file": {
+   "script": "5b24c06592dc3382",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 ./src/main.rs\n2 ./src/lib/math.rs\n"
+   }
+  },
+  "real tldr find: exec per file on a missing command": {
+   "script": "2e7683ac90d43b71",
+   "status": 0,
+   "stderr": {
+    "text": "find: ‘nosuchcmd’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr find: exec per file that fails": {
+   "script": "c4528c5cd289f477",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr find: files by extension": {
+   "script": "e09b5741dd9681ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/math.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: files by extension from a path": {
+   "script": "1a6efcab2a5606a5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/lib/math.rs\nsrc/main.rs\n"
+   }
+  },
+  "real tldr find: files by extension in a missing directory": {
+   "script": "ce6a39079ce91944",
+   "status": 1,
+   "stderr": {
+    "text": "find: ‘nosuch’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr find: files by extension with an absolute path": {
+   "script": "ba6cd0c06bf1e1b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/src/lib/math.rs\n/tmp/w/src/main.rs\n"
+   }
+  },
+  "real tldr find: files by extension with no match": {
+   "script": "bc3881ab7167f3b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr find: files modified long ago": {
+   "script": "9ddf814adb3ebf6e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./notes.txt\n"
+   }
+  },
+  "real tldr find: files modified today to one command": {
+   "script": "23a2229f771951dd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.hidden/key\n./docs/README.md\n./empty.txt\n./notes.txt\n./src/lib/math.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: follow links": {
+   "script": "e58fc4a00e1b221a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./slink/main.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: maxdepth and mindepth": {
+   "script": "d0ba74f961e2c0c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.hidden/key\n./docs/README.md\n./src/empty\n./src/lib\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: multiple path and name patterns": {
+   "script": "b4987f2f2047ad95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./notes.txt\n./src/lib/math.rs\n"
+   }
+  },
+  "real tldr find: multiple path and name patterns with -o": {
+   "script": "bd24c556b01b5153",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md\n./src/empty\n./src/lib\n./src/lib/math.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: name with a character class": {
+   "script": "219310a389ee257b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./notes.txt\n./src/lib/math.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: newer than a file": {
+   "script": "5c0f9576076e34c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./empty.txt\n./notes.txt\n"
+   }
+  },
+  "real tldr find: print0 to xargs": {
+   "script": "adbc5d8c433e9f86",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/math.rs:1\n./src/main.rs:1\n"
+   }
+  },
+  "real tldr find: prune a directory": {
+   "script": "d4f39e2ca2eb5705",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./.hidden/key\n./docs/README.md\n./empty.txt\n./notes.txt\n"
+   }
+  },
+  "real tldr find: regex": {
+   "script": "a76e1e84e025d9ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./src/lib/math.rs\n./src/main.rs\n"
+   }
+  },
+  "real tldr find: size in blocks and bytes": {
+   "script": "9ff1717e1664e27f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./f0\n./f4\n./f4\n./f1000\n"
+   }
+  },
+  "real tldr find: size range at depth 1": {
+   "script": "a5014bea1b41eb11",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./big.bin\n"
+   }
+  },
+  "real tldr find: type l": {
+   "script": "46a399bb5b5f5fef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./link\n"
+   }
+  },
+  "real tldr find: unquoted pattern that matches in the cwd": {
+   "script": "b82c2e2dd7f75108",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./x.rs\n"
+   }
+  },
+  "real tldr grep: recursive ignoring binary files": {
+   "script": "959165374ea0ae44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md:TODO here\n./src/lib/math.rs:// TODO: sub\n"
+   }
+  },
+  "real tldr grep: recursive ignoring binary files (long)": {
+   "script": "e1bef29e72e9ccee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "./docs/README.md:TODO here\n./src/lib/math.rs:// TODO: sub\n"
+   }
+  },
+  "real tldr grep: recursive in a directory": {
+   "script": "eef3b1b6c4b34050",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src/lib/math.rs:// TODO: sub\n"
+   }
+  },
+  "real tldr grep: recursive in a missing directory": {
+   "script": "436cc124d228917f",
+   "status": 2,
+   "stderr": {
+    "text": "grep: nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr grep: recursive including binary files": {
+   "script": "399718b4e9b93e4e",
+   "status": 0,
+   "stderr": {
+    "text": "grep: ./src/blob.bin: binary file matches\n"
+   },
+   "stdout": {
+    "text": "./docs/README.md:TODO here\n./src/lib/math.rs:// TODO: sub\n"
+   }
+  },
+  "real tldr grep: recursive with no match": {
+   "script": "b81e7dacff1d2dde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr link: existing new name": {
+   "script": "042c479eff2f7540",
+   "status": 1,
+   "stderr": {
+    "text": "link: cannot create link 'b.txt' to 'a.txt': File exists\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr link: extra operand": {
+   "script": "a56b582af21eff0d",
+   "status": 1,
+   "stderr": {
+    "text": "link: extra operand ‘c’\nTry 'link --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr link: hard link": {
+   "script": "e12d0f7fe60802f3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr link: missing existing file": {
+   "script": "d7f795f4fe644066",
+   "status": 1,
+   "stderr": {
+    "text": "link: cannot create link 'hard' to 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ln: dangling symbolic link": {
+   "script": "6a1236c34ec39c7d",
+   "status": 1,
+   "stderr": {
+    "text": "cat: link: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "nope.txt\n"
+   }
+  },
+  "real tldr ln: force a symbolic link": {
+   "script": "fbbeef37807b5173",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "real tldr ln: force a symbolic link (long)": {
+   "script": "ad54a00dbcb263aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\n"
+   }
+  },
+  "real tldr ln: hard link": {
+   "script": "bd18d2dbc38f41cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\nsame\n"
+   }
+  },
+  "real tldr ln: hard link into a directory": {
+   "script": "82397c76a1a18d7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr ln: hard link to a directory": {
+   "script": "d6a59d8473547bc8",
+   "status": 1,
+   "stderr": {
+    "text": "ln: dir: hard link not allowed for directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ln: hard link to a missing file": {
+   "script": "6bebfe94cc4841f7",
+   "status": 1,
+   "stderr": {
+    "text": "ln: failed to access '/tmp/w/nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ln: relative symbolic link": {
+   "script": "713a8ce1da7757d2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\none\n"
+   }
+  },
+  "real tldr ln: relative symbolic link (long)": {
+   "script": "d5d289a6036b4365",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr ln: symbolic link in a subdirectory": {
+   "script": "6c917edf3700e078",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr ln: symbolic link over an existing file": {
+   "script": "f0e487bb6a1649fd",
+   "status": 1,
+   "stderr": {
+    "text": "ln: failed to create symbolic link 'b.txt': File exists\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ln: symbolic link to a directory": {
+   "script": "06faad8ed6665730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x\n"
+   }
+  },
+  "real tldr ls: a missing path": {
+   "script": "ba056ef197219154",
+   "status": 2,
+   "stderr": {
+    "text": "ls: cannot access 'nosuch': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ls: a missing path among others": {
+   "script": "d92edcde89d744d3",
+   "status": 2,
+   "stderr": {
+    "text": "ls: cannot access 'nosuch': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "notes.txt\n\nsrc:\nempty\nlib\nmain.rs\n"
+   }
+  },
+  "real tldr ls: all files": {
+   "script": "8e1412de1e45f30b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.hidden\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr ls: all files (long)": {
+   "script": "47e1e0821197839e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\n.hidden\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr ls: almost all files": {
+   "script": "2c52ecd72bb83da8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden\ndocs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr ls: classify": {
+   "script": "f802b8f10c0a0653",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs/\nempty.txt\nlink@\nnotes.txt\nsrc/\n"
+   }
+  },
+  "real tldr ls: classify (long)": {
+   "script": "fa55aa3bc2646d75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty/\nlib/\nmain.rs\n"
+   }
+  },
+  "real tldr ls: comma separated": {
+   "script": "f61533282abc581a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs, empty.txt, notes.txt, src\n"
+   }
+  },
+  "real tldr ls: directory itself": {
+   "script": "3d8f1bbcf6ac258c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src\n"
+   }
+  },
+  "real tldr ls: hidden directory": {
+   "script": "3349aec0ffd0428d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n..\nkey\n"
+   }
+  },
+  "real tldr ls: names needing quotes": {
+   "script": "6ddcdedfc9f8ea5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nit's\nx*y\n"
+   }
+  },
+  "real tldr ls: natural version sort": {
+   "script": "3c2e7a1c467a6926",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f1\nf9\nf10\nf100\n"
+   }
+  },
+  "real tldr ls: one file": {
+   "script": "30bf9fc8b79f46fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "notes.txt\n"
+   }
+  },
+  "real tldr ls: one per line": {
+   "script": "b170e1e90445a0c6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr ls: one per line of a subdirectory": {
+   "script": "7460c7caa1d945b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty\nlib\nmain.rs\n"
+   }
+  },
+  "real tldr ls: one per line of names needing quotes": {
+   "script": "95313368d778ccde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b\nit's\n"
+   }
+  },
+  "real tldr ls: only directories": {
+   "script": "024fdea038f20ddc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs/\nsrc/\n"
+   }
+  },
+  "real tldr ls: only directories (long)": {
+   "script": "c1fbbf4c6d39bb2c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs/\nsrc/\n"
+   }
+  },
+  "real tldr ls: only directories when there are none": {
+   "script": "3bf1600c83477cb0",
+   "status": 2,
+   "stderr": {
+    "text": "ls: cannot access '*/': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr ls: recursive": {
+   "script": "c1c8049290099128",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\ndocs\nempty.txt\nnotes.txt\nsrc\n\n./docs:\nREADME.md\n\n./src:\nempty\nlib\nmain.rs\n\n./src/empty:\n\n./src/lib:\nmath.rs\n"
+   }
+  },
+  "real tldr ls: recursive (long)": {
+   "script": "d9c0075037419814",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src:\nempty\nlib\nmain.rs\n\nsrc/empty:\n\nsrc/lib:\nmath.rs\n"
+   }
+  },
+  "real tldr ls: reverse": {
+   "script": "ecafeb3803db79f8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "src\nnotes.txt\nempty.txt\ndocs\n"
+   }
+  },
+  "real tldr ls: several directories": {
+   "script": "4c78d040dfcdefea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs:\nREADME.md\n\nsrc:\nempty\nlib\nmain.rs\n"
+   }
+  },
+  "real tldr ls: sort by extension": {
+   "script": "46b312c41a6249ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d\nc.md\na.rs\nb.txt\n"
+   }
+  },
+  "real tldr ls: sorted by size in reverse": {
+   "script": "255ad6237bc3a3e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nc\nb\n"
+   }
+  },
+  "real tldr ls: sorted by size recursively": {
+   "script": "d997c7601cc14615",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "big\nsmall\nmid\ntwo\n.:\nbig\nsmall\nt\n\n./t:\nmid\ntwo\n"
+   }
+  },
+  "real tldr ls: sorted by time reversed": {
+   "script": "dc0f6e9147069773",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "real tldr ls: sorted by time reversed (long)": {
+   "script": "dbb93165e46b4498",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\nc\n"
+   }
+  },
+  "real tldr mkdir: create directories": {
+   "script": "565b5adf5167967c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d1\nd2\n"
+   }
+  },
+  "real tldr mkdir: create with parents": {
+   "script": "ba658595dbcba830",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".\n./a\n./a/b\n./c\n./c/d\n"
+   }
+  },
+  "real tldr mkdir: create with parents (long)": {
+   "script": "ba2029db463675c7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\na/b\n"
+   }
+  },
+  "real tldr mkdir: name with spaces": {
+   "script": "b7390eea0075c6c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "my dir\n"
+   }
+  },
+  "real tldr mkdir: nested brace expansion": {
+   "script": "179832685efed3dc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "27\nh\ni\nj\n"
+   }
+  },
+  "real tldr mkdir: parents of an existing directory": {
+   "script": "5b623bdce1a7eb5f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "real tldr mkdir: parents through a file": {
+   "script": "27164a82e5a3f080",
+   "status": 1,
+   "stderr": {
+    "text": "mkdir: cannot create directory ‘f’: Not a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mkdir: verbose parents": {
+   "script": "350c13a38c5f0bca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "mkdir: created directory 'a'\nmkdir: created directory 'a/b'\nmkdir: created directory 'a/b/c'\n"
+   }
+  },
+  "real tldr mktemp: custom directory": {
+   "script": "53a3d99d28a6f53c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: custom directory (long)": {
+   "script": "7a397419b9899dec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: custom file name template": {
+   "script": "963f2917871ed84b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: custom path template": {
+   "script": "fa119077f5a478e9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: directory": {
+   "script": "15fbefc44547debe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: directory (long)": {
+   "script": "2ce62acdd53c5cbf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: dry run": {
+   "script": "0152898faad0eea3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nabsent\n"
+   }
+  },
+  "real tldr mktemp: dry run (long)": {
+   "script": "1bec35b8ed2f7989",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nabsent\n"
+   }
+  },
+  "real tldr mktemp: empty temporary file": {
+   "script": "616557925ce4ece0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: quiet failure": {
+   "script": "f20c18ce848ac4ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr mktemp: suffix": {
+   "script": "8748f952f5580172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: template with a relative path": {
+   "script": "a6e2c4c8d1dcffb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "name ok\nexists\n"
+   }
+  },
+  "real tldr mktemp: two calls give two names": {
+   "script": "49853acbe3f45505",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "distinct\n"
+   }
+  },
+  "real tldr mv: force": {
+   "script": "e377b6462fc76fa3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr mv: force (long)": {
+   "script": "107dcd3215c08b91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "one\n"
+   }
+  },
+  "real tldr mv: interactive (long)": {
+   "script": "5182aeb44ae31f83",
+   "status": 0,
+   "stderr": {
+    "text": "mv: overwrite 'b.txt'? "
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr mv: interactive accepted": {
+   "script": "7cb7cd991b2e46dd",
+   "status": 0,
+   "stderr": {
+    "text": "mv: overwrite 'b.txt'? "
+   },
+   "stdout": {
+    "text": "b.txt\ndir\none\n"
+   }
+  },
+  "real tldr mv: interactive declined": {
+   "script": "7447b0197d2a70e6",
+   "status": 0,
+   "stderr": {
+    "text": "mv: overwrite 'b.txt'? "
+   },
+   "stdout": {
+    "text": "one\ntwo\n"
+   }
+  },
+  "real tldr mv: move a directory into itself": {
+   "script": "a1b6d557b5bef392",
+   "status": 1,
+   "stderr": {
+    "text": "mv: cannot move 'dir' to a subdirectory of itself, 'dir/sub'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: move a directory over a file": {
+   "script": "0f2bbf47c6e6ed3f",
+   "status": 1,
+   "stderr": {
+    "text": "mv: cannot overwrite non-directory 'a.txt' with directory 'dir'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: move a file over a directory": {
+   "script": "d7f12f216d7d6da4",
+   "status": 1,
+   "stderr": {
+    "text": "mv: cannot overwrite directory 'd2/a.txt' with non-directory 'a.txt'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: move into a directory": {
+   "script": "a010badcc31d8083",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".:\nb.txt\ndir\n\ndir:\na.txt\n"
+   }
+  },
+  "real tldr mv: move into a directory with a trailing slash": {
+   "script": "3f3e486ca4c003c0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\n"
+   }
+  },
+  "real tldr mv: move multiple files into a directory": {
+   "script": "5422a63e97ae948d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\n"
+   }
+  },
+  "real tldr mv: move multiple files to a non-directory": {
+   "script": "399b4a8714bee7db",
+   "status": 1,
+   "stderr": {
+    "text": "mv: target 'c.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: no clobber": {
+   "script": "be6be0db06cc5372",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\none\ntwo\n"
+   }
+  },
+  "real tldr mv: no clobber (long)": {
+   "script": "be79c82009816704",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\na.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr mv: no clobber without a conflict": {
+   "script": "124343124b849b9d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nb.txt\nc.txt\ndir\n"
+   }
+  },
+  "real tldr mv: rename a directory": {
+   "script": "a2616639d732ba14",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\ndir2\n"
+   }
+  },
+  "real tldr mv: rename a file": {
+   "script": "1237d8d8d59857e0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\nc.txt\ndir\none\n"
+   }
+  },
+  "real tldr mv: rename a file onto itself": {
+   "script": "2e9600b00aa36ff1",
+   "status": 1,
+   "stderr": {
+    "text": "mv: 'a.txt' and 'a.txt' are the same file\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: rename a file with spaces": {
+   "script": "f533d583b25f50d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\ndir\nnew name.txt\n"
+   }
+  },
+  "real tldr mv: rename a missing file": {
+   "script": "820b9b9a3650fbbe",
+   "status": 1,
+   "stderr": {
+    "text": "mv: cannot stat 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: rename into a missing directory": {
+   "script": "67ba06282da2348b",
+   "status": 1,
+   "stderr": {
+    "text": "mv: cannot move 'a.txt' to 'nodir/c.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr mv: rename over an existing file": {
+   "script": "44c3aa59a8383fae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\ndir\none\n"
+   }
+  },
+  "real tldr mv: target directory (long)": {
+   "script": "d43611dabc3a65a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\n"
+   }
+  },
+  "real tldr mv: target directory from find and xargs": {
+   "script": "5c210efad37f265f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x.log\ny.log\nz.log\n"
+   }
+  },
+  "real tldr mv: target directory with no input": {
+   "script": "b31fb5862113e9f5",
+   "status": 0,
+   "stderr": {
+    "text": "mv: missing file operand\nTry 'mv --help' for more information.\n"
+   },
+   "stdout": {
+    "text": "status=123\n"
+   }
+  },
+  "real tldr mv: verbose": {
+   "script": "d3befad9e79cb955",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "renamed 'a.txt' -> 'c.txt'\n"
+   }
+  },
+  "real tldr mv: verbose (long)": {
+   "script": "9d2c34724ff91a73",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "renamed 'a.txt' -> 'dir/a.txt'\nrenamed 'b.txt' -> 'dir/b.txt'\n"
+   }
+  },
+  "real tldr patch: a hunk that fails": {
+   "script": "4d8d9cf7a0068f7b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 FAILED at 1.\n1 out of 1 hunk FAILED -- saving rejects to file f.rej\nstatus=1\nf\nf.orig\nf.rej\n--- f\n+++ f\n@@ -1,5 +1,5 @@\n a\n-b\n+B\n c\n d\n-e\n+E\n"
+   }
+  },
+  "real tldr patch: already applied": {
+   "script": "fb9bfddfe832be60",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\npatching file f\nReversed (or previously applied) patch detected!  Assume -R? [n] \nApply anyway? [n] \nSkipping patch.\n1 out of 1 hunk ignored -- saving rejects to file f.rej\nstatus=1\nf\nf.rej\n"
+   }
+  },
+  "real tldr patch: apply to a specific file": {
+   "script": "dcf5dbdb1b27c18c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file target\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: apply to a specific file (long)": {
+   "script": "d5febb33ccbc21cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file target\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: apply with an offset": {
+   "script": "c453746ceb627801",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\nHunk #1 succeeded at 3 (offset 2 lines).\nx\ny\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: apply with names from the diff": {
+   "script": "a7f07eec2967829c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: apply with names from the diff (long)": {
+   "script": "daaed7a8af5cc28f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: dry run": {
+   "script": "2b0d8fe81de6a572",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "checking file f\na\nb\nc\nd\ne\n"
+   }
+  },
+  "real tldr patch: from stdin": {
+   "script": "4c58e9d1c188b10f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: garbage input": {
+   "script": "f06262a9dcab6209",
+   "status": 0,
+   "stderr": {
+    "text": "patch: **** Only garbage was found in the patch input.\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "real tldr patch: missing patch file": {
+   "script": "cc3bd814bfc8cee2",
+   "status": 2,
+   "stderr": {
+    "text": "patch: **** Can't open patch file nope.diff : No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr patch: missing target file": {
+   "script": "d315fc7d4aae5fa9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file nope\nHunk #1 FAILED at 1.\nCannot stat file nope, skipping backup\n1 out of 1 hunk FAILED -- saving rejects to file nope.rej\nstatus=1\n"
+   }
+  },
+  "real tldr patch: reverse": {
+   "script": "ff61df30b4742d41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\npatching file f\na\nb\nc\nd\ne\n"
+   }
+  },
+  "real tldr patch: reverse (long)": {
+   "script": "131efc38082a2502",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file f\npatching file f\na\nb\nc\nd\ne\n"
+   }
+  },
+  "real tldr patch: strip one component": {
+   "script": "5acb8c3108d7c7b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file src/f\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: strip one component (long)": {
+   "script": "006f8e8dfd770edb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file src/f\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr patch: strip zero components on an a/ b/ diff": {
+   "script": "a6ecac107cf114af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "can't find file to patch at input line 3\nPerhaps you used the wrong -p or --strip option?\nThe text leading up to this was:\n--------------------------\n|--- a/src/f\n|+++ b/src/f\n--------------------------\nFile to patch: \nSkip this patch? [y] \nSkipping patch.\n1 out of 1 hunk ignored\nstatus=1\n"
+   }
+  },
+  "real tldr patch: write the result to another file": {
+   "script": "da2c8b61496e7ebd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file out (read from proj/src/f)\na\nB\nc\nd\nE\na\nb\nc\nd\ne\n"
+   }
+  },
+  "real tldr patch: write the result to another file (long)": {
+   "script": "834b1cb80e464d0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "patching file out (read from proj/src/f)\na\nB\nc\nd\nE\n"
+   }
+  },
+  "real tldr readlink: canonicalize (long)": {
+   "script": "0e456c4d7ab884e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/sub\n"
+   }
+  },
+  "real tldr readlink: canonicalize .": {
+   "script": "8a192c6da9156609",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize dangling": {
+   "script": "c1254d811356c9ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/nope\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize existing": {
+   "script": "c6cde3df7f4fcf7f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n/tmp/w/real/f\n"
+   }
+  },
+  "real tldr readlink: canonicalize fl": {
+   "script": "bba6699c2c34df8e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize missing": {
+   "script": "c778a481f30ad7bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/nope/y\n"
+   }
+  },
+  "real tldr readlink: canonicalize nope/x": {
+   "script": "43b5562d60b37a72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr readlink: canonicalize real/./sub/../f": {
+   "script": "0439841a5d50de19",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize rl": {
+   "script": "a8d122f155a655b6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize rl/nope": {
+   "script": "2aad2542e9c4f52d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/nope\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: canonicalize rl/sub/..": {
+   "script": "2598349429191548",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\nstatus=0\n"
+   }
+  },
+  "real tldr readlink: no newline": {
+   "script": "e2b1e5e3a62821e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "real/f|\n"
+   }
+  },
+  "real tldr readlink: target of a dangling link": {
+   "script": "d05a38860a3aed89",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "nope\n"
+   }
+  },
+  "real tldr readlink: target of a link": {
+   "script": "f5b9d0d1d666cb72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "real/f\nreal\n"
+   }
+  },
+  "real tldr readlink: target of a missing path": {
+   "script": "7ba9f72131fc318d",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr readlink: target of a regular file": {
+   "script": "9c3c41b8d35518c0",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr realpath: absolute path of .": {
+   "script": "6f1e2592ee453033",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of /tmp/w//real/": {
+   "script": "9d59569ae75f33c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of dangling": {
+   "script": "62b2bcc95425b003",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/nope\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of fl": {
+   "script": "10c575cf7bbeb0c9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of nope": {
+   "script": "b4572ce80e727dd3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/nope\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of nope/x": {
+   "script": "3aa6993d0dfb978c",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nope/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr realpath: absolute path of real/./sub/../f": {
+   "script": "20640df9f7f465fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of real/f": {
+   "script": "0c58473938a3fd9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of rl": {
+   "script": "d4e3b3a96e370148",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: absolute path of rl/sub/..": {
+   "script": "eb9ead1a25b9d6c8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\nstatus=0\n"
+   }
+  },
+  "real tldr realpath: logical": {
+   "script": "8ed042bd3193d3a4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\n"
+   }
+  },
+  "real tldr realpath: logical (long)": {
+   "script": "5f3d21c7a9df7e07",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n"
+   }
+  },
+  "real tldr realpath: no symlinks": {
+   "script": "4efd1e9af5c75ddb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/rl\n/tmp/w/fl\n"
+   }
+  },
+  "real tldr realpath: no symlinks (long)": {
+   "script": "4cae3d2cb5d1581a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/rl\n"
+   }
+  },
+  "real tldr realpath: quiet": {
+   "script": "8e56fc51988661b5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr realpath: quiet (long)": {
+   "script": "bb7aa076e34eec47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr realpath: relative to": {
+   "script": "122251450b113f30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "../f\n"
+   }
+  },
+  "real tldr realpath: require all components": {
+   "script": "162f3e56d23ed6e7",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: nope/x: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "/tmp/w/real/f\nstatus=1\n"
+   }
+  },
+  "real tldr realpath: require all components (long)": {
+   "script": "cce5bca9b495abc3",
+   "status": 0,
+   "stderr": {
+    "text": "realpath: dangling: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "real tldr realpath: several paths": {
+   "script": "16f6e83d23957a2e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w/real\n/tmp/w/real/f\n/tmp/w/nope\n"
+   }
+  },
+  "real tldr rm: a file named with a dash": {
+   "script": "039b22824dbfdc0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr rm: a file with -d": {
+   "script": "f1e3d63ce073f234",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs\nempty.txt\nsrc\n"
+   }
+  },
+  "real tldr rm: empty directory": {
+   "script": "5458bc29c165d100",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lib\nmain.rs\n"
+   }
+  },
+  "real tldr rm: empty directory (long)": {
+   "script": "4d21b92f5b54c81a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lib\nmain.rs\n"
+   }
+  },
+  "real tldr rm: force (long)": {
+   "script": "1e3a4ef9be498d29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "real tldr rm: force ignores missing files": {
+   "script": "8856b101797c0ac9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\ndir\n"
+   }
+  },
+  "real tldr rm: force with no operands": {
+   "script": "22b9181051f7cf0c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "real tldr rm: interactive (long)": {
+   "script": "683fa5b068a78063",
+   "status": 0,
+   "stderr": {
+    "text": "rm: remove regular file 'a.txt'? rm: remove regular file 'b.txt'? "
+   },
+   "stdout": {
+    "text": "b.txt\ndir\n"
+   }
+  },
+  "real tldr rm: interactive accepted": {
+   "script": "9d0344bcae067841",
+   "status": 0,
+   "stderr": {
+    "text": "rm: remove regular file 'a.txt'? "
+   },
+   "stdout": {
+    "text": "b.txt\ndir\n"
+   }
+  },
+  "real tldr rm: interactive declined": {
+   "script": "9d218c56751965d2",
+   "status": 0,
+   "stderr": {
+    "text": "rm: remove regular file 'a.txt'? "
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr rm: no operands": {
+   "script": "f9ecb651c4718557",
+   "status": 1,
+   "stderr": {
+    "text": "rm: missing operand\nTry 'rm --help' for more information.\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rm: non-empty directory with -d": {
+   "script": "862f5092deb2acff",
+   "status": 1,
+   "stderr": {
+    "text": "rm: cannot remove 'src': Directory not empty\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rm: recursive": {
+   "script": "62c60c96ce052bfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ".hidden\ndocs\nempty.txt\n"
+   }
+  },
+  "real tldr rm: recursive (long)": {
+   "script": "6291a7221dc5544f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "empty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr rm: recursive force on a missing path": {
+   "script": "5a23cb066b0fafb5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ok\n"
+   }
+  },
+  "real tldr rm: recursive on a missing path": {
+   "script": "870fb5fdf7675fd7",
+   "status": 1,
+   "stderr": {
+    "text": "rm: cannot remove 'nosuch': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rm: recursive verbose": {
+   "script": "e2e34dece38c9a55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'src/lib/math.rs'\nremoved 'src/main.rs'\nremoved directory 'src'\nremoved directory 'src/empty'\nremoved directory 'src/lib'\n"
+   }
+  },
+  "real tldr rm: remove a directory without -r": {
+   "script": "8f166c657981207a",
+   "status": 1,
+   "stderr": {
+    "text": "rm: cannot remove 'dir': Is a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rm: remove a missing file": {
+   "script": "9e40bfb7cf3d1501",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\na.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr rm: remove files": {
+   "script": "905f84ec17a67e91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir\n"
+   }
+  },
+  "real tldr rm: remove files and a missing one": {
+   "script": "f162813c55fa5c5a",
+   "status": 0,
+   "stderr": {
+    "text": "rm: cannot remove 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\ndir\n"
+   }
+  },
+  "real tldr rm: remove the current directory": {
+   "script": "b95f27b2108d86e6",
+   "status": 1,
+   "stderr": {
+    "text": "rm: refusing to remove '.' or '..' directory: skipping '.'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rm: verbose": {
+   "script": "57f10c2abb914ce3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'a.txt'\nremoved 'b.txt'\n"
+   }
+  },
+  "real tldr rm: verbose (long)": {
+   "script": "3d6f6f69348d3966",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "removed 'a.txt'\n"
+   }
+  },
+  "real tldr rmdir: clean a directory of empty directories": {
+   "script": "eb52441fc6855e0d",
+   "status": 0,
+   "stderr": {
+    "text": "rmdir: failed to remove 'file': Not a directory\nrmdir: failed to remove 'full': Directory not empty\n"
+   },
+   "stdout": {
+    "text": "status=1\nfile\nfull\n"
+   }
+  },
+  "real tldr rmdir: parents stops at a non-empty directory": {
+   "script": "0ee1a090ae5e3998",
+   "status": 0,
+   "stderr": {
+    "text": "rmdir: failed to remove directory 'a': Directory not empty\n"
+   },
+   "stdout": {
+    "text": "status=1\na\na/f\n"
+   }
+  },
+  "real tldr rmdir: remove a file": {
+   "script": "22da42ceb39e2a34",
+   "status": 1,
+   "stderr": {
+    "text": "rmdir: failed to remove 'notes.txt': Not a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rmdir: remove a missing directory": {
+   "script": "c20de5f14a5e4dad",
+   "status": 1,
+   "stderr": {
+    "text": "rmdir: failed to remove 'nosuch': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rmdir: remove a non-empty directory": {
+   "script": "388f4b373d345675",
+   "status": 1,
+   "stderr": {
+    "text": "rmdir: failed to remove 'src': Directory not empty\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rmdir: remove directories": {
+   "script": "78d0af94b036ddc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "docs\nempty.txt\nnotes.txt\nsrc\n"
+   }
+  },
+  "real tldr rmdir: remove nested directories with parents": {
+   "script": "9450653f73cb41d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rmdir: remove nested directories with parents (long)": {
+   "script": "c7136d04892f83fe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr rmdir: remove with a trailing slash": {
+   "script": "fc66c1589b604c50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lib\nmain.rs\n"
+   }
+  },
+  "real tldr stat: file type names": {
+   "script": "8dd023b8219b399e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "regular file f\nregular empty file e\ndirectory d\nsymbolic link l\n"
+   }
+  },
+  "real tldr stat: link target": {
+   "script": "21374db5a343a5bf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'l' -> 'f'\n"
+   }
+  },
+  "real tldr stat: printf format with escapes": {
+   "script": "24fcca7ea1ca2bf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\tf\n"
+   }
+  },
+  "real tldr stat: size and name": {
+   "script": "1eb6d49f494656d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 f\n"
+   }
+  },
+  "real tldr stat: size and name (long)": {
+   "script": "4bb52ad1aab2a082",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 f\n"
+   }
+  },
+  "real tldr stat: size and name of several files": {
+   "script": "2b91813f0d723bfe",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 f\n0 e\n"
+   }
+  },
+  "real tldr stat: size of a missing file": {
+   "script": "b7c96d79e601a528",
+   "status": 1,
+   "stderr": {
+    "text": "stat: cannot statx 'nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr touch: create files": {
+   "script": "759ce1d5ffbf2db7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nb\n"
+   }
+  },
+  "real tldr touch: increasing numbers": {
+   "script": "11afbf15d8f39035",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "file1\nfile10\nfile2\nfile3\nfile4\nfile5\nfile6\nfile7\nfile8\nfile9\n"
+   }
+  },
+  "real tldr touch: into a missing directory": {
+   "script": "1fd00880b26272ff",
+   "status": 1,
+   "stderr": {
+    "text": "touch: cannot touch 'nodir/a': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr touch: invalid date string": {
+   "script": "e20f4a20a2f3004b",
+   "status": 1,
+   "stderr": {
+    "text": "touch: invalid date format ‘not a date’\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr touch: letter range": {
+   "script": "7fa147e5259a6a5e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "filea\nfileb\nfilec\nfiled\nfilee\n"
+   }
+  },
+  "real tldr touch: missing reference file": {
+   "script": "75010b646cd9ca18",
+   "status": 1,
+   "stderr": {
+    "text": "touch: failed to get attributes of 'nope': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr touch: no create (long)": {
+   "script": "86fcdcb0e0d2c07d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr touch: no create with access time": {
+   "script": "b4b41adbce791429",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr touch: no create with modification time": {
+   "script": "d58a0660fba49b50",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\na\n"
+   }
+  },
+  "real tldr touch: order by time": {
+   "script": "6b706b509e3f9b62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c\nb\na\na\nb\nc\n"
+   }
+  },
+  "real tldr touch: parse a date string (long)": {
+   "script": "c605e7d50e1c5961",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2021-03-04T05:06:00\n"
+   }
+  },
+  "real tldr touch: parse a date string 14 nov 2020": {
+   "script": "d540cd7f8685aab9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-11-14T00:00:00\n"
+   }
+  },
+  "real tldr touch: parse a date string 2020-11-14": {
+   "script": "b0885965ddca25e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-11-14T00:00:00\n"
+   }
+  },
+  "real tldr touch: parse a date string 2020-11-14 10:30:00": {
+   "script": "7c0b02602e933ea0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-11-14T10:30:00\n"
+   }
+  },
+  "real tldr touch: parse a date string 2020-11-14T10:30:00Z": {
+   "script": "fb3ff7d7c831f110",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-11-14T10:30:00\n"
+   }
+  },
+  "real tldr touch: parse a date string @1600000000": {
+   "script": "4a7aba9fcd7692de",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-09-13T12:26:40\n"
+   }
+  },
+  "real tldr touch: parse a date string nov 14 2020 10:30": {
+   "script": "c14083040e2e2b83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-11-14T10:30:00\n"
+   }
+  },
+  "real tldr touch: reference file": {
+   "script": "28c817a57a1fcc1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\nref\n2015-06-07T08:09:00\n"
+   }
+  },
+  "real tldr touch: reference file (long)": {
+   "script": "0d853fb5bd1ccf15",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ref\n2015-06-07T08:09:00\n"
+   }
+  },
+  "real tldr touch: specific time": {
+   "script": "7e7e1f23e72da610",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a\n2020-01-01T12:00:30\n"
+   }
+  },
+  "real tldr touch: specific time with a century-less year": {
+   "script": "9eb2d09e2f8d3a5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1999-12-31T23:59:00\n"
+   }
+  },
+  "real tldr touch: specific time without seconds": {
+   "script": "4b6108244559cd71",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2020-01-01T12:00:00\n"
+   }
+  },
+  "real tldr touch: touch an existing file keeps its content": {
+   "script": "0b305b6c2f64a6e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keep\n"
+   }
+  },
+  "real tldr truncate: a directory": {
+   "script": "561b6f80d52b90ef",
+   "status": 1,
+   "stderr": {
+    "text": "truncate: cannot open 'd' for writing: Is a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr truncate: create a new file with a size": {
+   "script": "ee5bdab232ed23ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10240 f\n"
+   }
+  },
+  "real tldr truncate: empty a file": {
+   "script": "2d67be289853f4b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "real tldr truncate: empty without creating": {
+   "script": "f657dc218b6660c3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "real tldr truncate: empty without creating (long)": {
+   "script": "137cb71b0e886a65",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "f\n0 f\n"
+   }
+  },
+  "real tldr truncate: extend a file": {
+   "script": "e74daa98a0b4e01a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "51206 f\n0000000   h   e   l   l   o  \\n  \\0  \\0\n0000010\n"
+   }
+  },
+  "real tldr truncate: invalid size": {
+   "script": "7b961b27d99f7497",
+   "status": 1,
+   "stderr": {
+    "text": "truncate: Invalid number: ‘10Q’: Value too large for data type\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr truncate: round down to a multiple": {
+   "script": "9b604f2b124ffcb3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 f\n"
+   }
+  },
+  "real tldr truncate: round up to a multiple": {
+   "script": "5167360917807443",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8 f\n"
+   }
+  },
+  "real tldr truncate: set a size (long)": {
+   "script": "104f90fc60b7a9d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2048 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 0": {
+   "script": "efc2bec7bf4ed8d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 10K": {
+   "script": "c45d5ee864302b55",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10240 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 10KB": {
+   "script": "5160eccec1690cf5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10000 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 1G": {
+   "script": "2282076ea7af49da",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1073741824 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 1M": {
+   "script": "f23d09005c88546d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1048576 f\n"
+   }
+  },
+  "real tldr truncate: set a size of 3": {
+   "script": "9adc1d0cb078b0d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 f\n"
+   }
+  },
+  "real tldr truncate: shrink a file": {
+   "script": "6fcee15e7b37f72c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2952 f\n"
+   }
+  },
+  "real tldr truncate: shrink below zero": {
+   "script": "b3a9bb91caeeb687",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 f\n"
+   }
+  },
+  "real tldr unlink: remove a directory": {
+   "script": "81fbad1a3822859d",
+   "status": 1,
+   "stderr": {
+    "text": "unlink: cannot unlink 'dir': Is a directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr unlink: remove a file": {
+   "script": "0d69bfc4eb483c10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b.txt\ndir\n"
+   }
+  },
+  "real tldr unlink: remove a missing file": {
+   "script": "45ebcc6ee39afe54",
+   "status": 1,
+   "stderr": {
+    "text": "unlink: cannot unlink 'nope.txt': No such file or directory\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "real tldr unlink: remove a symbolic link": {
+   "script": "b1b47f476c240e92",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt\nb.txt\ndir\n"
+   }
+  },
+  "real tldr wc: count find output": {
+   "script": "881a5db54c49ed24",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "     12      12     134\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

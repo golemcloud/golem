@@ -414,7 +414,12 @@ fn project_result(
                 .map_err(|e| invalid(format!("invalid native result: {e:?}")))?;
             let json = to_json_value_redacted(value.graph(), &value.graph().root, value.value())
                 .map_err(|e| invalid(e.to_string()))?;
-            Some(if matches!(&spec.type_, SchemaType::Record { .. }) {
+            let result_type = export
+                .definition
+                .schema
+                .resolve_ref(&spec.type_)
+                .map_err(|e| invalid(e.to_string()))?;
+            Some(if matches!(result_type, SchemaType::Record { .. }) {
                 json
             } else {
                 json!({FALLBACK_OUTPUT_FIELD_NAME: json})
@@ -477,9 +482,6 @@ mod tests {
     use super::*;
     use crate::invocation_session_token::SessionInvocationTarget;
     use futures::stream;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, TypedSchemaValue as ProtoTypedSchemaValue, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::{
         ExternalToolInvocation, InvocationStart, invocation_request,
     };
@@ -488,6 +490,9 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentName;
     use golem_common::schema::SchemaGraph;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, TypedSchemaValue as ProtoTypedSchemaValue, schema_value,
+    };
     use test_r::{test, timeout};
 
     fn empty_session() -> StartedPublicAgentSession {
@@ -607,7 +612,7 @@ mod tests {
         tool.stdin = stdin;
         tool.stdout = stdout;
         tool.stderr = stderr;
-        let uuid = |n| golem_api_grpc::proto::golem::common::Uuid {
+        let uuid = |n| golem_schema::proto::golem::common::Uuid {
             high_bits: 0,
             low_bits: n,
         };
@@ -688,7 +693,7 @@ mod tests {
             golem_api_grpc::proto::golem::worker::OutputStreamItem {
                 transport_stream_id,
                 producer_sequence: sequence,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: transport_stream_id,
                 }),
@@ -706,7 +711,7 @@ mod tests {
             golem_api_grpc::proto::golem::worker::OutputStreamEnd {
                 transport_stream_id,
                 producer_sequence: sequence,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: transport_stream_id,
                 }),
@@ -806,7 +811,7 @@ mod tests {
             send(invocation_response::Response::OutputEnd(OutputStreamEnd {
                 transport_stream_id: 71,
                 producer_sequence: 5,
-                durable_stream_id: Some(golem_api_grpc::proto::golem::common::Uuid {
+                durable_stream_id: Some(golem_schema::proto::golem::common::Uuid {
                     high_bits: 0,
                     low_bits: 71,
                 }),
@@ -960,10 +965,12 @@ mod tests {
     #[test]
     fn native_results_match_mcp_json_and_content_contracts() {
         use golem_common::model::tool::SerializableToolInvocationResult;
+        use golem_common::schema::metadata::TypeId;
         use golem_common::schema::tool::{
             CommandAnnotations, CommandBody, CommandNode, CommandTree, Doc, Formatter, ResultSpec,
             StreamSpec, Tool as NativeTool,
         };
+        use golem_common::schema::{MetadataEnvelope, NamedFieldType, SchemaTypeDef};
         let definition = NativeTool {
             version: "1.0.0".to_string(),
             requires_filesystem: false,
@@ -1121,6 +1128,60 @@ mod tests {
             .unwrap_err()
             .code,
             rmcp::model::ErrorCode::INVALID_PARAMS
+        );
+
+        let record_id = TypeId::new("answer");
+        let record = SchemaType::record(vec![NamedFieldType {
+            name: "answer".to_string(),
+            body: SchemaType::string(),
+            metadata: MetadataEnvelope::default(),
+        }]);
+        let record_graph = SchemaGraph {
+            defs: vec![SchemaTypeDef {
+                id: record_id.clone(),
+                name: Some("Answer".to_string()),
+                body: record,
+            }],
+            root: SchemaType::ref_to(record_id.clone()),
+        };
+        let mut record_definition = definition;
+        record_definition.schema = record_graph.clone();
+        record_definition.commands.nodes[0]
+            .body
+            .as_mut()
+            .unwrap()
+            .result
+            .as_mut()
+            .unwrap()
+            .type_ = SchemaType::ref_to(record_id);
+        let record_export = golem_service_base::mcp::native_tool::compile_native_tool_exports(
+            ComponentId::new(),
+            "test:owner".try_into().unwrap(),
+            "test".try_into().unwrap(),
+            &record_definition,
+            None,
+            None,
+        )
+        .unwrap()
+        .remove(0);
+        let record_value = TypedSchemaValue::new(
+            record_graph,
+            SchemaValue::Record {
+                fields: vec![SchemaValue::String("direct".to_string())],
+            },
+        );
+        let record_result = project_result(
+            &record_export,
+            PublicExternalToolResult::Success(SerializableToolInvocationResult {
+                result: Some(Box::new(record_value)),
+            }),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        assert_eq!(
+            record_result.structured_content,
+            Some(json!({"answer":"direct"}))
         );
     }
 }

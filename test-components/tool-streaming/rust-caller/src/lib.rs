@@ -1,23 +1,132 @@
 use capable_streaming_tool_guest_client::CapableStreamingClient;
 use clock_race_tool_guest_client::ClockRaceClient;
+use environment_probe_tool_guest_client::{
+    EnvironmentProbeClient, EnvironmentProbeEvidence as ToolEnvironmentProbeEvidence,
+};
 use futures_concurrency::prelude::*;
 use golem_rust::agentic::{
     AgentStream, Config, InputStream, Principal, RpcError, Secret, ToolError, ToolInvocation,
     ToolInvocationOutput, pump_tool_stdin, spawn_local, tool_protocol_error,
 };
+use golem_rust::bindings::golem::permissions::types as permission_types;
 use golem_rust::durability::{Durability, DurableFunctionType};
 use golem_rust::golem_agentic::golem::tool::host::{
     self as tool_host, ByteStreamFailure, ToolRpc, ToolRpcError,
 };
+use golem_rust::quota::QuotaToken;
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::schema::wit::wire::ToolError as WireToolError;
 use golem_rust::{
-    ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaGraph,
-    SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition, agent_implementation,
-    decode_typed_schema_value_owned, read_only,
+    CardId, ConfigSchema, FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire,
+    SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue, WireSchema, agent_definition,
+    agent_implementation, decode_typed_schema_value_owned, encode_schema_value, read_only,
 };
+use matrix_core_tool_guest_client::{
+    MatrixCoreArtifactInspectError, MatrixCoreClient, MatrixDimensions, MatrixRequest,
+};
+use matrix_permission_issuer_tool_guest_client::MatrixPermissionIssuerClient;
+use matrix_resource_tool_guest_client::MatrixResourceClient;
 use secret_policy_probe_tool_guest_client::SecretPolicyProbeClient;
 use std::io::{Read, Write};
 use streaming_tool_guest_client::{StreamSummary, StreamingClient, StreamingRunError};
 use typed_output_stream_tool_guest_client::TypedOutputStreamClient;
+
+#[allow(dead_code)]
+mod definition_owned_proxy {
+    use golem_rust::agentic::{InputStream, OutputStream};
+    use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition};
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
+    pub struct StreamSummary {
+        pub chunks_read: u32,
+        pub bytes_read: u64,
+        pub output_closed: bool,
+    }
+
+    #[derive(Debug, Clone, golem_rust::ToolError)]
+    pub enum StreamingError {
+        #[tool_error(kind = "runtime-error", exit_code = 7)]
+        Declared { bytes_read: u64 },
+    }
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait Streaming {
+        async fn run(
+            &self,
+            mode: String,
+            stdin: InputStream,
+            stdout: OutputStream,
+            principal: golem_rust::agentic::Principal,
+        ) -> Result<StreamSummary, StreamingError>;
+
+        async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
+    }
+}
+
+#[allow(dead_code)]
+mod definition_owned_matrix_proxy {
+    use golem_rust::{FromSchema, FromWire, IntoSchema, IntoWire, WireSchema, tool_definition};
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    pub struct MatrixDimensions {
+        pub width: u32,
+        pub height: u32,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    pub struct MatrixRequest {
+        pub source: String,
+        pub dimensions: MatrixDimensions,
+        pub labels: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    #[schema(rename_all = "camelCase")]
+    pub struct MatrixResult {
+        pub provider: String,
+        pub command: String,
+        pub normalized_source: String,
+        pub weighted_size: i64,
+        pub label_summary: String,
+        pub principal: String,
+        pub owner_agent_id: String,
+    }
+
+    #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    #[schema(rename_all = "camelCase")]
+    pub struct MatrixRejection {
+        pub field: String,
+        pub reason: String,
+        pub retryable: bool,
+    }
+
+    #[derive(Debug, Clone, golem_rust::ToolError)]
+    pub enum MatrixError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        Rejected(MatrixRejection),
+    }
+
+    pub struct MatrixArtifactSubtree;
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MatrixCore {
+        #[command(subtree = Artifact)]
+        fn artifact(&self) -> MatrixArtifactSubtree;
+    }
+
+    #[tool_definition]
+    pub trait Artifact {
+        async fn inspect(
+            &self,
+            request: MatrixRequest,
+            multiplier: i64,
+            principal: golem_rust::agentic::Principal,
+        ) -> Result<MatrixResult, MatrixError>;
+    }
+}
+
+#[path = "../../../../builtin-tools/filesystem-tools/src/bounded_stream.rs"]
+mod bounded_stream;
 
 #[unsafe(export_name = "_initialize")]
 pub extern "C" fn initialize_component_baseline_clock() {
@@ -37,6 +146,15 @@ pub struct StreamEvidence {
 }
 
 #[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct RedactionEvidence {
+    pub output: Vec<u8>,
+    pub stdout_terminal: String,
+    pub stderr: Vec<u8>,
+    pub stderr_terminal: String,
+    pub outcome: String,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct StreamingBenchmarkResult {
     pub first_chunk_nanos: u64,
     pub total_nanos: u64,
@@ -48,6 +166,73 @@ pub struct ClockedStreamEvidence {
     pub before_tool_nanos: u64,
     pub after_tool_nanos: u64,
     pub stream: StreamEvidence,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixObservation {
+    pub provider: String,
+    pub command: String,
+    pub normalized_source: String,
+    pub weighted_size: i64,
+    pub label_summary: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub error_field: String,
+    pub error_reason: String,
+    pub error_retryable: bool,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixResourceObservation {
+    pub secret_first_provider: String,
+    pub secret_second_provider: String,
+    pub secret_first_revealed: bool,
+    pub secret_second_revealed: bool,
+    pub secret_principal: String,
+    pub secret_owner_agent_id: String,
+    pub quota_provider: String,
+    pub quota_reserved: bool,
+    pub quota_returned_usable: bool,
+    pub quota_original_consumed: bool,
+    pub quota_principal: String,
+    pub quota_owner_agent_id: String,
+    pub permission_supported: bool,
+    pub permission_provider: String,
+    pub permission_same_identity: bool,
+    pub permission_original_consumed: bool,
+    pub permission_principal: String,
+    pub permission_owner_agent_id: String,
+    pub typed_values: Vec<u32>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct RustSdkTerminalObservation {
+    pub success_bytes: Vec<u8>,
+    pub success_result: bool,
+    pub declared_bytes: Vec<u8>,
+    pub declared_error: bool,
+    pub failed_bytes: Vec<u8>,
+    pub failed_terminal: String,
+    pub failed_result: bool,
+    pub cancellation_result: String,
+    pub cancellation_closed_stdin: bool,
+    pub abandoned_writer_bytes: Vec<u8>,
+    pub abandoned_writer_result: bool,
+    pub finish_failure_bytes: Vec<u8>,
+    pub finish_failure_observed: bool,
+    pub cancelled_reader_resumed_bytes: Vec<u8>,
+    pub cancelled_reader_result: bool,
+    pub dropped_observer_bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct CliToolEvidence {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 #[derive(IntoSchema)]
@@ -103,6 +288,24 @@ struct RawReadFileResult {
 }
 
 #[derive(FromSchema)]
+#[schema(rename_all = "snake_case")]
+enum RawPathPolicyOperation {
+    Read,
+    Write,
+    Delete,
+}
+
+#[derive(FromSchema)]
+struct RawPathPolicyDenied {
+    operation: RawPathPolicyOperation,
+    argument: String,
+    supplied_path: String,
+    resolved_path: Option<String>,
+    allowed_roots: Vec<String>,
+    reason: String,
+}
+
+#[derive(FromSchema)]
 enum RawWriteDisposition {
     Created,
     Replaced,
@@ -121,11 +324,172 @@ struct RawEditFileResult {
     bytes_after: u64,
 }
 
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.DirectoryFrame")]
+struct RawDirectoryFrame {
+    after: Option<String>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.TreeCursor")]
+struct RawTreeCursor {
+    frames: Vec<RawDirectoryFrame>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsQuery")]
+struct RawLsQuery {
+    path: String,
+    max_depth: u32,
+    glob: Option<String>,
+    limit: u32,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsCursor")]
+struct RawLsCursor {
+    query: RawLsQuery,
+    tree: RawTreeCursor,
+}
+
+#[derive(IntoSchema)]
+#[schema(rename_all = "kebab-case")]
+struct RawLsInput {
+    path: String,
+    max_depth: Option<u32>,
+    glob: Option<String>,
+    limit: Option<u32>,
+    cursor: Option<RawLsCursor>,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.EntryKind")]
+enum RawEntryKind {
+    File(u64),
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.LsEntry")]
+struct RawLsEntry {
+    path: String,
+    kind: RawEntryKind,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.DiagnosticKind")]
+enum RawDiagnosticKind {
+    Io,
+    Binary,
+    Unsupported,
+    SymlinkSkipped,
+    DirectoryTooLarge,
+    FileTooLarge,
+    LineTooLong,
+    PathTooLong,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.DiscoveryDiagnostic")]
+struct RawDiscoveryDiagnostic {
+    path: String,
+    kind: RawDiagnosticKind,
+    message: String,
+}
+
+#[derive(FromSchema)]
+struct RawLsResult {
+    entries: Vec<RawLsEntry>,
+    diagnostics: Vec<RawDiscoveryDiagnostic>,
+    next_cursor: Option<RawLsCursor>,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.SearchMode")]
+enum RawSearchMode {
+    Literal,
+    Regex,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepQuery")]
+struct RawGrepQuery {
+    path: String,
+    pattern: String,
+    mode: RawSearchMode,
+    case_sensitive: bool,
+    max_depth: u32,
+    include_globs: Vec<String>,
+    exclude_globs: Vec<String>,
+    limit: u32,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepFileCursor")]
+struct RawGrepFileCursor {
+    tree: Option<RawTreeCursor>,
+    next_byte: u64,
+    next_line: u64,
+    content_sha256: String,
+}
+
+#[derive(IntoSchema, FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepCursor")]
+struct RawGrepCursor {
+    query: RawGrepQuery,
+    tree: Option<RawTreeCursor>,
+    file: Option<RawGrepFileCursor>,
+}
+
+#[derive(IntoSchema)]
+#[schema(rename_all = "kebab-case")]
+struct RawGrepInput {
+    path: String,
+    pattern: String,
+    mode: Option<RawSearchMode>,
+    max_depth: Option<u32>,
+    limit: Option<u32>,
+    cursor: Option<RawGrepCursor>,
+    include_globs: Vec<String>,
+    exclude_globs: Vec<String>,
+    case_insensitive: bool,
+}
+
+#[derive(FromSchema)]
+#[schema(named = "golem_filesystem_tools.GrepMatch")]
+struct RawGrepMatch {
+    path: String,
+    line: u64,
+    text: String,
+    text_truncated: bool,
+}
+
+#[derive(FromSchema)]
+struct RawGrepResult {
+    matches: Vec<RawGrepMatch>,
+    diagnostics: Vec<RawDiscoveryDiagnostic>,
+    next_cursor: Option<RawGrepCursor>,
+}
+
 #[derive(Debug, Clone, IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
 struct TypedInputItem {
     ordinal: u32,
     caller_extra: u64,
     label: String,
+}
+
+#[derive(ConfigSchema)]
+pub struct ToolStreamingCallerConfig {
+    pub allowed: Option<String>,
+    pub denied: Option<String>,
+}
+
+#[derive(ConfigSchema)]
+pub struct RustResourceToolStreamingCallerConfig {
+    #[config_schema(secret)]
+    pub secret: Secret<String>,
 }
 
 #[derive(IntoSchema)]
@@ -151,6 +515,62 @@ pub struct SecretPolicyObservation {
 pub struct SecretPolicyEvidence {
     pub middleware: Vec<SecretPolicyObservation>,
     pub leaf_revealed: bool,
+}
+
+#[derive(ConfigSchema)]
+pub struct EnvironmentProbeCallerConfig {
+    pub marker: String,
+    #[config_schema(secret)]
+    pub secret: Secret<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvironmentProbeEvidence {
+    pub marker: String,
+    pub secret: String,
+    pub reserved: bool,
+}
+
+#[agent_definition]
+pub trait EnvironmentProbeCaller {
+    fn new(name: String, #[agent_config] config: Config<EnvironmentProbeCallerConfig>) -> Self;
+
+    async fn observe_owner_environment(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence;
+}
+
+struct EnvironmentProbeCallerImpl;
+
+#[agent_implementation]
+impl EnvironmentProbeCaller for EnvironmentProbeCallerImpl {
+    fn new(_name: String, #[agent_config] _config: Config<EnvironmentProbeCallerConfig>) -> Self {
+        Self
+    }
+
+    async fn observe_owner_environment(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence {
+        let ToolEnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        } = EnvironmentProbeClient::new()
+            .observe(expected_use, amount, commit_amount)
+            .await
+            .expect("environment probe tool invocation succeeds");
+        EnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        }
+    }
 }
 
 #[agent_definition]
@@ -217,12 +637,15 @@ pub struct TypedInputEvidence {
 
 #[agent_definition]
 pub trait ToolStreamingCaller {
-    fn new(name: String) -> Self;
+    fn new(name: String, #[agent_config] config: Config<ToolStreamingCallerConfig>) -> Self;
 
     fn record_native_order(&self, marker: String) -> String;
     fn replay_probe(&self) -> String;
     #[read_only]
     fn read_owner_file(&self, path: String) -> String;
+    fn prepare_filesystem_limit_fixtures(&self);
+    async fn probe_bounded_wasi_stream(&self) -> Vec<u64>;
+    async fn filesystem_limit_roundtrip(&self) -> Vec<u64>;
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String>;
     async fn marker_before_eof(&self, first: Vec<u8>, rest: Vec<u8>) -> StreamEvidence;
     async fn alternating_echo(&self, chunk_count: u32, chunk_size: u32) -> StreamEvidence;
@@ -232,7 +655,14 @@ pub trait ToolStreamingCaller {
         chunk_size: u32,
     ) -> StreamingBenchmarkResult;
     async fn collect(&self, mode: String, input: Vec<u8>, fragment_size: u32) -> StreamEvidence;
+    async fn rust_proxy_generated_parity(&self) -> Vec<String>;
+    async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String>;
+    async fn rust_provider_terminal_rows(&self) -> Vec<String>;
+    async fn gol40_rust_sdk_terminal_observation(&self) -> RustSdkTerminalObservation;
+    async fn gol40_rust_sdk_exception(&self);
     async fn result_before_stdout(&self, mode: String) -> StreamEvidence;
+    async fn redaction_stream_case(&self, mode: String) -> RedactionEvidence;
+    async fn redaction_dual_case(&self) -> RedactionEvidence;
     async fn started_invocation_contracts(
         &self,
         capable_path: String,
@@ -257,12 +687,20 @@ pub trait ToolStreamingCaller {
     async fn long_clock_through_tool_entity(&self) -> Vec<String>;
     async fn aggregate_clocks_through_tool_entities(&self) -> Vec<String>;
     async fn filesystem_tool_roundtrip(&self) -> Vec<String>;
+    async fn builtin_cli(&self, tool: String, cwd: String, args: Vec<String>) -> CliToolEvidence;
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String>;
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String>;
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence>;
     async fn produce_typed_input(&self, decorated: bool) -> Vec<TypedInputEvidence>;
     async fn native_modes_stream_cancel_overlap(&self) -> Vec<String>;
     fn native_veto_gate(&self) -> golem_rust::PromiseId;
     async fn native_veto_with_long_clock(&self, gate: golem_rust::PromiseId) -> Vec<String>;
     async fn native_effect_count(&self) -> String;
+    async fn native_config(&self, key: String) -> String;
     async fn raw_handle_lifecycles(&self) -> Vec<String>;
     async fn raw_observer_detach_and_fire_open(&self) -> Vec<String>;
     async fn stdout_drop_preserves_sibling(&self) -> Vec<String>;
@@ -275,8 +713,11 @@ pub trait ToolStreamingCaller {
     async fn capable_modes_and_cohorts(&self) -> Vec<String>;
     async fn collect_capable(&self, path: String, input: Vec<u8>) -> StreamEvidence;
     async fn collect_capable_dual(&self, path: String, output_size: u64) -> Vec<Vec<u8>>;
+    async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8>;
     async fn clean_stdout_then_trap(&self);
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String>;
     async fn trap_with_blocked_sibling(&self);
+    async fn trap_with_sibling_lifecycle(&self, lifecycle: String);
     async fn drop_trapping_result(&self);
     async fn fire_and_forget_trap(&self);
     async fn hold_incapable_checkpoint(&self, checkpoint: String);
@@ -304,9 +745,63 @@ pub trait ToolStreamingCaller {
     async fn hold_completed_reconstruction_overlapping_custom(&self);
     async fn single_store_http_atomic_probe(&self);
     async fn principal_context(&self, principal: Principal) -> Vec<String>;
+    async fn matrix_core_observation(&self) -> MatrixObservation;
 }
 
 struct ToolStreamingCallerImpl;
+
+#[agent_definition]
+pub trait RustResourceToolStreamingCaller {
+    fn new(
+        name: String,
+        #[agent_config] config: Config<RustResourceToolStreamingCallerConfig>,
+    ) -> Self;
+
+    async fn matrix_secret_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_quota_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_permission_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation;
+    async fn matrix_resource_observation(&self) -> MatrixResourceObservation;
+}
+
+struct RustResourceToolStreamingCallerImpl {
+    config: Config<RustResourceToolStreamingCallerConfig>,
+}
+
+fn matrix_typed_input(values: [u32; 3]) -> AgentStream<u32> {
+    let (mut writer, input) = AgentStream::new();
+    spawn_local(async move {
+        writer
+            .write_all(values)
+            .await
+            .expect("write matrix typed input values");
+    });
+    input
+}
+
+fn empty_matrix_resource_observation() -> MatrixResourceObservation {
+    MatrixResourceObservation {
+        secret_first_provider: String::new(),
+        secret_second_provider: String::new(),
+        secret_first_revealed: false,
+        secret_second_revealed: false,
+        secret_principal: String::new(),
+        secret_owner_agent_id: String::new(),
+        quota_provider: String::new(),
+        quota_reserved: false,
+        quota_returned_usable: false,
+        quota_original_consumed: false,
+        quota_principal: String::new(),
+        quota_owner_agent_id: String::new(),
+        permission_supported: false,
+        permission_provider: String::new(),
+        permission_same_identity: false,
+        permission_original_consumed: false,
+        permission_principal: String::new(),
+        permission_owner_agent_id: String::new(),
+        typed_values: Vec::new(),
+    }
+}
 
 fn input_stream(chunks: Vec<Vec<u8>>) -> InputStream {
     let (mut writer, reader) =
@@ -379,6 +874,17 @@ async fn read_all(mut stdout: InputStream) -> Vec<u8> {
         }
     }
     output
+}
+
+async fn read_output(mut output: InputStream) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    while let Some(item) = output.next().await {
+        match item {
+            Ok(chunk) => bytes.extend(chunk),
+            Err(failure) => return Err(format!("{failure:?}")),
+        }
+    }
+    Ok(bytes)
 }
 
 async fn read_tool_stdout(mut stdout: ToolInvocationOutput) -> Vec<u8> {
@@ -455,6 +961,12 @@ fn decode_middleware_probe_result(result: tool_host::InvocationResult) -> String
     String::from_value(value.value()).expect("middleware probe result is a string")
 }
 
+fn decode_no_stream_result(result: tool_host::InvocationResult) -> String {
+    let value = decode_typed_schema_value_owned(result.result.expect("no-stream returns a result"))
+        .expect("decode no-stream result");
+    String::from_value(value.value()).expect("no-stream result is a string")
+}
+
 fn decode_dynamic_mcp_result(result: tool_host::InvocationResult) -> String {
     let value = decode_typed_schema_value_owned(result.result.expect("MCP tool returns a result"))
         .expect("decode MCP tool result");
@@ -498,23 +1010,132 @@ fn raw_filesystem_input(
     golem_rust::encode_typed_schema_value(&value).expect("encode filesystem tool wire input")
 }
 
+fn raw_cli_input(
+    tool: &str,
+    cwd: String,
+    args: Vec<String>,
+) -> golem_rust::schema::wit::wire::TypedSchemaValue {
+    let mut fields = vec![
+        (
+            "args",
+            SchemaType::list(SchemaType::string()),
+            SchemaValue::List {
+                elements: args.into_iter().map(SchemaValue::String).collect(),
+            },
+        ),
+        ("cwd", SchemaType::string(), SchemaValue::String(cwd)),
+    ];
+    if matches!(tool, "npm" | "npx") {
+        fields.push((
+            "registry",
+            SchemaType::string(),
+            SchemaValue::String("https://registry.npmjs.org/".to_string()),
+        ));
+    }
+    raw_filesystem_input(fields)
+}
+
 async fn invoke_filesystem_tool<T: FromSchema>(
     name: String,
     input: golem_rust::schema::wit::wire::TypedSchemaValue,
 ) -> T {
+    try_invoke_filesystem_tool(name.clone(), input)
+        .await
+        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error}"))
+}
+
+async fn try_invoke_filesystem_tool<T: FromSchema>(
+    name: String,
+    input: golem_rust::schema::wit::wire::TypedSchemaValue,
+) -> Result<T, String> {
     let result = ToolRpc::create(&name)
-        .expect("tool RPC creation failed")
+        .map_err(|error| format!("{error:?}"))?
         .invoke_and_await(Vec::new(), input, None, None, None)
         .await
-        .unwrap_or_else(|error| panic!("invoke guest-side filesystem tool '{name}': {error:?}"));
+        .map_err(describe_filesystem_error)?;
     let value = decode_typed_schema_value_owned(
         result
             .result
-            .unwrap_or_else(|| panic!("filesystem tool '{name}' returned no result")),
+            .ok_or_else(|| format!("filesystem tool '{name}' returned no result"))?,
     )
-    .unwrap_or_else(|error| panic!("decode filesystem tool '{name}' result: {error}"));
+    .map_err(|error| format!("decode filesystem tool '{name}' result: {error}"))?;
     T::from_value(value.value())
-        .unwrap_or_else(|error| panic!("convert filesystem tool '{name}' result: {error}"))
+        .map_err(|error| format!("convert filesystem tool '{name}' result: {error}"))
+}
+
+fn describe_filesystem_error(error: ToolRpcError) -> String {
+    match error {
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error))
+            if error.name == "path-policy-denied" =>
+        {
+            let value =
+                decode_typed_schema_value_owned(error.payload).unwrap_or_else(|decode_error| {
+                    panic!("decode path-policy payload: {decode_error}")
+                });
+            let payload =
+                RawPathPolicyDenied::from_value(value.value()).unwrap_or_else(|decode_error| {
+                    panic!("convert path-policy payload: {decode_error}")
+                });
+            let operation = match payload.operation {
+                RawPathPolicyOperation::Read => "read",
+                RawPathPolicyOperation::Write => "write",
+                RawPathPolicyOperation::Delete => "delete",
+            };
+            format!(
+                "{}|{operation}|{}|{}|{}|{}|{}",
+                error.name,
+                payload.argument,
+                payload.supplied_path,
+                payload.resolved_path.as_deref().unwrap_or("none"),
+                payload.allowed_roots.join(","),
+                payload.reason,
+            )
+        }
+        ToolRpcError::RemoteToolError(WireToolError::CustomError(error)) => {
+            format!("custom-tool-error:{}", error.name)
+        }
+        other => format!("unexpected-tool-rpc-error:{other:?}"),
+    }
+}
+
+async fn write_filesystem_file(path: String, content: String) -> RawWriteFileResult {
+    invoke_filesystem_tool(
+        "write-file".to_string(),
+        raw_filesystem_input(vec![
+            ("path", SchemaType::string(), SchemaValue::String(path)),
+            (
+                "content",
+                SchemaType::string(),
+                SchemaValue::String(content),
+            ),
+            (
+                "create-parent-directories",
+                SchemaType::bool(),
+                SchemaValue::Bool(true),
+            ),
+        ]),
+    )
+    .await
+}
+
+fn format_diagnostics(diagnostics: &[RawDiscoveryDiagnostic]) -> String {
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let kind = match diagnostic.kind {
+                RawDiagnosticKind::Io => "io",
+                RawDiagnosticKind::Binary => "binary",
+                RawDiagnosticKind::Unsupported => "unsupported",
+                RawDiagnosticKind::SymlinkSkipped => "symlink-skipped",
+                RawDiagnosticKind::DirectoryTooLarge => "directory-too-large",
+                RawDiagnosticKind::FileTooLarge => "file-too-large",
+                RawDiagnosticKind::LineTooLong => "line-too-long",
+                RawDiagnosticKind::PathTooLong => "path-too-long",
+            };
+            format!("{}:{kind}:{}", diagnostic.path, diagnostic.message)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn gated_typed_input<T: IntoWire + FromWire + 'static>(items: [T; 3]) -> AgentStream<T> {
@@ -559,6 +1180,14 @@ async fn raw_chunk(stdout: &mut InputStream) -> Vec<u8> {
 }
 
 async fn wait_at_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, true).await;
+}
+
+async fn wait_at_unscoped_crash_checkpoint(name: &str) {
+    wait_at_crash_checkpoint_with_atomic_gate(name, false).await;
+}
+
+async fn wait_at_crash_checkpoint_with_atomic_gate(name: &str, atomic_gate: bool) {
     use golem_rust::wasip3::http::{client, types};
     use golem_rust::wasip3::sockets::types::{
         IpAddressFamily, IpSocketAddress, Ipv4SocketAddress, TcpSocket,
@@ -645,7 +1274,7 @@ async fn wait_at_crash_checkpoint(name: &str) {
         assert_ne!(outside, outer);
     }
 
-    golem_rust::atomically_async(|| async {
+    let wait_for_release = || async {
         let socket =
             TcpSocket::create(IpAddressFamily::Ipv4).expect("create checkpoint gate socket");
         socket
@@ -673,8 +1302,12 @@ async fn wait_at_crash_checkpoint(name: &str) {
         drop(stream);
         received.await.expect("finish checkpoint gate receive");
         assert_eq!(bytes, [1], "checkpoint gate returns one release byte");
-    })
-    .await;
+    };
+    if atomic_gate {
+        golem_rust::atomically_async(wait_for_release).await;
+    } else {
+        wait_for_release().await;
+    }
 }
 
 async fn wait_at_promise_checkpoint(name: &str) {
@@ -722,7 +1355,7 @@ async fn wait_at_promise_checkpoint(name: &str) {
 
 #[agent_implementation]
 impl ToolStreamingCaller for ToolStreamingCallerImpl {
-    fn new(_name: String) -> Self {
+    fn new(_name: String, #[agent_config] _config: Config<ToolStreamingCallerConfig>) -> Self {
         assert!(
             std::env::var_os("FORBID_AGENT_CONSTRUCTION").is_none(),
             "component-baseline owners must not construct an agent"
@@ -750,6 +1383,86 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .and_then(|mut file| file.read_to_string(&mut contents))
             .expect("read owner file");
         contents
+    }
+
+    fn prepare_filesystem_limit_fixtures(&self) {
+        let directory = "workspace/filesystem-tools/oversized-directory";
+        std::fs::create_dir_all(directory).expect("create oversized directory fixture");
+        for index in 0..=4096 {
+            std::fs::write(format!("{directory}/{index:04}.txt"), b"")
+                .expect("create oversized directory entry");
+        }
+
+        let mut content = String::with_capacity(1024 * 1024);
+        for index in 0..16384 {
+            content.push_str(&format!("{index:05}:{}\n", "x".repeat(57)));
+        }
+        assert_eq!(content.len(), 1024 * 1024);
+        std::fs::write("workspace/filesystem-tools/bounded-read.txt", content)
+            .expect("create bounded read fixture");
+    }
+
+    async fn probe_bounded_wasi_stream(&self) -> Vec<u64> {
+        let (mut writer, reader) = golem_rust::wasip3::wit_stream::new::<u8>();
+        let read = bounded_stream::read_bounded(reader, 4, |mut reader, bytes| async move {
+            let (_, returned) = reader.read(bytes).await;
+            (reader, returned)
+        });
+        let write = async move {
+            let unwritten = writer.write_all(vec![1, 2, 3, 4, 5, 6, 7, 8]).await;
+            drop(writer);
+            unwritten.len() as u64
+        };
+        let ((bytes, at_eof), unwritten) = (read, write).join().await;
+        vec![bytes.len() as u64, u64::from(at_eof), unwritten]
+    }
+
+    async fn filesystem_limit_roundtrip(&self) -> Vec<u64> {
+        let path = "workspace/filesystem-tools/bounded-read.txt".to_string();
+        let mut cursor = None;
+        let mut first_next_byte = 0;
+        let mut first_next_line = 0;
+        let mut pages = 0;
+        let mut diagnostics = 0;
+        loop {
+            let result: RawGrepResult = invoke_filesystem_tool(
+                "grep".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawGrepInput {
+                        path: path.clone(),
+                        pattern: "not-present".to_string(),
+                        mode: None,
+                        case_insensitive: false,
+                        max_depth: None,
+                        include_globs: Vec::new(),
+                        exclude_globs: Vec::new(),
+                        limit: None,
+                        cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode bounded grep input"),
+                )
+                .expect("encode bounded grep wire input"),
+            )
+            .await;
+            pages += 1;
+            diagnostics += result.diagnostics.len() as u64;
+            assert!(result.matches.is_empty());
+            cursor = result.next_cursor;
+            if pages == 1 {
+                let file = cursor
+                    .as_ref()
+                    .and_then(|cursor| cursor.file.as_ref())
+                    .expect("first bounded grep page has a file cursor");
+                first_next_byte = file.next_byte;
+                first_next_line = file.next_line;
+            }
+            if cursor.is_none() {
+                break;
+            }
+            assert!(pages < 10, "bounded grep pagination did not converge");
+        }
+        vec![first_next_byte, first_next_line, pages, diagnostics]
     }
 
     async fn concurrent_attempt_identity_replay(&self) -> Vec<String> {
@@ -833,6 +1546,530 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         evidence(result, output)
     }
 
+    async fn rust_proxy_generated_parity(&self) -> Vec<String> {
+        let generated_success = MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
+            .await
+            .expect("invoke generated client success");
+        let proxy_success = definition_owned_matrix_proxy::MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                definition_owned_matrix_proxy::MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: definition_owned_matrix_proxy::MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
+            .await
+            .expect("invoke definition-owned proxy success");
+
+        let generated_error = MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["generated-secret".to_string()],
+                },
+                99,
+            )
+            .await
+            .expect_err("generated client observes declared error");
+        let proxy_error = definition_owned_matrix_proxy::MatrixCoreClient::default()
+            .artifact()
+            .inspect(
+                definition_owned_matrix_proxy::MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: definition_owned_matrix_proxy::MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["proxy-secret".to_string()],
+                },
+                101,
+            )
+            .await
+            .expect_err("definition-owned proxy observes declared error");
+
+        let ToolError::Tool(MatrixCoreArtifactInspectError::Rejected(generated_rejection)) =
+            generated_error
+        else {
+            panic!("generated client returned the wrong error: {generated_error:?}")
+        };
+        let ToolError::Tool(definition_owned_matrix_proxy::MatrixError::Rejected(proxy_rejection)) =
+            proxy_error
+        else {
+            panic!("definition-owned proxy returned the wrong error: {proxy_error:?}")
+        };
+
+        assert_eq!(proxy_success.provider, generated_success.provider);
+        assert_eq!(proxy_success.command, generated_success.command);
+        assert_eq!(
+            proxy_success.normalized_source,
+            generated_success.normalized_source
+        );
+        assert_eq!(proxy_success.weighted_size, generated_success.weighted_size);
+        assert_eq!(proxy_success.label_summary, generated_success.label_summary);
+        assert_eq!(proxy_success.principal, generated_success.principal);
+        assert_eq!(
+            proxy_success.owner_agent_id,
+            generated_success.owner_agent_id
+        );
+        assert_eq!(proxy_rejection.field, generated_rejection.field);
+        assert_eq!(proxy_rejection.reason, generated_rejection.reason);
+        assert_eq!(proxy_rejection.retryable, generated_rejection.retryable);
+
+        vec![
+            generated_success.provider,
+            generated_success.command,
+            generated_success.normalized_source,
+            generated_success.weighted_size.to_string(),
+            generated_success.label_summary,
+            generated_success.principal,
+            generated_rejection.field,
+            generated_rejection.reason,
+            generated_rejection.retryable.to_string(),
+        ]
+    }
+
+    async fn rust_reflected_generated_parity(&self, capable_path: String) -> Vec<String> {
+        let generated = StreamingClient::default()
+            .no_stream("reflection-parity".to_string())
+            .await
+            .expect("invoke generated client");
+        let command = golem_rust::agentic::get_tool_type("streaming")
+            .expect("discover streaming tool")
+            .client()
+            .command(&["no-stream"])
+            .expect("resolve reflected no-stream command");
+        let reflected = command
+            .invoke_value(SchemaValue::Record {
+                fields: vec![SchemaValue::String("reflection-parity".to_string())],
+            })
+            .await
+            .expect("invoke reflected client")
+            .expect("no-stream returns a value");
+        let SchemaValue::String(reflected) = reflected else {
+            panic!("no-stream returns text")
+        };
+
+        let generated_stream = StreamingClient::default()
+            .run("principal".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start generated principal stream")
+            .collect()
+            .await;
+        generated_stream
+            .result
+            .as_ref()
+            .expect("generated principal stream succeeds");
+        assert!(matches!(generated_stream.stderr, Ok(None)));
+        let stream_command = golem_rust::agentic::get_tool_type("streaming")
+            .expect("discover streaming tool")
+            .client()
+            .command(&["run"])
+            .expect("resolve reflected run command");
+        let mut generated_error_invocation = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start generated declared-error stream");
+        let generated_error_output = read_tool_stdout(
+            generated_error_invocation
+                .stdout
+                .take()
+                .expect("generated declared-error stream has stdout"),
+        )
+        .await;
+        let generated_error = generated_error_invocation
+            .result()
+            .await
+            .expect_err("generated client observes declared error");
+        let mut reflected_error_invocation = stream_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("declared-error".to_string())],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected declared-error stream");
+        let reflected_error_output = read_tool_stdout(
+            reflected_error_invocation
+                .stdout
+                .take()
+                .expect("reflected declared-error stream has stdout"),
+        )
+        .await;
+        let reflected_error = reflected_error_invocation
+            .result()
+            .await
+            .expect_err("reflected client observes declared error");
+        assert_eq!(reflected_error_output, generated_error_output);
+        assert_eq!(generated_error_output, b"marker:");
+        let mut reflected_stream = stream_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String("principal".to_string())],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected principal stream");
+        let reflected_output = read_tool_stdout(
+            reflected_stream
+                .stdout
+                .take()
+                .expect("reflected run has stdout"),
+        )
+        .await;
+        let reflected_result = reflected_stream
+            .result()
+            .await
+            .expect("reflected principal stream succeeds")
+            .expect("reflected run returns a structured result");
+
+        let generated_principal = String::from_utf8(
+            generated_stream
+                .stdout
+                .expect("generated principal stdout finishes")
+                .expect("generated principal stream has stdout"),
+        )
+        .expect("generated principal is UTF-8");
+        let reflected_principal =
+            String::from_utf8(reflected_output.clone()).expect("reflected principal is UTF-8");
+
+        assert_eq!(reflected, generated);
+        assert!(format!("{reflected_error:?}").contains("declared"));
+        assert!(format!("{generated_error:?}").contains("Declared"));
+        assert_eq!(reflected_principal, generated_principal);
+        assert!(matches!(reflected_result, SchemaValue::Record { .. }));
+
+        let generated_capable = CapableStreamingClient::default()
+            .run_capable(capable_path.clone(), input_stream(Vec::new()))
+            .await
+            .expect("start generated capable stream")
+            .collect()
+            .await;
+        generated_capable
+            .result
+            .as_ref()
+            .expect("generated capable stream succeeds");
+        assert!(matches!(generated_capable.stderr, Ok(None)));
+        let capable_command = golem_rust::agentic::get_tool_type("capable-streaming")
+            .expect("discover capable streaming tool")
+            .client()
+            .command(&["run-capable"])
+            .expect("resolve reflected capable command");
+        let mut reflected_capable = capable_command
+            .start_value(
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(capable_path)],
+                },
+                Some(input_stream(Vec::new())),
+            )
+            .await
+            .expect("start reflected capable stream");
+        let reflected_capable_output = read_tool_stdout(
+            reflected_capable
+                .stdout
+                .take()
+                .expect("reflected capable call has stdout"),
+        )
+        .await;
+        let reflected_capable_result = reflected_capable
+            .result()
+            .await
+            .expect("reflected capable stream succeeds")
+            .expect("reflected capable call returns a structured result");
+        let generated_capable_output = generated_capable
+            .stdout
+            .expect("generated capable stdout finishes")
+            .expect("generated capable stream has stdout");
+        assert_eq!(reflected_capable_output, generated_capable_output);
+        assert!(matches!(
+            reflected_capable_result,
+            SchemaValue::Record { .. }
+        ));
+        vec![
+            generated,
+            reflected,
+            format!("{generated_error:?}"),
+            format!("{reflected_error:?}"),
+            generated_principal,
+            reflected_principal,
+            generated_capable_output.len().to_string(),
+            reflected_capable_output.len().to_string(),
+        ]
+    }
+
+    async fn rust_provider_terminal_rows(&self) -> Vec<String> {
+        let mut declared = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start declared error case");
+        let mut declared_output = Vec::new();
+        let declared_stdout = declared.stdout.as_mut().expect("streaming tool has stdout");
+        while let Some(item) = declared_stdout.next().await {
+            declared_output.extend(item.expect("declared error must finish stdout normally"));
+        }
+        let declared_result = declared
+            .result()
+            .await
+            .expect_err("declared error must retain its structured failure");
+
+        let mut failed = StreamingClient::default()
+            .run(
+                "explicit-stdout-failure".to_string(),
+                input_stream(Vec::new()),
+            )
+            .await
+            .expect("start explicit stdout failure case");
+        let failed_prefix = first_chunk(&mut failed).await;
+        let failed_terminal = match failed
+            .stdout
+            .as_mut()
+            .expect("streaming tool has stdout")
+            .next()
+            .await
+        {
+            Some(Err(ByteStreamFailure::Failed(reason))) => reason,
+            other => panic!("expected explicit failed stdout terminal, got {other:?}"),
+        };
+        let failed_result = failed
+            .result()
+            .await
+            .expect("explicit stdout failure preserves structured success");
+
+        let mut abandoned = StreamingClient::default()
+            .run("finish-failure".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start finish failure case");
+        let abandoned_prefix = first_chunk(&mut abandoned).await;
+        drop(abandoned.stdout.take().expect("streaming tool has stdout"));
+        let abandoned_result = abandoned
+            .result()
+            .await
+            .expect("finish failure preserves structured success");
+
+        vec![
+            String::from_utf8(declared_output).expect("marker is UTF-8"),
+            "finished".to_string(),
+            format!("{declared_result:?}"),
+            String::from_utf8(failed_prefix).expect("marker is UTF-8"),
+            failed_terminal,
+            failed_result.output_closed.to_string(),
+            String::from_utf8(abandoned_prefix).expect("marker is UTF-8"),
+            abandoned_result.output_closed.to_string(),
+        ]
+    }
+
+    async fn gol40_rust_sdk_terminal_observation(&self) -> RustSdkTerminalObservation {
+        use std::future::{Future, poll_fn};
+        use std::task::Poll;
+
+        let success = StreamingClient::default()
+            .run("marker-echo".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start partial-success case")
+            .collect()
+            .await;
+        assert!(matches!(success.stderr, Ok(None)));
+
+        let mut declared = StreamingClient::default()
+            .run("declared-error".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start declared-error case");
+        let declared_bytes = read_tool_stdout(
+            declared
+                .stdout
+                .take()
+                .expect("declared-error case has stdout"),
+        )
+        .await;
+        let declared_error = matches!(
+            declared.result().await,
+            Err(ToolError::Tool(StreamingRunError::Declared { .. }))
+        );
+
+        let mut failed = StreamingClient::default()
+            .run(
+                "explicit-stdout-failure".to_string(),
+                input_stream(Vec::new()),
+            )
+            .await
+            .expect("start explicit stdout failure case");
+        let failed_bytes = first_chunk(&mut failed).await;
+        let failed_terminal = match failed
+            .stdout
+            .as_mut()
+            .expect("explicit failure case has stdout")
+            .next()
+            .await
+        {
+            Some(Err(ByteStreamFailure::Failed(reason))) => reason,
+            other => panic!("expected explicit stdout failure, got {other:?}"),
+        };
+        let failed_result = failed.result().await.is_ok();
+
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let command = ["run".to_string()];
+        let (mut cancel_source, cancel_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (cancel_target, mut cancel_stdout) = tool_host::create_output();
+        let cancelled = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(cancel_stdin)),
+            Some(cancel_target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut cancel_stdout).await, b"marker:");
+        cancelled.cancel();
+        let cancellation_result = format!("{:?}", raw_result(&cancelled).await);
+        let cancellation_closed_stdin = !cancel_source
+            .write_all(vec![Ok(b"after-cancel".to_vec())])
+            .await
+            .is_empty();
+
+        let abandoned_writer = StreamingClient::default()
+            .run("writer-abandonment".to_string(), input_stream(Vec::new()))
+            .await
+            .expect("start writer-abandonment case")
+            .collect()
+            .await;
+        assert!(matches!(abandoned_writer.stderr, Ok(None)));
+
+        let (mut finish_source, finish_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let mut finish_failure = StreamingClient::default()
+            .run("finish-after-reader-drop".to_string(), finish_stdin)
+            .await
+            .expect("start finish-failure case");
+        let finish_failure_bytes = first_chunk(&mut finish_failure).await;
+        drop(
+            finish_failure
+                .stdout
+                .take()
+                .expect("finish-failure case has stdout"),
+        );
+        assert!(finish_source.write_all(vec![Ok(vec![1])]).await.is_empty());
+        drop(finish_source);
+        let finish_failure_observed = finish_failure
+            .result()
+            .await
+            .expect("finish failure preserves structured success")
+            .output_closed;
+
+        let (mut resumed_source, resumed_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let (resumed_target, mut resumed_stdout) = tool_host::create_output();
+        let resumed_result = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(pump_tool_stdin(resumed_stdin)),
+            Some(resumed_target),
+            None,
+        );
+        assert_eq!(raw_chunk(&mut resumed_stdout).await, b"marker:");
+        let mut pending_read = Box::pin(resumed_stdout.read(Vec::with_capacity(1)));
+        poll_fn(|cx| match pending_read.as_mut().poll(cx) {
+            Poll::Pending => Poll::Ready(()),
+            Poll::Ready(result) => panic!("stdout read completed before cancellation: {result:?}"),
+        })
+        .await;
+        let (reader_cancelled, buffer) = pending_read.as_mut().cancel();
+        assert_eq!(format!("{reader_cancelled:?}"), "Cancelled");
+        assert!(buffer.is_empty());
+        drop(pending_read);
+        assert!(
+            resumed_source
+                .write_all(vec![Ok(b"resumed".to_vec())])
+                .await
+                .is_empty()
+        );
+        drop(resumed_source);
+        let cancelled_reader_resumed_bytes = read_all(resumed_stdout).await;
+        let cancelled_reader_result = raw_result(&resumed_result).await.is_ok();
+
+        let (detached_target, detached_stdout) = tool_host::create_output();
+        let detached = rpc.async_invoke_and_await(
+            &command,
+            raw_input("marker-echo"),
+            Some(raw_stdin(vec![b"detached".to_vec()])),
+            Some(detached_target),
+            None,
+        );
+        drop(detached);
+        let dropped_observer_bytes = read_all(detached_stdout).await;
+
+        RustSdkTerminalObservation {
+            success_bytes: success
+                .stdout
+                .expect("partial-success stdout finishes")
+                .expect("partial-success case has stdout"),
+            success_result: !success
+                .result
+                .expect("partial-success case retains structured success")
+                .output_closed,
+            declared_bytes,
+            declared_error,
+            failed_bytes,
+            failed_terminal,
+            failed_result,
+            cancellation_result,
+            cancellation_closed_stdin,
+            abandoned_writer_bytes: abandoned_writer
+                .stdout
+                .expect("writer-abandonment stdout finishes")
+                .expect("writer-abandonment case has stdout"),
+            abandoned_writer_result: !abandoned_writer
+                .result
+                .expect("writer abandonment preserves structured success")
+                .output_closed,
+            finish_failure_bytes,
+            finish_failure_observed,
+            cancelled_reader_resumed_bytes,
+            cancelled_reader_result,
+            dropped_observer_bytes,
+        }
+    }
+
+    async fn gol40_rust_sdk_exception(&self) {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let result = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("trap-after-clean-eof"),
+            Some(closed_raw_stdin()),
+            Some(stdout_target),
+            None,
+        );
+        let bytes = read_all(stdout).await;
+        assert_eq!(bytes, b"marker:");
+        wait_at_crash_checkpoint("gol40-rust-sdk-exception-bytes-observed").await;
+        raw_result(&result)
+            .await
+            .expect("provider exception must fail the caller invocation");
+    }
+
     async fn benchmark_producer(
         &self,
         chunk_count: u32,
@@ -904,6 +2141,59 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let result = invocation.result().await;
         let output = read_tool_stdout(invocation.stdout.expect("streaming tool has stdout")).await;
         evidence(result, output)
+    }
+
+    async fn redaction_stream_case(&self, mode: String) -> RedactionEvidence {
+        let invocation = StreamingClient::default()
+            .run(mode, input_stream(Vec::new()))
+            .await
+            .expect("start redaction stream case");
+        let outcome = match invocation.result().await {
+            Ok(_) => "ok".to_string(),
+            Err(error) => format!("{error:?}"),
+        };
+        let mut stdout = invocation.stdout.expect("streaming tool has stdout");
+        let mut output = Vec::new();
+        let stdout_terminal = loop {
+            match stdout.next().await {
+                Some(Ok(chunk)) => output.extend(chunk),
+                Some(Err(failure)) => break format!("failed:{failure:?}"),
+                None => break "finished".to_string(),
+            }
+        };
+        std::fs::write("/redaction-replay-output", &output)
+            .expect("persist redacted output for reconstruction assertion");
+        RedactionEvidence {
+            output,
+            stdout_terminal,
+            stderr: Vec::new(),
+            stderr_terminal: "absent".to_string(),
+            outcome,
+        }
+    }
+
+    async fn redaction_dual_case(&self) -> RedactionEvidence {
+        let invocation = StreamingClient::default()
+            .dual_reconstruct("redaction-terminals".to_string())
+            .await
+            .expect("start dual-output redaction case");
+        let collected = invocation.collect().await;
+        collected
+            .result
+            .expect("dual-output redaction case succeeds");
+        RedactionEvidence {
+            output: collected
+                .stdout
+                .expect("dual-output stdout finishes")
+                .expect("dual-output stdout is attached"),
+            stdout_terminal: "finished".to_string(),
+            stderr: collected
+                .stderr
+                .expect("dual-output stderr finishes")
+                .expect("dual-output stderr is attached"),
+            stderr_terminal: "finished".to_string(),
+            outcome: "ok".to_string(),
+        }
     }
 
     async fn started_invocation_contracts(
@@ -1485,7 +2775,8 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
     }
 
     async fn filesystem_tool_roundtrip(&self) -> Vec<String> {
-        let path = "workspace/guest-filesystem-tools/notes.txt".to_string();
+        let root = "workspace/guest-filesystem-tools".to_string();
+        let path = format!("{root}/notes.txt");
         let write: RawWriteFileResult = invoke_filesystem_tool(
             "write-file".to_string(),
             raw_filesystem_input(vec![
@@ -1525,7 +2816,11 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let edit: RawEditFileResult = invoke_filesystem_tool(
             "edit-file".to_string(),
             raw_filesystem_input(vec![
-                ("path", SchemaType::string(), SchemaValue::String(path)),
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
                 (
                     "old-text",
                     SchemaType::string(),
@@ -1539,6 +2834,130 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             ]),
         )
         .await;
+        write_filesystem_file(format!("{root}/second.txt"), "TWO second".to_string()).await;
+        write_filesystem_file(
+            format!("{root}/nested/hidden.txt"),
+            "TWO hidden".to_string(),
+        )
+        .await;
+        write_filesystem_file(format!("{root}/ignored.log"), "TWO ignored".to_string()).await;
+        write_filesystem_file(format!("{root}/long.txt"), "x".repeat(64 * 1024 + 1)).await;
+
+        let mut ls_cursor = None;
+        let mut ls_entries = Vec::new();
+        let mut ls_pages = 0;
+        loop {
+            let ls: RawLsResult = invoke_filesystem_tool(
+                "ls".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawLsInput {
+                        path: root.clone(),
+                        max_depth: Some(2),
+                        glob: Some("**/*.txt".to_string()),
+                        limit: Some(1),
+                        cursor: ls_cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode ls input"),
+                )
+                .expect("encode ls wire input"),
+            )
+            .await;
+            ls_pages += 1;
+            assert!(
+                ls.diagnostics.is_empty(),
+                "ls diagnostics: {}",
+                format_diagnostics(&ls.diagnostics)
+            );
+            ls_entries.extend(ls.entries);
+            ls_cursor = ls.next_cursor;
+            if ls_cursor.is_none() {
+                break;
+            }
+            assert!(ls_pages < 10, "ls pagination did not converge");
+        }
+        assert!(ls_pages > 1, "ls did not return a continuation cursor");
+        let listed_paths = ls_entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            listed_paths,
+            [
+                format!("{root}/long.txt"),
+                format!("{root}/nested/hidden.txt"),
+                path.clone(),
+                format!("{root}/second.txt"),
+            ]
+        );
+        let notes_size = ls_entries
+            .iter()
+            .find_map(|entry| {
+                if entry.path == path {
+                    match entry.kind {
+                        RawEntryKind::File(size) => Some(size),
+                        RawEntryKind::Directory => panic!("ls returned notes.txt as a directory"),
+                        RawEntryKind::Symlink => panic!("ls returned notes.txt as a symlink"),
+                        RawEntryKind::Other => {
+                            panic!("ls returned notes.txt as an unsupported entry")
+                        }
+                    }
+                } else {
+                    None
+                }
+            })
+            .expect("ls returned notes.txt");
+
+        let mut grep_cursor = None;
+        let mut grep_matches = Vec::new();
+        let mut grep_diagnostics = Vec::new();
+        let mut grep_pages = 0;
+        loop {
+            let grep: RawGrepResult = invoke_filesystem_tool(
+                "grep".to_string(),
+                golem_rust::encode_typed_schema_value(
+                    &RawGrepInput {
+                        path: root.clone(),
+                        pattern: "T.O".to_string(),
+                        mode: Some(RawSearchMode::Regex),
+                        case_insensitive: false,
+                        max_depth: Some(2),
+                        include_globs: vec!["**/*.txt".to_string()],
+                        exclude_globs: vec!["nested".to_string()],
+                        limit: Some(1),
+                        cursor: grep_cursor,
+                    }
+                    .into_typed_schema_value()
+                    .expect("encode grep input"),
+                )
+                .expect("encode grep wire input"),
+            )
+            .await;
+            grep_pages += 1;
+            grep_matches.extend(grep.matches);
+            grep_diagnostics.extend(grep.diagnostics);
+            grep_cursor = grep.next_cursor;
+            if grep_cursor.is_none() {
+                break;
+            }
+            assert!(grep_pages < 10, "grep pagination did not converge");
+        }
+        assert!(grep_pages > 1, "grep did not return a continuation cursor");
+        assert_eq!(grep_matches.len(), 2);
+        assert_eq!(grep_matches[0].path, path);
+        assert_eq!(grep_matches[0].line, 2);
+        assert_eq!(grep_matches[0].text, "TWO");
+        assert!(!grep_matches[0].text_truncated);
+        assert_eq!(grep_matches[1].path, format!("{root}/second.txt"));
+        assert_eq!(grep_matches[1].line, 1);
+        assert_eq!(grep_matches[1].text, "TWO second");
+        assert!(!grep_matches[1].text_truncated);
+        assert_eq!(grep_diagnostics.len(), 1);
+        assert!(matches!(
+            grep_diagnostics[0].kind,
+            RawDiagnosticKind::LineTooLong
+        ));
+        assert_eq!(grep_diagnostics[0].path, format!("{root}/long.txt"));
 
         vec![
             match write.disposition {
@@ -1556,7 +2975,132 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             edit.replacements.to_string(),
             edit.bytes_before.to_string(),
             edit.bytes_after.to_string(),
+            format!("{}:file:{notes_size}:pages={ls_pages}", path),
+            format!(
+                "{}:{}:{}:matches={}:diagnostics={}:pages={grep_pages}",
+                grep_matches[0].path,
+                grep_matches[0].line,
+                grep_matches[0].text,
+                grep_matches.len(),
+                grep_diagnostics.len(),
+            ),
         ]
+    }
+
+    async fn builtin_cli(&self, tool: String, cwd: String, args: Vec<String>) -> CliToolEvidence {
+        let rpc = ToolRpc::create(&tool).expect("built-in CLI tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let (stderr_target, stderr) = tool_host::create_output();
+        let invoke = rpc.invoke_and_await(
+            Vec::new(),
+            raw_cli_input(&tool, cwd, args),
+            None,
+            Some(stdout_target),
+            Some(stderr_target),
+        );
+        let (result, stdout, stderr) = (invoke, read_output(stdout), read_output(stderr))
+            .join()
+            .await;
+        let result = result.unwrap_or_else(|error| {
+            panic!(
+                "invoke built-in CLI tool '{tool}': {error:?}; stdout={stdout:?}; stderr={stderr:?}"
+            )
+        });
+        let stdout = stdout.unwrap_or_else(|error| panic!("read '{tool}' stdout: {error}"));
+        let stderr = stderr.unwrap_or_else(|error| panic!("read '{tool}' stderr: {error}"));
+        let value = decode_typed_schema_value_owned(
+            result
+                .result
+                .unwrap_or_else(|| panic!("built-in CLI tool '{tool}' returned no result")),
+        )
+        .unwrap_or_else(|error| panic!("decode built-in CLI tool '{tool}' result: {error}"));
+        let exit_code = i32::from_value(value.value())
+            .unwrap_or_else(|error| panic!("convert built-in CLI tool '{tool}' result: {error}"));
+        CliToolEvidence {
+            exit_code,
+            stdout,
+            stderr,
+        }
+    }
+
+    async fn filesystem_policy_write_read(
+        &self,
+        path: String,
+        content: String,
+    ) -> Result<Vec<String>, String> {
+        let write: RawWriteFileResult = try_invoke_filesystem_tool(
+            "write-file".to_string(),
+            raw_filesystem_input(vec![
+                (
+                    "path",
+                    SchemaType::string(),
+                    SchemaValue::String(path.clone()),
+                ),
+                (
+                    "content",
+                    SchemaType::string(),
+                    SchemaValue::String(content.clone()),
+                ),
+                (
+                    "create-parent-directories",
+                    SchemaType::bool(),
+                    SchemaValue::Bool(true),
+                ),
+            ]),
+        )
+        .await?;
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+
+        Ok(vec![
+            match write.disposition {
+                RawWriteDisposition::Created => "created",
+                RawWriteDisposition::Replaced => "replaced",
+            }
+            .to_string(),
+            write.bytes_written.to_string(),
+            read.content,
+            read.start_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.end_line
+                .map_or_else(|| "none".to_string(), |line| line.to_string()),
+            read.next_cursor.map_or_else(
+                || "none".to_string(),
+                |cursor| format!("{}:{}", cursor.byte_offset, cursor.line),
+            ),
+        ])
+    }
+
+    async fn filesystem_policy_read(&self, path: String) -> Result<String, String> {
+        let read: RawReadFileResult = try_invoke_filesystem_tool(
+            "read-file".to_string(),
+            golem_rust::encode_typed_schema_value(
+                &RawReadFileInput {
+                    path,
+                    start_line: None,
+                    end_line: None,
+                    cursor: None,
+                }
+                .into_typed_schema_value()
+                .map_err(|error| format!("{error:?}"))?,
+            )
+            .map_err(|error| format!("{error:?}"))?,
+        )
+        .await?;
+        Ok(read.content)
     }
 
     async fn consume_typed_output(&self, decorated: bool, tag: String) -> Vec<TypedOutputEvidence> {
@@ -1797,7 +3341,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         let (counter_target, counter_stdout) = tool_host::create_output();
         rpc.invoke_and_await(
             path.to_vec(),
-            raw_input("read-counter"),
+            raw_input("wait-counter:5"),
             Some(closed_raw_stdin()),
             Some(counter_target),
             None,
@@ -1841,6 +3385,21 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         )
         .await
         .expect("read native effect counter");
+        String::from_utf8(read_all(stdout).await).unwrap()
+    }
+
+    async fn native_config(&self, key: String) -> String {
+        let rpc = ToolRpc::create("native-streaming").expect("tool RPC creation failed");
+        let (target, stdout) = tool_host::create_output();
+        rpc.invoke_and_await(
+            vec!["run".to_string()],
+            raw_input(&format!("config:{key}")),
+            Some(closed_raw_stdin()),
+            Some(target),
+            None,
+        )
+        .await
+        .expect("invoke native config probe");
         String::from_utf8(read_all(stdout).await).unwrap()
     }
 
@@ -2407,6 +3966,24 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         ]
     }
 
+    async fn completed_capable_tool_then_promise(&self, path: String, input: Vec<u8>) -> Vec<u8> {
+        let invocation = CapableStreamingClient::default()
+            .run_capable(path, input_stream(vec![input.clone()]))
+            .await
+            .expect("start capable tool before durable promise");
+        let collected = invocation.collect().await;
+        let result = collected
+            .result
+            .expect("complete capable tool before durable promise");
+        assert_eq!(result.bytes_read, input.len() as u64);
+        let output = collected
+            .stdout
+            .expect("collect capable stdout before durable promise")
+            .expect("capable tool has stdout");
+        wait_at_promise_checkpoint("completed-capable-tool").await;
+        output
+    }
+
     async fn clean_stdout_then_trap(&self) {
         let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
         let (stdout_target, stdout) = tool_host::create_output();
@@ -2422,6 +3999,35 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
         raw_result(&result)
             .await
             .expect("owner trap must abort this result observation");
+    }
+
+    async fn dependent_sibling_after_unjournaled_stdout(&self) -> Vec<String> {
+        let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+        let (stdout_target, stdout) = tool_host::create_output();
+        let changing = rpc.async_invoke_and_await(
+            &["run".to_string()],
+            raw_input("changing-stdout-in-atomic-region"),
+            Some(raw_stdin(Vec::new())),
+            Some(stdout_target),
+            None,
+        );
+        let observed = String::from_utf8(read_all(stdout).await).expect("stdout is UTF-8");
+        let sibling = rpc.async_invoke_and_await(
+            &["no-stream".to_string()],
+            raw_no_stream_input(&observed),
+            None,
+            None,
+            None,
+        );
+        let sibling = decode_no_stream_result(
+            raw_result(&sibling)
+                .await
+                .expect("dependent sibling invocation succeeds"),
+        );
+        raw_result(&changing)
+            .await
+            .expect("changing invocation completes after recovery");
+        vec![observed, sibling]
     }
 
     async fn trap_with_blocked_sibling(&self) {
@@ -2453,6 +4059,53 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             .result()
             .await
             .expect("owner trap must abort the primary while its sibling remains blocked");
+    }
+
+    async fn trap_with_sibling_lifecycle(&self, lifecycle: String) {
+        let (blocked_source, blocked_stdin) =
+            golem_rust::golem_agentic::wit_stream::new::<Result<Vec<u8>, ByteStreamFailure>>();
+        let mut blocked = StreamingClient::default()
+            .run("marker-echo".to_string(), blocked_stdin)
+            .await
+            .expect("start sibling tool");
+        assert_eq!(first_chunk(&mut blocked).await, b"marker:");
+
+        match lifecycle.as_str() {
+            "blocked-attachment" => {
+                let mut trapped = StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool");
+                assert_eq!(first_chunk(&mut trapped).await, b"marker:");
+                trapped
+                    .result()
+                    .await
+                    .expect("owner trap must abort the blocked attachment");
+            }
+            "detached-child" => {
+                drop(blocked);
+                StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool")
+                    .result()
+                    .await
+                    .expect("owner trap must abort after detaching the child observer");
+            }
+            "observed-future" => {
+                let observed = blocked.result();
+                let trapped = StreamingClient::default()
+                    .run("trap".to_string(), input_stream(Vec::new()))
+                    .await
+                    .expect("start trapping tool");
+                let (blocked, trapped) = (observed, trapped.result()).join().await;
+                blocked.expect("owner trap must wake the observed sibling future");
+                trapped.expect("owner trap must abort the trapping future");
+            }
+            other => panic!("unknown sibling lifecycle {other}"),
+        }
+
+        let _keep_blocked_source_open = blocked_source;
     }
 
     async fn drop_trapping_result(&self) {
@@ -2878,6 +4531,7 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
                 .expect("completed reconstruction result before custom effect");
         };
         let incomplete_custom = async {
+            wait_at_unscoped_crash_checkpoint("before-reconstruction-custom-effect").await;
             Durability::<(), String>::new(
                 "golem-it",
                 "reconstruction-barrier-custom-effect",
@@ -2982,5 +4636,193 @@ impl ToolStreamingCaller for ToolStreamingCallerImpl {
             outer_class.to_string(),
             nested_class.to_string(),
         ]
+    }
+
+    async fn matrix_core_observation(&self) -> MatrixObservation {
+        let client = MatrixCoreClient::default().artifact();
+        let success = client
+            .inspect(
+                MatrixRequest {
+                    source: "matrix.sample".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 3,
+                        height: 5,
+                    },
+                    labels: vec!["north".to_string(), "east".to_string(), "south".to_string()],
+                },
+                7,
+            )
+            .await
+            .expect("matrix success invocation");
+        let error = client
+            .inspect(
+                MatrixRequest {
+                    source: "reject.me".to_string(),
+                    dimensions: MatrixDimensions {
+                        width: 1,
+                        height: 1,
+                    },
+                    labels: vec!["must-not-echo".to_string()],
+                },
+                99,
+            )
+            .await
+            .expect_err("matrix rejection invocation");
+        let ToolError::Tool(MatrixCoreArtifactInspectError::Rejected(rejection)) = error else {
+            panic!("matrix invocation returned the wrong error variant: {error:?}")
+        };
+        MatrixObservation {
+            provider: success.provider,
+            command: success.command,
+            normalized_source: success.normalized_source,
+            weighted_size: success.weighted_size,
+            label_summary: success.label_summary,
+            principal: success.principal,
+            owner_agent_id: success.owner_agent_id,
+            error_field: rejection.field,
+            error_reason: rejection.reason,
+            error_retryable: rejection.retryable,
+        }
+    }
+}
+
+#[agent_implementation]
+impl RustResourceToolStreamingCaller for RustResourceToolStreamingCallerImpl {
+    fn new(
+        _name: String,
+        #[agent_config] config: Config<RustResourceToolStreamingCallerConfig>,
+    ) -> Self {
+        Self { config }
+    }
+
+    async fn matrix_secret_observation(&self) -> MatrixResourceObservation {
+        let secret = self
+            .config
+            .get()
+            .expect("matrix resource config access is allowed")
+            .secret
+            .handle()
+            .expect("matrix resource secret handle access is allowed");
+        let first_secret = MatrixResourceClient::default()
+            .secret()
+            .exchange(secret)
+            .await
+            .expect("first matrix secret exchange succeeds");
+        let second_secret = MatrixResourceClient::default()
+            .secret()
+            .exchange(first_secret.secret)
+            .await
+            .expect("second matrix secret exchange succeeds");
+
+        MatrixResourceObservation {
+            secret_first_provider: first_secret.provider,
+            secret_second_provider: second_secret.provider,
+            secret_first_revealed: first_secret.revealed,
+            secret_second_revealed: second_secret.revealed,
+            secret_principal: second_secret.principal,
+            secret_owner_agent_id: second_secret.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_quota_observation(&self) -> MatrixResourceObservation {
+        let quota = QuotaToken::new("matrix-capacity", 2);
+        let quota_original =
+            QuotaToken::from_value(&quota.to_value()).expect("clone matrix quota handle cell");
+        let quota_exchange = MatrixResourceClient::default()
+            .quota()
+            .exchange(quota)
+            .await
+            .expect("matrix quota exchange succeeds");
+        let quota_original_consumed = encode_schema_value(&quota_original.to_value()).is_err();
+        let quota_returned_usable = quota_exchange
+            .token
+            .reserve(0)
+            .map(|reservation| reservation.commit(0))
+            .is_ok();
+
+        MatrixResourceObservation {
+            quota_provider: quota_exchange.provider,
+            quota_reserved: quota_exchange.reserved,
+            quota_returned_usable,
+            quota_original_consumed,
+            quota_principal: quota_exchange.principal,
+            quota_owner_agent_id: quota_exchange.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_permission_observation(&self) -> MatrixResourceObservation {
+        let issue = MatrixPermissionIssuerClient::default()
+            .issue()
+            .await
+            .expect("matrix permission issue succeeds");
+        assert_eq!(issue.issuer, "rust");
+        let original = issue.card;
+        let original_view = GuestPermissionCardHandle::from_value(&original.to_value())
+            .expect("clone matrix permission handle cell");
+        let id = original
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .expect("derived matrix permission card is usable");
+        let exchange = MatrixResourceClient::default()
+            .permissions()
+            .exchange(original)
+            .await
+            .expect("matrix permission exchange succeeds");
+        let same_identity = exchange
+            .card
+            .with_handle(|card| CardId::from(permission_types::id(card)))
+            .is_some_and(|returned_id| returned_id == id);
+        let original_consumed = !original_view.is_present();
+        assert_eq!(issue.principal, exchange.principal);
+        assert_eq!(issue.owner_agent_id, exchange.owner_agent_id);
+
+        MatrixResourceObservation {
+            permission_supported: true,
+            permission_provider: exchange.provider,
+            permission_same_identity: same_identity,
+            permission_original_consumed: original_consumed,
+            permission_principal: exchange.principal,
+            permission_owner_agent_id: exchange.owner_agent_id,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_typed_stream_observation(&self) -> MatrixResourceObservation {
+        let typed_values = MatrixResourceClient::default()
+            .typed()
+            .transform(matrix_typed_input([2, 5, 9]))
+            .await
+            .expect("matrix typed transform starts")
+            .collect()
+            .await
+            .expect("matrix typed transform completes");
+
+        MatrixResourceObservation {
+            typed_values,
+            ..empty_matrix_resource_observation()
+        }
+    }
+
+    async fn matrix_resource_observation(&self) -> MatrixResourceObservation {
+        let secret = self.matrix_secret_observation().await;
+        let quota = self.matrix_quota_observation().await;
+        let typed = self.matrix_typed_stream_observation().await;
+        MatrixResourceObservation {
+            secret_first_provider: secret.secret_first_provider,
+            secret_second_provider: secret.secret_second_provider,
+            secret_first_revealed: secret.secret_first_revealed,
+            secret_second_revealed: secret.secret_second_revealed,
+            secret_principal: secret.secret_principal,
+            secret_owner_agent_id: secret.secret_owner_agent_id,
+            quota_provider: quota.quota_provider,
+            quota_reserved: quota.quota_reserved,
+            quota_returned_usable: quota.quota_returned_usable,
+            quota_original_consumed: quota.quota_original_consumed,
+            quota_principal: quota.quota_principal,
+            quota_owner_agent_id: quota.quota_owner_agent_id,
+            typed_values: typed.typed_values,
+            ..empty_matrix_resource_observation()
+        }
     }
 }

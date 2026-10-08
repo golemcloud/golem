@@ -19,7 +19,16 @@ package golem.runtime.tool
 import golem.host.ToolWireInterop
 import golem.schema.{SchemaValue, TypedSchemaValue}
 import golem.schema.wire.SchemaWire
-import golem.tool.{Doc, ToolMiddleware, ToolMiddlewareDescriptor, ToolMiddlewareScope}
+import golem.tool.{
+  CommandAnnotations,
+  Doc,
+  ErrorKind,
+  Example,
+  ToolBuildError,
+  ToolMiddleware,
+  ToolMiddlewareDescriptor,
+  ToolMiddlewareScope
+}
 import golem.tool.wire.{WitCustomToolError, WitTool, WitToolError}
 import zio.test._
 
@@ -130,6 +139,66 @@ object ToolWireInteropSpec extends ZIOSpecDefault {
     test("rich_tool_roundtrips_through_js") {
       val roundtripped = ToolWireInterop.toolFromJs(ToolWireInterop.toolToJs(richWit))
       assertTrue(roundtripped == richWit)
+    },
+    test("GOL-40 rich metadata represents the complete contract and exposes its invalid identifier") {
+      val expected = gol40RichTool
+      val root     = expected.commands(0)
+      val render   = expected.commands(1)
+      val status   = expected.commands(2)
+      val body     = render.body.get
+      assertTrue(
+        expected.version == "1.0.0",
+        !expected.requiresFilesystem,
+        root.name == "artifact",
+        root.aliases == List("art"),
+        root.doc == Doc(
+          "Build and inspect artifacts",
+          "A deliberately asymmetric conformance tool.",
+          List(Example("Render", "artifact --region eu-west-1 render src/main.wasm --format json"))
+        ),
+        root.globals.options.map(_.long) == List("region"),
+        root.globals.flags.map(_.long) == List("trace"),
+        root.body.isEmpty,
+        render.aliases == List("build"),
+        render.globals.options.map(_.long) == List("profile"),
+        render.subcommands == List(2),
+        status.aliases == List("show"),
+        body.positionals.fixed.map(_.name) == List("request"),
+        body.positionals.tail.map(t => (t.name, t.min, t.max, t.separator, t.verbatim)) ==
+          Some(("inputs", 1, Some(3), Some("--"), true)),
+        body.options.map(_.long) == List("format", "tag", "define", "color"),
+        body.flags.map(_.long) == List("checksum", "verbose"),
+        body.constraints.map(_.productPrefix) == List("RequiresAll", "Implies", "Forbids"),
+        body.stdin.exists(_.mime == List("application/wasm")),
+        body.stdout.exists(spec => spec.required && spec.mime == List("text/plain; charset=utf-8")),
+        body.stderr.exists(_.mime == List("application/octet-stream")),
+        body.result.exists(result =>
+          result.formatters.map(formatter => formatter.name -> formatter.doc.summary) ==
+            List("json" -> "JSON report", "table" -> "Tabular report") && result.defaultFormatter == "json"
+        ),
+        body.errors.map(error => (error.name, error.kind, error.exitCode, error.payload.isDefined)) == List(
+          ("invalid-request", ErrorKind.UsageError, 2, true),
+          ("render-failed", ErrorKind.RuntimeError, 70, true)
+        ),
+        body.annotations.contains(
+          CommandAnnotations(readOnly = false, destructive = false, idempotent = true, openWorld = false)
+        ),
+        expected.canonicalInputFields(1).map(_.name) == List(
+          "region",
+          "trace",
+          "profile",
+          "request",
+          "inputs",
+          "format",
+          "tag",
+          "define",
+          "color",
+          "checksum",
+          "verbose"
+        ),
+        expected.canonicalInputFields(2).map(_.name) == List("region", "trace", "profile", "artifact-id"),
+        expected.tryToTool.isRight
+      )
     },
     test("js_tool_shape_matches_dts") {
       val j    = dyn(ToolWireInterop.toolToJs(richWit))

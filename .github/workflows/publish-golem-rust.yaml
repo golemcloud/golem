@@ -22,6 +22,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           submodules: true
+          fetch-depth: 0
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v1-golem-rust
@@ -36,10 +37,23 @@ jobs:
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          # The Golem release that published golem-schema, golem-schema-derive and golem-tool-metadata to crates.io.
+          GOLEM_VERSION: 1.6.0-dev.2
         run: |
           export VERSION_FULL="${{ steps.get_version.outputs.version }}"
           export VERSION="${VERSION_FULL#golem-rust-v}"
+          for crate in golem-schema golem-schema-derive golem-tool-metadata; do
+            curl -sf -A golem-ci "https://crates.io/api/v1/crates/$crate/$GOLEM_VERSION" > /dev/null \
+              || { echo "$crate $GOLEM_VERSION is not published on crates.io" >&2; exit 1; }
+          done
+          if git rev-parse -q --verify "refs/tags/v$GOLEM_VERSION" > /dev/null; then
+            git diff --quiet "v$GOLEM_VERSION" HEAD -- golem-schema golem-schema-derive golem-tool-metadata \
+              || { echo "golem-schema or golem-tool-metadata changed since v$GOLEM_VERSION; publish a new Golem release first" >&2; exit 1; }
+          else
+            echo "::warning::No v$GOLEM_VERSION tag; cannot check that golem-schema and golem-tool-metadata are unchanged since they were published"
+          fi
+          sed -i "s/0\.0\.0/$GOLEM_VERSION/g" golem-schema/Cargo.toml golem-schema-derive/Cargo.toml golem-tool-metadata/Cargo.toml
+          sed -i -E "/^golem-(schema|schema-derive|tool-metadata) *=/ s/0\.0\.0/$GOLEM_VERSION/" Cargo.toml sdks/rust/golem-rust/Cargo.toml
           git ls-files -z '*Cargo.toml' | xargs -0 sed -i "s/0\.0\.0/$VERSION/g"
-          cargo publish -p golem-tool-metadata --all-features --allow-dirty
           cargo publish -p golem-rust-macro --all-features --allow-dirty
           cargo publish --manifest-path sdks/rust/golem-rust/Cargo.toml --all-features --allow-dirty

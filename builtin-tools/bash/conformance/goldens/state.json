@@ -1,0 +1,158 @@
+{
+ "cases": {
+  "calls: aliases end with their call": {
+   "script": "5e3f34928c77fb2a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "calls: arrays end with their call": {
+   "script": "d31d8093ef2d212c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 0\n"
+   }
+  },
+  "calls: each call is a new process": {
+   "script": "d6659f138cb210aa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "different\n"
+   }
+  },
+  "calls: errexit does not carry": {
+   "script": "0844b0fc56dc1fd2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "reached\n"
+   }
+  },
+  "calls: exit keeps the directory it left in": {
+   "script": "c2ceaa5d9b91a89b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp\n"
+   }
+  },
+  "calls: functions end with their call": {
+   "script": "74c850081205be88",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "done\n"
+   }
+  },
+  "calls: positional parameters and the directory stack end with their call": {
+   "script": "14525434f6cc06b9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n/tmp/s\n"
+   }
+  },
+  "calls: readonly ends with its call": {
+   "script": "953a85637dee0d35",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "calls: relative paths resolve from the carried directory": {
+   "script": "881ab590514dc313",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\ndata\n/tmp/r/sub\n"
+   }
+  },
+  "calls: settings kept in a file": {
+   "script": "76a05d143547810b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "kept\nhi you\npipefail       \ton\n"
+   }
+  },
+  "calls: shell options end with their call": {
+   "script": "34d44d702de46fce",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "errexit        \toff\nnounset        \toff\npipefail       \toff\nnullglob            \toff\n"
+   }
+  },
+  "calls: the last status does not carry": {
+   "script": "3125cc6f80a3077b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "calls: the working directory carries": {
+   "script": "198846c8ecb1823a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp/w\n/tmp\n/tmp\n"
+   }
+  },
+  "calls: traps end with their call": {
+   "script": "3e4b2271aae1cfb9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "bye\nafter\n"
+   }
+  },
+  "calls: variables and exports end with their call": {
+   "script": "ae8b3afcc29686cc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset] [unset] [unset]\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

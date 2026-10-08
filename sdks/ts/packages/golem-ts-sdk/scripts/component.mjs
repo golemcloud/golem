@@ -1,12 +1,35 @@
+import fs from 'node:fs';
 import ts from 'typescript';
 import { minify } from 'terser';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticTools } from './static-tools.mjs';
 
-const sdk = '@golemcloud/golem-ts-sdk';
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const sdk = manifest.name;
 const runtime = path.join(packageRoot, 'dist/runtime');
+const componentExports = Object.entries(manifest.exports).flatMap(([subpath, target]) => {
+  if (!target || typeof target !== 'object' || typeof target['golem-component'] !== 'string')
+    return [];
+  if (!target['golem-component'].startsWith('./dist/runtime/'))
+    throw new Error(`Invalid ${sdk} component export target: ${target['golem-component']}`);
+  return [
+    {
+      specifier: subpath === '.' ? sdk : `${sdk}/${subpath.slice(2)}`,
+      declaration:
+        typeof target.types === 'string' ? path.join(packageRoot, target.types) : undefined,
+      runtime: path.join(packageRoot, target['golem-component']),
+    },
+  ];
+});
+const componentEntries = new Map(
+  componentExports.map(({ specifier, runtime }) => [specifier, runtime]),
+);
+const componentDeclarations = new Map(
+  componentExports.flatMap(({ declaration, runtime }) =>
+    declaration ? [[path.normalize(declaration), runtime]] : [],
+  ),
+);
 
 function referencesSdk(node) {
   const specifier =
@@ -38,9 +61,9 @@ export function discoverCapabilities(parsedConfig) {
     Object.assign(capabilities, { agents: true, tools: true, middleware: true, schemas: true });
   const sdkDeclarations = new Set();
   for (const source of program.getSourceFiles()) {
-    for (const subpath of ['', '/middleware']) {
+    for (const { specifier } of componentExports) {
       const resolved = ts.resolveModuleName(
-        sdk + subpath,
+        specifier,
         source.fileName,
         parsedConfig.options,
         ts.sys,
@@ -181,8 +204,6 @@ export default (async () => {
 
 export function componentPlugin(parsedConfig, main) {
   const capabilities = discoverCapabilities(parsedConfig);
-  const tools = staticTools(parsedConfig, runtime);
-  const dynamicModels = tools.usesDynamicModels || capabilities.middleware || capabilities.schemas;
   const entry = '\0golem:component-entry';
   let started = false;
   const validateBuild = (options, watchMode = false) => {
@@ -202,10 +223,10 @@ export function componentPlugin(parsedConfig, main) {
     },
     resolveId(id, importer) {
       if (id === 'virtual:agent-main') return entry;
-      if (id === sdk) return path.join(runtime, 'index.mjs');
-      if (id === `${sdk}/middleware`) return path.join(runtime, 'middleware.mjs');
-      if (id === `${sdk}/schema`) return path.join(runtime, 'schema/public.mjs');
-      if (id === `${sdk}/reflection`) return path.join(runtime, 'reflection.mjs');
+      const componentEntry = componentEntries.get(id);
+      if (componentEntry) return componentEntry;
+      if (id === sdk || id.startsWith(`${sdk}/`))
+        this.error(`Package import ${id} is not available to component builds`);
       if (importer && !importer.startsWith('\0') && !importer.startsWith(runtime + path.sep)) {
         const resolved = ts.resolveModuleName(
           id,
@@ -213,84 +234,14 @@ export function componentPlugin(parsedConfig, main) {
           parsedConfig.options,
           ts.sys,
         ).resolvedModule;
-        for (const [declaration, module] of [
-          ['index', 'index'],
-          ['middleware', 'middleware'],
-          ['schema', 'schema/public'],
-          ['reflection', 'reflection'],
-        ]) {
-          if (resolved?.resolvedFileName === path.join(packageRoot, `dist/${declaration}.d.mts`)) {
-            return path.join(runtime, `${module}.mjs`);
-          }
-        }
+        const componentEntry = componentDeclarations.get(
+          path.normalize(resolved?.resolvedFileName ?? ''),
+        );
+        if (componentEntry) return componentEntry;
       }
     },
     load(id) {
       if (id === entry) return componentEntry(main, capabilities);
-    },
-    transform: {
-      order: 'post',
-      handler(code, id) {
-        const compiled = tools.transform(code, id);
-        if (compiled) return compiled;
-        if (id === path.join(runtime, 'index.mjs')) {
-          if (capabilities.tools)
-            code = code
-              .replaceAll('./internal/registry/toolRegistry.mjs', './internal/tool/compiled.mjs')
-              .replaceAll('./internal/tool/invocationResult.mjs', './internal/tool/compiled.mjs');
-          if (!dynamicModels)
-            code = code.replace(
-              /^import ['"]\.\/schema\/(zod|valibot|arktype|effect)\.mjs['"];?\s*$/gm,
-              '',
-            );
-          return { code, map: null };
-        }
-        if (id === path.join(runtime, 'agentId.mjs') && !dynamicModels) {
-          const source = ts.createSourceFile(
-            id,
-            code,
-            ts.ScriptTarget.Latest,
-            true,
-            ts.ScriptKind.JS,
-          );
-          const edits = [];
-          for (const statement of source.statements) {
-            if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'ParsedAgentId')
-              continue;
-            for (const member of statement.members)
-              if (['create', 'parsed', 'parts', 'dynamicClient'].includes(member.name?.text))
-                edits.push([member.getStart(source), member.end]);
-          }
-          for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
-          return { code, map: null };
-        }
-        // Rollup does not eliminate unused class methods. Specialize only the two
-        // registration methods of the SDK's builder, before Rollup links imports.
-        // There are no capability tests or alternate implementations at runtime.
-        if (id !== path.join(runtime, 'tool.mjs')) return;
-        const source = ts.createSourceFile(
-          id,
-          code,
-          ts.ScriptTarget.Latest,
-          true,
-          ts.ScriptKind.JS,
-        );
-        const edits = [];
-        for (const statement of source.statements) {
-          if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'CommandBuilder')
-            continue;
-          for (const member of statement.members) {
-            if (
-              (member.name?.text === 'middleware' && !capabilities.middleware) ||
-              (member.name?.text === 'implement' && !capabilities.tools)
-            ) {
-              edits.push([member.getStart(source), member.end]);
-            }
-          }
-        }
-        for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
-        return { code, map: null };
-      },
     },
     async renderChunk(code, _chunk, options) {
       const result = await minify(code, {

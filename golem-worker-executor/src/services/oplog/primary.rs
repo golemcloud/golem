@@ -27,8 +27,9 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
-    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor,
-    next_scan_cursor, retry_scan_storage_op,
+    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, StagePublication,
+    decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
+    refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -124,53 +125,8 @@ where
     }
 }
 
-/// As [`retry_storage_op`], but hands a fence back instead of panicking on it.
-///
-/// A fenced write is not a storage failure: the storage is healthy and refused the write on
-/// purpose, because this executor no longer owns the agent's shard. Retrying cannot change that,
-/// and panicking would take the whole executor down over one agent that simply moved. Every other
-/// permanent failure still panics, so the fail-stop contract is unchanged for everything else -
-/// including the primary-key collision that has always been the crude fence.
-async fn retry_storage_op_fenceable<T, F, Fut>(
-    retry_config: &RetryConfig,
-    op_name: &str,
-    key: &str,
-    mut op: F,
-) -> Result<T, IndexedStorageError>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
-{
-    let mut attempts = 0u32;
-    loop {
-        attempts += 1;
-        match op().await {
-            Ok(val) => return Ok(val),
-            Err(err @ IndexedStorageError::Fenced { .. }) => return Err(err),
-            Err(IndexedStorageError::Transient(msg)) => {
-                if let Some(delay) = get_delay(retry_config, attempts) {
-                    record_oplog_storage_retry(op_name);
-                    warn!(
-                        op = op_name,
-                        key = key,
-                        attempt = attempts,
-                        delay_ms = delay.as_millis() as u64,
-                        "Transient indexed storage error, retrying: {msg}"
-                    );
-                    tokio::time::sleep(delay).await;
-                } else {
-                    panic!(
-                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
-                    );
-                }
-            }
-            Err(err) => {
-                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
-            }
-        }
-    }
-}
-
+/// Retries transient failures of an oplog maintenance operation and returns anything else, a
+/// fence included, for the caller to classify.
 async fn retry_maintenance_storage_op<T, F, Fut>(
     retry_config: &RetryConfig,
     op_name: &str,
@@ -394,15 +350,6 @@ async fn retry_oplog_append(
     }
 }
 
-/// Records the epoch this executor is allowed to write `key` with, and reports the fence when
-/// the stored record is already ahead of it.
-///
-/// Monotonic on the storage side once a record exists, so a re-grant at a higher epoch takes the
-/// oplog over while an executor holding a stale one cannot claim it back. An oplog with no record
-/// (new, deleted, or from before the record existed) is claimed by whichever epoch opens it
-/// first. Written before the oplog's first entry -
-/// an absent record fences too, which is what closes the window between creating an oplog and
-/// recording who owns it.
 /// Whether an open still has to record the epoch it asserts, or its caller did so already.
 #[derive(Clone)]
 enum EpochRecord {
@@ -410,51 +357,6 @@ enum EpochRecord {
     Pending,
     /// A create recorded it before the first entry went in, with this refusal.
     Recorded(Option<OplogFence>),
-}
-
-async fn record_owning_epoch(
-    indexed_storage: &(dyn IndexedStorage + Send + Sync),
-    retry_config: &RetryConfig,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    key: &str,
-    shard_epoch: ShardEpoch,
-) -> Option<OplogFence> {
-    let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
-        let ns = IndexedStorageNamespace::OpLog {
-            agent_id: owned_agent_id.agent_id(),
-            agent_mode,
-        };
-        async move {
-            indexed_storage
-                .set_key_epoch("oplog", "set_key_epoch", ns, key, shard_epoch)
-                .await
-        }
-    })
-    .await;
-
-    record_oplog_epoch_fence("record", outcome.is_err());
-    match outcome {
-        Ok(()) => None,
-        Err(IndexedStorageError::Fenced {
-            expected, actual, ..
-        }) => {
-            warn!(
-                agent_id = %owned_agent_id,
-                expected_epoch = expected.0,
-                actual_epoch = ?actual.map(|epoch| epoch.0),
-                "Oplog opened at a stale shard epoch: the shard has a new owner"
-            );
-            let fence = OplogFence {
-                agent_id: owned_agent_id.agent_id(),
-                expected_epoch: expected,
-                actual_epoch: actual,
-            };
-            Some(fence)
-        }
-        // `retry_storage_op_fenceable` panics on every other permanent failure.
-        Err(other) => unreachable!("unexpected storage error: {other}"),
-    }
 }
 
 async fn read_persisted_oplog_entries(
@@ -871,10 +773,11 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        stage_id: uuid::Uuid,
+        publication: StagePublication,
         expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         record_oplog_call("publish_staged");
+        let stage_id = publication.stage_id();
         if agent_mode != AgentMode::Durable {
             return Err("Only durable agents can publish staged oplogs".into());
         }
@@ -943,8 +846,8 @@ impl OplogService for PrimaryOplogService {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    owned_agent_id,
-                    agent_mode,
+                    Self::namespace(&owned_agent_id.agent_id, agent_mode),
+                    &owned_agent_id.agent_id,
                     &key,
                     epoch,
                 )
@@ -1023,8 +926,8 @@ impl OplogService for PrimaryOplogService {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    owned_agent_id,
-                    agent_mode,
+                    Self::namespace(&owned_agent_id.agent_id, agent_mode),
+                    &owned_agent_id.agent_id,
                     &key,
                     epoch,
                 )
@@ -1127,8 +1030,8 @@ impl OplogService for PrimaryOplogService {
         match record_owning_epoch(
             self.indexed_storage.as_ref(),
             &self.retry_config,
-            owned_agent_id,
-            agent_mode,
+            Self::namespace(&owned_agent_id.agent_id, agent_mode),
+            &owned_agent_id.agent_id,
             &key,
             expected_epoch,
         )
@@ -1170,20 +1073,14 @@ impl OplogService for PrimaryOplogService {
         .await;
         match outcome {
             Ok(()) => Ok(()),
-            Err(IndexedStorageError::Fenced {
-                expected, actual, ..
-            }) => {
+            Err(error @ IndexedStorageError::Fenced { .. }) => {
+                let fence = OplogFence::refused(agent_id, error);
                 warn!(
                     agent_id = %owned_agent_id,
-                    expected_epoch = expected.0,
-                    actual_epoch = ?actual.map(|epoch| epoch.0),
+                    expected_epoch = fence.expected_epoch.0,
+                    actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
                     "Oplog delete refused: the shard has a new owner"
                 );
-                let fence = OplogFence {
-                    agent_id,
-                    expected_epoch: expected,
-                    actual_epoch: actual,
-                };
                 Err(OplogError::Fenced(fence))
             }
             Err(other) => Err(OplogError::Maintenance(format!(
@@ -1457,8 +1354,8 @@ impl OplogConstructor for CreateOplogConstructor {
                 record_owning_epoch(
                     &*self.indexed_storage,
                     &self.retry_config,
-                    &self.owned_agent_id,
-                    self.agent_mode,
+                    PrimaryOplogService::namespace(&self.owned_agent_id.agent_id, self.agent_mode),
+                    &self.owned_agent_id.agent_id,
                     &self.key,
                     shard_epoch,
                 )
@@ -2403,10 +2300,7 @@ impl PrimaryOplogState {
     /// Without it an add below the commit threshold would only buffer, answer with an index, and
     /// report a write that can never reach the storage.
     fn refuse_if_fenced(&self) -> Result<(), OplogError> {
-        match self.fence.get() {
-            Some(fence) => Err(OplogError::Fenced(fence.clone())),
-            None => Ok(()),
-        }
+        refuse_if_fenced(self.fence.get())
     }
 
     /// Puts entries a fenced append turned away back at the head of the buffer, where `commit`
@@ -2434,18 +2328,7 @@ impl PrimaryOplogState {
 
     /// Names the agent on a refused write, so the worker that hit it can be given up by id.
     fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
-        match err {
-            IndexedStorageError::Fenced {
-                expected, actual, ..
-            } => OplogError::Fenced(OplogFence {
-                agent_id: owned_agent_id.agent_id(),
-                expected_epoch: expected,
-                actual_epoch: actual,
-            }),
-            other => unreachable!(
-                "retry_oplog_append panics on every storage failure but a fence, got {other}"
-            ),
-        }
+        OplogError::Fenced(OplogFence::refused(owned_agent_id.agent_id(), err))
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -2520,27 +2403,53 @@ impl PrimaryOplogState {
         entries
     }
 
+    /// Trims the entries an archive transfer has copied, asserting the epoch this oplog was opened
+    /// with in the same step. A refusal removes nothing and latches the fence: the oplog belongs to
+    /// a newer owner, whose own transfer decides what leaves it, so there is nothing to retry. Any
+    /// other failure is returned for the archive maintenance to retry later.
     async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), String> {
         record_oplog_call("drop_prefix");
-
-        {
-            let is = self.indexed_storage.clone();
-            let namespace = self.namespace.clone();
-            let key = self.key.clone();
-            let dropped_id: u64 = last_dropped_id.into();
-            retry_storage_op_result(&self.retry_config, "drop_prefix", &key, || {
-                let is = is.clone();
-                let ns = namespace.clone();
-                let key = key.clone();
-                async move {
-                    is.with("oplog", "drop_prefix")
-                        .drop_prefix(ns, &key, dropped_id)
-                        .await
-                }
-            })
-            .await?;
+        if self.fence.get().is_some() {
+            return Ok(());
         }
-        Ok(())
+
+        let is = self.indexed_storage.clone();
+        let namespace = self.namespace.clone();
+        let key = self.key.clone();
+        let dropped_id: u64 = last_dropped_id.into();
+        let shard_epoch = self.shard_epoch;
+        let trimmed = retry_maintenance_storage_op(&self.retry_config, "drop_prefix", &key, || {
+            let is = is.clone();
+            let ns = namespace.clone();
+            let key = key.clone();
+            async move {
+                is.with("oplog", "drop_prefix")
+                    .drop_prefix(ns, &key, dropped_id, shard_epoch)
+                    .await
+            }
+        })
+        .await;
+        if self.shard_epoch.is_some() {
+            record_epoch_verdict("drop_prefix", &trimmed);
+        }
+        match trimmed {
+            Ok(()) => Ok(()),
+            Err(error @ IndexedStorageError::Fenced { .. }) => {
+                let fence = OplogFence::refused(self.owned_agent_id.agent_id(), error);
+                if self.fence.set(fence.clone()).is_ok() {
+                    warn!(
+                        agent_id = %self.owned_agent_id,
+                        expected_epoch = fence.expected_epoch.0,
+                        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                        "Oplog trim fenced: the shard has a new owner, refusing further writes"
+                    );
+                }
+                Ok(())
+            }
+            Err(error) => Err(format!(
+                "Indexed storage operation 'drop_prefix' failed for key '{key}': {error}"
+            )),
+        }
     }
 }
 
@@ -2552,6 +2461,23 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
+    fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
+        let jobs = self.jobs.clone();
+        let closed = self.closed();
+        super::OplogShutdownHandle::new(
+            || {},
+            move || {
+                let jobs = jobs.clone();
+                let closed = closed.clone();
+                async move {
+                    let _ = jobs.send(OplogJob::Close);
+                    closed.await
+                }
+                .boxed()
+            },
+        )
+    }
+
     fn retire(&self) {
         if !self.retired.swap(true, Ordering::AcqRel) {
             let _ = self.jobs.send(OplogJob::Close);

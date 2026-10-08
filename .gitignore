@@ -9,10 +9,13 @@ golem-worker-executor/golem-wit/
 zig-cache/
 dump.rdb
 /golem_registry_service.db
+/golem_registry_service.db-*
 test-components/*.wat
 test-components/**/*.wat
 test-components/*.wasm
 test-components/*/**/*.wasm
+builtin-tools/*.wasm
+plugins/*.wasm
 # Exception: this minimal component-model-async fixture is committed (see the
 # build-concurrent-delivery-order-component cargo-make task) so the Seam 3
 # runtime delivery-order test can run without the WASM build toolchain.

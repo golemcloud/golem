@@ -598,7 +598,7 @@ async fn staged_publication_preserves_atomic_visibility(
             .await
             .unwrap();
         storage
-            .drop_prefix("test", "archive", visible.clone(), key, first_id)
+            .drop_prefix("test", "archive", visible.clone(), key, first_id, None)
             .await
             .unwrap();
         assert!(
@@ -688,7 +688,14 @@ async fn staged_publication_preserves_atomic_visibility(
         );
     }
     storage
-        .drop_prefix("test", "archive", visible.clone(), "never-existed", 50)
+        .drop_prefix(
+            "test",
+            "archive",
+            visible.clone(),
+            "never-existed",
+            50,
+            None,
+        )
         .await
         .unwrap();
     assert!(
@@ -1422,11 +1429,10 @@ async fn scan_stable_resumes_past_deleted_keys(
     }
 }
 
-/// A drained multi-SQLite namespace keeps its files, so the walk still crosses them a page budget
-/// at a time.
+/// Draining multi-SQLite removes its database files, so later walks do no per-agent database work.
 #[test]
 #[tracing::instrument]
-async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
+async fn multi_sqlite_scan_stable_does_not_reopen_drained_files() {
     async fn walk(
         is: &MultiSqliteIndexedStorage,
         meta: &IndexedStorageMetaNamespace,
@@ -1498,9 +1504,16 @@ async fn multi_sqlite_scan_stable_crosses_its_files_a_page_at_a_time() {
     let (pages, seen) = walk(&is, &meta).await;
     assert!(seen.is_empty(), "every key was deleted");
     assert_eq!(
-        pages, 3,
-        "the drained files are still crossed two at a time, not opened all at once"
+        pages, 1,
+        "the drained files were removed, not traversed again"
     );
+    assert!(std::fs::read_dir(tempdir.path()).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("durable-oplog-")
+    }));
 }
 
 /// A file created after a listing was cached still shows up in the next walk, because creating a
@@ -2284,7 +2297,7 @@ async fn drop_prefix_no_match(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 5)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 5, None)
         .await
         .unwrap();
     let result = is
@@ -2347,7 +2360,7 @@ async fn drop_prefix_partial(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 10)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 10, None)
         .await
         .unwrap();
     let result = is
@@ -2410,7 +2423,7 @@ async fn drop_prefix_full(
     .await
     .unwrap();
 
-    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20)
+    is.drop_prefix("svc", "api", ns.ns.clone(), key1, 20, None)
         .await
         .unwrap();
     let result = is
@@ -3110,6 +3123,64 @@ async fn a_repeated_id_in_a_staged_batch_is_a_conflict(
 
 #[test]
 #[tracing::instrument]
+async fn a_held_index_in_the_blob_manifest_is_a_conflict(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    // The blob layer deletes the object of a manifest append that gets this answer. So it must be
+    // the storage's own answer that the index is held, with or without an asserted epoch, for one
+    // entry as for a batch.
+    let is = is.get_indexed_storage().await;
+    let manifest = IndexedStorageNamespace::BlobOplogManifest {
+        agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "manifest-conflict".into(),
+        },
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let key = format!("{}-manifest-conflict", Uuid::new_v4());
+
+    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
+        .await
+        .unwrap();
+    append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+
+    for epoch in [Some(ShardEpoch(6)), None] {
+        let single = is
+            .append(
+                "svc",
+                "api",
+                "entity",
+                manifest.clone(),
+                &key,
+                1,
+                b"again".to_vec(),
+                epoch,
+            )
+            .await;
+        assert!(
+            matches!(single, Err(IndexedStorageError::Conflict(_))),
+            "an append asserting {epoch:?} returned {single:?}"
+        );
+        let batch = append_fenced(&is, &manifest, &key, &[1], epoch).await;
+        assert!(
+            matches!(batch, Err(IndexedStorageError::Conflict(_))),
+            "a batch asserting {epoch:?} returned {batch:?}"
+        );
+    }
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+#[tracing::instrument]
 async fn a_failed_batch_leaves_no_partial_write(
     deps: &WorkerExecutorTestDependencies,
     #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
@@ -3157,5 +3228,379 @@ async fn a_failed_batch_leaves_no_partial_write(
         is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
         2,
         "the failed batch must not have written its first entry"
+    );
+}
+
+async fn append_three_fenced(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    ns: &IndexedStorageNamespaces,
+    key: &str,
+    epoch: u64,
+) {
+    is.append_many(
+        "svc",
+        "api",
+        "entity",
+        &ns.ns,
+        key,
+        Arc::from([
+            (1, Bytes::from_static(b"a")),
+            (2, Bytes::from_static(b"b")),
+            (3, Bytes::from_static(b"c")),
+        ]),
+        Some(ShardEpoch(epoch)),
+    )
+    .await
+    .unwrap();
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_trim_with_the_recorded_epoch_removes_the_prefix(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-match";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 1, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    let survivors = is
+        .read("svc", "api", "entity", ns.ns.clone(), key, 1, 100)
+        .await
+        .unwrap();
+    assert_eq!(
+        survivors.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+        vec![2, 3]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_stale_epoch_trim_is_refused_and_removes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-stale";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    // Another writer takes the key over.
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+
+    let result = is
+        .drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result, 7, Some(8));
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3,
+        "a refused trim must remove nothing"
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_trim_asserting_an_epoch_on_a_key_without_a_record_is_refused(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-no-record";
+
+    for (id, value) in [(1, b"a"), (2, b"b"), (3, b"c")] {
+        is.append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            id,
+            value.to_vec(),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let result = is
+        .drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result, 7, None);
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn an_unfenced_trim_ignores_the_recorded_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "trim-unfenced";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 8).await;
+
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 1, None)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        2
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-owner";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    let deleted = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    assert!(deleted, "an emptied key is deleted");
+    assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
+
+    // The record survives: the owner keeps writing, a stale writer is still refused.
+    is.append(
+        "svc",
+        "api",
+        "entity",
+        ns.ns.clone(),
+        key,
+        4,
+        b"d".to_vec(),
+        Some(ShardEpoch(7)),
+    )
+    .await
+    .unwrap();
+    let stale = is
+        .append(
+            "svc",
+            "api",
+            "entity",
+            ns.ns.clone(),
+            key,
+            5,
+            b"e".to_vec(),
+            Some(ShardEpoch(6)),
+        )
+        .await;
+    assert_fenced(stale, 6, Some(7));
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_key_that_still_holds_entries_is_not_deleted(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-non-empty";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+
+    let deleted = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+
+    assert!(!deleted);
+    assert_eq!(
+        is.length("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        3
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+    #[tagged_as("ns1")] ns: &IndexedStorageNamespaces,
+) {
+    let is = is.get_indexed_storage().await;
+    let key = "delete-empty-stale";
+
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .await
+        .unwrap();
+    append_three_fenced(&is, ns, key, 7).await;
+    is.drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
+        .await
+        .unwrap();
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .await
+        .unwrap();
+
+    let result = is
+        .delete_empty_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(7)))
+        .await;
+
+    assert_fenced(result.map(|_| ()), 7, Some(8));
+    assert!(
+        is.exists("svc", "api", ns.ns.clone(), key).await.unwrap(),
+        "a refused delete leaves the emptied key in place"
+    );
+}
+
+/// A blob manifest level no other test writes to, so a walk over it sees only this test's keys.
+const BLOB_MANIFEST_LEVEL: usize = 95;
+
+async fn scan_all(
+    is: &Arc<dyn IndexedStorage + Send + Sync>,
+    namespace: IndexedStorageMetaNamespace,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut resume = None;
+    loop {
+        let (next, chunk) = is
+            .with("svc", "api")
+            .scan_stable(namespace.clone(), None, resume, 100)
+            .await
+            .unwrap();
+        keys.extend(chunk);
+        match next {
+            Some(next) => resume = Some(next),
+            None => return keys,
+        }
+    }
+}
+
+/// The blob manifest is fenced like every oplog namespace, and its entries, epoch record and scan
+/// are its own: the compressed level with the same agent and level number shares none of them.
+#[test]
+#[tracing::instrument]
+async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
+    deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let is = is.get_indexed_storage().await;
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "blob-manifest".to_string(),
+    };
+    let manifest = IndexedStorageNamespace::BlobOplogManifest {
+        agent_id: agent_id.clone(),
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let compressed = IndexedStorageNamespace::CompressedOpLog {
+        agent_id,
+        agent_mode: AgentMode::Durable,
+        level: BLOB_MANIFEST_LEVEL,
+    };
+    let key = format!("{}-manifest", Uuid::new_v4());
+
+    // The compressed level's record does not stand in for the manifest's.
+    is.set_key_epoch("svc", "api", compressed.clone(), &key, ShardEpoch(9))
+        .await
+        .unwrap();
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(9))).await,
+        9,
+        None,
+    );
+
+    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
+        .await
+        .unwrap();
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(5))).await,
+        5,
+        Some(6),
+    );
+    append_fenced(&is, &manifest, &key, &[1, 2], Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        is.length("svc", "api", compressed.clone(), &key)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let manifest_keys = scan_all(
+        &is,
+        IndexedStorageMetaNamespace::BlobOplogManifest {
+            agent_mode: AgentMode::Durable,
+            level: BLOB_MANIFEST_LEVEL,
+        },
+    )
+    .await;
+    assert!(manifest_keys.contains(&key), "{manifest_keys:?}");
+    let compressed_keys = scan_all(
+        &is,
+        IndexedStorageMetaNamespace::CompressedOplog {
+            agent_mode: AgentMode::Durable,
+            level: BLOB_MANIFEST_LEVEL,
+        },
+    )
+    .await;
+    assert!(!compressed_keys.contains(&key), "{compressed_keys:?}");
+
+    // The recorded writer's delete takes the record with the entries.
+    is.delete_with_epoch("svc", "api", manifest.clone(), &key, Some(ShardEpoch(6)))
+        .await
+        .unwrap();
+    assert_eq!(
+        is.length("svc", "api", manifest.clone(), &key)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_fenced(
+        append_fenced(&is, &manifest, &key, &[3], Some(ShardEpoch(6))).await,
+        6,
+        None,
     );
 }

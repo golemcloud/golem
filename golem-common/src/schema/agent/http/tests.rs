@@ -15,8 +15,8 @@
 use super::*;
 use crate::base_model::Empty;
 use crate::base_model::agent::{
-    AgentHttpAuthDetails, AgentTypeName, CorsOptions, HttpEndpointDetails, LiteralSegment,
-    PathVariable, SnapshottingConfig,
+    AgentHttpAuthDetails, AgentTypeName, CorsOptions, FileResponseHeader, HttpEndpointDetails,
+    LiteralSegment, PathVariable, SnapshottingConfig,
 };
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AutoInjectedKind,
@@ -261,6 +261,7 @@ fn agent(input: &Value) -> AgentTypeSchema {
             webhook_suffix: vec![],
             static_bindings: mappings(&input["static_bindings"]),
             filesystem_bindings: mappings(&input["filesystem_bindings"]),
+            file_response_headers: vec![],
             openapi_provider_method: input["provider"].as_str().map(str::to_string),
         }),
     }
@@ -274,6 +275,8 @@ fn corpus_category(error: &HttpAgentValidationError) -> &'static str {
     match error {
         HttpAgentValidationError::DuplicateMethod(_) => "duplicate-method",
         HttpAgentValidationError::InvalidFileMapping(_) => "file-mapping",
+        HttpAgentValidationError::InvalidFileResponseHeader(_) => "file-response-header",
+        HttpAgentValidationError::FileResponseHeadersWithoutBindings => "file-response-bindings",
         HttpAgentValidationError::RouterMethodOnRegularAgent(_)
         | HttpAgentValidationError::RouterMethodRole(_) => "router-method-role",
         HttpAgentValidationError::StaticBindingsOnRegularAgent => "static-owner",
@@ -326,6 +329,73 @@ fn shared_metadata_corpus() {
             }
         }
     }
+}
+
+#[test]
+fn file_response_headers_validate_names_values_duplicates_and_ownership() {
+    let mut agent = from_case("metadata-live-typed-overlap");
+    let mount = agent.http_mount.as_mut().unwrap();
+    mount.file_response_headers = vec![
+        FileResponseHeader {
+            name: "Content-Security-Policy".into(),
+            value: "default-src 'none'".into(),
+        },
+        FileResponseHeader {
+            name: "Referrer-Policy".into(),
+            value: "no-referrer".into(),
+        },
+    ];
+    agent.validate().unwrap();
+
+    for headers in [
+        vec![FileResponseHeader {
+            name: "Content-Length".into(),
+            value: "1".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Age".into(),
+            value: "60".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Expires".into(),
+            value: "Thu, 01 Dec 1994 16:00:00 GMT".into(),
+        }],
+        vec![FileResponseHeader {
+            name: "Pragma".into(),
+            value: "no-cache".into(),
+        }],
+        vec![
+            FileResponseHeader {
+                name: "X-Policy".into(),
+                value: "one".into(),
+            },
+            FileResponseHeader {
+                name: "x-policy".into(),
+                value: "two".into(),
+            },
+        ],
+        vec![FileResponseHeader {
+            name: "X-Policy".into(),
+            value: "ok\r\ninjected: value".into(),
+        }],
+    ] {
+        agent.http_mount.as_mut().unwrap().file_response_headers = headers;
+        assert!(matches!(
+            validate(&agent),
+            Err(HttpAgentValidationError::InvalidFileResponseHeader(_))
+        ));
+    }
+
+    let mount = agent.http_mount.as_mut().unwrap();
+    mount.file_response_headers = vec![FileResponseHeader {
+        name: "Referrer-Policy".into(),
+        value: "same-origin".into(),
+    }];
+    mount.filesystem_bindings.clear();
+    assert_eq!(
+        validate(&agent),
+        Err(HttpAgentValidationError::FileResponseHeadersWithoutBindings)
+    );
 }
 
 #[test]

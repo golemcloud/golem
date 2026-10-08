@@ -18,8 +18,6 @@
 use anyhow::{Context, bail, ensure};
 use futures::{StreamExt, stream::BoxStream};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::common::Uuid;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoValue;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
     AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
@@ -31,6 +29,8 @@ use golem_client::model::ComponentDto;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::TypedSchemaValue;
+use golem_schema::proto::golem::common::Uuid;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoValue;
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::config::TestDependencies;
 use std::collections::{BTreeMap, BTreeSet};

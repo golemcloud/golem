@@ -2076,7 +2076,11 @@ where
             {
                 return Err(SessionTransportError::Protocol(message));
             }
-            if finished && stdout_terminal && stderr_terminal {
+            if finished
+                && completion_failure.is_none()
+                && stdout_terminal
+                && stderr_terminal
+            {
                 if !matches!(result, Some(PublicInvocationResult::ToolFailure { .. })) {
                     if let Some(outcome) = stdout_failure {
                         return Err(SessionTransportError::Protocol(format!("native stdout failed: {outcome:?}")));

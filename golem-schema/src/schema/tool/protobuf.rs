@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::*;
-use golem_api_grpc::proto::golem::common::Empty;
-use golem_api_grpc::proto::golem::tool as proto;
+use crate::proto::golem::common::Empty;
+use crate::proto::golem::tool as proto;
 
 fn required<T>(value: Option<T>, field: &str) -> Result<T, String> {
     value.ok_or_else(|| format!("Missing field: {field}"))
@@ -28,7 +28,7 @@ fn decode_char(value: u32, field: &str) -> Result<char, String> {
     char::from_u32(value).ok_or_else(|| format!("Invalid Unicode scalar in {field}: {value}"))
 }
 
-fn encode_static_value(value: SchemaValue) -> golem_api_grpc::proto::golem::schema::SchemaValue {
+fn encode_static_value(value: SchemaValue) -> crate::proto::golem::schema::SchemaValue {
     value
         .try_into()
         .expect("static tool values cannot contain live streams")

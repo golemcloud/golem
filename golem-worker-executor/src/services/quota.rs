@@ -646,58 +646,6 @@ impl GrpcQuotaService {
     async fn notify_demand(&self, key: &ResourceKey, slot: &mut LeaseInner) {
         let (environment_id, resource_name) = key;
         match &slot.lease {
-            TrackedLease::Bounded(b) => {
-                let entry = BatchRenewalEntry {
-                    resource_definition_id: b.resource_definition_id,
-                    epoch: b.epoch.0,
-                    unused: b.remaining,
-                    pending_reservations: slot
-                        .waiters
-                        .iter()
-                        .map(|w| PendingReservation {
-                            amount: w.amount,
-                            priority: w.priority(),
-                        })
-                        .collect(),
-                };
-                match self
-                    .client
-                    .batch_renew_quota_leases(self.port, vec![entry])
-                    .await
-                {
-                    Ok(mut results) => {
-                        if let Some(result) = results.pop() {
-                            match result {
-                                Ok(new_lease) => {
-                                    if let TrackedLease::Bounded(b) =
-                                        Self::from_quota_lease(&new_lease)
-                                    {
-                                        debug!(
-                                            resource_definition_id = %b.resource_definition_id,
-                                            allocation = b.remaining,
-                                            total_available = b.total_available_amount,
-                                            "notify_demand: received new allocation"
-                                        );
-                                        slot.lease = TrackedLease::Bounded(b);
-                                    } else {
-                                        slot.lease = Self::from_quota_lease(&new_lease);
-                                    }
-                                    self.process_waiters(slot, key);
-                                }
-                                Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
-                                    slot.lease = TrackedLease::Lost;
-                                }
-                                Err(err) => {
-                                    tracing::warn!(error = %err, "Demand notification renewal failed");
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "Demand notification batch renew failed");
-                    }
-                }
-            }
             TrackedLease::Unlimited(_) => {
                 // Unlimited leases always succeed — no demand notification needed.
             }
@@ -714,8 +662,76 @@ impl GrpcQuotaService {
                     }
                     Err(err) => {
                         tracing::warn!(error = %err, "Re-acquire in notify_demand failed");
+                        return;
                     }
                 }
+                // The acquire carries no pending reservations, so it can grant
+                // only the baseline share of the pool. If waiters remain queued,
+                // follow up with a demand-carrying renewal so they are served now
+                // instead of at the lease's near-expiry renewal.
+                if !slot.waiters.is_empty() {
+                    self.demand_renewal(key, slot).await;
+                }
+            }
+            TrackedLease::Bounded(_) => {
+                self.demand_renewal(key, slot).await;
+            }
+        }
+    }
+
+    /// Renew the bounded lease carrying the queued demand so the shard manager
+    /// can refund the unused allocation and re-grant one sized to the waiters.
+    /// Called with the slot lock held; a no-op for non-bounded leases.
+    async fn demand_renewal(&self, key: &ResourceKey, slot: &mut LeaseInner) {
+        let TrackedLease::Bounded(b) = &slot.lease else {
+            return;
+        };
+        let entry = BatchRenewalEntry {
+            resource_definition_id: b.resource_definition_id,
+            epoch: b.epoch.0,
+            unused: b.remaining,
+            pending_reservations: slot
+                .waiters
+                .iter()
+                .map(|w| PendingReservation {
+                    amount: w.amount,
+                    priority: w.priority(),
+                })
+                .collect(),
+        };
+        match self
+            .client
+            .batch_renew_quota_leases(self.port, vec![entry])
+            .await
+        {
+            Ok(mut results) => {
+                if let Some(result) = results.pop() {
+                    match result {
+                        Ok(new_lease) => {
+                            if let TrackedLease::Bounded(b) = Self::from_quota_lease(&new_lease) {
+                                debug!(
+                                    resource_definition_id = %b.resource_definition_id,
+                                    allocation = b.remaining,
+                                    total_available = b.total_available_amount,
+                                    "demand renewal: received new allocation"
+                                );
+                                slot.lease = TrackedLease::Bounded(b);
+                            } else {
+                                slot.lease = Self::from_quota_lease(&new_lease);
+                            }
+                            self.process_waiters(slot, key);
+                        }
+                        Err(QuotaError::LeaseNotFound(_) | QuotaError::StaleEpoch(_)) => {
+                            slot.lease = TrackedLease::Lost;
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "Demand renewal failed");
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "Demand renewal batch renew failed");
             }
         }
     }
@@ -940,6 +956,14 @@ impl GrpcQuotaService {
                         );
                         slot.lease = Self::from_quota_lease(&new_lease);
                         self.process_waiters(&mut slot, key);
+                        // The re-acquire carries no pending reservations, so it
+                        // can grant only the baseline share of the pool. If waiters
+                        // remain queued, follow up with a demand-carrying renewal
+                        // so they are served now instead of at the lease's
+                        // near-expiry renewal.
+                        if !slot.waiters.is_empty() {
+                            self.demand_renewal(key, &mut slot).await;
+                        }
                     }
                     Err(err) => {
                         tracing::warn!(
@@ -1237,6 +1261,30 @@ mod tests {
         }
     }
 
+    /// Bounded lease expiring far beyond the test renewal threshold, so it is
+    /// only renewed when the renewal explicitly carries demand.
+    fn bounded_lease_with_distant_expiry(
+        resource_definition_id: ResourceDefinitionId,
+        epoch: u64,
+        amount: u64,
+        total_available_amount: u64,
+    ) -> QuotaLease {
+        QuotaLease::Bounded {
+            resource_definition_id,
+            pod: test_pod(),
+            epoch: LeaseEpoch(epoch),
+            allocation: amount,
+            expires_at: Utc::now() + ChronoDuration::seconds(60),
+            resource_limit: ResourceLimit::Rate(ResourceRateLimit {
+                value: 1000,
+                period: TimePeriod::Second,
+                max: 1000,
+            }),
+            enforcement_action: EnforcementAction::Throttle,
+            total_available_amount,
+        }
+    }
+
     /// Lease with a very slow refill rate (1 token/hour).
     /// Any deficit ≥ 1 → estimated_wait ≥ 3600s, well above a 60s threshold.
     fn slow_rate_lease_with_total(
@@ -1291,11 +1339,20 @@ mod tests {
     type RenewFn =
         Box<dyn Fn(ResourceDefinitionId, u64, u64) -> Result<QuotaLease, QuotaError> + Send + Sync>;
 
+    #[derive(Debug, Clone)]
+    struct RenewCall {
+        resource_definition_id: ResourceDefinitionId,
+        epoch: u64,
+        unused: u64,
+        pending_reservations: Vec<PendingReservation>,
+    }
+
     struct MockShardManager {
         acquire_response: StdMutex<Option<Result<QuotaLease, QuotaError>>>,
         acquire_calls: std::sync::atomic::AtomicUsize,
         acquire_gate: Option<Arc<tokio::sync::Semaphore>>,
         renew_fn: StdMutex<Option<RenewFn>>,
+        renewed: StdMutex<Vec<RenewCall>>,
         released: StdMutex<Vec<(ResourceDefinitionId, u64, u64)>>,
     }
 
@@ -1306,6 +1363,7 @@ mod tests {
                 acquire_calls: std::sync::atomic::AtomicUsize::new(0),
                 acquire_gate: None,
                 renew_fn: StdMutex::new(None),
+                renewed: StdMutex::new(Vec::new()),
                 released: StdMutex::new(Vec::new()),
             }
         }
@@ -1328,6 +1386,10 @@ mod tests {
 
         fn releases(&self) -> Vec<(ResourceDefinitionId, u64, u64)> {
             self.released.lock().unwrap().clone()
+        }
+
+        fn renewed(&self) -> Vec<RenewCall> {
+            self.renewed.lock().unwrap().clone()
         }
     }
 
@@ -1386,8 +1448,14 @@ mod tests {
             _port: u16,
             epoch: u64,
             unused: u64,
-            _pending_reservations: Vec<PendingReservation>,
+            pending_reservations: Vec<PendingReservation>,
         ) -> Result<QuotaLease, QuotaError> {
+            self.renewed.lock().unwrap().push(RenewCall {
+                resource_definition_id,
+                epoch,
+                unused,
+                pending_reservations,
+            });
             let guard = self.renew_fn.lock().unwrap();
             let f = guard.as_ref().expect("renew_fn not configured");
             f(resource_definition_id, epoch, unused)
@@ -1492,6 +1560,128 @@ mod tests {
         assert_eq!(
             mock.acquire_calls.load(std::sync::atomic::Ordering::SeqCst),
             1
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn first_reservation_exceeding_baseline_share_is_served_by_demand_renewal() {
+        let rid = test_resource_definition_id();
+        // The acquire grants only the baseline share of the pool (50 of 100);
+        // the demand-carrying renewal re-grants 90, enough for the queued 60.
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease_with_distant_expiry(rid, 1, 50, 100)))
+                .with_renew_fn(move |_, _, _| {
+                    Ok(bounded_lease_with_distant_expiry(rid, 2, 90, 100))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            9093,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+
+        // 60 is globally satisfiable (total_available 100) but above the baseline
+        // share, so the demand-blind acquire cannot serve it inline.
+        let svc2 = svc.clone();
+        let mut interest2 = interest.clone();
+        let task = tokio::spawn(async move { svc2.try_reserve(&mut interest2, 60).await });
+
+        let result = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect(
+                "first reservation must be served by a demand-carrying renewal \
+                 following the acquire, not parked until the near-expiry renewal",
+            )
+            .unwrap();
+        assert_matches!(
+            result,
+            ReserveResult::Ok(Reservation::Bounded { reserved: 60, .. })
+        );
+
+        // The demand-carrying renewal renewed the just-acquired lease and
+        // reported the queued reservation to the shard manager.
+        let renewed = mock.renewed();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(renewed[0].resource_definition_id, rid);
+        assert_eq!(renewed[0].epoch, 1);
+        assert_eq!(renewed[0].unused, 50);
+        assert_eq!(
+            renewed[0]
+                .pending_reservations
+                .iter()
+                .map(|p| p.amount)
+                .collect::<Vec<_>>(),
+            vec![60]
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn reacquired_lost_lease_is_followed_by_demand_renewal() {
+        let rid = test_resource_definition_id();
+        // The demand-blind re-acquire grants only the baseline share of the
+        // pool (50 of 100); the demand-carrying follow-up renewal re-grants 90,
+        // enough for the queued 60.
+        let mock = Arc::new(
+            MockShardManager::new()
+                .with_acquire(Ok(bounded_lease_with_distant_expiry(rid, 1, 50, 100)))
+                .with_renew_fn(move |_, _, _| {
+                    Ok(bounded_lease_with_distant_expiry(rid, 2, 90, 100))
+                }),
+        );
+        let svc = GrpcQuotaService::new_inner(
+            mock.clone(),
+            9093,
+            Duration::from_millis(200),
+            Duration::from_secs(60),
+        );
+
+        let interest = svc
+            .acquire(test_env_id(), test_resource_name(), 100, 0, None)
+            .await;
+
+        // A waiter queued on the lost lease: the next renewal pass re-acquires it.
+        let (tx, rx) = oneshot::channel::<WaiterOutcome>();
+        {
+            let key: ResourceKey = (interest.environment_id, interest.resource_name.clone());
+            let slot_mutex = svc.get_slot(&key).await.unwrap();
+            let mut slot = slot_mutex.inner.lock().await;
+            slot.waiters.push(Waiter::with_credit(60, 0, tx));
+        }
+
+        // Phase 4 of the renewal pass re-acquires the lost lease. Without a
+        // demand-carrying follow-up renewal the waiter would stay parked until
+        // the lease is close to expiry, which is 60s - threshold away.
+        svc.renew_all().await;
+
+        let result = tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect(
+                "a waiter queued on a reacquired lease must be served by a \
+                 demand-carrying renewal following the re-acquire",
+            )
+            .unwrap();
+        assert_matches!(
+            result,
+            WaiterOutcome::Granted(Reservation::Bounded { reserved: 60, .. })
+        );
+
+        let renewed = mock.renewed();
+        assert_eq!(renewed.len(), 1);
+        assert_eq!(
+            renewed[0]
+                .pending_reservations
+                .iter()
+                .map(|p| p.amount)
+                .collect::<Vec<_>>(),
+            vec![60]
         );
     }
 

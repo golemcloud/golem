@@ -2758,6 +2758,362 @@ async fn test_rust_tool_guest_bridge_e2e() {
     );
 }
 
+#[test]
+#[tag(agents_guest_bridge)]
+#[timeout("20 minutes")]
+async fn rust_ambient_native_client_executes_through_golem() {
+    let mut ctx = TestContext::new();
+    ctx.enable_native_conformance_tool();
+    ctx.start_server().await;
+
+    fs::create_dir_all(ctx.cwd_path_join("native-client")).unwrap();
+    ctx.cd("native-client");
+    for component_name in [
+        "native-client:consumer",
+        "native-client:unauthorized",
+        "native-client:middleware",
+    ] {
+        let output = ctx
+            .cli([
+                flag::YES,
+                cmd::NEW,
+                ".",
+                flag::TEMPLATE,
+                "rust",
+                flag::COMPONENT_NAME,
+                component_name,
+            ])
+            .await;
+        assert!(output.success_or_dump());
+    }
+
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+            manifestVersion: {version}
+            app: native-client
+            environments:
+              local:
+                server: local
+                componentPresets: debug
+                tools:
+                  middleware: [native-conformance-audit]
+            components:
+              native-client:consumer:
+                dir: consumer
+                templates: rust
+                dependencies:
+                  tools: [native-conformance]
+              native-client:unauthorized:
+                dir: unauthorized
+                templates: rust
+              native-client:middleware:
+                dir: middleware
+                templates: rust
+            tools:
+              middleware:
+                native-conformance-audit:
+                  component: native-client:middleware
+            agents:
+              NativeConsumer:
+                tools:
+                  native-conformance: {{}}
+              UnauthorizedNativeConsumer:
+                initialCard:
+                  lowerBound:
+                    positive:
+                      - 'filesystem(?agent) @ ?agent : * : /**'
+                      - 'network() @ ?agent : * : *'
+                      - 'env(?agent) @ ?agent : * : *'
+                      - 'oplog(?agent) @ ?agent : * : *'
+                      - 'config(?agent) @ ?agent : * : *'
+                      - 'secret(?env) @ ?agent : * : *'
+                      - 'agent(?env/*/*) @ ?agent : * : *'
+                      - 'environment(?env) @ ?agent : * : *'
+                      - 'component(?component) @ ?agent : * : *'
+                      - 'kv(?env) @ ?agent : * : *.**'
+                      - 'blob(?env) @ ?agent : * : *.**'
+                      - 'rdbms(?env) @ ?agent : * : *.*.*'
+                      - 'card(?account) @ ?agent : * : *'
+                    negative:
+                      - 'tool(?env/*/*) @ ?agent : * : *'
+                  upperBound: {{ positive: [], negative: [] }}
+            bridge:
+              rust:
+                internal:
+                  tools: [native-conformance]
+        "#, version = versions::sdk::MANIFEST},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("middleware/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::schema::{SchemaValue, TypedSchemaValue};
+            use golem_rust::tool::{
+                InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
+                ToolInvokeError, UnderlyingTool,
+            };
+            use golem_rust::universal_tool_middleware;
+
+            #[universal_tool_middleware(name = "native-conformance-audit")]
+            async fn audit(
+                tool_name: String,
+                _tool_metadata: Tool,
+                command_path: Vec<String>,
+                input: TypedSchemaValue,
+                stdin: Option<InputStream>,
+                stdout: Option<OutputStream>,
+                stderr: Option<OutputStream>,
+                _principal: Principal,
+                underlying: UnderlyingTool,
+            ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+                let input = if tool_name == "native-conformance"
+                    && command_path == ["middleware".to_string()]
+                {
+                    let (graph, mut value) = input.into_parts();
+                    let SchemaValue::Record { fields } = &mut value else {
+                        panic!("middleware input is a record")
+                    };
+                    let SchemaValue::String(argument) = &mut fields[0] else {
+                        panic!("middleware argument is a string")
+                    };
+                    *argument = format!("middleware({argument})");
+                    TypedSchemaValue::new(graph, value)
+                } else {
+                    input
+                };
+                underlying
+                    .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+                    .await
+            }
+        "#},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait NativeConsumer {
+                fn new(name: String) -> Self;
+                async fn exercise(&self) -> Vec<String>;
+            }
+
+            struct NativeConsumerImpl;
+
+            #[agent_implementation]
+            impl NativeConsumer for NativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn exercise(&self) -> Vec<String> {
+                    let client = NativeConformanceClient::new();
+                    let success = client
+                        .structured("alpha".into(), 7)
+                        .await
+                        .expect("structured native result");
+                    let error = client
+                        .supported_error("expected".into())
+                        .await
+                        .expect_err("declared native error");
+                    let stream = client
+                        .finite_stream("payload".into())
+                        .await
+                        .expect("start finite native stream")
+                        .collect()
+                        .await;
+                    let stream_result = stream.result.expect("finite native stream result");
+                    let stream_stdout = stream.stdout
+                        .expect("collect finite native stdout")
+                        .expect("finite native stream omitted stdout");
+                    let middleware = client
+                        .middleware("input".into())
+                        .await
+                        .expect("native invocation through middleware");
+                    vec![
+                        format!("success:{}:{}:{}", success.value, success.count, success.agent_authorized),
+                        format!("error:{error:?}"),
+                        format!("stream:{}:{}", String::from_utf8(stream_stdout).unwrap(), stream_result.count),
+                        format!("middleware:{middleware}"),
+                    ]
+                }
+            }
+
+        "#},
+    )
+    .unwrap();
+
+    fs::write_str(
+        ctx.cwd_path_join("unauthorized/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait UnauthorizedNativeConsumer {
+                fn new(name: String) -> Self;
+                async fn denied(&self) -> String;
+            }
+
+            struct UnauthorizedNativeConsumerImpl;
+
+            #[agent_implementation]
+            impl UnauthorizedNativeConsumer for UnauthorizedNativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn denied(&self) -> String {
+                    NativeConformanceClient::new()
+                        .structured("denied".into(), 0)
+                        .await
+                        .expect_err("agent without a tool grant must be rejected")
+                        .to_string()
+                }
+            }
+        "#},
+    )
+    .unwrap();
+
+    let cargo_path = ctx.cwd_path_join("consumer/Cargo.toml");
+    let cargo = fs::read_to_string(&cargo_path).unwrap();
+    fs::write_str(
+        &cargo_path,
+        cargo.replace(
+            "[dependencies]",
+            "[dependencies]\nnative-conformance-tool-guest-client = { path = \"../golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client\" }",
+        ),
+    )
+    .unwrap();
+    let unauthorized_cargo_path = ctx.cwd_path_join("unauthorized/Cargo.toml");
+    let unauthorized_cargo = fs::read_to_string(&unauthorized_cargo_path).unwrap();
+    fs::write_str(
+        &unauthorized_cargo_path,
+        unauthorized_cargo.replace(
+            "[dependencies]",
+            "[dependencies]\nnative-conformance-tool-guest-client = { path = \"../golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client\" }",
+        ),
+    )
+    .unwrap();
+
+    let build = ctx.cli([flag::YES, cmd::BUILD]).await;
+    assert!(build.success_or_dump());
+    assert!(
+        ctx.cwd_path_join(
+            "golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client/Cargo.toml"
+        )
+        .is_file()
+    );
+    assert!(
+        !ctx.cwd_path_join("provider").exists(),
+        "ambient native client must not select a local provider component"
+    );
+
+    let deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(deploy.success_or_dump());
+    let invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "NativeConsumer(\"rust\")",
+            "exercise",
+        ])
+        .await;
+    assert!(invoke.success_or_dump());
+    for expected in [
+        "success:alpha:7:true",
+        "error:Tool(Rejected",
+        "stream:first:payload|second:2",
+        "middleware:leaf(middleware(input))",
+    ] {
+        assert!(
+            invoke.stdout_contains(expected),
+            "missing independent native conformance evidence: {expected}"
+        );
+    }
+    let denied = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "UnauthorizedNativeConsumer(\"rust\")",
+            "denied",
+        ])
+        .await;
+    assert!(denied.success_or_dump());
+    assert!(
+        denied.stdout_contains("permission target Tool")
+            && denied.stdout_contains("is not allowed")
+            && !denied.stdout_contains("Evidence { value: \"denied\""),
+        "the unauthorized agent must return a tool permission denial without native fixture evidence"
+    );
+
+    let generated_path = ctx.cwd_path_join(
+        "golem-temp/bridge-sdk/rust/internal/native-conformance-tool-guest-client/src/lib.rs",
+    );
+    let initial_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(!initial_generated.contains("fn refreshed"));
+
+    ctx.server_process.take().unwrap().kill().await.unwrap();
+    ctx.startup_ports = None;
+    ctx.add_env_var(
+        golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+        "2",
+    );
+    ctx.start_server().await;
+    fs::write_str(
+        ctx.cwd_path_join("consumer/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{agent_definition, agent_implementation};
+            use native_conformance_tool_guest_client::NativeConformanceClient;
+
+            #[agent_definition]
+            pub trait NativeConsumer {
+                fn new(name: String) -> Self;
+                async fn refreshed(&self) -> u64;
+            }
+
+            struct NativeConsumerImpl;
+
+            #[agent_implementation]
+            impl NativeConsumer for NativeConsumerImpl {
+                fn new(_name: String) -> Self { Self }
+
+                async fn refreshed(&self) -> u64 {
+                    NativeConformanceClient::new()
+                        .refreshed()
+                        .await
+                        .expect("refreshed native contract")
+                }
+            }
+        "#},
+    )
+    .unwrap();
+    let refreshed_build = ctx
+        .cli([flag::YES, cmd::BUILD, "native-client:consumer"])
+        .await;
+    assert!(refreshed_build.success_or_dump());
+    let refreshed_generated = fs::read_to_string(&generated_path).unwrap();
+    assert!(refreshed_generated.contains("fn refreshed"));
+    assert_ne!(initial_generated, refreshed_generated);
+
+    let refreshed_deploy = ctx.cli([flag::YES, cmd::DEPLOY]).await;
+    assert!(refreshed_deploy.success_or_dump());
+    let refreshed_invoke = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "NativeConsumer(\"refresh\")",
+            "refreshed",
+        ])
+        .await;
+    assert!(refreshed_invoke.success_or_dump());
+    assert!(refreshed_invoke.stdout_contains("2"));
+}
+
 /// Deploys a single component whose discovered metadata contains both an agent
 /// type and a tool definition. Runtime tool discovery and invocation are
 /// intentionally outside this test's scope.

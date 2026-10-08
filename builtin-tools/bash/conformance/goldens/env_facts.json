@@ -1,0 +1,308 @@
+{
+ "cases": {
+  "env: GOLEM variables": {
+   "script": "09abc95237ce51e4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "conformance-agent 0\n5\n"
+   }
+  },
+  "env: GOLEM variables are exported": {
+   "script": "f74b9acbe35a9bc1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "conformance-agent\n"
+   }
+  },
+  "env: HOME exported reaches children": {
+   "script": "f609aa0ed8cae584",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/tmp /tmp\n"
+   }
+  },
+  "env: HOME is unset": {
+   "script": "77471faea3c8da17",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\nunset\n"
+   }
+  },
+  "env: HOSTNAME and OSTYPE are set": {
+   "script": "aee0e25a966d6a83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "ostype\nhostname\n"
+   }
+  },
+  "env: LANG and LC_ALL": {
+   "script": "d5b1cebcd0c9fa91",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "env: PPID is a number": {
+   "script": "2e5a17d3a0a983bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "numeric\n"
+   }
+  },
+  "env: SHLVL and BASH are set": {
+   "script": "013525e76d5ad5d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shlvl\nbash\n"
+   }
+  },
+  "env: TMPDIR unset": {
+   "script": "cf932863969dee3d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[unset]\n"
+   }
+  },
+  "env: UID and EUID": {
+   "script": "0b9883978ca08372",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "uid=[1000] euid=[1000]\n"
+   }
+  },
+  "env: USER LOGNAME SHELL": {
+   "script": "4f7128efbdb18b4e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[u] [l] [/bin/sh]\n"
+   }
+  },
+  "env: cd with no operand and no HOME": {
+   "script": "1e7028103097b8f9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: cd: HOME not set\n"
+   },
+   "stdout": {
+    "text": "status=1\n/\n"
+   }
+  },
+  "env: command lookup of a builtin command": {
+   "script": "cc9f4f27d2577506",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "found\nfile\n"
+   }
+  },
+  "env: command lookup of a missing command": {
+   "script": "7983859c83d470ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nstatus=127\n"
+   }
+  },
+  "env: dev null reads empty": {
+   "script": "ba216def69f55c5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n0\n"
+   }
+  },
+  "env: dev null swallows output": {
+   "script": "f9f9e97b75d4f669",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "shown\nstatus=0\n"
+   }
+  },
+  "env: dev null without tmp": {
+   "script": "1fa0785ec6420f39",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nno-tmp\n"
+   }
+  },
+  "env: hash of a missing command": {
+   "script": "e50056c89f2629d9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "env: id -u": {
+   "script": "1532a52996998f04",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "env: mktemp directory": {
+   "script": "a098aec982aa7339",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "dir\nin-tmp\n"
+   }
+  },
+  "env: mktemp in tmp": {
+   "script": "3b8d951fc30cbc6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "in-tmp\nfile\n"
+   }
+  },
+  "env: mktemp without tmp": {
+   "script": "9582d7b3d925d420",
+   "status": 0,
+   "stderr": {
+    "text": "mktemp: failed to create file via template ‘/tmp/tmp.XXXXXXXXXX’: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "env: no tmp directory": {
+   "script": "3fbe0d00e86812f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "absent\n"
+   }
+  },
+  "env: root is writable": {
+   "script": "0e3d700fb0a322ef",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "data\nf\n"
+   }
+  },
+  "env: test operators on dev null": {
+   "script": "13ce54fe8f7e4084",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "exists\nnot-regular\nchar\n"
+   }
+  },
+  "env: tilde forms with no HOME": {
+   "script": "3a72fcf3a5ef1b44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/ //a / ~-\n/tmp /\n"
+   }
+  },
+  "env: tmp is empty and writable": {
+   "script": "928569e9758cd65f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx\n"
+   }
+  },
+  "env: umask default is printable": {
+   "script": "6bdc1e3b21cfbaf1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  },
+  "env: whoami": {
+   "script": "ac6f40d44a7f092b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "env: working directory": {
+   "script": "e2677db6c0b1cd20",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "/\n/\n/tmp\n/\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

@@ -81,7 +81,7 @@ pub async fn invoke_resource(
     // A resource method has no user-supplied input parameters.
     let method_parameters = SchemaValue::Record { fields: vec![] };
 
-    let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+    let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
         method_parameters.try_into().map_err(|error| {
             ErrorData::internal_error(format!("Failed to encode method parameters: {error}"), None)
         })?;

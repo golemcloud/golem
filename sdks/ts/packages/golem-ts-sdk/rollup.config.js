@@ -9,12 +9,13 @@ import * as fs from 'node:fs';
 import path from 'path';
 
 // All `golem:*` and `wasi:*` specifiers are host-provided WIT imports (resolved by
-// the wasm runtime), plus generated guest worlds and `node:sqlite`. Externalize them
+// the wasm runtime), plus generated guest worlds, `node:sqlite` and `node:fs`. Externalize them
 // all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
   id === 'user' ||
   id === 'agent-guest' ||
   id === 'node:sqlite' ||
+  id === 'node:fs' ||
   id.startsWith('golem:') ||
   id.startsWith('wasi:');
 
@@ -93,9 +94,8 @@ export default (args) =>
           middleware: 'src/middleware.ts',
           'schema/public': 'src/schema/public.ts',
           reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouterContract.ts',
           toolClient: 'src/toolClient.ts',
-          'internal/tool/compiled': 'src/internal/tool/compiled.ts',
-          'internal/compiledAgent': 'src/internal/compiledAgent.ts',
         },
         output: {
           dir: 'dist/runtime',
@@ -114,7 +114,6 @@ export default (args) =>
             name: 'component-build',
             writeBundle() {
               fs.copyFileSync('scripts/component.mjs', 'dist/component.mjs');
-              fs.copyFileSync('scripts/static-tools.mjs', 'dist/static-tools.mjs');
             },
           },
         ],

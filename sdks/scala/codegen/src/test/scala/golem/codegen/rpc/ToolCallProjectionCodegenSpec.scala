@@ -61,7 +61,8 @@ class ToolCallProjectionCodegenSpec extends munit.FunSuite {
     assert(content.contains("backend.startNoStdout"), content)
     assert(content.contains("backend.startOutputs"), content)
     assert(content.contains("ToolCallPreparation.prepareInput"), content)
-    assert(content.contains("ToolCallPreparation.decodeValue"), content)
+    assert(content.contains("ToolCallPreparation.decodeConcreteValue"), content)
+    assert(content.contains("ConcreteCodec.derived[_root_.java.lang.String]"), content)
   }
 
   test("shared projection selects no-output and all four output channel combinations") {

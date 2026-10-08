@@ -145,9 +145,18 @@ impl CompiledMcpToolExport {
             return Ok(None);
         };
         reject_capabilities(&self.definition.schema, &result.type_, "result")?;
-        let mut inner =
-            to_external_output_json_schema(&self.definition.schema, &result.type_, false);
-        if matches!(&result.type_, SchemaType::Record { .. }) {
+        let resolved = self
+            .definition
+            .schema
+            .resolve_ref(&result.type_)
+            .map_err(|error| error.to_string())?;
+        let is_record = matches!(resolved, SchemaType::Record { .. });
+        let mut inner = to_external_output_json_schema(
+            &self.definition.schema,
+            if is_record { resolved } else { &result.type_ },
+            false,
+        );
+        if is_record {
             return inner
                 .as_object()
                 .cloned()

@@ -224,6 +224,65 @@ async fn dropping_a_provisional_operation_unregisters_it_and_wakes_parent_waiter
 }
 
 #[test]
+#[timeout("10s")]
+async fn jump_fence_keeps_driving_selecting_cancellation_after_another_store_task_errors() {
+    use wasmtime::AsContextMut;
+    use wasmtime::component::{Accessor, AccessorTask, HasSelf};
+
+    struct CancelTask(OwnerToolOperation, Arc<Notify>);
+    impl AccessorTask<(), HasSelf<()>> for CancelTask {
+        async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
+            self.1.notified().await;
+            self.0.resolve_cancel(true).await;
+            self.0.settle().await;
+            Ok(())
+        }
+    }
+    struct JumpTask;
+    impl AccessorTask<(), HasSelf<()>> for JumpTask {
+        async fn run(self, _: &Accessor<(), HasSelf<()>>) -> wasmtime::Result<()> {
+            Err(wasmtime::Error::from_anyhow(anyhow::Error::new(
+                InterruptKind::Jump,
+            )))
+        }
+    }
+
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.begin_cancel());
+    let release = Arc::new(Notify::new());
+    let mut config = wasmtime::Config::new();
+    config.concurrency_support(true);
+    let engine = wasmtime::Engine::new(&config).unwrap();
+    let mut store = wasmtime::Store::new(&engine, ());
+    store
+        .run_concurrent(async |accessor| {
+            accessor.spawn(CancelTask(operation, release.clone()));
+            accessor.spawn(JumpTask);
+        })
+        .await
+        .unwrap();
+
+    let mut errors = 0;
+    owner
+        .fence_for_jump(&mut store.as_context_mut(), |error| {
+            assert!(matches!(
+                error.root_cause().downcast_ref::<InterruptKind>(),
+                Some(InterruptKind::Jump)
+            ));
+            errors += 1;
+            release.notify_one();
+        })
+        .await;
+    assert_eq!(errors, 1);
+    assert!(matches!(
+        owner.selected_owner_failure(),
+        Some(OwnerFailureWinner::Lifecycle(InterruptKind::Jump))
+    ));
+    assert_eq!(owner.operation_count(), 0);
+}
+
+#[test]
 #[timeout("30s")]
 async fn attachment_admission_rejection_preselects_ordinary_terminal() {
     let owner = OwnerToolOperations::new();

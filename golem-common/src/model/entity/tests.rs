@@ -226,6 +226,7 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
                 .unwrap(),
         },
         assume_idempotence: false,
+        authority_wallet: Vec::new(),
     };
 
     let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -475,6 +476,7 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             .unwrap(),
         },
         assume_idempotence: true,
+        authority_wallet: Vec::new(),
     };
     let identity = EntityInvocationRequestIdentity {
         entity: request.entity.clone(),
@@ -687,6 +689,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             .unwrap(),
         },
         assume_idempotence: false,
+        authority_wallet: Vec::new(),
     };
 
     let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();

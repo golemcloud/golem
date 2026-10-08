@@ -500,7 +500,7 @@ impl WorkerProxy for RemoteWorkerProxy {
             nanos: dt.timestamp_subsec_nanos() as i32,
         });
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
                 WorkerProxyError::BadRequest(vec![format!(
                     "method parameters cannot cross the remote worker boundary: {error}"
@@ -1101,9 +1101,6 @@ mod tests {
     use crate::services::rpc::{RemoteInvocationRpc, Rpc};
     use crate::services::shard::ShardServiceDefault;
     use futures::StreamExt;
-    use golem_api_grpc::proto::golem::schema::{
-        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
-    };
     use golem_api_grpc::proto::golem::worker::v1::worker_service_server::{
         WorkerService, WorkerServiceServer,
     };
@@ -1115,6 +1112,9 @@ mod tests {
         invocation_session_result,
     };
     use golem_common::model::component::ComponentId;
+    use golem_schema::proto::golem::schema::{
+        SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
+    };
     use prost::Message;
     use std::sync::{Arc, Mutex};
     use test_r::test;

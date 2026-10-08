@@ -30,13 +30,31 @@ components:
 
 tools:
   moonbit-streaming: {}
+  matrix-core: {}
+  matrix-permission-issuer: {}
+  matrix-resource: {}
 
 agents:
   MoonBitToolStreamingCaller:
     tools:
       moonbit-streaming: {}
+      matrix-core: {}
+  MoonBitResourceToolStreamingCaller:
+    tools:
+      matrix-permission-issuer: {}
+      matrix-resource: {}
 
 environments:
   local:
     server: local
     componentPresets: release
+
+resourceDefaults:
+  local:
+    matrix-capacity:
+      limit:
+        type: Capacity
+        value: 8
+      enforcementAction: reject
+      unit: operation
+      units: operations

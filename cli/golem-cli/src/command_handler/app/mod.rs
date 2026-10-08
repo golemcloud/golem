@@ -125,7 +125,7 @@ use tracing::debug;
 
 mod deploy_diff;
 mod template;
-mod tool_middleware;
+pub(crate) mod tool_middleware;
 mod version_strategy;
 
 pub(crate) fn resolve_mcp_import_env_vars(
@@ -1126,6 +1126,7 @@ impl AppCommandHandler {
                 vec![],
                 &ApplicationComponentSelectMode::All,
                 &tool_grant_plan.resolved_grants,
+                &tool_middleware_grant_plan.resolved,
             )
             .await
             .map_err(DeployError::BuildError)?;
@@ -3460,8 +3461,49 @@ impl AppCommandHandler {
             ResolvedToolGrants::default()
         };
 
-        self.build_selected(build_config, &resolved_tool_grants)
-            .await
+        let requires_middleware_metadata = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .remote_tool_middleware_release_references()
+                .next()
+                .is_some()
+        };
+        let resolved_middleware_grants = if requires_middleware_metadata {
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::ManifestOnly)
+                .await?;
+            let mut plan = self
+                .plan_tool_middleware_grant_reconciliation(&environment)
+                .await?;
+            // A build needs release access, not removal of other environment grants.
+            plan.deletions.clear();
+            self.validate_tool_middleware_grant_reconciliation(&environment, &plan)
+                .await?;
+            if plan.has_changes() {
+                if !self
+                    .ctx
+                    .interactive_handler()
+                    .confirm_tool_grant_plan_apply()?
+                {
+                    bail!(NonSuccessfulExit);
+                }
+                self.apply_tool_middleware_grant_reconciliation(&environment, &mut plan)
+                    .await?;
+            }
+            plan.resolved
+        } else {
+            ResolvedToolMiddlewareGrants::default()
+        };
+        self.build_selected(
+            build_config,
+            &resolved_tool_grants,
+            &resolved_middleware_grants,
+        )
+        .await
     }
 
     async fn build_with_resolved_tool_grants(
@@ -3470,17 +3512,23 @@ impl AppCommandHandler {
         component_names: Vec<ComponentName>,
         default_component_select_mode: &ApplicationComponentSelectMode,
         resolved_tool_grants: &ResolvedToolGrants,
+        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, default_component_select_mode)
             .await?;
-        self.build_selected(build_config, resolved_tool_grants)
-            .await
+        self.build_selected(
+            build_config,
+            resolved_tool_grants,
+            resolved_tool_middleware_grants,
+        )
+        .await
     }
 
     async fn build_selected(
         &self,
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
+        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
     ) -> anyhow::Result<()> {
         let environment_tools = self.resolve_build_environment_tools(build_config).await?;
         let app_ctx = self.ctx.app_context_lock().await;
@@ -3496,6 +3544,7 @@ impl AppCommandHandler {
             .build(
                 build_config,
                 resolved_tool_grants,
+                resolved_tool_middleware_grants,
                 environment_tools.as_ref(),
             )
             .await

@@ -23,7 +23,7 @@ use futures::FutureExt;
 use golem_common::SafeDisplay;
 use golem_common::metrics::db::record_db_serialized_size;
 use golem_common::model::ShardEpoch;
-use golem_service_base::db::postgres::PostgresPool;
+use golem_service_base::db::postgres::{PostgresLabelledTransaction, PostgresPool};
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
@@ -123,6 +123,14 @@ impl PostgresIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -135,6 +143,10 @@ impl PostgresIndexedStorage {
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
             }
         }
     }
@@ -152,6 +164,36 @@ impl PostgresIndexedStorage {
     /// `u64` would wrap it into a near-ceiling epoch that fences every writer out of the key.
     fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("Postgres indexed storage read a negative epoch {value} for key '{key}'")
+    }
+
+    /// The writer generation recorded for `key`, read inside `tx`, and holding its row until `tx` ends: a writer recording a new generation for the key waits
+    /// for this transaction.
+    async fn stored_epoch(
+        tx: &mut PostgresLabelledTransaction,
+        namespace: &str,
+        key: &str,
+    ) -> Result<Option<i64>, RepoError> {
+        let stored: Option<(i64,)> = tx
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
+                )
+                .bind(namespace.to_string())
+                .bind(key.to_string()),
+            )
+            .await?;
+        Ok(stored.map(|(epoch,)| epoch))
+    }
+
+    /// Refuses the write `tx` makes unless `expected` is the generation recorded for `key`.
+    async fn check_epoch(
+        tx: &mut PostgresLabelledTransaction,
+        namespace: &str,
+        key: &str,
+        expected: ShardEpoch,
+    ) -> Result<(), FencedTxError> {
+        let stored = Self::stored_epoch(tx, namespace, key).await?;
+        FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
     fn classify_repo_error(err: RepoError, primary_oplog_insert: bool) -> IndexedStorageError {
@@ -179,6 +221,19 @@ impl PostgresIndexedStorage {
     /// [`FencedTxError::into_indexed_storage_error`], which takes a function pointer.
     fn classify_repo_error_oplog_insert(err: RepoError) -> IndexedStorageError {
         Self::classify_repo_error(err, true)
+    }
+
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err, false)
+        }
     }
 
     async fn acquire_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
@@ -319,10 +374,15 @@ impl IndexedStorage for PostgresIndexedStorage {
             return Ok(());
         }
         let _permit = self.acquire_permit().await;
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error_general,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (id, value) in pairs.iter() {
@@ -348,32 +408,17 @@ impl IndexedStorage for PostgresIndexedStorage {
                 )
                 .await
                 .map(|_| ())
-                .map_err(|err| Self::classify_repo_error(err, primary_oplog_insert));
+                .map_err(classify);
         }
 
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
-
                     // Inside the insert transaction, and holding the row, so a writer that has
                     // lost the shard cannot slip a batch in between the check and the insert.
                     // `FOR UPDATE` is what serialises two executors racing over the same oplog.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored.map(|(epoch,)| epoch),
-                            Self::negative_epoch_message,
-                        )?;
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
 
                     for chunk in pairs.chunks(Self::APPEND_MANY_CHUNK_SIZE) {
@@ -398,13 +443,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_oplog_insert
-                } else {
-                    Self::classify_repo_error_general
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// Postgres's half of [`IndexedStorage::set_key_epoch`], which states the rule this
@@ -487,15 +526,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     // Holding the row, as an append does: a writer taking the key over waits for
                     // this transaction, and then finds nothing left to take over.
                     if let Some(expected) = expected_epoch {
-                        let stored: Option<(i64,)> = tx
-                            .fetch_optional_as(
-                                sqlx::query_as(
-                                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = $1 AND key = $2 FOR UPDATE;",
-                                )
-                                .bind(namespace.clone())
-                                .bind(key.clone()),
-                            )
-                            .await?;
+                        let stored = Self::stored_epoch(tx, &namespace, &key).await?;
                         // Neither a record nor entries: the key is already gone, most often taken
                         // by an earlier attempt of this same deletion whose later steps failed, and
                         // a writer that lost the key has nothing here to destroy. Refusing would
@@ -518,7 +549,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                         FencedTxError::check_record(
                             &key,
                             expected,
-                            stored.map(|(epoch,)| epoch),
+                            stored,
                             Self::negative_epoch_message,
                         )?;
                     }
@@ -540,6 +571,51 @@ impl IndexedStorage for PostgresIndexedStorage {
                     )
                     .await?;
                     Ok(())
+                }
+                .boxed()
+            })
+            .await
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error_general))
+    }
+
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        let _permit = self.acquire_permit().await;
+        let namespace = Self::namespace(namespace);
+        let key = key.to_string();
+        self.pool
+            .with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+                async move {
+                    // Holding the row, as an append does: a writer adding entries waits for this
+                    // transaction, so the emptiness seen below is the emptiness deleted.
+                    if let Some(expected) = expected_epoch {
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
+                    }
+                    let (has_entries,): (bool,) = tx
+                        .fetch_one_as(
+                            sqlx::query_as(
+                                "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = $1 AND key = $2);",
+                            )
+                            .bind(namespace.clone())
+                            .bind(key.clone()),
+                        )
+                        .await?;
+                    if has_entries {
+                        return Ok(false);
+                    }
+                    tx.execute(
+                        sqlx::query("DELETE FROM index_storage WHERE namespace = $1 AND key = $2;")
+                            .bind(format!("{namespace}-present"))
+                            .bind(key.clone()),
+                    )
+                    .await?;
+                    Ok(true)
                 }
                 .boxed()
             })
@@ -771,9 +847,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         let last_dropped_id = Self::to_i64(last_dropped_id, "last_dropped_id")?;
@@ -783,8 +864,14 @@ impl IndexedStorage for PostgresIndexedStorage {
         )?;
         let delete_batch_size = self.drop_prefix_delete_batch_size;
         self.pool
-            .with_tx(svc_name, api_name, |tx| {
+            .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 async move {
+                    // Holding the row, as an append does: the whole trim happens inside one
+                    // ownership generation, so a stale executor's archive transfer cannot
+                    // destroy entries the new owner accepted.
+                    if let Some(expected) = expected_epoch {
+                        Self::check_epoch(tx, &namespace, &key, expected).await?;
+                    }
                     tx.execute(sqlx::query(
                         "INSERT INTO index_storage (namespace, key, id, value) SELECT $1, $2, 0, ''::bytea WHERE EXISTS (SELECT 1 FROM index_storage WHERE namespace = $3 AND key = $2) ON CONFLICT DO NOTHING;")
                         .bind(format!("{namespace}-present")).bind(&key).bind(&namespace)).await?;
@@ -819,7 +906,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 .boxed()
             })
             .await
-            .map_err(Self::classify_repo_error_general)
+            .map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error_general))
     }
 }
 

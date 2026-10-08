@@ -290,6 +290,23 @@ pub fn set_log_output(output: Output) {
     LOG_STATE.write().unwrap().set_output(output);
 }
 
+/// Shows the messages held back by [`Output::BufferedUntilErr`] now, and stops holding later
+/// ones. For when the user has to see and act on a message, such as a link to log in with.
+pub fn release_held_log() {
+    let mut state = LOG_STATE.write().unwrap();
+    if state.output == Output::BufferedUntilErr {
+        state.set_output(Output::Stderr);
+    }
+}
+
+/// Drops the messages held back by [`Output::BufferedUntilErr`], for a command that ended
+/// without an error of the CLI's own.
+pub fn discard_held_log() {
+    if LOG_STATE.read().unwrap().output == Output::BufferedUntilErr {
+        LOG_STATE_BUFFER.write().unwrap().clear();
+    }
+}
+
 /// Renders an error for structured (JSON / YAML / TOON) output: the full context chain, with
 /// any terminal styling removed. Error messages meant for the terminal (e.g. `ServiceError`)
 /// are colorized whenever the CLI output is colorized, which must not leak into output that is

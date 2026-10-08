@@ -441,8 +441,14 @@ pub trait IndexedStorage: Debug + Sync {
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
     /// Primary oplog keys remain present even when every entry is removed, preserving the creation
-    /// fence. Compressed archive keys are removed atomically when trimming leaves them empty, so a
-    /// later retry may append the same final chunk id. Missing keys stay missing.
+    /// fence. Archive level keys (compressed chunks and blob manifests) are removed atomically
+    /// when trimming leaves them empty, so a later retry may append the same final chunk id; their
+    /// epoch record stays. Missing keys stay missing.
+    ///
+    /// Fenced on the writer generation as an append is, checked in the same atomic step as the
+    /// trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the generation recorded for the key (an absent record refuses
+    /// too). `None` trims unconditionally.
     async fn drop_prefix(
         &self,
         svc_name: &'static str,
@@ -450,7 +456,27 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
+
+    /// Deletes the given key only if it holds no entries, keeping the writer generation recorded
+    /// for it. Answers `true` when the key held no entries and is now gone, `false` when it still
+    /// holds entries and was left alone. The epoch is checked in the same atomic step as the emptiness
+    /// test: refused with [`IndexedStorageError::Fenced`], deleting nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the recorded generation (an absent record refuses too).
+    ///
+    /// For a writer that trimmed a key empty and must keep writing it later: [`Self::delete`]
+    /// could remove entries a newer writer has added since the trim, and
+    /// [`Self::delete_with_epoch`] would also remove the record, refusing the writer's own next
+    /// append.
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError>;
 
     /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
     /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
@@ -624,11 +650,36 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
             .await
     }
 
+    pub async fn delete_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .await
+    }
+
+    pub async fn delete_empty_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_empty_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .await
+    }
+
     pub async fn drop_prefix(
         &self,
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         self.record("drop_prefix");
         self.storage
@@ -638,6 +689,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 namespace,
                 key,
                 last_dropped_id,
+                expected_epoch,
             )
             .await
     }
@@ -996,6 +1048,13 @@ pub enum IndexedStorageNamespace {
         agent_mode: AgentMode,
         level: usize,
     },
+    /// The chunks a blob archive level holds for an agent: the chunk bytes live in blob storage,
+    /// and only the chunks listed here are part of the oplog.
+    BlobOplogManifest {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        level: usize,
+    },
 }
 
 /// Various namespaces for operations working on multiple indexed storage namespaces such as scan
@@ -1003,6 +1062,7 @@ pub enum IndexedStorageNamespace {
 pub enum IndexedStorageMetaNamespace {
     Oplog { agent_mode: AgentMode },
     CompressedOplog { agent_mode: AgentMode, level: usize },
+    BlobOplogManifest { agent_mode: AgentMode, level: usize },
 }
 
 /// The resume token for a page of an ordered walk: the last key handed back, or `None` once a

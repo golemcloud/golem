@@ -19,6 +19,7 @@ use crate::app::error::{AppValidationError, CustomCommandError, format_warns};
 use crate::app::manifest_upgrade::plan_manifest_upgrade_steps;
 use crate::app::manifest_version::validate_manifest_versions;
 use crate::app::template::AppTemplateRepo;
+use crate::command_handler::ResolvedToolMiddlewareGrants;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::error::NonSuccessfulExit;
 use crate::fs;
@@ -79,6 +80,7 @@ pub struct BuildContext<'a> {
     application_context: &'a ApplicationContext,
     build_config: &'a BuildConfig,
     resolved_tool_grants: Option<&'a ResolvedToolGrants>,
+    resolved_tool_middleware_grants: Option<&'a ResolvedToolMiddlewareGrants>,
     environment_tools: Option<&'a ResolvedEnvironmentTools>,
 }
 
@@ -88,6 +90,7 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: None,
+            resolved_tool_middleware_grants: None,
             environment_tools: None,
         }
     }
@@ -101,8 +104,33 @@ impl<'a> BuildContext<'a> {
             application_context,
             build_config,
             resolved_tool_grants: Some(resolved_tool_grants),
+            resolved_tool_middleware_grants: None,
             environment_tools: None,
         }
+    }
+
+    pub fn with_tool_middleware_grants(mut self, grants: &'a ResolvedToolMiddlewareGrants) -> Self {
+        self.resolved_tool_middleware_grants = Some(grants);
+        self
+    }
+
+    pub fn remote_middleware_definitions(
+        &self,
+    ) -> anyhow::Result<Vec<golem_common::schema::tool::ToolMiddleware>> {
+        self.application()
+            .remote_tool_middleware_release_references()
+            .map(|(name, reference)| {
+                let reference = reference
+                    .to_release_reference()
+                    .map_err(anyhow::Error::msg)?;
+                self.resolved_tool_middleware_grants
+                    .and_then(|grants| grants.get(&reference))
+                    .map(|grant| grant.release.definition.clone())
+                    .ok_or_else(|| {
+                        anyhow!("Tool middleware '{name}' has no environment release grant")
+                    })
+            })
+            .collect()
     }
 
     pub fn with_environment_tools(mut self, tools: &'a ResolvedEnvironmentTools) -> Self {
@@ -472,6 +500,7 @@ impl ApplicationContext {
             agent_type_names: Default::default(),
             target_language: Some(language),
             output_dir: Some(repl_root_bridge_sdk_dir.clone()),
+            rust_config: Default::default(),
         }
     }
 
@@ -635,10 +664,12 @@ impl ApplicationContext {
         &self,
         build_config: &BuildConfig,
         resolved_tool_grants: &ResolvedToolGrants,
+        resolved_tool_middleware_grants: &ResolvedToolMiddlewareGrants,
         environment_tools: Option<&ResolvedEnvironmentTools>,
     ) -> anyhow::Result<()> {
         let ctx =
-            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants);
+            BuildContext::new_with_resolved_tool_grants(self, build_config, resolved_tool_grants)
+                .with_tool_middleware_grants(resolved_tool_middleware_grants);
         match environment_tools {
             Some(environment_tools) => {
                 build_app(&ctx.with_environment_tools(environment_tools)).await

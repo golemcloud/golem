@@ -16,9 +16,11 @@
 
 package golem.tool
 
+import golem.schema.wire.{ConcreteCodec, SchemaWire}
 import golem.schema.{FromSchema, SchemaEncodeError, SchemaValue, TypedSchemaValue}
 
 import scala.concurrent.Future
+import scala.util.control.NonFatal
 
 /** @internal Used by Golem-generated typed tool projections. */
 sealed trait ToolDeclaredErrorDecoder[+E]
@@ -90,6 +92,26 @@ object ToolCallPreparation {
       case Some(result) if !ToolGraphs.schemaShapesMatch(result.graph, expected) =>
         Left("tool result schema does not match the generated client's expected result schema")
       case Some(result) => from.fromValue(result.value).left.map(_.message)
+    }
+
+  def decodeConcreteValue[A](
+    value: Option[TypedSchemaValue],
+    codec: ConcreteCodec[A]
+  ): Either[String, A] =
+    value match {
+      case None         => Left("tool result did not contain a value")
+      case Some(result) =>
+        val expected = SchemaWire.schemaGraphFromWit(codec.graph)
+        if (!ToolGraphs.schemaShapesMatch(result.graph, expected)) {
+          SchemaWire.releaseOwned(result.value)
+          Left("tool result schema does not match the generated client's expected result schema")
+        } else
+          try Right(codec.decode(SchemaWire.schemaValueToWit(result.value)))
+          catch {
+            case NonFatal(error) =>
+              SchemaWire.releaseOwned(result.value)
+              Left(Option(error.getMessage).getOrElse(error.toString))
+          }
     }
 
   private def toolErrorMessage(error: ToolError[Nothing]): String =

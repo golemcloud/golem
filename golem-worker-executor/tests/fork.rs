@@ -8,7 +8,6 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, StreamInvocationIdentity, UpdateMode,
     invocation_request, invocation_response,
@@ -33,6 +32,7 @@ use golem_common::model::{
     OwnedAgentId, PromiseId,
 };
 use golem_common::schema::{FromSchema, SchemaValue};
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
@@ -61,15 +61,45 @@ pub(crate) async fn start_with_local_resume(
     context: &TestContext,
     lose_resume_response: bool,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, lose_resume_response, None, None).await
+    start_with_resume_checkpoint(
+        deps,
+        context,
+        lose_resume_response,
+        None,
+        TestExecutorOverrides::default(),
+    )
+    .await
 }
 
+/// Starts an executor with `overrides` whose fork activation stays local.
+pub(crate) async fn start_with_local_resume_and(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    overrides: TestExecutorOverrides,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_with_resume_checkpoint(deps, context, false, None, overrides).await
+}
+
+/// Starts an executor with `snapshot_policy` as its default snapshot policy, whose fork
+/// activation stays local.
 pub(crate) async fn start_with_local_resume_and_snapshot_policy(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     snapshot_policy: SnapshotPolicy,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    start_with_resume_checkpoint(deps, context, false, None, Some(snapshot_policy)).await
+    start_with_local_resume_and(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(
+                move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
+                    config.oplog.default_snapshotting = snapshot_policy.clone();
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -141,25 +171,17 @@ async fn start_with_resume_checkpoint(
     context: &TestContext,
     lose_resume_response: bool,
     checkpoint: Option<Arc<tokio::sync::Notify>>,
-    snapshot_policy: Option<SnapshotPolicy>,
+    overrides: TestExecutorOverrides,
 ) -> anyhow::Result<TestWorkerExecutor> {
     let client = Arc::new(Mutex::new(None));
     let target = client.clone();
     let lose_response = Arc::new(AtomicBool::new(lose_resume_response));
     let checkpoint = Arc::new(Mutex::new(checkpoint));
     let environment_id = context.default_environment_id;
-    let configure = snapshot_policy.map(|snapshot_policy| {
-        Arc::new(
-            move |config: &mut golem_worker_executor::services::golem_config::GolemConfig| {
-                config.oplog.default_snapshotting = snapshot_policy.clone();
-            },
-        ) as Arc<_>
-    });
     let executor = start_with_overrides(
         deps,
         context,
         TestExecutorOverrides {
-            configure,
             wrap_worker_proxy: Some(Arc::new(move |inner| {
                 Arc::new(LocalResumeProxy {
                     inner,
@@ -171,7 +193,7 @@ async fn start_with_resume_checkpoint(
                     checkpoint: checkpoint.clone(),
                 })
             })),
-            ..Default::default()
+            ..overrides
         },
     )
     .await?;
@@ -820,9 +842,9 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String(value.into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        value.into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1030,7 +1052,7 @@ async fn exported_fork_initial_content_and_receipt_survive_lost_resume_response(
                     panic!("expected typed item")
                 };
                 SchemaValue::try_from(
-                    golem_api_grpc::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
+                    golem_schema::proto::golem::schema::SchemaValue::decode(bytes.as_slice())
                         .unwrap(),
                 )
                 .unwrap()
@@ -1770,9 +1792,9 @@ async fn sliding_expiry_refreshes_are_coalesced(
         payload: Some(append_to_stream_slot_request::Payload::Values(
             TypedStreamSlotItems {
                 values: vec![
-                    golem_api_grpc::proto::golem::schema::SchemaValue::try_from(
-                        SchemaValue::String("refresh".into()),
-                    )
+                    golem_schema::proto::golem::schema::SchemaValue::try_from(SchemaValue::String(
+                        "refresh".into(),
+                    ))
                     .unwrap()
                     .encode_to_vec(),
                 ],
@@ -1839,8 +1861,14 @@ async fn guest_fork_retries_same_child_after_crash_before_caller_result(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let checkpoint = Arc::new(tokio::sync::Notify::new());
-    let executor =
-        start_with_resume_checkpoint(deps, &context, false, Some(checkpoint.clone()), None).await?;
+    let executor = start_with_resume_checkpoint(
+        deps,
+        &context,
+        false,
+        Some(checkpoint.clone()),
+        TestExecutorOverrides::default(),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1969,4 +1997,168 @@ async fn guest_fork_same_key_on_phantom_siblings_creates_distinct_children(
     assert!(cursor.is_none());
     assert_eq!(agents.len(), 4);
     Ok(())
+}
+
+#[test]
+#[timeout("180s")]
+async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_export_fork_copy_once(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    // The executor keeps filesystem snapshots in a test store. A fork that its byte budget
+    // rejects copies no snapshot. The store holds the copy of the first of two attempts of one
+    // request, so the second attempt waits for it, then finds the published target.
+    use golem_api_grpc::proto::golem::worker::InvocationStart;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ForkStreamSlotRequest, StreamSessionExpiryPolicy, create_stream_session_response,
+        fork_stream_slot_rejection::Reason, fork_stream_slot_response,
+        stream_session_expiry_policy,
+    };
+    use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
+    use golem_worker_executor::filesystem_snapshot_testing::with_snapshot_store;
+    use golem_worker_executor::services::golem_config::{
+        FilesystemSnapshotUploadConfig, SnapshotPolicy,
+    };
+    use uuid::Uuid;
+    let context = TestContext::new(last_unique_id);
+    with_snapshot_store(|store| async move {
+    let executor = start_with_local_resume_and(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
+            })),
+            filesystem_snapshot_store: Some((
+                store.clone(),
+                FilesystemSnapshotUploadConfig::default(),
+            )),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let source = executor
+        .start_agent(
+            &component.id,
+            agent_id!("DurableStreamAgent", "export-fork-snapshots"),
+        )
+        .await?;
+    let target = AgentId::from_agent_id(
+        component.id,
+        &golem_common::phantom_agent_id!(
+            "DurableStreamAgent",
+            Uuid::new_v4(),
+            "export-fork-snapshots"
+        ),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let session = Uuid::new_v4().to_string();
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(CreateStreamSessionRequest {
+            public_session_id: session.clone(),
+            expiry_policy: Some(StreamSessionExpiryPolicy {
+                kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(3_600)),
+            }),
+            creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+            invocation: Some(InvocationStart {
+                agent_id: Some(source.clone().into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                component_owner_account_id: Some(component.account_id.into()),
+                idempotency_key: Some(IdempotencyKey::new(session.clone()).into()),
+                method_name: Some("echo".into()),
+                input: Some(input),
+                ..Default::default()
+            }),
+        })
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(_)) = created.result else {
+        anyhow::bail!("{created:?}");
+    };
+    let request = ForkStreamSlotRequest {
+        source_agent_id: Some(source.clone().into()),
+        target_agent_id: Some(target.clone().into()),
+        environment_id: Some(component.environment_id.into()),
+        auth_ctx: Some(AuthCtx::System.into()),
+        session: session.clone(),
+        slot: "input".into(),
+        expected_method: "echo".into(),
+        source_path: "/source/input".into(),
+        initial_content: br#"["fork-initial"]"#.to_vec(),
+        max_forks_per_session: 1,
+        max_forks_per_second: 100,
+        max_copied_bytes: 64 * 1024 * 1024,
+        ..Default::default()
+    };
+    let mut too_large = request.clone();
+    too_large.max_copied_bytes = 0;
+
+    let rejected = executor
+        .client
+        .clone()
+        .fork_stream_slot(too_large)
+        .await?
+        .into_inner();
+    let copies_after_the_rejection = store.copy_count();
+    let held = store.hold_next_copy();
+    let fork = || {
+        let (mut client, request) = (executor.client.clone(), request.clone());
+        async move { client.fork_stream_slot(request).await }
+    };
+    let (first, second, ()) = tokio::join!(fork(), fork(), async move {
+        let polls = futures::StreamExt::then(
+            futures::StreamExt::take(futures::stream::repeat(()), 600),
+            |()| async {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                held.name().is_some()
+            },
+        );
+        futures::StreamExt::any(polls, |started| async move { started }).await;
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        held.release();
+    });
+    let succeeded = |response: Result<
+        tonic::Response<golem_api_grpc::proto::golem::workerexecutor::v1::ForkStreamSlotResponse>,
+        tonic::Status,
+    >| {
+        matches!(
+            response.map(|response| response.into_inner().result),
+            Ok(Some(fork_stream_slot_response::Result::Success(_)))
+        )
+    };
+
+    assert!(
+        matches!(rejected.result, Some(fork_stream_slot_response::Result::Rejected(ref rejection)) if rejection.reason == Reason::TooLarge as i32),
+        "{rejected:?}"
+    );
+    assert_eq!(
+        (
+            copies_after_the_rejection,
+            succeeded(first),
+            succeeded(second),
+            store.copy_count()
+        ),
+        (0, true, true, 1)
+    );
+    Ok(())
+    })
+    .await
 }

@@ -24,13 +24,15 @@ pub mod services;
 use self::bootstrap::Services;
 use self::config::RegistryServiceConfig;
 use anyhow::Context;
-use golem_common::poem::{CliClientInfoMiddleware, LazyEndpointExt};
+use golem_common::poem::{
+    CliClientInfoMiddleware, LazyEndpointExt, OpenTelemetryTracing, PrometheusExporter,
+};
 use opentelemetry_sdk::trace::SdkTracer;
-use poem::endpoint::{BoxEndpoint, PrometheusExporter};
+use poem::endpoint::BoxEndpoint;
 use poem::listener::Acceptor;
 use poem::listener::Listener;
+use poem::middleware::CookieJarManager;
 use poem::middleware::Cors;
-use poem::middleware::{CookieJarManager, OpenTelemetryTracing};
 use poem::{EndpointExt, Route};
 use tokio::task::JoinSet;
 use tracing::{Instrument, info};

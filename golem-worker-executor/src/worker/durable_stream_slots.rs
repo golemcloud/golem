@@ -17,7 +17,6 @@ use crate::durable_host::durable_stream::{
     CommittedProducerStreamEventPayload, DurableStreamStore, ExternalAppendOutcome,
     ExternalProducer, SessionError, StreamHandleReadResult, StreamStoreError, StreamWriteAdmission,
 };
-use golem_api_grpc::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_common::model::DurableStreamPublicBinding;
 use golem_common::model::ScheduledAction;
 use golem_common::model::durable_stream::{
@@ -30,6 +29,7 @@ use golem_common::model::invocation_session_public::validate_durable_stream_sess
 use golem_common::schema::{
     AgentMethodSchema, FieldSource, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
 };
+use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
 use golem_schema::schema::fingerprint::schema_fingerprint_v1;
 use golem_schema::schema::validation::validate_value;
 use prost::Message;
@@ -983,7 +983,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .materialize_bindings(&prepared.stream_mappings)
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-            let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue::decode(
+            let input = golem_schema::proto::golem::schema::TypedSchemaValue::decode(
                 descriptor.invocation_value.as_slice(),
             )
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
@@ -1974,12 +1974,12 @@ mod tests {
         second.stream_id = StreamId(uuid::Uuid::from_u128(202));
         let reference = ProtoValue {
             value: Some(schema_value::Value::StreamReference(
-                golem_api_grpc::proto::golem::schema::SchemaValueStreamReference { stream_id: 1 },
+                golem_schema::proto::golem::schema::SchemaValueStreamReference { stream_id: 1 },
             )),
         };
         let record = ProtoValue {
             value: Some(schema_value::Value::RecordValue(
-                golem_api_grpc::proto::golem::schema::RecordValue {
+                golem_schema::proto::golem::schema::RecordValue {
                     fields: vec![reference.clone()],
                 },
             )),

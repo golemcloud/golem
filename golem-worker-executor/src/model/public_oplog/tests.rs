@@ -373,6 +373,7 @@ fn test_entity_request(
         }),
         plan: EntityInvocationPlanReference::Root { plan },
         assume_idempotence: true,
+        authority_wallet: Vec::new(),
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),

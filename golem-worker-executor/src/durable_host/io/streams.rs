@@ -46,7 +46,7 @@ use golem_common::model::oplog::{
     HostResponseStreamWriteResult, HostResponseStreamWriteWithBytes, HostResponseStreamWriteZeroes,
     OplogIndex, SpanOutcome,
 };
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use wasmtime_wasi::p2::bindings::io::streams::{
     Host, HostInputStream, HostOutputStream, InputStream, OutputStream, Pollable,
 };
@@ -1350,7 +1350,7 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
                     .has_unreconstructable_body = true;
             }
             let state = get_http_output_stream_state(self, rep)?;
-            let call = DurableCallSession::<
+            let mut call = DurableCallSession::<
                 HttpTypesOutgoingBodyStreamBlockingSplice,
                 NotCancellable,
             >::start(
@@ -1362,7 +1362,12 @@ impl<Ctx: WorkerCtx> HostOutputStream for DurableWorkerCtx<Ctx> {
             .map_err(StreamError::from)?;
 
             let result = if call.is_live() {
-                let result = HostOutputStream::blocking_splice(self.table(), self_, src, len).await;
+                let interrupt = self.create_interrupt_signal();
+                let result = blocking_splice_or_interrupt(self.table(), self_, src, len, interrupt)
+                    .await
+                    .map_err(|interrupt| {
+                        StreamError::Trap(wasmtime::Error::from_anyhow(call.trap(interrupt)))
+                    })?;
                 call.complete(
                     self,
                     HostResponseStreamSkip {
@@ -1797,6 +1802,21 @@ async fn should_accept_closed_for_pending_status_retry<Ctx: WorkerCtx, T>(
     }
 }
 
+async fn blocking_splice_or_interrupt(
+    table: &mut wasmtime::component::ResourceTable,
+    dest: Resource<OutputStream>,
+    src: Resource<InputStream>,
+    len: u64,
+    interrupt: impl std::future::Future<Output = InterruptKind>,
+) -> Result<Result<u64, StreamError>, InterruptKind> {
+    tokio::select! {
+        // Preserve a completed native result; durable completion is outside this race.
+        biased;
+        result = HostOutputStream::blocking_splice(table, dest, src, len) => Ok(result),
+        interrupt = interrupt => Err(interrupt),
+    }
+}
+
 async fn blocking_write_and_flush_chunked(
     table: &mut wasmtime::component::ResourceTable,
     stream: Resource<OutputStream>,
@@ -1832,4 +1852,119 @@ async fn blocking_write_zeroes_and_flush_chunked(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blocking_splice_or_interrupt;
+    use golem_common::model::Timestamp;
+    use golem_service_base::error::worker_executor::InterruptKind;
+    use http_body_util::BodyExt;
+    use std::time::Duration;
+    use test_r::{test, timeout};
+    use tokio::io::AsyncReadExt;
+    use wasmtime::component::{Resource, ResourceTable};
+    use wasmtime_wasi::p2::bindings::io::streams::{HostOutputStream, InputStream};
+    use wasmtime_wasi::p2::pipe::{AsyncReadStream, MemoryInputPipe};
+    use wasmtime_wasi_http::p2::body::{HostOutgoingBody, StreamContext};
+
+    #[test]
+    #[timeout("30s")]
+    async fn http_blocking_splice_interrupts_silent_tcp_input() {
+        for kind in [
+            InterruptKind::Interrupt(Timestamp::now_utc()),
+            InterruptKind::Suspend(Timestamp::now_utc()),
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::ShardLost,
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let socket = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+                .await
+                .unwrap();
+            let (mut peer, _) = listener.accept().await.unwrap();
+            let mut table = ResourceTable::new();
+            let input: InputStream = Box::new(AsyncReadStream::new(socket));
+            let src = table.push(input).unwrap();
+            let (mut outgoing, _body) =
+                HostOutgoingBody::new(StreamContext::Request, None, 1, 1024);
+            let dest = table.push(outgoing.take_output_stream().unwrap()).unwrap();
+            assert!(
+                HostOutputStream::check_write(&mut table, Resource::new_borrow(dest.rep()))
+                    .await
+                    .unwrap()
+                    > 0
+            );
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            {
+                let splice = blocking_splice_or_interrupt(&mut table, dest, src, 17, async {
+                    rx.await.unwrap()
+                });
+                tokio::pin!(splice);
+                // Output is writable, but no source bytes have arrived. Poll the actual
+                // native splice to Pending before issuing the lifecycle signal.
+                assert!(futures::poll!(&mut splice).is_pending());
+                tx.send(kind).unwrap();
+                let actual = tokio::time::timeout(Duration::from_secs(2), splice)
+                    .await
+                    .expect("silent input must not hold up interruption")
+                    .unwrap_err();
+                assert_eq!(actual, kind);
+            }
+            drop(table);
+            let mut byte = [0];
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), peer.read(&mut byte))
+                    .await
+                    .expect("dropping the table must retire the TCP reader")
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn http_blocking_splice_preserves_ready_result() {
+        let mut table = ResourceTable::new();
+        let input: InputStream = Box::new(MemoryInputPipe::new("abcde"));
+        let src = table.push(input).unwrap();
+        let (mut outgoing, mut body) = HostOutgoingBody::new(StreamContext::Request, None, 1, 1024);
+        let dest = table.push(outgoing.take_output_stream().unwrap()).unwrap();
+        let result = blocking_splice_or_interrupt(
+            &mut table,
+            dest,
+            src,
+            3,
+            std::future::ready(InterruptKind::Restart),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, 3);
+        assert_eq!(
+            body.frame().await.unwrap().unwrap().into_data().unwrap(),
+            "abc"
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn http_blocking_splice_preserves_native_error() {
+        let mut table = ResourceTable::new();
+        let input: InputStream = Box::new(MemoryInputPipe::new(""));
+        let src = table.push(input).unwrap();
+        let (mut outgoing, _body) = HostOutgoingBody::new(StreamContext::Request, None, 1, 1024);
+        let dest = table.push(outgoing.take_output_stream().unwrap()).unwrap();
+        let result = blocking_splice_or_interrupt(
+            &mut table,
+            dest,
+            src,
+            3,
+            std::future::ready(InterruptKind::Restart),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(wasmtime_wasi::StreamError::Closed)));
+    }
 }

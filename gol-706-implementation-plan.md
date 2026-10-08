@@ -1,6 +1,6 @@
 # GOL-706: suspension-only delivery plan
 
-Updated 2026-10-07. This is the authoritative execution plan for
+Updated 2026-10-08. This is the authoritative execution plan for
 [GOL-706](https://linear.app/golem-cloud/issue/GOL-706). It supersedes all execution
 sequences in `gol-706-suspension-design.md`; that file retains historical evidence.
 
@@ -50,14 +50,16 @@ passes do not confer completion on the reduced implementation.
 | M6 | Deliver reviewed change | DONE | Published locked pin/build, aligned docs, reviewed implementation pushed to existing drafts; exact results and residual risk recorded; merge/release remain separate |
 
 Current position: M0–M6 and the Wasmtime review follow-up are complete for authorized
-draft delivery under the approved RPC contract and disclosed verification caveats.
-The currently verified runtime is published at
+delivery under the approved RPC contract and disclosed verification caveats.
+Final fork/main integration is ACTIVE; the earlier verified runtime was
 [d853214](https://github.com/golemcloud/wasmtime/commit/d853214fa72f038344a266f2a7ee66a387144257)
-in [the companion draft PR](https://github.com/golemcloud/wasmtime/pull/9).
-The root manifest/lock pin that revision without local overrides or version drift.
+in [the companion PR](https://github.com/golemcloud/wasmtime/pull/9), now merged by the user.
+The root manifest now uses the normal fork branch, locked to its merge revision;
+merged-source validation is pending, not covered by the earlier results.
 Golem follow-up [aac940237](https://github.com/golemcloud/golem/commit/aac940237)
-is pushed to [draft PR #4062](https://github.com/golemcloud/golem/pull/4062).
-Merge/release remain unauthorized. Golem baseline is
+is pushed to [PR #4062](https://github.com/golemcloud/golem/pull/4062).
+Merging main into this branch and pushing the update is authorized; merging PR4062
+itself and release remain separate. The original Golem baseline is
 [`accae0e4`](https://github.com/golemcloud/golem/commit/accae0e435b5097cd1d7940a5c1f568bde8a055a).
 Prototype recovery files are in `tmp/gol706-reduction-20261005/`. Ignored binaries
 and WASMs may be stale; they are not baseline evidence.
@@ -123,10 +125,46 @@ Implementation and tests are committed and pushed as
 These targeted results do not erase the earlier full-group4 timeout or the
 GOL-761/GOL-769 follow-ups; the full group4 suite was not repeated for this pin.
 
-The user will merge the Wasmtime PR and notify this thread. Only after that
-notification: switch to the usual fork-branch reference, merge latest Golem main,
-resolve conflicts and rerun affected checks before making PR4062 ready to merge.
-Neither merge has been performed here; Golem merge/release remains separate.
+## Final fork/main integration — ACTIVE
+
+The user confirmed Wasmtime PR9 is merged and authorized restoring the usual fork
+branch, merging latest Golem main, resolving conflicts, verifying and pushing the
+PR4062 update. This does not authorize merging PR4062 itself.
+
+| Step | Status | Evidence / remaining gate |
+|---|---|---|
+| Restore published runtime | DONE | `golem-wasmtime-v46.0.1-p3`, locked to [7034e424](https://github.com/golemcloud/wasmtime/commit/7034e424b2e584cbc351d380b5b2cef8cb5e4fdb); no local override |
+| Integrate current main | DONE | Merge of [6c6e4c51f](https://github.com/golemcloud/golem/commit/6c6e4c51f); source/test/doc conflicts resolved, combined tool fixture lock regenerated |
+| Merged-source correctness checks | ACTIVE | Locked executor/CLI builds and fixture rebuilds pass; full executor units: 3827 passed, 20 ignored; 45 integration tests running; clippy and engine compatibility pending |
+| Independent review | ACTIVE | Oracle: ON TRACK, no production blocker; both recommended composition tests pass; bug-finder run 2 clean; final Oracle pending |
+| Record and deliver | ACTIVE | User authorized pushing the integration while final checks run so CI can start; no readiness claim until remaining checks finish |
+
+Resolutions preserve main's executor-owned task shutdown and snapshot behavior while
+retaining owner suspension participants/external-activity guards. The obsolete RPC
+wait-registration mechanism is not restored: `RpcTask::drop` synchronously revokes
+the new activity, which remains an unknown veto until actual cleanup. Added tests
+exercise dropping the actual RPC wrapper before cleanup and releasing retained-Store
+suspension accounting when executor shutdown prevents its callbacks from running.
+Main's renamed status API replaces the old attached-status accessor in RPC retry.
+Stream regression helpers use main's `golem_schema::proto` types instead of the
+removed gRPC re-exports; their content assertions are unchanged.
+Both sides' native tool tests, clock-race and environment/matrix fixtures are retained.
+Documentation is merged and the affected rendered sections inspected.
+
+The first bug-finder attempt and an executor build ran out of disk before testing;
+neither counts as a pass. Obsolete generated build caches were removed. A later
+process/session interruption stopped queued checks without final results; the
+remaining build/lint checks now use supervised services and explicit exit files.
+The completed unit run (`units.log`) passes both new composition tests, cross-thread
+wake and parked-fiber drop cases. Bug-finder run 2 is clean. Fixture builds use the
+current CLI and local Rust SDK; no fixture migrations were generated, and the caller
+lock adds only the required clock client to main's lock. Root Cargo regeneration
+preserves the package/version set while resolving the fork source and nine existing
+transitive dependency edges; there are no hand-edited lock entries.
+
+New evidence is kept separately under `tmp/gol706-final-merge/`. Earlier passes above
+are pre-merge evidence only. GOL-761/GOL-769 remain approved follow-ups; new correctness
+failures in this integration are not waived by those follow-ups.
 
 ## M1 — establish what must change and where it integrates
 

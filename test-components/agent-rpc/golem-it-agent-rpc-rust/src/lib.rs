@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use golem_rust::agentic::{AgentStream, Config, spawn_local};
 use golem_rust::bindings::golem::agent::host::{Datetime, RpcError, WasmRpc};
-use golem_rust::bindings::golem::api::context::start_span;
+use golem_rust::bindings::golem::api::context::{AttributeValue, current_context, start_span};
 use golem_rust::bindings::wasi::config::store as wasi_config;
 use golem_rust::bindings::wasi::keyvalue::eventual::{Bucket, get};
 use golem_rust::retry::{NamedPolicy, Policy, set_named_policy};
@@ -347,6 +347,7 @@ pub trait StreamingRpcTarget {
     async fn drop_input_u64(&self, input: AgentStream<u64>) -> u64;
     async fn hold_input(&self, input: AgentStream<u32>) -> u64;
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32>;
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)>;
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes>;
     fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
     async fn consume_bytes(&self, input: AgentStream<u8>) -> Vec<u8>;
@@ -465,6 +466,28 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
 
     fn produce(&self, values: Vec<u32>) -> AgentStream<u32> {
         agent_stream(values)
+    }
+
+    fn produce_context_stream(&self, gate: PromiseId) -> AgentStream<(String, String, String)> {
+        let snapshot = || {
+            let context = current_context();
+            let Some(AttributeValue::String(name)) = context.get_attribute("name", false) else {
+                panic!("current span has no name");
+            };
+            (context.trace_id(), context.span_id(), name)
+        };
+        let before_return = snapshot();
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            writer.write_one(before_return).await.unwrap();
+            golem_rust::await_promise(&gate).await;
+            writer.write_one(snapshot()).await.unwrap();
+            let span = start_span("stream-child");
+            writer.write_one(snapshot()).await.unwrap();
+            span.finish();
+            writer.write_one(snapshot()).await.unwrap();
+        });
+        output
     }
 
     fn produce_binary_chunks(&self, chunk_count: u32, chunk_size: u32) -> AgentStream<Bytes> {
@@ -908,6 +931,7 @@ pub trait StreamingRpcCaller {
     );
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn call_stream_free(&self) -> u64;
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)>;
     async fn call_stream_free_while_fetching(&self, host: String, port: u16) -> u64;
 }
 
@@ -926,6 +950,15 @@ struct StreamingRpcCallerImpl {
 impl StreamingRpcCaller for StreamingRpcCallerImpl {
     fn new(name: String) -> Self {
         Self { name }
+    }
+
+    async fn collect_context_stream(&self, gate: PromiseId) -> Vec<(String, String, String)> {
+        StreamingRpcTargetClient::get(self.name.clone())
+            .produce_context_stream(gate)
+            .await
+            .collect()
+            .await
+            .expect("failed to collect invocation context stream")
     }
 
     async fn benchmark_producer(

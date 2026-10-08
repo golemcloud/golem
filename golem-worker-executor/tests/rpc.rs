@@ -17,7 +17,6 @@ use async_trait::async_trait;
 use axum::Router;
 use axum::routing::post;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_api_grpc::proto::golem::worker::{
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRequest,
     InvocationResponse, InvocationStart, ResumeAttach, ResumeOperation, StreamCancel,
@@ -41,6 +40,7 @@ use golem_common::model::{AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, Pr
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue, TypedSchemaValue};
 use golem_common::{agent_id, data_value};
+use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference, schema_value};
 use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::services::direct_invocation_auth::{
@@ -1734,9 +1734,9 @@ async fn invalid_start_is_rejected_before_acceptance(
                     name: "agent".to_string(),
                 }),
                 method_name: Some("run".to_string()),
-                input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+                input: Some(golem_schema::proto::golem::schema::SchemaValue {
                     value: Some(
-                        golem_api_grpc::proto::golem::schema::schema_value::Value::U8Value(1),
+                        golem_schema::proto::golem::schema::schema_value::Value::U8Value(1),
                     ),
                 }),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
@@ -1833,7 +1833,7 @@ async fn output_consumer_cancel_after_result_remains_a_valid_terminal_session(
                 };
                 let stream_id = match &value.value {
                     Some(schema_value::Value::TupleValue(tuple)) => match tuple.elements.first() {
-                        Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+                        Some(golem_schema::proto::golem::schema::SchemaValue {
                             value: Some(schema_value::Value::StreamReference(reference)),
                         }) => reference.stream_id,
                         other => anyhow::bail!("expected first sibling stream, got {other:?}"),
@@ -2397,7 +2397,7 @@ async fn output_prefix_survives_autonomous_suspension(
                     };
                     assert_eq!(encoded.len(), 1);
                     assert_eq!(
-                        golem_api_grpc::proto::golem::schema::SchemaValue::decode(
+                        golem_schema::proto::golem::schema::SchemaValue::decode(
                             encoded[0].as_slice()
                         )?
                         .value,
@@ -2416,7 +2416,7 @@ async fn output_prefix_survives_autonomous_suspension(
                         anyhow::bail!("parent prefix is not a value");
                     };
                     assert_eq!(encoded.len(), 1);
-                    let value = golem_api_grpc::proto::golem::schema::SchemaValue::decode(
+                    let value = golem_schema::proto::golem::schema::SchemaValue::decode(
                         encoded[0].as_slice(),
                     )?;
                     let Some(schema_value::Value::RecordValue(record)) = value.value else {
@@ -2485,14 +2485,14 @@ async fn output_prefix_survives_autonomous_suspension(
                     StreamItemsPayload::Values(values) => values
                         .iter()
                         .map(|encoded| {
-                            golem_api_grpc::proto::golem::schema::SchemaValue::decode(
+                            golem_schema::proto::golem::schema::SchemaValue::decode(
                                 encoded.as_slice(),
                             )
                         })
                         .collect::<Result<Vec<_>, _>>()?,
                     StreamItemsPayload::PackedU8(bytes) => bytes
                         .iter()
-                        .map(|byte| golem_api_grpc::proto::golem::schema::SchemaValue {
+                        .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
                             value: Some(schema_value::Value::U8Value(u32::from(*byte))),
                         })
                         .collect(),
@@ -2578,7 +2578,7 @@ async fn output_prefix_survives_autonomous_suspension(
         } else {
             item.packed_u8
                 .iter()
-                .map(|byte| golem_api_grpc::proto::golem::schema::SchemaValue {
+                .map(|byte| golem_schema::proto::golem::schema::SchemaValue {
                     value: Some(schema_value::Value::U8Value(u32::from(*byte))),
                 })
                 .collect()
@@ -2660,9 +2660,9 @@ async fn interrupt_output_producer_after_result(
         request: Some(invocation_request::Request::Start(InvocationStart {
             agent_id: Some(agent_id.clone().into()),
             method_name: Some("produce_then_spin".to_string()),
-            input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+            input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                         value: Some(schema_value::Value::StreamReference(
                             SchemaValueStreamReference { stream_id: 1 },
                         )),
@@ -3033,6 +3033,103 @@ async fn stream_local_output_failure_does_not_fail_sibling_or_invocation(
     assert_eq!(output_errors, 1);
     assert_eq!(output_ends, 1);
     assert!(finished_successfully);
+    Ok(())
+}
+
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn streaming_output_retains_invocation_context_during_live_and_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let caller = agent_id!("StreamingRpcCaller", "stream-context-lifetime");
+    let target = agent_id!("StreamingRpcTarget", "stream-context-lifetime");
+    let target_worker = executor.start_agent(&component.id, target.clone()).await?;
+    let mut previous_span_id = None;
+
+    for attempt in 0..2 {
+        let gate = executor
+            .invoke_and_await_agent(&component, &target, "create_output_gate", data_value!())
+            .await?
+            .into_typed::<PromiseId>()?;
+        let checkpoint = executor.oplog_max_index(&target_worker).await?;
+        let collect = executor.invoke_and_await_agent(
+            &component,
+            &caller,
+            "collect_context_stream",
+            data_value!(gate.clone()),
+        );
+        let release = async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let oplog = executor.get_oplog(&target_worker, checkpoint).await?;
+                    if oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::StreamItems(_)))
+                    {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("producer did not persist its first output item"))??;
+            executor.complete_promise(&gate, Vec::new()).await
+        };
+        let (result, released) = tokio::join!(collect, release);
+        released?;
+        let snapshots = result?.into_typed::<Vec<(String, String, String)>>()?;
+        assert_eq!(snapshots.len(), 4);
+        assert_eq!(snapshots[0].2, "invoke-exported-function");
+        assert_eq!(
+            snapshots[1], snapshots[0],
+            "context changed after guest return"
+        );
+        assert_eq!(snapshots[2].0, snapshots[0].0);
+        assert_ne!(snapshots[2].1, snapshots[0].1);
+        assert_eq!(snapshots[2].2, "stream-child");
+        assert_eq!(
+            snapshots[3], snapshots[0],
+            "finishing the child lost its parent"
+        );
+        assert_ne!(previous_span_id.as_ref(), Some(&snapshots[0].1));
+        previous_span_id = Some(snapshots[0].1.clone());
+
+        // A subsequent scalar invocation also joins the producer's completion bookkeeping.
+        executor
+            .invoke_and_await_agent(&component, &target, "noop", data_value!())
+            .await?;
+        let oplog = executor
+            .get_oplog(&target_worker, OplogIndex::INITIAL)
+            .await?;
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count(),
+            1 + 3 * (attempt + 1),
+            "initialization and each gate/stream/scalar invocation finish exactly once"
+        );
+        if attempt == 0 {
+            executor.shutdown_and_wait_for_invocation_loops().await?;
+            drop(executor);
+            executor = start(deps, &context).await?;
+        }
+    }
     Ok(())
 }
 
@@ -3810,9 +3907,9 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
         request: Some(invocation_request::Request::Start(InvocationStart {
             agent_id: Some(worker_agent_id.clone().into()),
             method_name: Some("hold_input".to_string()),
-            input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+            input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
-                    fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                         value: Some(schema_value::Value::StreamReference(
                             SchemaValueStreamReference { stream_id: 1 },
                         )),
@@ -4192,9 +4289,9 @@ async fn malformed_request_after_streaming_result_terminalizes_open_streams(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),
@@ -4321,9 +4418,9 @@ fn origin_observer_start(
     InvocationStart {
         agent_id: Some(target.clone().into()),
         method_name: Some(method.to_string()),
-        input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+        input: Some(golem_schema::proto::golem::schema::SchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                     value: Some(schema_value::Value::StreamReference(
                         SchemaValueStreamReference { stream_id: 1 },
                     )),
@@ -4701,9 +4798,9 @@ async fn resident_ephemeral_streaming_input_resume_restores_lost_ack_high_water(
         .map_err(anyhow::Error::msg)?;
     let worker_agent_id = executor.start_agent(&component.id, final_agent_id).await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),
@@ -5342,7 +5439,7 @@ async fn consumed_input_boundary(
     let metadata = executor.get_worker_metadata(&id).await?;
     let loads = executor.instance_load_count(&id);
     let wire = |value: SchemaValue| value.try_into().map_err(anyhow::Error::msg);
-    let stream = |stream_id| golem_api_grpc::proto::golem::schema::SchemaValue {
+    let stream = |stream_id| golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::StreamReference(
             SchemaValueStreamReference { stream_id },
         )),
@@ -5370,13 +5467,13 @@ async fn consumed_input_boundary(
                 .iter()
                 .map(|value| SchemaValue::U32(*value))
                 .collect::<Vec<_>>();
-            let argument = golem_api_grpc::proto::golem::schema::SchemaValue {
+            let argument = golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
                     fields: vec![
                         stream(1),
-                        golem_api_grpc::proto::golem::schema::SchemaValue {
+                        golem_schema::proto::golem::schema::SchemaValue {
                             value: Some(schema_value::Value::OptionValue(Box::new(
-                                golem_api_grpc::proto::golem::schema::OptionValue {
+                                golem_schema::proto::golem::schema::OptionValue {
                                     inner: Some(Box::new(stream(2))),
                                 },
                             ))),
@@ -5413,7 +5510,7 @@ async fn consumed_input_boundary(
         request: Some(invocation_request::Request::Start(InvocationStart {
             agent_id: Some(id.clone().into()),
             method_name: Some(method.into()),
-            input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+            input: Some(golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
                     fields: vec![argument],
                 })),
@@ -5688,7 +5785,7 @@ async fn consumed_input_boundary(
 
 fn decode_input_value(bytes: &[u8]) -> anyhow::Result<SchemaValue> {
     use prost::Message;
-    SchemaValue::try_from(golem_api_grpc::proto::golem::schema::SchemaValue::decode(
+    SchemaValue::try_from(golem_schema::proto::golem::schema::SchemaValue::decode(
         bytes,
     )?)
     .map_err(anyhow::Error::msg)
@@ -5820,9 +5917,9 @@ async fn durable_streaming_input_recovers_after_executor_restart(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),
@@ -6122,9 +6219,9 @@ async fn resuming_a_finished_session_with_guest_cancelled_input_replays_completi
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),
@@ -6843,7 +6940,7 @@ async fn forks_of_agent_rpc_outputs_finish_without_inherited_attachments(
             anyhow::bail!("missing output value");
         };
         assert_eq!(
-            SchemaValue::try_from(golem_api_grpc::proto::golem::schema::SchemaValue::decode(
+            SchemaValue::try_from(golem_schema::proto::golem::schema::SchemaValue::decode(
                 bytes.as_slice()
             )?)
             .map_err(anyhow::Error::msg)?,
@@ -7294,9 +7391,9 @@ async fn reverted_retained_stream_start_reports_current_epoch_for_resume(
     let start = InvocationStart {
         agent_id: Some(worker_id.clone().into()),
         method_name: Some("consume".into()),
-        input: Some(golem_api_grpc::proto::golem::schema::SchemaValue {
+        input: Some(golem_schema::proto::golem::schema::SchemaValue {
             value: Some(schema_value::Value::RecordValue(RecordValue {
-                fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+                fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                     value: Some(schema_value::Value::StreamReference(
                         SchemaValueStreamReference { stream_id: 1 },
                     )),
@@ -7556,9 +7653,9 @@ async fn revert_stream_acceptance_removes_pending_inputs_and_fences_old_connecti
     wait_for_agent_initialization(&executor, &worker_id).await?;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     let cut = metadata.last_oplog_index;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),
@@ -7927,9 +8024,9 @@ async fn typescript_streaming_guest_abi_e2e(
         .start_agent(&component.id, agent_id.clone())
         .await?;
     let metadata = executor.get_worker_metadata(&worker_agent_id).await?;
-    let input = golem_api_grpc::proto::golem::schema::SchemaValue {
+    let input = golem_schema::proto::golem::schema::SchemaValue {
         value: Some(schema_value::Value::RecordValue(RecordValue {
-            fields: vec![golem_api_grpc::proto::golem::schema::SchemaValue {
+            fields: vec![golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::StreamReference(
                     SchemaValueStreamReference { stream_id: 1 },
                 )),

@@ -32,30 +32,37 @@
     "./build": "./build/component.mjs",
     ".": {
       "types": "./dist/effect-golem.d.ts",
+      "golem-component": "./dist/component/index.js",
       "import": "./dist/index.mjs"
     },
     "./middleware": {
       "types": "./dist/effect-golem-middleware.d.ts",
+      "golem-component": "./dist/component/Middleware.js",
       "import": "./dist/middleware.mjs"
     },
     "./ai": {
       "types": "./dist/effect-golem-ai.d.ts",
+      "golem-component": "./dist/component/Ai.js",
       "import": "./dist/ai.mjs"
     },
     "./sqlite": {
       "types": "./dist/effect-golem-sqlite.d.ts",
+      "golem-component": "./dist/component/Sqlite/SqliteClient.js",
       "import": "./dist/sqlite.mjs"
     },
     "./postgres": {
       "types": "./dist/effect-golem-postgres.d.ts",
+      "golem-component": "./dist/component/Postgres/PgClient.js",
       "import": "./dist/postgres.mjs"
     },
     "./mysql": {
       "types": "./dist/effect-golem-mysql.d.ts",
+      "golem-component": "./dist/component/Mysql/MySqlClient.js",
       "import": "./dist/mysql.mjs"
     },
     "./ignite2": {
       "types": "./dist/effect-golem-ignite2.d.ts",
+      "golem-component": "./dist/component/Ignite/IgniteClient.js",
       "import": "./dist/ignite.mjs"
     },
     "./agent-guest": {
@@ -69,6 +76,7 @@
     "./Ignite/internal/*": null,
     "./*": {
       "types": "./dist/src/*.d.ts",
+      "golem-component": "./dist/component/*.js",
       "import": "./dist/src/*.js"
     }
   },
@@ -124,6 +132,7 @@
     "golem-types"
   ],
   "scripts": {
+    "prebuild": "node ./scripts/clean-build-output.mjs",
     "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
     "build:bundle": "rollup -c",
     "generate-dts": "node ./scripts/generate-dts.mjs",
@@ -146,11 +155,11 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "typescript": "^5.7.2"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-rc.117",
+    "@effect/vitest": "4.0.0",
     "@eslint/js": "^9.17.0",
     "@golemcloud/http-contract": "file:../http-contract",
     "@rollup/plugin-commonjs": "^29.0.2",

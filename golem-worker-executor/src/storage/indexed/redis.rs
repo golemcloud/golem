@@ -111,6 +111,45 @@ redis.call('DEL', KEYS[1], KEYS[2])
 return redis.status_reply('OK')
 "#;
 
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the lowest id to keep, the epoch the
+    /// trim asserts, compared the way [`Self::FENCED_APPEND_SCRIPT`] does, and `1` to delete the
+    /// stream when the trim empties it (never the record). A refused trim removes nothing.
+    const FENCED_DROP_PREFIX_SCRIPT: &'static str = r#"
+local stored = redis.call('HGET', KEYS[2], 'epoch')
+if stored == false then
+  return redis.error_reply('FENCED -')
+end
+if stored ~= ARGV[2] then
+  return redis.error_reply('FENCED ' .. stored)
+end
+redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1])
+if ARGV[3] == '1' and redis.call('XLEN', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+end
+return redis.status_reply('OK')
+"#;
+
+    /// `KEYS`: the stream, then its epoch record. `ARGV`: the epoch the delete asserts, compared
+    /// the way [`Self::FENCED_APPEND_SCRIPT`] does, or nothing for an unconditional delete. Deletes
+    /// only an empty stream and never the record; answers 1 when the stream was empty (and is now
+    /// gone), 0 when it still holds entries.
+    const DELETE_EMPTY_WITH_EPOCH_SCRIPT: &'static str = r#"
+if #ARGV > 0 then
+  local stored = redis.call('HGET', KEYS[2], 'epoch')
+  if stored == false then
+    return redis.error_reply('FENCED -')
+  end
+  if stored ~= ARGV[1] then
+    return redis.error_reply('FENCED ' .. stored)
+  end
+end
+if redis.call('EXISTS', KEYS[1]) == 1 and redis.call('XLEN', KEYS[1]) > 0 then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+"#;
+
     /// Where a key's epoch lives. Not under the key's own name: `scan` matches `...oplog:*`, and
     /// an `...oplog:<key>:epoch` sibling would come back from it as a key of its own.
     fn epoch_key(namespace: IndexedStorageNamespace, key: &str) -> String {
@@ -129,6 +168,14 @@ return redis.status_reply('OK')
             } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog-epoch:{key}")
+            }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog-epoch:{key}")
             }
             // A stage is hidden and has one writer, so it never asserts an epoch; the key exists
             // only to keep this total.
@@ -187,7 +234,7 @@ return redis.status_reply('OK')
         pairs: impl Iterator<Item = (u64, Bytes)>,
         expected_epoch: ShardEpoch,
         options: Option<&Options>,
-        primary_oplog_insert: bool,
+        classify: fn(RedisError) -> IndexedStorageError,
     ) -> Result<(), IndexedStorageError> {
         let mut args = vec![Value::from(expected_epoch.0.to_string())];
         for (id, value) in pairs {
@@ -208,8 +255,7 @@ return redis.status_reply('OK')
             .await
             .map(|_| ())
             .map_err(|error| {
-                Self::parse_fenced(&error, key, expected_epoch)
-                    .unwrap_or_else(|| Self::classify_append_error(error, primary_oplog_insert))
+                Self::parse_fenced(&error, key, expected_epoch).unwrap_or_else(|| classify(error))
             })
     }
 
@@ -237,6 +283,14 @@ return redis.status_reply('OK')
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog:{key}")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog:{key}")
+            }
         }
     }
 
@@ -249,6 +303,10 @@ return redis.status_reply('OK')
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("worker:{mode}:c{level}-oplog:{key}")
+            }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("worker:{mode}:b{level}-oplog:{key}")
             }
         }
     }
@@ -296,6 +354,22 @@ return redis.status_reply('OK')
         }
     }
 
+    /// The options of an append that must reach Redis at most once. Sent again after a lost
+    /// reply, it would report the outcome of its second run, a conflict or a refusal, for an
+    /// entry that its first run stored. The caller reconciles the unknown outcome instead.
+    fn append_options(namespace: &IndexedStorageNamespace) -> Option<Options> {
+        matches!(
+            namespace,
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        )
+        .then_some(Options {
+            max_attempts: Some(1),
+            ..Default::default()
+        })
+    }
+
     fn classify_append_error(error: RedisError, primary_oplog_insert: bool) -> IndexedStorageError {
         if primary_oplog_insert
             && error
@@ -312,6 +386,36 @@ return redis.status_reply('OK')
             IndexedStorageError::Indeterminate(error.to_string())
         } else {
             IndexedStorageError::Other(error.to_string())
+        }
+    }
+
+    /// A blob manifest append under an id the stream does not accept is a conflict, which the
+    /// blob layer acts on. Its other failures stay permanent, as a compressed level's do.
+    fn classify_manifest_append_error(error: RedisError) -> IndexedStorageError {
+        if error
+            .details()
+            .contains("ID specified in XADD is equal or smaller than")
+        {
+            IndexedStorageError::Conflict(error.to_string())
+        } else {
+            IndexedStorageError::Other(error.to_string())
+        }
+    }
+
+    /// How a failed append is classified, by what its writer does with the answer.
+    fn append_error_classifier(
+        namespace: &IndexedStorageNamespace,
+    ) -> fn(RedisError) -> IndexedStorageError {
+        match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                |error| Self::classify_append_error(error, true)
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_manifest_append_error
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => {
+                |error| Self::classify_append_error(error, false)
+            }
         }
     }
 
@@ -437,14 +541,8 @@ impl IndexedStorage for RedisIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         record_redis_serialized_size(svc_name, entity_name, value.len());
-        let primary_oplog_insert = matches!(
-            &namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
-        let options = primary_oplog_insert.then_some(Options {
-            max_attempts: Some(1),
-            ..Default::default()
-        });
+        let classify = Self::append_error_classifier(&namespace);
+        let options = Self::append_options(&namespace);
 
         if let Some(expected_epoch) = expected_epoch {
             return self
@@ -456,7 +554,7 @@ impl IndexedStorage for RedisIndexedStorage {
                     std::iter::once((id, Bytes::from(value))),
                     expected_epoch,
                     options.as_ref(),
-                    primary_oplog_insert,
+                    classify,
                 )
                 .await;
         }
@@ -473,7 +571,7 @@ impl IndexedStorage for RedisIndexedStorage {
                 options.as_ref(),
             )
             .await
-            .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
+            .map_err(classify)?;
         Ok(())
     }
 
@@ -488,14 +586,8 @@ impl IndexedStorage for RedisIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
         if !pairs.is_empty() {
-            let primary_oplog_insert = matches!(
-                namespace,
-                IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-            );
-            let options = primary_oplog_insert.then_some(Options {
-                max_attempts: Some(1),
-                ..Default::default()
-            });
+            let classify = Self::append_error_classifier(namespace);
+            let options = Self::append_options(namespace);
 
             if let Some(expected_epoch) = expected_epoch {
                 for (_, value) in pairs.iter() {
@@ -510,7 +602,7 @@ impl IndexedStorage for RedisIndexedStorage {
                         pairs.iter().cloned(),
                         expected_epoch,
                         options.as_ref(),
-                        primary_oplog_insert,
+                        classify,
                     )
                     .await;
             }
@@ -533,7 +625,7 @@ impl IndexedStorage for RedisIndexedStorage {
                     options.as_ref(),
                 )
                 .await
-                .map_err(|error| Self::classify_append_error(error, primary_oplog_insert))?;
+                .map_err(classify)?;
         }
         Ok(())
     }
@@ -743,32 +835,92 @@ impl IndexedStorage for RedisIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
-        let composite_key = Self::composite_key(namespace, key);
-        if delete_if_empty {
-            let _: u64 = self
-                .redis
-                .with(svc_name, api_name)
-                .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
-                .await
-                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
-        } else {
-            let _: u64 = self
-                .redis
-                .with(svc_name, api_name)
-                .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
-                .await
-                .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
-        }
-        Ok(())
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
+        let Some(expected) = expected_epoch else {
+            let composite_key = Self::composite_key(namespace, key);
+            if delete_if_empty {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim_and_delete_if_empty(composite_key, last_dropped_id + 1)
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            } else {
+                let _: u64 = self
+                    .redis
+                    .with(svc_name, api_name)
+                    .xtrim(composite_key, (XCapKind::MinID, last_dropped_id + 1))
+                    .await
+                    .map_err(|e| IndexedStorageError::Other(e.to_string()))?;
+            }
+            return Ok(());
+        };
+        self.redis
+            .with(svc_name, api_name)
+            .eval(
+                Self::FENCED_DROP_PREFIX_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                vec![
+                    Value::from((last_dropped_id + 1).to_string()),
+                    Value::from(expected.0.to_string()),
+                    Value::from(if delete_if_empty { "1" } else { "0" }),
+                ],
+                None,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| Self::classify_epoch_error(error, key, Some(expected)))
+    }
+
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        let args = match expected_epoch {
+            Some(expected) => vec![Value::from(expected.0.to_string())],
+            None => vec![],
+        };
+        self.redis
+            .with(svc_name, api_name)
+            .eval(
+                Self::DELETE_EMPTY_WITH_EPOCH_SCRIPT,
+                &[
+                    Self::composite_key(namespace.clone(), key),
+                    Self::epoch_key(namespace, key),
+                ],
+                args,
+                None,
+            )
+            .await
+            .map(|deleted| matches!(deleted, Value::Integer(1)))
+            .map_err(|error| Self::classify_epoch_error(error, key, expected_epoch))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fred::prelude::{Config, Pool, ReconnectPolicy};
+    use golem_common::model::AgentId;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::component::ComponentId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use test_r::test;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::{TcpListener, TcpStream};
 
     #[test]
     fn a_fenced_reply_carries_the_stored_epoch() {
@@ -892,5 +1044,141 @@ mod tests {
             RedisIndexedStorage::classify_epoch_error(wrong_type, "k", Some(ShardEpoch(7))),
             IndexedStorageError::Other(_)
         ));
+    }
+
+    async fn read_resp_command(reader: &mut BufReader<TcpStream>) -> Option<Vec<Vec<u8>>> {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await.ok()? == 0 {
+            return None;
+        }
+        let count = line.strip_prefix('*')?.trim_end().parse::<usize>().ok()?;
+        let mut parts = Vec::with_capacity(count);
+        for _ in 0..count {
+            line.clear();
+            reader.read_line(&mut line).await.ok()?;
+            let len = line.strip_prefix('$')?.trim_end().parse::<usize>().ok()?;
+            let mut part = vec![0; len];
+            reader.read_exact(&mut part).await.ok()?;
+            let mut crlf = [0; 2];
+            reader.read_exact(&mut crlf).await.ok()?;
+            parts.push(part);
+        }
+        Some(parts)
+    }
+
+    /// Closes the connection on the first `EVAL` without a reply, as when the reply of a script
+    /// that ran is lost, and answers every later `EVAL` as the scripts answer a writer whose
+    /// epoch a newer owner has replaced.
+    async fn lose_the_first_eval_reply(stream: TcpStream, evals: Arc<AtomicUsize>) {
+        let mut reader = BufReader::new(stream);
+        while let Some(command) = read_resp_command(&mut reader).await {
+            let reply: &[u8] = if command
+                .first()
+                .is_some_and(|name| name.eq_ignore_ascii_case(b"EVAL"))
+            {
+                if evals.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return;
+                }
+                b"-FENCED 6\r\n"
+            } else {
+                b"+OK\r\n"
+            };
+            reader.get_mut().write_all(reply).await.unwrap();
+        }
+    }
+
+    /// A storage over a server that stores nothing and counts the `EVAL`s it receives.
+    async fn storage_losing_the_first_eval_reply() -> (
+        RedisIndexedStorage,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let evals = Arc::new(AtomicUsize::new(0));
+        let received = evals.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(lose_the_first_eval_reply(stream, received.clone()));
+            }
+        });
+        let config = Config::from_url(&format!("redis://{address}")).unwrap();
+        let policy = ReconnectPolicy::new_constant(20, 10);
+        let pool = Pool::new(config, None, None, Some(policy), 1).unwrap();
+        let storage = RedisIndexedStorage::new(RedisPool::new(pool, String::new()));
+        (storage, evals, server)
+    }
+
+    fn blob_manifest() -> IndexedStorageNamespace {
+        IndexedStorageNamespace::BlobOplogManifest {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "lost-reply".to_string(),
+            },
+            agent_mode: AgentMode::Durable,
+            level: 1,
+        }
+    }
+
+    // A manifest append that ran and lost its reply must come back as a failure of unknown
+    // outcome. Sent again after a newer owner recorded its epoch, it would come back as a
+    // refusal, which tells the blob layer that nothing was listed.
+    #[test]
+    async fn a_blob_manifest_append_is_not_sent_again_after_a_lost_reply() {
+        let (storage, evals, server) = storage_losing_the_first_eval_reply().await;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            storage.append(
+                "test",
+                "test",
+                "entry",
+                blob_manifest(),
+                "key",
+                1,
+                vec![1],
+                Some(ShardEpoch(5)),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_err(), "{result:?}");
+        assert!(
+            !matches!(result, Err(IndexedStorageError::Fenced { .. })),
+            "{result:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(evals.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
+
+    #[test]
+    async fn a_blob_manifest_batch_append_is_not_sent_again_after_a_lost_reply() {
+        let (storage, evals, server) = storage_losing_the_first_eval_reply().await;
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            storage.append_many(
+                "test",
+                "test",
+                "entry",
+                &blob_manifest(),
+                "key",
+                vec![(1, Bytes::from_static(b"a")), (2, Bytes::from_static(b"b"))].into(),
+                Some(ShardEpoch(5)),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert!(result.is_err(), "{result:?}");
+        assert!(
+            !matches!(result, Err(IndexedStorageError::Fenced { .. })),
+            "{result:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(evals.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 }

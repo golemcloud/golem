@@ -84,8 +84,9 @@ pub struct EntityInvocationHandle<R> {
     invocation: OwnerInvocationId,
     mode: EntityCallMode,
     lane: OwnerLane,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     lane_await_required: bool,
-    task: Option<JoinHandle<EntityInvocationCompletion<R>>>,
+    task: Option<JoinHandle<Option<EntityInvocationCompletion<R>>>>,
 }
 
 pub(crate) struct EntityInvocationCompletion<R> {
@@ -99,6 +100,7 @@ pub(crate) struct EntityInvocationResources {
     permit: Option<OwnerInvocationPermit>,
     lane_wait: Option<OwnerLaneWait>,
     suspension: Option<Arc<super::suspension::OwnerSuspension>>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
 }
 
 pub(crate) trait RetainedEntityStore: Send {
@@ -333,6 +335,7 @@ impl EntityInvocationResources {
         mut registration: EntitySlotRegistration,
         permit: Option<OwnerInvocationPermit>,
         suspension: Arc<super::suspension::OwnerSuspension>,
+        executor_tasks: crate::services::active_agents::InvocationLoops,
     ) -> Self {
         registration.body_finished();
         Self {
@@ -341,6 +344,7 @@ impl EntityInvocationResources {
             permit,
             lane_wait: None,
             suspension: Some(suspension),
+            executor_tasks,
         }
     }
 
@@ -352,17 +356,24 @@ impl EntityInvocationResources {
             .suspension
             .as_ref()
             .map(|suspension| suspension.register_external());
-        let (hosted, result) = tokio::spawn(async move {
-            let _activity = activity;
-            let result = hosted.prepare_parent_end().await;
-            (hosted, result)
-        })
-        .await
-        .map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "Retained entity Store parent-end preparation task failed: {error}"
-            ))
-        })?;
+        let (hosted, result) = self
+            .executor_tasks
+            .spawn_entity(async move {
+                let _activity = activity;
+                let result = hosted.prepare_parent_end().await;
+                (hosted, result)
+            })
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Retained entity Store parent-end preparation task failed: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime(
+                    "Retained entity Store preparation was abandoned during executor shutdown",
+                )
+            })?;
         self.hosted = Some(hosted);
         result
     }
@@ -384,7 +395,7 @@ impl EntityInvocationResources {
                     .suspension
                     .as_ref()
                     .map(|suspension| suspension.register_external());
-                tokio::spawn(async move {
+                self.executor_tasks.spawn_entity(async move {
                     let _activity = activity;
                     hosted.settle().await
                 })
@@ -393,6 +404,11 @@ impl EntityInvocationResources {
                     WorkerExecutorError::runtime(format!(
                         "Retained entity Store settlement task failed: {error}"
                     ))
+                })?
+                .ok_or_else(|| {
+                    WorkerExecutorError::runtime(
+                        "Retained entity Store settlement was abandoned during executor shutdown",
+                    )
                 })?
             }
             None => Ok(()),
@@ -412,6 +428,10 @@ impl EntityInvocationResources {
 }
 
 impl<R: Send + 'static> EntityInvocationHandle<R> {
+    pub(crate) fn executor_tasks(&self) -> crate::services::active_agents::InvocationLoops {
+        self.executor_tasks.clone()
+    }
+
     pub fn invocation(&self) -> &OwnerInvocationId {
         &self.invocation
     }
@@ -479,13 +499,17 @@ impl<R: Send + 'static> EntityInvocationHandle<R> {
             .task
             .take()
             .expect("entity invocation handle can only be joined once");
-        task.await.map_err(|error| {
-            WorkerExecutorError::runtime(if error.is_panic() {
-                "Entity body task panicked".to_string()
-            } else {
-                format!("Entity body task was cancelled: {error}")
+        task.await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(if error.is_panic() {
+                    "Entity body task panicked".to_string()
+                } else {
+                    format!("Entity body task was cancelled: {error}")
+                })
+            })?
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("Entity body was abandoned during executor shutdown")
             })
-        })
     }
 }
 
@@ -494,6 +518,7 @@ pub(crate) fn start_entity_invocation<Ctx, R, F, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     parent: OwnerInvocationId,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -528,6 +553,7 @@ where
         slot,
         lane,
         suspension,
+        executor_tasks,
         scope,
         mode,
         Some(ticket),
@@ -541,6 +567,7 @@ pub(crate) fn start_registered_entity_invocation<Ctx, R, F, Finalize, Finalized>
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: OwnerInvocationTicket,
@@ -567,6 +594,7 @@ where
         slot,
         lane,
         suspension,
+        executor_tasks,
         scope,
         mode,
         Some(ticket),
@@ -585,6 +613,7 @@ pub(crate) fn start_pre_acquired_entity_invocation<Ctx, R, F, Finalize, Finalize
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     invoke: F,
@@ -598,13 +627,24 @@ where
     Finalized: Future<Output = Result<R, WorkerExecutorError>> + Send + 'static,
 {
     let run = ComponentEntityRunner { host, body: invoke };
-    start_entity_invocation_inner(slot, lane, suspension, scope, mode, None, run, finalize)
+    start_entity_invocation_inner(
+        slot,
+        lane,
+        suspension,
+        executor_tasks,
+        scope,
+        mode,
+        None,
+        run,
+        finalize,
+    )
 }
 
 pub(crate) fn start_native_entity_invocation<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     parent: Option<OwnerInvocationId>,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
@@ -647,6 +687,7 @@ where
         slot,
         lane,
         suspension,
+        executor_tasks,
         scope,
         mode,
         ticket,
@@ -659,6 +700,7 @@ pub(crate) fn start_registered_native_entity_invocation<R, Run, Finalize, Finali
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: OwnerInvocationTicket,
@@ -690,6 +732,7 @@ where
         slot,
         lane,
         suspension,
+        executor_tasks,
         scope,
         mode,
         Some(ticket),
@@ -704,6 +747,7 @@ fn start_entity_invocation_inner<R, Run, Finalize, Finalized>(
     slot: Arc<EntitySlot>,
     lane: OwnerLane,
     suspension: Arc<super::suspension::OwnerSuspension>,
+    executor_tasks: crate::services::active_agents::InvocationLoops,
     scope: EntityInvocationScope,
     mode: EntityCallMode,
     ticket: Option<OwnerInvocationTicket>,
@@ -737,7 +781,8 @@ where
         activation_fingerprint = %scope.activation().fingerprint(),
         execution_mode = ?scope.mode(),
     );
-    let task = tokio::spawn(super::invocation::with_invocation_stack(
+    let task_executor = executor_tasks.clone();
+    let task = executor_tasks.spawn_entity(
         async move {
             let _participant = participant;
             let mut metrics = EntityInvocationMetricsGuard::new(&scope);
@@ -764,6 +809,7 @@ where
                                     registration,
                                     permit,
                                     suspension.clone(),
+                                    task_executor,
                                 ),
                             };
                         }
@@ -784,11 +830,12 @@ where
                     registration,
                     permit,
                     suspension,
+                    task_executor,
                 ),
             }
         }
         .instrument(span),
-    ));
+    );
     let task_abort = task.abort_handle();
     if start_tx.send(()).is_err() {
         task_abort.abort();
@@ -801,6 +848,7 @@ where
         invocation,
         mode,
         lane,
+        executor_tasks,
         lane_await_required,
         task: Some(task),
     })
@@ -820,7 +868,11 @@ mod tests {
         lane: OwnerLane,
         lane_await_required: bool,
     ) -> EntityInvocationHandle<&'static str> {
-        let task = tokio::spawn(async {
+        let executor_tasks = crate::services::active_agents::InvocationLoops::new(
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let task_executor = executor_tasks.clone();
+        let task = executor_tasks.spawn_entity(async move {
             EntityInvocationCompletion {
                 result: Ok("completed"),
                 resources: EntityInvocationResources {
@@ -829,6 +881,7 @@ mod tests {
                     permit: None,
                     lane_wait: None,
                     suspension: None,
+                    executor_tasks: task_executor,
                 },
             }
         });
@@ -836,6 +889,7 @@ mod tests {
             invocation: OwnerInvocationId::Agent(OplogIndex::from_u64(2)),
             mode: EntityCallMode::Asynchronous,
             lane,
+            executor_tasks,
             lane_await_required,
             task: Some(task),
         }
@@ -895,6 +949,9 @@ mod tests {
     #[test]
     async fn retained_store_prepares_before_terminal_commit_and_settlement() {
         let events = Arc::new(Mutex::new(Vec::new()));
+        let executor_tasks = crate::services::active_agents::InvocationLoops::new(
+            tokio_util::sync::CancellationToken::new(),
+        );
         let mut resources = EntityInvocationResources {
             hosted: Some(Box::new(RecordingStore {
                 events: events.clone(),
@@ -903,6 +960,7 @@ mod tests {
             permit: None,
             lane_wait: None,
             suspension: None,
+            executor_tasks,
         };
 
         resources.prepare_parent_end().await.unwrap();
@@ -910,5 +968,48 @@ mod tests {
         resources.settle_after_parent_end().await.unwrap();
 
         assert_eq!(*events.lock().unwrap(), ["prepare", "terminal", "settle"]);
+    }
+
+    #[test]
+    async fn retained_store_callbacks_are_not_polled_after_executor_shutdown() {
+        use super::super::suspension::tests::{blocked_timer, eligible_now};
+        use std::time::{Duration, Instant};
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let executor_tasks = crate::services::active_agents::InvocationLoops::new(shutdown.clone());
+        let suspension = super::super::suspension::OwnerSuspension::new();
+        let (_store, _, _timer) =
+            blocked_timer(&suspension, Instant::now() + Duration::from_secs(30));
+        assert!(eligible_now(&suspension));
+        shutdown.cancel();
+        executor_tasks.wait_for_exit().await.unwrap();
+
+        let mut preparation = EntityInvocationResources {
+            hosted: Some(Box::new(RecordingStore {
+                events: events.clone(),
+            })),
+            registration: None,
+            permit: None,
+            lane_wait: None,
+            suspension: Some(suspension.clone()),
+            executor_tasks: executor_tasks.clone(),
+        };
+        assert!(preparation.prepare_parent_end().await.is_err());
+        assert!(eligible_now(&suspension));
+
+        let settlement = EntityInvocationResources {
+            hosted: Some(Box::new(RecordingStore {
+                events: events.clone(),
+            })),
+            registration: None,
+            permit: None,
+            lane_wait: None,
+            suspension: Some(suspension.clone()),
+            executor_tasks,
+        };
+        assert!(settlement.settle_after_parent_end().await.is_err());
+        assert!(eligible_now(&suspension));
+        assert!(events.lock().unwrap().is_empty());
     }
 }

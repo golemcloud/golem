@@ -72,6 +72,10 @@ These options have the following meaning:
 
 The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
 
+## Filesystem snapshots
+
+When [filesystem snapshots](/next/operate/filesystem_snapshots) are enabled, the worker executor keeps copies of the files of durable agents that take snapshots in the **blob storage**. With S3, it uses the bucket that `filesystem_snapshots_bucket` names. Each incarnation of an agent has its own location. See [Where the snapshots are](/next/operate/filesystem_snapshots#where-the-snapshots-are).
+
 ## Promises and schedules
 
 The worker executor stores **promise information** in its **key-value storage**, with one entry for each promise's completion state. Scheduled actions, including promise completion used to wake agents after long sleeps, use the separate **scheduler storage**.
@@ -79,6 +83,16 @@ The worker executor stores **promise information** in its **key-value storage**,
 ## WASI Blob store and Key Value store
 
 Golem implements (partially) the [WASI Blob Store](https://github.com/WebAssembly/wasi-blobstore) and [WASI Key-Value Store](https://github.com/WebAssembly/wasi-keyvalue) proposals. These interfaces allow agents to store blobs and key-value data in the worker executor's configured **blob storage** and **key-value storage** layers.
+
+### Custom blob storage quotas
+
+An account's blob storage quota applies only to data that agents write through the WASI Blob Store API. Internal blobs such as oplog payloads, compilation caches, initial agent files, components, and snapshots do not consume this quota.
+
+Worker executors enforce the quota from their last known account balance and send net byte changes to the registry service. Concurrent executors can each spend the same stale remaining balance before their next usage update, so a distributed deployment can temporarily exceed the configured limit. S3 deployments correct accounting drift by comparing the recorded total with the physical objects. Reconciliation runs in the background when a resource-limit read or usage update observes that the reconciliation interval has elapsed; it is not a periodic timer. Consequently, an idle account is corrected only after its next such activity, and a delta that overlaps a sweep can require the next successful sweep to converge.
+
+For reconciliation to be accurate, registry services and worker executors must use the same S3 endpoint, `custom_data_bucket`, and `object_prefix`. The custom-data bucket and prefix must not be shared with another blob-storage namespace because namespace keys can otherwise overlap.
+
+Blob mutations and usage reporting are not atomic. An executor crash can lose usage changes that have not reached the registry. Automatic physical reconciliation is enabled only for S3. Filesystem and SQLite deployments enforce quotas using incrementally reported usage, but crash-induced accounting drift can persist indefinitely, including undercounting that permits further writes beyond the configured limit.
 
 ## Adding new storage implementations
 

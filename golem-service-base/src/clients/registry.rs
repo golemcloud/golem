@@ -112,6 +112,7 @@ pub struct ResourceUsageUpdate {
     pub durable_storage_byte_seconds_delta: i64,
     pub ephemeral_storage_byte_seconds_delta: i64,
     pub memory_gb_seconds_delta: i64,
+    pub blob_storage_bytes_delta: i64,
     pub metering: ResourceUsageMetering,
 }
 
@@ -659,6 +660,7 @@ impl RegistryService for GrpcRegistryService {
                 compute_metering_enabled: v.metering.compute,
                 memory_metering_enabled: v.metering.memory,
                 filesystem_metering_enabled: v.metering.filesystem,
+                blob_storage_bytes_delta: v.blob_storage_bytes_delta,
             })
             .collect();
 

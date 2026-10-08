@@ -679,8 +679,7 @@ export const clientFor = <
   return clientForCompiled(def, compile, config)
 }
 
-/** @internal RPC transport shared by generated and reflective clients. */
-export const clientForCompiled = <
+const clientForCompiled = <
   C extends MethodParams,
   Methods extends Record<string, AnyMethodSpec>,
   Mode extends AgentCommon.AgentMode,

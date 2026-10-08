@@ -242,7 +242,9 @@ impl Fixture {
             .monthly_http_call_limit = monthly_http_call_limit;
         let root = &config.initial_accounts["root"];
         let mut tasks = JoinSet::new();
-        let services = Services::new(&config, &mut tasks).await.unwrap();
+        let services = Services::new_without_component_builtins(&config, &mut tasks)
+            .await
+            .unwrap();
         services.mcp_oauth_service.trust_certificate(
             reqwest::Certificate::from_pem(include_bytes!("tls/ca.pem")).unwrap(),
         );

@@ -1,5 +1,12 @@
 # Golem development
 
+## Before your first pull request
+
+Golem uses [vouch](https://github.com/mitchellh/vouch): you need to be listed in `.github/VOUCHED.td` to open pull requests, otherwise they are closed automatically.
+
+If this is your first contribution, introduce yourself and ask for permission on [Discord](https://discord.gg/UjXeH8uG4x).
+
+Once a maintainer vouches for you, you can open pull requests normally.
 
 ## Prerequisites
 
@@ -151,7 +158,7 @@ and fix any possible errors and warnings reported by it.
 
 ## Release process
 
-Releases are triggered by **pushing a tag** to GitHub. There are five independent
+Releases are triggered by **pushing a tag** to GitHub. There are six independent
 release channels, each gated by its own tag prefix:
 
 | Tag pattern                | What gets released                                                    | Workflow                                |
@@ -159,12 +166,17 @@ release channels, each gated by its own tag prefix:
 | `v<major>.<minor>.<patch>` | Golem crates on crates.io, Docker images, signed CLI binaries on GH   | `.github/workflows/ci.yaml`             |
 | `golem-rust-v<x.y.z>`      | The Rust SDK (`golem-rust`, `golem-rust-macro`) on crates.io          | `.github/workflows/publish-golem-rust.yaml`    |
 | `golem-ts-v<x.y.z>`        | The TypeScript SDK packages on npmjs                                  | `.github/workflows/publish-golem-ts.yaml`      |
+| `golem-effect-v<x.y.z>`    | The Effect SDK (`@golemcloud/effect-golem`) on npmjs                  | `.github/workflows/publish-golem-effect.yaml`  |
 | `golem-scala-v<x.y.z>`     | The Scala SDK on Maven Central                                        | `.github/workflows/publish-golem-scala.yaml`   |
 | `golem-moonbit-v<x.y.z>`   | The MoonBit SDK on mooncakes.io                                       | `.github/workflows/publish-golem-moonbit.yaml` |
 
 Version numbers are *not committed* to the repository — every `Cargo.toml`,
 `package.json`, `moon.mod.json`, etc. uses a placeholder version that is
 rewritten at release time from the tag.
+
+npm packages are published under the `latest` dist-tag for stable versions and under
+`next` for prerelease versions (any version containing `-`, e.g. `2.0.0-rc1`), so
+prereleases never become the default install.
 
 ### Maintenance branches
 

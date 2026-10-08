@@ -25,8 +25,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
-    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
-    PrecreatedPlan, RegistryServiceConfig,
+    BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
+    PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
@@ -39,8 +39,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -171,9 +171,15 @@ async fn start_components(
     args: &LaunchArgs,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
+    let component_compilation_service_config = component_compilation_service_config(args);
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        prometheus::default_registry().clone(),
+        component_compilation_service_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
     let component_compilation_service =
-        run_component_compilation_service(component_compilation_service_config(args), join_set)
-            .await?;
+        run_component_compilation_service(component_compilation_service_config, join_set).await?;
 
     let registry_service = run_registry_service(
         registry_service_config(args, &component_compilation_service)?,
@@ -252,6 +258,7 @@ fn registry_service_config(
                     component_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
+                    blob_storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
@@ -312,6 +319,10 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        builtin_artifacts: BuiltinArtifactsConfig {
+            cache_dir: Some(args.data_dir.join("builtin-artifacts")),
+            ..Default::default()
+        },
         security_scheme: golem_registry_service::config::SecuritySchemeConfig {
             strict_issuer_url_validation: false,
         },
@@ -436,7 +447,12 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            deterministic_root_dir: args.agent_filesystem_root.clone(),
+            mode: args
+                .agent_filesystem_root
+                .clone()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                }),
             ..Default::default()
         },
         ..Default::default()
@@ -621,6 +637,10 @@ mod tests {
             };
             assert_eq!(worker_blobs.root, registry_blobs.root);
             assert_eq!(worker_blobs.root, args.data_dir.join("blobs"));
+            assert_eq!(
+                registry_config.builtin_artifacts.cache_dir,
+                Some(args.data_dir.join("builtin-artifacts"))
+            );
         }
     }
 }

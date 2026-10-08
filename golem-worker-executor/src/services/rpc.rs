@@ -24,22 +24,23 @@ use super::{
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
+use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{InvocationResponseStream, WorkerProxy, WorkerProxyError};
 use crate::services::{
-    HasActiveAgents, HasAgentTypesService, HasBlobStoreService, HasCardService,
-    HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasHttpConnectionPool,
-    HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog, HasOplogProcessorPlugin,
-    HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService, HasResourceLimits,
-    HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasShutdownToken, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    active_agents, agent_types, blob_store, card, component, golem_config, key_value, oplog,
-    promise, rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration,
-    worker_fork,
+    HasActiveAgents, HasAgentFilesystemSnapshots, HasAgentTypesService, HasBlobStoreService,
+    HasCardService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
+    HasHttpConnectionPool, HasKeyValueService, HasLeakSentinel, HasNativeToolCatalog,
+    HasOplogProcessorPlugin, HasOplogService, HasPromiseService, HasQuotaService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasShutdownToken, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
+    HasWorkerService, active_agents, agent_types, blob_store, card, component, golem_config,
+    key_value, oplog, promise, rdbms, scheduler, shard_manager, worker, worker_activator,
+    worker_enumeration, worker_fork,
 };
 use crate::worker::Worker;
 use crate::worker::invocation::validate_agent_method_invocation;
@@ -47,7 +48,6 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
-use golem_api_grpc::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InvocationAccepted, InvocationFailure, InvocationFailureKind,
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationStart,
@@ -71,6 +71,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationResult, IdempotencyKey, OwnedAgentId,
 };
 use golem_common::schema::SchemaValue;
+use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -980,6 +981,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     resource_limits: Arc<dyn ResourceLimits>,
     shutdown_token: tokio_util::sync::CancellationToken,
     environment_state_service: Arc<dyn EnvironmentStateService>,
+    agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
     native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -1023,6 +1025,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             resource_limits: self.resource_limits.clone(),
             shutdown_token: self.shutdown_token.clone(),
             environment_state_service: self.environment_state_service.clone(),
+            agent_filesystem_snapshots: self.agent_filesystem_snapshots.clone(),
             native_tool_catalog: self.native_tool_catalog.clone(),
             agent_types_service: self.agent_types_service.clone(),
             agent_webhooks_service: self.agent_webhooks_service.clone(),
@@ -1244,6 +1247,12 @@ impl<Ctx: WorkerCtx> HasWebSocketConnectionPool for DirectWorkerInvocationRpc<Ct
     }
 }
 
+impl<Ctx: WorkerCtx> HasAgentFilesystemSnapshots for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_filesystem_snapshots(&self) -> Arc<AgentFilesystemSnapshots> {
+        self.agent_filesystem_snapshots.clone()
+    }
+}
+
 impl<Ctx: WorkerCtx> HasMcpTransport for DirectWorkerInvocationRpc<Ctx> {
     fn mcp_transport(&self) -> Arc<super::mcp::McpTransport> {
         self.mcp_transport.clone()
@@ -1297,6 +1306,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         resource_limits: Arc<dyn ResourceLimits>,
         shutdown_token: tokio_util::sync::CancellationToken,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         native_tool_catalog: Arc<crate::native_tool::NativeToolCatalog<Ctx>>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
@@ -1337,6 +1347,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             resource_limits,
             shutdown_token,
             environment_state_service,
+            agent_filesystem_snapshots,
             native_tool_catalog,
             agent_types_service,
             agent_webhooks_service,
@@ -1871,23 +1882,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 auth_ctx,
             )
             .await?;
-        Worker::<Ctx>::get_latest_metadata(self, &target)
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &target)
             .await
-            .map_err(RpcError::from)?
+            .map_err(|error| error.map_other(RpcError::from))?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(target.agent_id()))
             .map_err(RpcError::from)?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &target,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
-        .map_err(RpcError::from)?;
         worker
             .control_durable_stream_attachment(request)
             .await
@@ -1941,23 +1940,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     details: error.to_string(),
                 })?,
         }
-        Worker::<Ctx>::get_latest_metadata(self, &producer)
+        let (worker, _response_lease) = Worker::find_durable_stream_worker(self, &producer)
             .await
-            .map_err(RpcError::from)?
+            .map_err(|error| error.map_other(RpcError::from))?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(producer.agent_id()))
             .map_err(RpcError::from)?;
-        let worker = Worker::get_or_create_suspended(
-            self,
-            &producer,
-            None,
-            Vec::new(),
-            None,
-            None,
-            &InvocationContextStack::fresh(),
-            Principal::anonymous(),
-        )
-        .await
-        .map_err(RpcError::from)?;
         match request {
             DurableStreamReadRequest::AttachedConsumer(request) => {
                 let events = worker

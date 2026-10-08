@@ -1,5 +1,10 @@
 import { Effect, Pipeable, Schema, SchemaAST } from "effect"
-import { compileFileMappings, type FileExposure } from "@golemcloud/http-contract"
+import {
+  compileFileMappings,
+  compileFileResponseHeaders,
+  type FileExposure,
+  type FileResponseHeaders,
+} from "@golemcloud/http-contract"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import { withPipe } from "./internal/pipeable.js"
 import type {
@@ -451,6 +456,7 @@ export interface MountDef<MountVars extends string, WebhookVars extends string =
   readonly phantomAgent: boolean
   readonly webhookSuffix: ReadonlyArray<PathSegment>
   readonly exposeFiles?: readonly FileExposure[]
+  readonly fileResponseHeaders?: FileResponseHeaders
 }
 
 /**
@@ -754,6 +760,8 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
 export interface MountOptions<W extends string = string> {
   /** Ordered live-file mappings for regular durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[]
+  /** Response headers applied by the host when serving mounted files. */
+  readonly fileResponseHeaders?: FileResponseHeaders
   /** When `true`, the host treats every endpoint as authentication-required. */
   readonly auth?: boolean
   /** CORS allowed-origin patterns advertised at the mount level. */
@@ -837,6 +845,7 @@ export const mount: <const Path extends string, const W extends string = string>
     phantomAgent: opts?.phantomAgent ?? false,
     webhookSuffix,
     exposeFiles: opts?.exposeFiles?.map((mapping) => ({ ...mapping })),
+    fileResponseHeaders: opts?.fileResponseHeaders ? { ...opts.fileResponseHeaders } : undefined,
   }) as unknown as MountDef<never, never>
 }) as never
 
@@ -1401,6 +1410,7 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   staticBindings: [],
   filesystemBindings: compileFileMappings(mountDef.exposeFiles ?? []),
   openapiProviderMethod: undefined,
+  fileResponseHeaders: compileFileResponseHeaders(mountDef.fileResponseHeaders),
 })
 
 /**

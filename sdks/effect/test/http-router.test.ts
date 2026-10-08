@@ -7,7 +7,7 @@ import {
   HttpServerRequest,
   HttpServerRespondable,
   HttpServerResponse,
-} from "effect/unstable/http"
+} from "effect/http"
 import { __resetAgents, defineAgent } from "../src/Agent.js"
 import * as GolemRouter from "../src/HttpRouter.js"
 import * as Http from "../src/Http.js"
@@ -606,16 +606,30 @@ describe("real Effect HTTP application adapter", () => {
   })
 
   it("ordinary-agent exposeFiles uses shared mapping compilation and rejects ephemeral owners", () => {
+    const liveHeaders = {
+      "content-security-policy": "default-src 'none'",
+      "referrer-policy": "no-referrer",
+    }
     defineAgent({
       name: "LiveFiles",
       id: { id: Schema.String },
-      http: Http.mount("/files/{id}", { exposeFiles: [{ route: "/*", path: "/data/$1" }] }),
+      http: Http.mount("/files/{id}", {
+        exposeFiles: [{ route: "/*", path: "/data/$1" }],
+        fileResponseHeaders: liveHeaders,
+      }),
       methods: {},
     }).implement({ init: () => Effect.void, methods: () => ({}) })
-    expect(
-      guest.discoverAgentTypes().find((agent) => agent.typeName === "LiveFiles")!.httpMount!
-        .filesystemBindings,
-    ).toEqual([{ tag: "subtree", val: { publicPrefix: [], filesystemRoot: "/data" } }])
+    liveHeaders["content-security-policy"] = "mutated"
+    const liveMount = guest
+      .discoverAgentTypes()
+      .find((agent) => agent.typeName === "LiveFiles")!.httpMount!
+    expect(liveMount.filesystemBindings).toEqual([
+      { tag: "subtree", val: { publicPrefix: [], filesystemRoot: "/data" } },
+    ])
+    expect(liveMount.fileResponseHeaders).toEqual([
+      { name: "content-security-policy", value: "default-src 'none'" },
+      { name: "referrer-policy", value: "no-referrer" },
+    ])
     defineAgent({
       name: "BadFiles",
       mode: "ephemeral",
@@ -624,5 +638,24 @@ describe("real Effect HTTP application adapter", () => {
       methods: {},
     }).implement({ init: () => Effect.void, methods: () => ({}) })
     expect(() => guest.discoverAgentTypes()).toThrow()
+  })
+
+  it("reconstructs ordered file response headers for static router mounts", () => {
+    const headers = {
+      "content-security-policy": "default-src 'self'",
+      "referrer-policy": "same-origin",
+    }
+    GolemRouter.define("HeaderAssets", {
+      mount: Http.mount("/assets", { fileResponseHeaders: headers }),
+      static: [{ route: "/*", path: "/assets/$1" }],
+    }).register()
+    headers["content-security-policy"] = "mutated"
+    const mount = guest
+      .discoverAgentTypes()
+      .find((agent) => agent.typeName === "HeaderAssets")!.httpMount!
+    expect(mount.fileResponseHeaders).toEqual([
+      { name: "content-security-policy", value: "default-src 'self'" },
+      { name: "referrer-policy", value: "same-origin" },
+    ])
   })
 })

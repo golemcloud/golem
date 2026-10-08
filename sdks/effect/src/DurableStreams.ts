@@ -1,8 +1,11 @@
 /** Effect-native external Durable Streams. @since 1.6.0 */
 import { Effect, Option, Schema, Scope, Semaphore, Stream } from "effect"
 import type * as Host from "golem:agent/durable-streams@2.0.0"
-import type { Secret } from "golem:core/types@2.0.0"
+import type { Secret } from "./Capability.js"
 import { DurableStreamsClient } from "./host/DurableStreamsClient.js"
+import { assertCapabilityReady } from "./internal/schema-model/capabilityTransaction.js"
+import { peekGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
+import { SECRET_INTERNAL } from "./internal/schema-model/secretInternal.js"
 import { SchemaRef } from "./SchemaRef.js"
 import { compile } from "./WitCodec.js"
 
@@ -307,12 +310,24 @@ const checkedOptions = (options: Options) =>
   Effect.gen(function* () {
     return {
       url: options.url,
-      auth: options.auth,
+      auth: yield* borrowAuth(options.auth),
       timeoutMs: yield* bounded(options.timeoutMs ?? 30000, 1, 300000, "timeoutMs"),
       maxRetries: yield* bounded(options.maxRetries ?? 5, 0, 1000, "maxRetries"),
       retryDelayMs: yield* bounded(options.retryDelayMs ?? 100, 1, 30000, "retryDelayMs"),
     }
   })
+const borrowAuth = (auth: Secret | undefined) =>
+  auth === undefined
+    ? Effect.succeed(undefined)
+    : Effect.try({
+        try: () => {
+          assertCapabilityReady(auth)
+          const raw = peekGuestSecretHandle(SECRET_INTERNAL, auth)
+          if (raw === undefined) throw new Error("secret has already been transferred")
+          return raw
+        },
+        catch: () => new DurableStreamError("invalid-request", "Invalid auth secret capability"),
+      })
 interface RetryState {
   failures: number
   delay?: bigint

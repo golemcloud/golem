@@ -24,6 +24,8 @@ import scala.concurrent.{ExecutionContext, Future, Promise}
 import zio.blocks.async.*
 import zio.blocks.streams.{JvmType, Stream}
 
+import java.util.concurrent.CancellationException
+
 /**
  * The Scala port of the Rust SDK's `tool_client.rs` unit tests: custom-error
  * payload decoding, custom-error decode through `invokeAndAwait`, and framing
@@ -53,6 +55,18 @@ object ToolClientSpec extends ZIOSpecDefault {
       case (Right(Some(chunk)), tail) => Stream.fromArray(chunk) ++ tail
     }
     override def cancel(): Future[Unit] = Future.successful(())
+  }
+
+  private final class FailedReadStream(failure: Throwable) extends ToolInputStream {
+    override val stream: Stream[ByteStreamFailure, Byte] = Stream.unfoldAsync(()) { _ =>
+      Async.fromFuture[Option[(Byte, Unit)]](Future.failed(failure))
+    }(using JvmType.Infer.byte)
+    override def cancel(): Future[Unit] = Future.successful(())
+  }
+
+  private final class ThrowingStream(failure: Throwable) extends ToolInputStream {
+    override def stream: Stream[ByteStreamFailure, Byte] = throw failure
+    override def cancel(): Future[Unit]                  = Future.successful(())
   }
 
   private def stringPayload(text: String): TypedSchemaValue =
@@ -153,7 +167,7 @@ object ToolClientSpec extends ZIOSpecDefault {
         )
       }
     },
-    test("started invocation collect waits for stdout after an observer failure") {
+    test("started invocation collect retains a failed result future after both outputs settle") {
       val eof    = Promise[Unit]()
       val stream = new ToolInputStream {
         override val stream: Stream[ByteStreamFailure, Byte] = Stream
@@ -164,14 +178,107 @@ object ToolClientSpec extends ZIOSpecDefault {
         override def cancel(): Future[Unit] = Future.successful(())
       }
       val failure    = new RuntimeException("observer failed")
-      val invocation = ToolInvocation[Nothing, Unit](Some(stream), None, Future.failed(failure), () => ())
-      val collected  = invocation.collect()(ExecutionContext.global)
+      val invocation = ToolInvocation[Nothing, Unit](
+        Some(stream),
+        Some(new ChunkStream(List(Right(Some(Array[Byte](9))), Right(None)))),
+        Future.failed(failure),
+        () => ()
+      )
+      val collected = invocation.collect()(ExecutionContext.global)
       for {
-        _     <- ZIO.yieldNow
-        before = !collected.isCompleted
-        _      = eof.success(())
-        error <- ZIO.fromFuture(_ => collected.failed)
-      } yield assertTrue(before, error eq failure)
+        _      <- ZIO.yieldNow
+        before  = !collected.isCompleted
+        _       = eof.success(())
+        result <- ZIO.fromFuture(_ => collected)
+      } yield assertTrue(
+        before,
+        result.result == Left(ToolError.Rpc(RpcError.Protocol("observer failed"))),
+        result.stdout.exists(_.exists(_.isEmpty)),
+        result.stderr.exists(_.exists(_.sameElements(Array[Byte](9))))
+      )
+    },
+    test("started invocation collect retains a failed read future without hiding its sibling output") {
+      val failure    = new RuntimeException("stdout read failed")
+      val invocation = ToolInvocation[Nothing, String](
+        Some(new FailedReadStream(failure)),
+        Some(new ChunkStream(List(Right(Some(Array[Byte](7, 8))), Right(None)))),
+        Future.successful(Right("done")),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(
+          result.result == Right("done"),
+          result.stdout == Left(ByteStreamFailure.Failed("stdout read failed")),
+          result.stderr.exists(_.exists(_.sameElements(Array[Byte](7, 8))))
+        )
+      }
+    },
+    test("started invocation collect retains a synchronous stream failure in its channel") {
+      val failure    = new RuntimeException("stderr stream failed")
+      val invocation = ToolInvocation[Nothing, String](
+        Some(new ChunkStream(List(Right(Some(Array[Byte](3, 4))), Right(None)))),
+        Some(new ThrowingStream(failure)),
+        Future.successful(Right("done")),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(
+          result.result == Right("done"),
+          result.stdout.exists(_.exists(_.sameElements(Array[Byte](3, 4)))),
+          result.stderr == Left(ByteStreamFailure.Failed("stderr stream failed"))
+        )
+      }
+    },
+    test("started invocation collect does not convert cancellation into a collected result") {
+      val cancellation = new CancellationException("cancelled")
+      val invocation   = ToolInvocation[Nothing, Unit](None, None, Future.failed(cancellation), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec).failed).map(error => assertTrue(error eq cancellation))
+    },
+    test("started invocation collect returns a failed future for synchronous stream cancellation") {
+      val cancellation = new CancellationException("cancelled while opening stream")
+      val invocation   = ToolInvocation[Nothing, Unit](
+        Some(new ThrowingStream(cancellation)),
+        None,
+        Future.successful(Right(())),
+        () => ()
+      )
+      val attempted = scala.util.Try(invocation.collect()(ExecutionContext.global))
+      assertTrue(
+        attempted.isSuccess,
+        attempted.toOption.exists(future => future.value.exists(_.failed.toOption.contains(cancellation)))
+      )
+    },
+    test("started invocation collect does not convert wrapped cancellation") {
+      val cancellation = new CancellationException("cancelled")
+      val boxed        = new RuntimeException("wrapped", cancellation)
+      val invocation   = ToolInvocation[Nothing, Unit](None, None, Future.failed(boxed), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec).failed).map(error => assertTrue(error eq boxed))
+    },
+    test("started invocation collect handles cyclic non-fatal cause chains") {
+      val first  = new RuntimeException("first")
+      val second = new RuntimeException("second")
+      first.initCause(second)
+      second.initCause(first)
+      val invocation = ToolInvocation[Nothing, Unit](None, None, Future.failed(first), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map(result => assertTrue(result.result.isLeft))
+    } @@ TestAspect.timeout(zio.Duration.fromSeconds(2)),
+    test("started invocation collect does not convert boxed fatal or interrupted failures") {
+      val fatal                 = new LinkageError("fatal result")
+      val interrupted           = new InterruptedException("interrupted read")
+      val fatalInvocation       = ToolInvocation[Nothing, Unit](None, None, Future.failed(fatal), () => ())
+      val interruptedInvocation = ToolInvocation[Nothing, Unit](
+        Some(new FailedReadStream(interrupted)),
+        None,
+        Future.successful(Right(())),
+        () => ()
+      )
+      for {
+        fatalError       <- ZIO.fromFuture(ec => fatalInvocation.collect()(ec).failed)
+        interruptedError <- ZIO.fromFuture(ec => interruptedInvocation.collect()(ec).failed)
+      } yield assertTrue(
+        fatalError.getCause eq fatal,
+        interruptedError.getCause eq interrupted
+      )
     },
     test("started invocation collect preserves a declared error when stdout also fails") {
       val declared   = Usage("bad flag")

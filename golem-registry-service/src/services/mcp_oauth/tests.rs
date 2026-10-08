@@ -27,6 +27,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{self, PoolApi};
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_service_base::repo::{Blob, SqlDateTime};
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use http::{Request, Response};
 use http_body_util::Full;
 use serde_json::{Value, json};
@@ -121,6 +122,10 @@ impl Fixture {
                             Arc::new(DbRegistryChangeRepo::new(pool.clone())),
                         )),
                     )),
+                    Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                    Arc::new(InMemoryBlobStorage::new()),
+                    false,
+                    crate::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
                 )),
             ),
             pool,

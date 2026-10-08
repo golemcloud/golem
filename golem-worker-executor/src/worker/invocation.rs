@@ -242,6 +242,18 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         Err(payload) => std::panic::resume_unwind(payload),
     };
 
+    if matches!(
+        &call_result,
+        Ok(InvokeResult::Interrupted {
+            interrupt_kind: InterruptKind::Jump,
+            ..
+        })
+    ) {
+        let ctx = store.data().durable_ctx();
+        ctx.begin_stream_runtime_teardown();
+        crate::durable_host::tool::fence_tool_operations_for_jump(&mut store).await?;
+    }
+
     if let Some(parent) = primary_body
         .as_ref()
         .and_then(|primary_body| primary_body.invocation().cloned())
@@ -520,7 +532,13 @@ fn classify_guest_call_settlement<R>(
         ));
     }
     result.map_err(|error| {
-        if interrupted || error.root_cause().downcast_ref::<InterruptKind>().is_some() {
+        if interrupted
+            || error.root_cause().downcast_ref::<InterruptKind>().is_some()
+            || matches!(
+                error.root_cause().downcast_ref::<WorkerExecutorError>(),
+                Some(WorkerExecutorError::Interrupted { .. })
+            )
+        {
             GuestCallSettlementError::Interrupted(error)
         } else if let Some(recovery_failure) = error
             .chain()
@@ -2434,6 +2452,23 @@ mod tests {
                 "active_spawned_tasks: {active_spawned_tasks}"
             );
         }
+    }
+
+    #[test]
+    fn wrapped_replay_jump_settles_as_interruption() {
+        assert!(matches!(
+            classify_guest_call_settlement::<()>(
+                Err(wasmtime::Error::from_anyhow(
+                    anyhow::Error::new(WorkerExecutorError::Interrupted {
+                        kind: InterruptKind::Jump,
+                    })
+                    .context("durable scope restart"),
+                )),
+                None,
+                false,
+            ),
+            Err(GuestCallSettlementError::Interrupted(_))
+        ));
     }
 
     #[test]

@@ -32,13 +32,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug, info};
+use tracing::{Instrument, debug, info, warn};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -83,6 +83,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -106,6 +107,7 @@ impl RegisteredConcurrentAccount {
 pub struct ActiveAgent<Ctx: WorkerCtx> {
     owner_id: OwnedAgentId,
     primary: Arc<Worker<Ctx>>,
+    executor_tasks: InvocationLoops,
     entities: Mutex<HashMap<AgentEntity, Arc<EntitySlot>>>,
     accepting_entities: AtomicBool,
     entity_fence_generation: AtomicU64,
@@ -145,10 +147,15 @@ pub struct ActiveAgentEntityMetadata {
 }
 
 impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
-    fn new_unresolved(owner_id: OwnedAgentId, primary: Arc<Worker<Ctx>>) -> Self {
+    fn new_unresolved(
+        owner_id: OwnedAgentId,
+        primary: Arc<Worker<Ctx>>,
+        executor_tasks: InvocationLoops,
+    ) -> Self {
         Self {
             owner_id,
             primary,
+            executor_tasks,
             entities: Mutex::new(HashMap::new()),
             accepting_entities: AtomicBool::new(true),
             entity_fence_generation: AtomicU64::new(0),
@@ -404,6 +411,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slot,
             self.execution().lane(),
             self.execution().suspension(),
+            self.executor_tasks.clone(),
             parent,
             scope,
             mode,
@@ -445,6 +453,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slot,
             self.execution().lane(),
             self.execution().suspension(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             ticket,
@@ -491,6 +500,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slot,
             self.execution().lane(),
             self.execution().suspension(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             invoke,
@@ -542,6 +552,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slot,
             self.execution().lane(),
             self.execution().suspension(),
+            self.executor_tasks.clone(),
             parent,
             scope,
             mode,
@@ -584,6 +595,7 @@ impl<Ctx: WorkerCtx> ActiveAgent<Ctx> {
             slot,
             self.execution().lane(),
             self.execution().suspension(),
+            self.executor_tasks.clone(),
             scope,
             mode,
             ticket,
@@ -601,18 +613,101 @@ const INVOCATION_LOOP_DROP_STACK_SIZE: usize = 8 * 1024 * 1024;
 /// abandoning the loop and drains admitted writes before reporting its exit. The oplog can then
 /// be reopened without racing writes from the old owner. Cloning shares the same set of loops;
 /// a clone does not keep any task alive.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct InvocationLoops {
     shutdown_token: CancellationToken,
+    task_shutdown_token: CancellationToken,
     tracker: TaskTracker,
+    owner_oplogs: Arc<Mutex<Vec<RegisteredOwnerOplog>>>,
+    construction_admission: Arc<Mutex<bool>>,
+    _watcher_lifetime: Arc<InvocationLoopWatcherLifetime>,
+}
+
+struct InvocationLoopWatcherLifetime(CancellationToken);
+
+impl Drop for InvocationLoopWatcherLifetime {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
+#[derive(Clone)]
+struct RegisteredOwnerOplog {
+    oplog: Weak<dyn crate::services::oplog::Oplog>,
+    tasks: Option<crate::worker::tasks::WorkerTasks>,
+    shutdown: crate::services::oplog::OplogShutdownHandle,
+}
+
+impl RegisteredOwnerOplog {
+    fn fence_executor_shutdown(&self) {
+        self.shutdown.fence();
+    }
 }
 
 impl InvocationLoops {
     pub fn new(shutdown_token: CancellationToken) -> Self {
+        let task_shutdown_token = CancellationToken::new();
+        let owner_oplogs = Arc::new(Mutex::new(Vec::<RegisteredOwnerOplog>::new()));
+        let construction_admission = Arc::new(Mutex::new(true));
+        let watcher_stop = CancellationToken::new();
+        let watcher_lifetime = Arc::new(InvocationLoopWatcherLifetime(watcher_stop.clone()));
+        tokio::spawn({
+            let shutdown_token = shutdown_token.clone();
+            let task_shutdown_token = task_shutdown_token.clone();
+            let owner_oplogs = owner_oplogs.clone();
+            let construction_admission = construction_admission.clone();
+            async move {
+                tokio::select! {
+                    _ = shutdown_token.cancelled() => {}
+                    _ = watcher_stop.cancelled() => return,
+                }
+                *construction_admission.lock().unwrap() = false;
+                for registration in owner_oplogs.lock().unwrap().iter() {
+                    registration.fence_executor_shutdown();
+                }
+                task_shutdown_token.cancel();
+            }
+        });
         Self {
             shutdown_token,
+            task_shutdown_token,
             tracker: TaskTracker::new(),
+            owner_oplogs,
+            construction_admission,
+            _watcher_lifetime: watcher_lifetime,
         }
+    }
+
+    pub(crate) fn register_owner_oplog(&self, oplog: Arc<dyn crate::services::oplog::Oplog>) {
+        let mut owner_oplogs = self.owner_oplogs.lock().unwrap();
+        if !owner_oplogs
+            .iter()
+            .filter_map(|registered| registered.oplog.upgrade())
+            .any(|registered| Arc::ptr_eq(&registered, &oplog))
+        {
+            let shutdown = oplog.executor_shutdown_handle();
+            if self.shutdown_token.is_cancelled() {
+                shutdown.fence();
+            }
+            owner_oplogs.push(RegisteredOwnerOplog {
+                oplog: Arc::downgrade(&oplog),
+                tasks: oplog.task_owner().cloned(),
+                shutdown,
+            });
+        }
+    }
+
+    pub(crate) fn spawn_construction(
+        &self,
+        construction: impl Future<Output = ()> + Send + 'static,
+    ) -> bool {
+        let mut admission = self.construction_admission.lock().unwrap();
+        if !*admission || self.shutdown_token.is_cancelled() {
+            *admission = false;
+            return false;
+        }
+        self.tracker.spawn(construction);
+        true
     }
 
     pub(crate) fn spawn(
@@ -620,7 +715,7 @@ impl InvocationLoops {
         invocation_loop: impl Future<Output = ()> + Send + 'static,
         on_shutdown: impl FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static,
     ) -> JoinHandle<()> {
-        let shutdown_token = self.shutdown_token.clone();
+        let shutdown_token = self.task_shutdown_token.clone();
         self.tracker.spawn(async move {
             let mut invocation_loop = Box::pin(invocation_loop);
             tokio::select! {
@@ -637,10 +732,41 @@ impl InvocationLoops {
         })
     }
 
+    /// Runs detached entity work under the executor's shutdown boundary. Dropping a caller's
+    /// handle still leaves the entity running normally, while executor shutdown abandons the
+    /// transient work without running semantic finalization and joins its destruction before a
+    /// replacement executor may open the same owner oplog.
+    pub(crate) fn spawn_entity<T>(
+        &self,
+        entity_task: impl Future<Output = T> + Send + 'static,
+    ) -> JoinHandle<Option<T>>
+    where
+        T: Send + 'static,
+    {
+        let shutdown_token = self.task_shutdown_token.clone();
+        self.tracker.spawn(async move {
+            let mut entity_task = Box::pin(entity_task);
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    stacker::grow(INVOCATION_LOOP_DROP_STACK_SIZE, move || drop(entity_task));
+                    None
+                }
+                result = crate::worker::invocation::with_invocation_stack(&mut entity_task) => {
+                    Some(result)
+                }
+            }
+        })
+    }
+
     /// Whether the owning executor has been shut down. Once true, no new loop makes progress and
     /// [`Self::wait_for_exit`] resolves as soon as the already running ones have exited.
     pub fn is_shut_down(&self) -> bool {
         self.shutdown_token.is_cancelled()
+    }
+
+    pub fn same_executor(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.owner_oplogs, &other.owner_oplogs)
     }
 
     /// Resolves once every invocation loop of the executor has exited. Only meaningful after the
@@ -648,10 +774,62 @@ impl InvocationLoops {
     ///
     /// A loop that is executing guest code without reaching an await point cannot be cancelled
     /// once the executor's epoch ticker stopped, so callers should bound this wait.
-    pub async fn wait_for_exit(&self) {
+    pub async fn wait_for_exit(&self) -> Result<(), String> {
+        *self.construction_admission.lock().unwrap() = false;
+        {
+            let owner_oplogs = self.owner_oplogs.lock().unwrap();
+            for registration in owner_oplogs.iter() {
+                registration.fence_executor_shutdown();
+            }
+        }
+        self.task_shutdown_token.cancel();
         self.tracker.close();
+        let early_owner_oplogs = self.owner_oplogs.lock().unwrap().clone();
+        futures::future::join_all(
+            early_owner_oplogs
+                .iter()
+                .filter_map(|registration| registration.tasks.as_ref())
+                .map(crate::worker::tasks::WorkerTasks::stop_roots_and_wait),
+        )
+        .await;
         self.tracker.wait().await;
+        let owner_oplogs = self.owner_oplogs.lock().unwrap().clone();
+        let mut result = Ok(());
+        for registration in &owner_oplogs {
+            if let Some(tasks) = &registration.tasks {
+                result = result.and(tasks.stop_and_wait().await);
+            }
+            result = result.and(registration.shutdown.close_and_wait().await);
+        }
+        if result.is_ok() {
+            let mut registered = self.owner_oplogs.lock().unwrap();
+            registered.retain(|oplog| {
+                !owner_oplogs
+                    .iter()
+                    .any(|drained| Weak::ptr_eq(&oplog.oplog, &drained.oplog))
+            });
+        }
+        result
     }
+}
+
+impl std::fmt::Debug for InvocationLoops {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InvocationLoops")
+            .field("shut_down", &self.is_shut_down())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The number of refused admission attempts of one worker start between two warnings. With the
+/// default retry delay of 500 ms, the first warning comes after about 10 s of waiting, and one
+/// more comes every 10 s while the wait goes on.
+const ADMISSION_REFUSALS_PER_WARNING: u32 = 20;
+
+/// Whether `acquire_memory` logs a warning after its `refusals`-th refused attempt.
+fn admission_wait_warns(refusals: u32) -> bool {
+    refusals.is_multiple_of(ADMISSION_REFUSALS_PER_WARNING)
 }
 
 /// Holds owner-keyed active agent groups.
@@ -736,10 +914,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .is_some_and(|worker| worker.pending_startup_attempt().is_some())
     }
 
-    pub fn new(
+    pub async fn new(
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
@@ -752,24 +931,28 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             active_agents_config,
             memory_config,
             storage_config,
+            initial_files_service,
             agent_status_flush_config,
             shutdown_token,
         )
+        .await
     }
 
     /// Like [`Self::new`] but with an explicitly provided memory probe instead of
     /// the one derived from the config. The in-process test harness uses this to
     /// supply a probe with a pinned limit and current usage, so the gate's
     /// decision is deterministic and isolated from the shared test process's RSS.
-    pub fn new_with_probe(
+    pub async fn new_with_probe(
         probe: Box<dyn MemoryProbe>,
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
-        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
+        let agent_filesystems =
+            Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -837,7 +1020,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: ComponentRevision,
         component_module_bytes: u64,
     ) -> WorkerComponentCharge {
-        let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
+        let charge_bytes =
+            component_charge_bytes(self.component_size_coefficient, component_module_bytes);
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
             .await
@@ -1050,6 +1234,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     Ok(Arc::new(ActiveAgent::new_unresolved(
                         owned_agent_id,
                         worker,
+                        self.invocation_loops.clone(),
                     )))
                 })
             })
@@ -1382,11 +1567,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let Some(admission) = &self.admission else {
             return MemoryGrant::inert(memory);
         };
+        let mut refusals: u32 = 0;
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
             // back off) when it cannot make room rather than risking the limit.
             if let Some(grant) = admission.admit(memory, &self.eviction_source()).await {
                 return grant;
+            }
+            refusals = refusals.saturating_add(1);
+            if admission_wait_warns(refusals) {
+                warn!(
+                    requested = memory,
+                    refusals,
+                    retry_delay_ms = self.acquire_retry_delay.as_millis(),
+                    "Memory admission keeps refusing a worker start"
+                );
             }
             debug!("Measured headroom insufficient for {memory}, backing off and retrying");
             tokio::time::sleep(self.acquire_retry_delay).await;
@@ -1724,7 +1919,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
             // correct.
             let (component_id, component_revision, module_bytes) =
                 worker.resident_component_charge_requirement().await;
-            let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
+            let charge_bytes = component_charge_bytes(component_size_coefficient, module_bytes);
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
             candidates.push((
@@ -1805,6 +2000,13 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
         )
         .await
     }
+}
+
+/// Gives the bytes that a component charges for its compiled module: the module size multiplied by
+/// `coefficient`, rounded toward zero. A result above `u64::MAX` gives `u64::MAX`, and a negative
+/// or NaN result gives 0.
+fn component_charge_bytes(coefficient: f64, module_bytes: u64) -> u64 {
+    (coefficient * module_bytes as f64) as u64
 }
 
 /// Single attempt of the charge-first admission ordering used by

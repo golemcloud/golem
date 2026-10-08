@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::filesystem_snapshots::{InvocationShape, invocation_shape};
 use axum::Router;
 use axum::extract::Query;
 use axum::routing::{any, get};
@@ -20,8 +21,8 @@ use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{GolemUserPrincipal, Principal};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogIndex, PublicAgentInvocation, PublicOplogEntry,
-    PublicOplogEntryWithIndex, PublicSnapshotData,
+    OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
+    PublicSnapshotData,
 };
 use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId};
@@ -104,6 +105,59 @@ pub(crate) async fn assert_snapshot_recovery_loaded(events: &mut UnboundedReceiv
     })
     .await
     .expect("Timed out waiting for snapshot recovery event");
+}
+
+/// Expects the recovery to reject the snapshot at one index with `expected_error` and then to
+/// load the snapshot at another index. Gives the rejected index and the loaded index.
+async fn snapshot_recovery_fell_back(
+    events: &mut UnboundedReceiver<LogEvent>,
+    expected_error: &str,
+) -> (OplogIndex, OplogIndex) {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        use futures::StreamExt as _;
+        // The stream pulls one event at a time, and `next` stops at the first success, so it
+        // consumes the events up to that success and no more.
+        let fell_back = futures::stream::poll_fn(|context| events.poll_recv(context))
+            .scan(None, |rejected: &mut Option<OplogIndex>, event| {
+                let found = match AgentEvent::try_from(event) {
+                    Ok(AgentEvent::SnapshotRecoveryFailed {
+                        snapshot_index,
+                        error,
+                        ..
+                    }) => {
+                        assert!(
+                            rejected.is_none(),
+                            "Snapshot recovery from {snapshot_index} failed after an earlier failure: {error}"
+                        );
+                        assert!(
+                            error.contains(expected_error),
+                            "Snapshot recovery failed with unexpected error: {error}"
+                        );
+                        *rejected = Some(snapshot_index);
+                        None
+                    }
+                    Ok(AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. }) => {
+                        let rejected = rejected.unwrap_or_else(|| {
+                            panic!(
+                                "Snapshot recovery from {snapshot_index} succeeded before a failure"
+                            )
+                        });
+                        Some((rejected, snapshot_index))
+                    }
+                    _ => None,
+                };
+                std::future::ready(Some(found))
+            })
+            .filter_map(std::future::ready);
+        std::pin::pin!(fell_back)
+            .next()
+            .await
+            .unwrap_or_else(|| {
+                panic!("Worker event stream ended before the snapshot recovery events")
+            })
+    })
+    .await
+    .expect("Timed out waiting for the snapshot recovery events")
 }
 
 pub(crate) async fn assert_snapshot_recovery_failed(
@@ -741,7 +795,22 @@ async fn automatic_snapshot_every_2nd_invocation(
             .await?;
     }
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let expected_snapshot_count = 1 + SNAPSHOT_TEST_INVOCATIONS / 2;
+    let oplog = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let snapshot_count = oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+                .count();
+            if snapshot_count >= expected_snapshot_count {
+                return Ok::<_, anyhow::Error>(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("automatic snapshots were not persisted in time"))??;
     assert!(
         oplog
             .iter()
@@ -758,8 +827,7 @@ async fn automatic_snapshot_every_2nd_invocation(
         .count();
 
     assert_eq!(
-        snapshot_count,
-        1 + SNAPSHOT_TEST_INVOCATIONS / 2,
+        snapshot_count, expected_snapshot_count,
         "Expected a snapshot every 2 invocations"
     );
 
@@ -1127,7 +1195,7 @@ async fn snapshot_load_restores_without_initialization_and_replays_only_the_suff
 #[test]
 #[timeout("120s")]
 #[tracing::instrument]
-async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
+async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_the_older_snapshot(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
@@ -1180,13 +1248,21 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
             .await?
             .iter()
             .filter(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-            .count();
-        assert!(
-            snapshots >= 2,
-            "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
-        );
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>();
+        let [.., older, newest] = snapshots[..] else {
+            panic!(
+                "{mode} probe should have an older loadable snapshot before the failing latest snapshot"
+            );
+        };
         let oplog_before_recovery = executor.oplog_max_index(&worker_id).await?;
-        probes.push((mode, agent_id, worker_id, oplog_before_recovery));
+        probes.push((
+            mode,
+            agent_id,
+            worker_id,
+            oplog_before_recovery,
+            (newest, older),
+        ));
     }
 
     drop(executor);
@@ -1197,21 +1273,26 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
     )
     .await?;
 
-    for (mode, agent_id, worker_id, oplog_before_recovery) in probes {
+    for (mode, agent_id, worker_id, oplog_before_recovery, (newest, older)) in probes {
         let mut events = executor.capture_output(&worker_id).await?;
         executor.resume(&worker_id, false).await?;
-        assert_snapshot_recovery_failed(
+        let recovery = snapshot_recovery_fell_back(
             &mut events,
             "Read-only agent method attempted a side effect",
         )
         .await;
+        assert_eq!(
+            recovery,
+            (newest, older),
+            "{mode}: only the failing latest snapshot is rejected, and the start loads the older one"
+        );
         executor
             .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(10))
             .await?;
         assert_eq!(
             executor.oplog_max_index(&worker_id).await?,
             oplog_before_recovery,
-            "{mode}: failed snapshot loading and full replay must not write to the oplog"
+            "{mode}: the rejected snapshot and the replay after the older one must not write to the oplog"
         );
 
         let status = executor
@@ -1226,22 +1307,29 @@ async fn snapshot_load_rejects_write_http_and_rpc_and_falls_back_to_full_replay(
             .into_typed::<String>()?;
         let status: SnapshotLoadProbeStatus = serde_json::from_str(&status)?;
 
-        assert_eq!(status.value, 2, "{mode}: full replay should restore state");
-        assert_eq!(status.loaded_value, None, "{mode}: no partial load state");
-        assert_eq!(status.origin, "initialized", "{mode}: constructor replay");
+        assert_eq!(
+            status.value, 2,
+            "{mode}: the older snapshot and the replay after it restore state"
+        );
+        assert_eq!(
+            status.loaded_value,
+            Some(1),
+            "{mode}: the older snapshot was loaded"
+        );
+        assert_eq!(status.origin, "restored", "{mode}: snapshot restore");
         assert_eq!(status.mode, mode);
         assert_eq!(status.config_marker, config_marker);
         assert_eq!(
-            status.read_bytes, 0,
-            "{mode}: failed component was discarded"
+            status.read_bytes, 4,
+            "{mode}: the load of the older snapshot read its bytes"
         );
         assert_eq!(
-            status.constructor_calls_now, 1,
-            "{mode}: full replay ran init"
+            status.constructor_calls_now, 0,
+            "{mode}: the start from the older snapshot ran no constructor"
         );
         assert_eq!(
-            status.load_calls_now, 0,
-            "{mode}: failed load state was discarded"
+            status.load_calls_now, 1,
+            "{mode}: the failed load state was discarded, and the older snapshot loaded once"
         );
     }
 
@@ -1776,14 +1864,20 @@ async fn rust_default_json_snapshot_recovery_across_multiple_restarts(
     Ok(())
 }
 
+/// On an executor without filesystem snapshots, `SqliteSnapshotAgent` takes no periodic snapshot:
+/// its constructor writes the file of its file-backed database, so the tree differs from its
+/// initial files, and a start from a record without a name would not get the file back. The
+/// restart replays the whole oplog, which rebuilds the databases.
 #[test]
 #[tracing::instrument]
-async fn ts_sqlite_multipart_snapshot_recovery(
+async fn ts_sqlite_file_database_without_filesystem_snapshots_takes_no_snapshot_and_replays(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use futures::StreamExt as _;
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -1791,17 +1885,13 @@ async fn ts_sqlite_multipart_snapshot_recovery(
         .component_dep(&context.default_environment_id, constructor_parameter_echo)
         .store()
         .await?;
-    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-recovery");
+    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-no-filesystem-snapshots");
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Insert data into both databases and set a label
     executor
         .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("banana"))
         .await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
@@ -1809,228 +1899,143 @@ async fn ts_sqlite_multipart_snapshot_recovery(
     executor
         .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
         .await?;
-
     let state_before = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
+    // The snapshot after an invocation, and its check, run after the invocation returned to the
+    // caller, so the test waits for the checks.
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        std::pin::pin!(
+            futures::stream::repeat(())
+                .then(|()| tokio::time::sleep(Duration::from_millis(50)))
+                .filter(|()| std::future::ready(executor.filesystem_captures("changed") >= 2))
+        )
+        .next(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("fewer than two checks found a changed tree"))?;
 
-    let state_before_str = state_before.clone().into_typed::<String>()?;
-    let state_before_json: serde_json::Value = serde_json::from_str(&state_before_str)?;
-    assert_eq!(state_before_json["label"], "after-init");
-    assert_eq!(
-        state_before_json["items"],
-        serde_json::json!(["apple", "banana"])
-    );
-    assert_eq!(state_before_json["logs"], serde_json::json!(["started"]));
-
-    // Verify multipart snapshots exist in the oplog
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     let snapshots: Vec<_> = oplog
         .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Snapshot(params) => Some(params.clone()),
-            _ => None,
-        })
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .map(|entry| entry.oplog_index)
         .collect();
-    assert!(
-        !snapshots.is_empty(),
-        "Expected at least one snapshot before restart"
-    );
 
-    // Verify snapshots are multipart with the expected structure
-    let last_snapshot = snapshots.last().unwrap();
-    match &last_snapshot.data {
-        PublicSnapshotData::Multipart(multipart) => {
-            assert!(
-                multipart.mime_type.starts_with("multipart/mixed"),
-                "Expected multipart/mixed mime type, got '{}'",
-                multipart.mime_type
-            );
-
-            // Should have a state part (JSON) and two db parts
-            let state_parts: Vec<_> = multipart
-                .parts
-                .iter()
-                .filter(|p| p.name == "state")
-                .collect();
-            assert_eq!(state_parts.len(), 1, "Expected exactly one 'state' part");
-            match &state_parts[0].data {
-                MultipartPartData::Json(json) => {
-                    let state = json
-                        .data
-                        .get("state")
-                        .expect("State JSON should contain 'state' envelope");
-                    assert!(
-                        state.get("label").is_some(),
-                        "State JSON 'state' should contain 'label'"
-                    );
-                }
-                other => panic!("Expected JSON data for state part, got {:?}", other),
-            }
-
-            let db_parts: Vec<_> = multipart
-                .parts
-                .iter()
-                .filter(|p| p.name.starts_with("db:"))
-                .collect();
-            assert_eq!(
-                db_parts.len(),
-                2,
-                "Expected 2 database parts (memDb and fileDb), got {}",
-                db_parts.len()
-            );
-
-            for db_part in &db_parts {
-                assert_eq!(db_part.content_type, "application/x-sqlite3");
-                match &db_part.data {
-                    MultipartPartData::Raw(raw) => {
-                        assert!(
-                            !raw.data.is_empty(),
-                            "Database part '{}' should not be empty",
-                            db_part.name
-                        );
-                    }
-                    other => panic!(
-                        "Expected Raw data for db part '{}', got {:?}",
-                        db_part.name, other
-                    ),
-                }
-            }
-        }
-        other => panic!(
-            "Expected Multipart snapshot but got {:?}",
-            std::mem::discriminant(other)
-        ),
-    }
-
-    // Restart the executor — this triggers snapshot-based recovery
     drop(executor);
     let executor = start(deps, &context).await?;
     let mut events = executor.capture_output(&worker_id).await?;
 
-    // Verify state is preserved after recovery
     let state_after = executor
         .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
         .await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
+    let recoveries: Vec<String> = tokio::time::timeout(
+        Duration::from_secs(10),
+        futures::stream::poll_fn(|context| events.poll_recv(context))
+            .filter_map(|event| std::future::ready(AgentEvent::try_from(event).ok()))
+            .take_while(|event| {
+                std::future::ready(!matches!(event, AgentEvent::InvocationFinished { .. }))
+            })
+            .filter_map(|event| {
+                std::future::ready(match event {
+                    AgentEvent::SnapshotRecoveryFailed { snapshot_index, .. } => {
+                        Some(format!("failed at {snapshot_index}"))
+                    }
+                    AgentEvent::SnapshotRecoverySucceeded { snapshot_index, .. } => {
+                        Some(format!("loaded at {snapshot_index}"))
+                    }
+                    _ => None,
+                })
+            })
+            .collect(),
+    )
+    .await?;
 
-    assert_eq!(
-        state_before, state_after,
-        "Agent state (including SQLite databases) should be preserved across restart"
+    assert!(
+        snapshots.is_empty(),
+        "a periodic snapshot was taken after the database file existed: {snapshots:?}"
     );
-
-    // Add more data after recovery to verify databases are functional
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("cherry"))
-        .await?;
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
-        .await?;
-
-    let state_after_more = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-
-    let state_after_str = state_after_more.into_typed::<String>()?;
-    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
-    assert_eq!(state_after_json["label"], "after-init");
-    assert_eq!(
-        state_after_json["items"],
-        serde_json::json!(["apple", "banana", "cherry"])
-    );
-    assert_eq!(
-        state_after_json["logs"],
-        serde_json::json!(["started", "recovered"])
-    );
-
+    assert_eq!(state_before, state_after);
+    assert!(recoveries.is_empty(), "{recoveries:?}");
     executor.check_oplog_is_queryable(&worker_id).await?;
-
+    assert_eq!(
+        invocation_shape(&executor.stored_oplog(&worker_id).await),
+        InvocationShape::settled()
+    );
     drop(executor);
     Ok(())
 }
 
-/// `SqliteSnapshotAgent` snapshots every second invocation (the constructor counts as one), so the
-/// final `getState` below is recorded after the last snapshot and gets replayed on top of the
-/// restored SQLite databases after the restart. Reading the file-backed database from the restored
-/// connection must issue the same host calls as the live connection did, otherwise the replayed tail
-/// diverges from the oplog.
+/// The snapshot entries in the oplog of `agent_id`.
+async fn snapshot_count(
+    executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
+    agent_id: &AgentId,
+) -> anyhow::Result<usize> {
+    Ok(executor
+        .get_oplog(agent_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_)))
+        .count())
+}
+
+/// With a policy that takes a snapshot after each invocation, an ephemeral agent whose definition
+/// enables snapshots takes none, and a durable agent of the same component still takes snapshots.
+/// The executor keeps no filesystem snapshots, so each snapshot checks the tree of its agent after
+/// the save hook: a check count of zero shows that no snapshot of the ephemeral agent ran.
 #[test]
 #[tracing::instrument]
-async fn ts_sqlite_snapshot_recovery_replays_invocations_after_the_snapshot(
+async fn an_ephemeral_agent_takes_no_snapshot_and_a_durable_agent_does(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("constructor_parameter_echo")] constructor_parameter_echo: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
-
+    let executor = start_with_snapshot_policy(
+        deps,
+        &context,
+        SnapshotPolicy::EveryNInvocation { count: 1 },
+    )
+    .await?;
     let component = executor
-        .component_dep(&context.default_environment_id, constructor_parameter_echo)
+        .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
-    let agent_id = agent_id!("SqliteSnapshotAgent", "sqlite-tail-replay");
-    let worker_id = executor
-        .start_agent(&component.id, agent_id.clone())
+    let checks = || {
+        ["initial_files", "changed", "captured", "unchanged"]
+            .map(|outcome| executor.filesystem_captures(outcome))
+            .into_iter()
+            .sum::<u64>()
+    };
+    let ephemeral = agent_id!("EphemeralSnapshotCounter", "no-snapshot");
+    executor
+        .start_agent(&component.id, ephemeral.clone())
         .await?;
 
     executor
-        .invoke_and_await_agent(&component, &agent_id, "addItem", data_value!("apple"))
+        .invoke_and_await_agent(&component, &ephemeral, "increment", data_value!())
         .await?;
     executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("started"))
+        .invoke_and_await_agent(&component, &ephemeral, "increment", data_value!())
+        .await?;
+    // The snapshot after an invocation runs after the invocation returned to the caller.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let ephemeral_checks = checks();
+    let durable = agent_id!("SnapshotCounter", "snapshots");
+    let durable_id = executor.start_agent(&component.id, durable.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &durable, "increment", data_value!())
         .await?;
     executor
-        .invoke_and_await_agent(&component, &agent_id, "setLabel", data_value!("after-init"))
+        .invoke_and_await_agent(&component, &durable, "increment", data_value!())
         .await?;
-    let state_before = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let last_snapshot_position = oplog
-        .iter()
-        .rposition(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
-        .expect("Expected a snapshot before restart");
-    assert!(
-        oplog[last_snapshot_position..]
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-        "Expected an invocation recorded after the last snapshot"
-    );
-
-    drop(executor);
-    let executor = start(deps, &context).await?;
-    let mut events = executor.capture_output(&worker_id).await?;
-
-    let state_after = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
-
-    assert_eq!(
-        state_before, state_after,
-        "Agent state should be preserved by the snapshot and the replayed tail"
-    );
-
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "addLog", data_value!("recovered"))
-        .await?;
-    let state_after_more = executor
-        .invoke_and_await_agent(&component, &agent_id, "getState", data_value!())
-        .await?;
-
-    let state_after_str = state_after_more.into_typed::<String>()?;
-    let state_after_json: serde_json::Value = serde_json::from_str(&state_after_str)?;
-    assert_eq!(state_after_json["label"], "after-init");
-    assert_eq!(state_after_json["items"], serde_json::json!(["apple"]));
-    assert_eq!(
-        state_after_json["logs"],
-        serde_json::json!(["started", "recovered"])
-    );
-
-    executor.check_oplog_is_queryable(&worker_id).await?;
-
+    assert_eq!(ephemeral_checks, 0);
+    assert!(snapshot_count(&executor, &durable_id).await? >= 1);
+    assert!(checks() >= 1);
     drop(executor);
     Ok(())
 }

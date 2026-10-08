@@ -20,7 +20,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder,
+    ReservedRawStartBuilder, StagePublication,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -734,11 +734,11 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        stage_id: uuid::Uuid,
+        publication: StagePublication,
         expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         self.inner
-            .publish_staged(owned_agent_id, agent_mode, stage_id, expected_last_index)
+            .publish_staged(owned_agent_id, agent_mode, publication, expected_last_index)
             .await
     }
 
@@ -1443,6 +1443,34 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
+    fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
+        let forwarding_retired = self.forwarding_retired.clone();
+        let inner = self.inner.executor_shutdown_handle();
+        let close_forwarding_retired = forwarding_retired.clone();
+        let close_inner = inner.clone();
+        let jobs = self.jobs.clone();
+        let closed = self.closed();
+        super::OplogShutdownHandle::new(
+            move || {
+                inner.fence();
+                forwarding_retired.cancel();
+            },
+            move || {
+                let forwarding_retired = close_forwarding_retired.clone();
+                let jobs = jobs.clone();
+                let closed = closed.clone();
+                let inner = close_inner.clone();
+                async move {
+                    forwarding_retired.cancel();
+                    let _ = jobs.send(ForwardingJob::Close);
+                    let local = closed.await;
+                    local.and(inner.close_and_wait().await)
+                }
+                .boxed()
+            },
+        )
+    }
+
     fn retire(&self) {
         self.fence_forwarding();
         if let Some(timer) = &self.timer {
@@ -2773,7 +2801,7 @@ mod tests {
             }
             if self
                 .failed_sends_remaining
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::Relaxed,
                     std::sync::atomic::Ordering::Relaxed,
                     |remaining| remaining.checked_sub(1),
@@ -2850,7 +2878,7 @@ mod tests {
             async move { oplog.commit(CommitLevel::Always).await }
         });
         entered.notified().await;
-        oplog.fence_forwarding();
+        oplog.executor_shutdown_handle().fence();
         oplog.drain_forwarding().await;
         let committed = commit.await.unwrap().unwrap();
         assert_eq!(committed.len(), 3);
@@ -2866,6 +2894,59 @@ mod tests {
         assert_eq!(cleanup.len(), 1);
         assert_eq!(plugin.send_count().await, 1);
         assert_eq!(oplog.current_oplog_index().await, OplogIndex::from_u64(4));
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn stale_forwarding_shutdown_fence_does_not_stop_replacement() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (old_metadata, old_status) = test_worker_metadata(HashSet::new());
+        let old = Arc::new(
+            ForwardingOplog::new(
+                Arc::new(InMemoryOplog::new()),
+                Arc::new(RecordingOplogProcessorPlugin::new()),
+                Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                    grant_id,
+                )),
+                old_metadata,
+                old_status,
+                OplogIndex::NONE,
+                Box::new(|| {}),
+                usize::MAX,
+                Duration::from_secs(3600),
+            )
+            .await,
+        );
+        let stale_shutdown = old.executor_shutdown_handle();
+        let weak = Arc::downgrade(&old);
+        let (new_metadata, new_status) = test_worker_metadata(HashSet::new());
+        let replacement = ForwardingOplog::new(
+            Arc::new(InMemoryOplog::new()),
+            Arc::new(RecordingOplogProcessorPlugin::new()),
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                grant_id,
+            )),
+            new_metadata,
+            new_status,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+
+        drop(old);
+        assert!(weak.upgrade().is_none());
+        stale_shutdown.fence();
+        stale_shutdown.fence();
+        stale_shutdown.close_and_wait().await.unwrap();
+
+        assert!(!replacement.forwarding_retired.is_cancelled());
+        assert_eq!(
+            replacement.add(OplogEntry::no_op(None)).await.unwrap(),
+            OplogIndex::INITIAL
+        );
+        replacement.commit(CommitLevel::Always).await.unwrap();
     }
 
     #[test]
@@ -2919,6 +3000,43 @@ mod tests {
             );
             assert_eq!(plugin.send_count().await, 0);
         }
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn executor_shutdown_rejects_post_fence_ticks_and_closes_the_forwarding_generation() {
+        let grant_id = EnvironmentPluginGrantId::new();
+        let (metadata, status) = test_worker_metadata(HashSet::from([grant_id]));
+        let plugin = Arc::new(RecordingOplogProcessorPlugin::new());
+        let inner = Arc::new(InMemoryOplog::new());
+        let oplog = ForwardingOplog::new(
+            inner.clone(),
+            plugin.clone(),
+            Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+                grant_id,
+            )),
+            metadata,
+            status,
+            OplogIndex::NONE,
+            Box::new(|| {}),
+            usize::MAX,
+            Duration::from_secs(3600),
+        )
+        .await;
+        oplog.add(OplogEntry::no_op(None)).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        let shutdown = oplog.executor_shutdown_handle();
+        shutdown.fence();
+        oplog.tick().await;
+        assert_eq!(plugin.send_count().await, 0);
+        assert_eq!(*inner.current_idx.lock().unwrap(), OplogIndex::INITIAL);
+
+        shutdown.close_and_wait().await.unwrap();
+
+        assert!(oplog.is_retired());
+        assert_eq!(plugin.send_count().await, 0);
+        assert_eq!(*inner.current_idx.lock().unwrap(), OplogIndex::INITIAL);
     }
 
     #[test]

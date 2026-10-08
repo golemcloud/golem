@@ -1331,7 +1331,7 @@ impl ComponentCommandHandler {
             }
         }
         for (_, _, targets) in app.bridge_sdks().for_all_used_modes() {
-            let Some(tool_targets) = targets.tools else {
+            let Some(tool_targets) = targets.tools.as_ref() else {
                 continue;
             };
             let matchers = tool_targets.clone().into_set();
@@ -3800,6 +3800,56 @@ mod tool_binding_tests {
             golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
                 CanonicalAgentConfigPath(vec!["service".to_string(), "apiKey".to_string()]),
             ]))
+        );
+    }
+
+    #[test]
+    fn config_scope_layers_only_narrow_inherited_authority() {
+        use golem_common::model::tool::ConfigKeyScope;
+
+        let keys = |paths: &[&str]| {
+            ManifestConfigKeyScope::Keys(paths.iter().map(|path| path.to_string()).collect())
+        };
+        let resolve = |layers: Vec<ManifestConfigKeyScope>| {
+            let mut issues = Vec::new();
+            let scope = resolve_config_scope(
+                &mut issues,
+                &layers,
+                ToolEntityPath::tool("probe", "tools.probe.configKeysReadable"),
+                Some(Path::new("golem.yaml")),
+            );
+            assert!(issues.is_empty());
+            scope
+        };
+        let expected = |paths: &[&str]| {
+            ConfigKeyScope::Keys(
+                paths
+                    .iter()
+                    .map(|path| CanonicalAgentConfigPath(vec![path.to_string()]))
+                    .collect(),
+            )
+        };
+
+        assert_eq!(resolve(vec![]), ConfigKeyScope::All);
+        assert_eq!(
+            resolve(vec![keys(&["allowed", "shared"])]),
+            expected(&["allowed", "shared"])
+        );
+        assert_eq!(resolve(vec![keys(&[])]), expected(&[]));
+        assert_eq!(
+            resolve(vec![
+                keys(&["allowed"]),
+                ManifestConfigKeyScope::All("*".to_string())
+            ]),
+            expected(&["allowed"]),
+            "a later wildcard must not broaden a concrete inherited scope"
+        );
+        assert_eq!(
+            resolve(vec![
+                keys(&["allowed", "shared"]),
+                keys(&["shared", "extra"])
+            ]),
+            expected(&["shared"])
         );
     }
 
