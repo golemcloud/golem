@@ -813,68 +813,30 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 &owned_source_agent_id.agent_id,
                 &owned_target_agent_id.agent_id,
             );
-            let entry_size = if let OplogEntry::Start {
-                function_name:
-                    golem_common::model::oplog::host_functions::HostFunctionName::GolemEntityInvoke,
-                request,
-                ..
-            } = &mut entry
-            {
-                let (rewritten, external_bytes) = async {
-                    let request = request.as_ref().ok_or("entity Start has no request")?;
-                    payload::copy_entity_request(
-                        request,
-                        &owned_source_agent_id.agent_id,
-                        &owned_target_agent_id.agent_id,
-                        |payload_id, md5_hash| {
-                            self.oplog_service.download_raw_payload(
-                                &owned_source_agent_id,
-                                agent_mode,
-                                payload_id,
-                                md5_hash,
-                            )
-                        },
-                        |bytes| new_oplog.upload_raw_payload(bytes),
-                    )
-                    .await
-                }
-                .await
-                .map_err(|error: String| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed rebinding fork entity at oplog index {oplog_index}: {error}"
-                    ))
-                })?;
-                external_payload_bytes.fetch_add(external_bytes, Ordering::Relaxed);
-                *request = Some(rewritten);
+            copied_bytes = copied_bytes.saturating_add(
                 golem_common::serialization::serialize(&entry)
                     .map_err(WorkerExecutorError::runtime)?
-                    .len() as u64
-            } else {
-                let entry_size = golem_common::serialization::serialize(&entry)
-                    .map_err(WorkerExecutorError::runtime)?
-                    .len() as u64;
-                payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| {
-                    let new_oplog = &new_oplog;
-                    let source = &owned_source_agent_id;
-                    let external_payload_bytes = external_payload_bytes.clone();
-                    async move {
-                        let bytes = self
-                            .oplog_service
-                            .download_raw_payload(source, agent_mode, payload_id, md5_hash)
-                            .await?;
-                        external_payload_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-                        new_oplog.upload_raw_payload(bytes).await
-                    }
-                })
-                .await
-                .map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "Failed copying fork payload at oplog index {oplog_index}: {error}"
-                    ))
-                })?;
-                entry_size
-            };
-            copied_bytes = copied_bytes.saturating_add(entry_size);
+                    .len() as u64,
+            );
+            payload::copy_entry_payloads(&mut entry, |payload_id, md5_hash| {
+                let new_oplog = &new_oplog;
+                let source = &owned_source_agent_id;
+                let external_payload_bytes = external_payload_bytes.clone();
+                async move {
+                    let bytes = self
+                        .oplog_service
+                        .download_raw_payload(source, agent_mode, payload_id, md5_hash)
+                        .await?;
+                    external_payload_bytes.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+                    new_oplog.upload_raw_payload(bytes).await
+                }
+            })
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed copying fork payload at oplog index {oplog_index}: {error}"
+                ))
+            })?;
             let counted_bytes =
                 copied_bytes.saturating_add(external_payload_bytes.load(Ordering::Relaxed));
             if max_copied_bytes.is_some_and(|limit| counted_bytes > limit) {
