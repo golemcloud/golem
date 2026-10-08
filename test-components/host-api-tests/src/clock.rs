@@ -3,17 +3,51 @@ use golem_rust::{agent_definition, agent_implementation};
 use std::thread;
 use std::time::Duration;
 
+async fn race_p3_sleeps_impl(secs: Vec<u64>) -> u64 {
+    let waits: Vec<_> = secs
+        .into_iter()
+        .map(|secs| async move {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+                secs.saturating_mul(1_000_000_000),
+            )
+            .await;
+            secs
+        })
+        .collect();
+    waits.race().await
+}
+
+async fn race_promise_and_p3_sleep_impl(secs: u64) -> String {
+    let promise_id = golem_rust::create_promise();
+    let promise = async {
+        golem_rust::await_promise(&promise_id).await;
+        "promise".to_string()
+    };
+    let timer = async {
+        golem_rust::wasip3::clocks::monotonic_clock::wait_for(secs.saturating_mul(1_000_000_000))
+            .await;
+        "timer".to_string()
+    };
+    (promise, timer).race().await
+}
+
 #[agent_definition]
 pub trait Clock {
     fn new(name: String) -> Self;
     fn sleep(&self, secs: u64) -> Result<(), String>;
     async fn sleep_p3(&self, secs: u64) -> bool;
+    async fn race_p3_sleeps(&self, secs: Vec<u64>) -> u64;
+    async fn race_promise_and_p3_sleep(&self, secs: u64) -> String;
+    async fn polling_loop_vs_watchdog(&self) -> String;
     fn healthcheck(&self) -> bool;
     async fn sleep_during_request(&self, secs: u64) -> String;
     async fn sleep_during_parallel_requests(&self, secs: u64) -> String;
     async fn sleep_between_requests(&self, secs: u64, n: u64) -> String;
     async fn jump_during_request(&self) -> String;
     async fn p2_sleep_during_request(&self, secs: u64) -> String;
+    fn p2_poll_duplicate_handles(&self, later_millis: u64, early_millis: u64) -> String;
+    fn p2_file_pollables(&self, contents: String) -> String;
+    async fn p2_clock_during_request(&self) -> String;
 }
 
 pub struct ClockImpl {
@@ -37,8 +71,42 @@ impl Clock for ClockImpl {
         true
     }
 
+    async fn race_p3_sleeps(&self, secs: Vec<u64>) -> u64 {
+        race_p3_sleeps_impl(secs).await
+    }
+
+    async fn race_promise_and_p3_sleep(&self, secs: u64) -> String {
+        race_promise_and_p3_sleep_impl(secs).await
+    }
+
+    async fn polling_loop_vs_watchdog(&self) -> String {
+        let flag = std::cell::Cell::new(false);
+        let set_flag = async {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(3_000_000_000).await;
+            flag.set(true);
+        };
+        let poll = async {
+            while !flag.get() {
+                golem_rust::wasip3::clocks::monotonic_clock::wait_for(100_000_000).await;
+            }
+            "flag".to_string()
+        };
+        let watchdog = async {
+            golem_rust::wasip3::clocks::monotonic_clock::wait_for(600_000_000_000).await;
+            "watchdog".to_string()
+        };
+        let (_, result) = (set_flag, (poll, watchdog).race()).join().await;
+        result
+    }
+
     fn healthcheck(&self) -> bool {
         true
+    }
+
+    async fn p2_clock_during_request(&self) -> String {
+        let clock = async { wasi::clocks::wall_clock::now() };
+        let (response, _) = (send_request(), clock).join().await;
+        response.unwrap()
     }
 
     async fn sleep_during_request(&self, secs: u64) -> String {
@@ -129,6 +197,65 @@ impl Clock for ClockImpl {
         };
         let (request_result, sleep_result) = (request, sleep).join().await;
         format!("{request_result}, {sleep_result}")
+    }
+
+    fn p2_file_pollables(&self, contents: String) -> String {
+        use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
+
+        let (root, _) = wasi::filesystem::preopens::get_directories()
+            .into_iter()
+            .next()
+            .unwrap();
+        let file = root
+            .open_at(
+                PathFlags::empty(),
+                "p2-pollables.txt",
+                OpenFlags::CREATE,
+                DescriptorFlags::READ | DescriptorFlags::WRITE,
+            )
+            .unwrap();
+        let offset = file.stat().unwrap().size;
+        let output = file.write_via_stream(offset).unwrap();
+        let writable = output.subscribe();
+        writable.block();
+        let write_ready = writable.ready();
+        output
+            .blocking_write_and_flush(contents.as_bytes())
+            .unwrap();
+        drop(writable);
+        drop(output);
+
+        let input = file.read_via_stream(0).unwrap();
+        let readable = input.subscribe();
+        readable.block();
+        let read_ready = readable.ready();
+        // Read in unequal chunks to exercise stream position independently of write size.
+        let mut bytes = input.blocking_read(2).unwrap();
+        while bytes.len() < (offset as usize + contents.len()) {
+            bytes.extend(input.blocking_read(3).unwrap());
+        }
+        format!(
+            "{write_ready};{read_ready};{}",
+            String::from_utf8(bytes).unwrap()
+        )
+    }
+
+    fn p2_poll_duplicate_handles(&self, later_millis: u64, early_millis: u64) -> String {
+        use wasi::clocks::monotonic_clock::subscribe_duration;
+        use wasi::io::poll::poll;
+
+        let later = subscribe_duration(later_millis.saturating_mul(1_000_000));
+        let early = subscribe_duration(early_millis.saturating_mul(1_000_000));
+        let first = poll(&[&later, &early, &early]);
+        let early_again = poll(&[&early, &early]);
+        drop(early);
+        let later_ready = poll(&[&later]);
+        let later_again = poll(&[&later]);
+        drop(later);
+        let replacement = subscribe_duration(0);
+        let replacement_ready = poll(&[&replacement]);
+
+        format!("{first:?};{early_again:?};{later_ready:?};{later_again:?};{replacement_ready:?}")
     }
 }
 

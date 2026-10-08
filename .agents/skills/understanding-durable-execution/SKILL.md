@@ -88,8 +88,8 @@ something from the right column to survive a restart is wrong. Sockets and other
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
 must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
 coordination gate so concurrent calls cannot reconnect one handle twice (see
-"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
-wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
+wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
@@ -828,8 +828,25 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    never random.
 
 ### Pending RPC waits and proactive suspension
-Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
-this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+`OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
+participants (`worker/instance.rs`, `worker/suspension.rs`). A current runtime blocked witness
+is necessary but insufficient: every admitted participant must be accounted for, with no active
+outer poll or unclassified non-root work. Unknown work, preparation and borrowed synchronous
+RPC waits veto automatic suspension; raw sync RPC does not automatically suspend.
+Owned async RPC activities become eligible after their grace period; the owner rechecks while
+other work vetoes. Owned timers (including the narrow P2 timer-only poll/block dispatcher) and
+promises provide deadline/activation evidence. This is not general P2 readiness adaptation.
+Durable source reads bind to their exact runtime transfer activity and retain the read future.
+Only an established source wait can be passive: locally registered external inline input and
+its descendants veto suspension; agent-hosted input, invocation output and attached downstream
+waits can qualify with a durable timed recheck. Active journaling, publication and settlement
+are not passive waits. Root/result return alone is not idle.
+`RuntimeStore::drive` persists the earliest timed wake, then revalidates the same activity revision
+and eligibility before committing timestamped suspension. Activity changes invalidate stale
+evidence. Existing interrupt/retirement precedence and discard/replay reconstruction remain
+unchanged; there is no new cleanup or lifecycle protocol. Borrowed waits in
+`durable_host/suspendable_wait.rs` observe only readiness and interruption.
+See `reference/rpc-suspension.md` for timing and admission details.
 Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
 `tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
@@ -1182,8 +1199,20 @@ the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 ## Concurrency and guest completion delivery
 
-p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized
-(`concurrent/mod.rs`). Concurrent completions may finish in any host order, but the guest observes
+`Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
+the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
+exclusive because concurrent bindings cannot run during synchronous core initialization.
+Fresh clock/random value reads in the primary Store skip live wallet synchronization: their
+results require no permissions, and waiting for an accessor holding `card_event_boundary_lock`
+would retain the Store that accessor needs. The explicit allowlist is in `call_coordinator.rs`;
+`ReadLocal` alone does not imply permission independence. Snapshotting, retained recorded Starts,
+entity Stores and replay still use the ordinary boundary. An automatic-update latch prevents
+the exemption until update success is committed, including after the pending description is taken.
+Clock-only execution does not guarantee pending card-transfer progress. Permission-sensitive calls
+still synchronize. Replay-transition/cleanup lock contention is not eliminated by this exemption.
+WebSocket connect/send/close use accessor bindings so their asynchronous work releases the Store.
+WebSocket drop only removes local state and does not await boundary work.
+Concurrent completions may finish in any host order, but the guest observes
 them in exactly one order per run, and that order is recorded by the `CompletionDelivered` markers.
 `ReplayDeliveryBarrier` transfers the cursor gate so replay releases each completion at its
 recorded boundary. `supersede_prior_completion_delivery` hard-errors if an observer is still armed:
@@ -1206,8 +1235,8 @@ Cursor operations and recorded-marker waits stay active; durable `Start`/`End` w
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
 per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
-handle goes through `ensure_websocket_connection_live` (direct) or
-`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+handle goes through `ensure_websocket_connection_live_access` in
+`durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
 still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
@@ -1262,7 +1291,15 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 
 Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
 resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
-mappings. Export forks also append `ExportForkInitialized`, which binds their new public session ID,
+mappings. Entity-invocation requests do not record the internal calling principal: live execution
+and replay derive it from the current owner, including every middleware and leaf invocation.
+Request matching still checks entity, operation, call mode, input and descendant plan position.
+The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
+from authoritative contents under the target without decoding or re-encoding them. Cached external
+values are not a substitute for copying durable bytes. Repeated forks derive the new owner without
+rewriting historical guest observations or logical RPC origins.
+Export forks also append `ExportForkInitialized`, which binds their new public session ID,
 fresh invocation key and expiry policy. Revert raises the generation/epoch fence before reconstruction,
 so handles issued by the discarded generation cannot control the rebuilt streams. Export targets
 are built in hidden staged oplogs and published atomically; matching retries trust the immutable

@@ -635,6 +635,8 @@ pub struct DeploymentDisplayHttpMount {
     pub webhook: Option<String>,
     pub phantom_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub phantom_id_binding: Option<golem_common::model::agent::PhantomIdBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cors: Vec<String>,
@@ -1169,6 +1171,7 @@ fn display_http_mount(http_mount: &HttpMountDetails) -> DeploymentDisplayHttpMou
         webhook: (!http_mount.webhook_suffix.is_empty())
             .then(|| render_path(&http_mount.webhook_suffix)),
         phantom_agent: http_mount.phantom_agent,
+        phantom_id_binding: http_mount.phantom_id_binding.clone(),
         auth_required: http_mount.auth_details.as_ref().map(|auth| auth.required),
         cors: http_mount.cors_options.allowed_patterns.clone(),
     }

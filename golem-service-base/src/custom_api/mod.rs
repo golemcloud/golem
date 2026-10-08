@@ -580,7 +580,7 @@ pub struct CallAgentBehaviour {
     /// parameters.
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
-    pub phantom: bool,
+    pub phantom_selection: PhantomSelection,
     pub method_name: String,
     /// Self-contained schema of the agent method input. Used by the runtime to
     /// reconstruct the full positional `SchemaValue::Record` from the bound
@@ -597,6 +597,15 @@ pub struct CallAgentBehaviour {
     /// handle `If-None-Match` revalidation for `GET`/`HEAD` requests.
     #[desert(default)]
     pub read_only: Option<ReadOnlyConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum PhantomSelection {
+    Policy { phantom: bool },
+    Original,
+    Path { index: SafeIndex },
+    Query { name: String, optional: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BinaryCodec)]

@@ -66,16 +66,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let result = handle
             .run(self, async |ctx| -> wasmtime::Result<_> {
-                let result = {
-                    let mut view = ctx.as_wasi_view();
-                    Host::resolution(&mut view.clocks()).await?
-                };
-                Ok(HostResponseWallClock {
-                    time: result.into(),
-                })
+                let mut view = ctx.as_wasi_view();
+                let time = Host::resolution(&mut view.clocks()).await?;
+                Ok(HostResponseWallClock { time: time.into() })
             })
             .await?;
-
         Ok(result.time.into())
     }
 }
