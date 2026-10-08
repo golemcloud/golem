@@ -1120,8 +1120,8 @@ impl DurableStreamStore {
                 records
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let AppliedWriteBatch {
             events: item_events,
@@ -1238,7 +1238,8 @@ impl DurableStreamStore {
                         StreamSessionRecord::ExternalProducerState(record) => {
                             index.apply_external_producer_state(&record);
                         }
-                        StreamSessionRecord::InputHighWater(_) => {}
+                        StreamSessionRecord::InputHighWater(_)
+                        | StreamSessionRecord::ExpiryRefreshed(_) => {}
                         _ => unreachable!("write batch contains an unrelated session record"),
                     }
                 }

@@ -11,7 +11,7 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
         #|pub fn HTTPAPI::http_api() -> String { "root" }
         #|pub fn HTTPAPI::list_items(limit : Int) -> Array[String] { [] }
         #|
-        #|#derive.tool("custom", version="2.0.0")
+        #|#derive.tool("custom", version="2.0.0", requires_filesystem=true)
         #|struct CustomTool {}
         #|
         #|#derive.tool
@@ -29,7 +29,9 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "HTTPAPI",
       #|    name: "httpapi",
+      #|    aliases: [],
       #|    version: None,
+      #|    requires_filesystem: false,
       #|    description: "HTTP API tool.",
       #|    examples: [],
       #|    commands: [
@@ -83,7 +85,9 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "CustomTool",
       #|    name: "custom",
+      #|    aliases: [],
       #|    version: Some("2.0.0"),
+      #|    requires_filesystem: true,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],
@@ -92,7 +96,9 @@ test "tool names, version, root, subcommand, and pure dispatcher" {
       #|  {
       #|    source_name: "EmptyDispatcher",
       #|    name: "empty-dispatcher",
+      #|    aliases: [],
       #|    version: None,
+      #|    requires_filesystem: false,
       #|    description: "",
       #|    examples: [],
       #|    commands: [],
@@ -119,7 +125,7 @@ test "tool metadata, hidden types, result, and constraints" {
         #|#derive.tool("tool")
         #|struct Tool {}
         #|
-        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> String { ... }
+        #|pub fn Tool::execute(path : String, principal : @common.Principal, input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> String { ... }
         #|
       ),
     ),
@@ -141,6 +147,57 @@ test "tool metadata, hidden types, result, and constraints" {
     ),
   )
   inspect(command.success_type is Some(_), content="true")
+}
+
+///|
+test "tool output channels are selected explicitly and independently" {
+  let tools = @lib.parse_tools([
+    (
+      "channels.mbt",
+      (
+        #|#derive.tool("channels")
+        #|struct Channels {}
+        #|#derive.arg("diagnostics", channel="stderr")
+        #|pub fn Channels::both(output : @tool.ProviderOutput, diagnostics : @tool.ProviderOutput) -> Unit { () }
+        #|#derive.arg("diagnostics", channel="stderr")
+        #|pub fn Channels::stderr_only(diagnostics : @tool.ProviderOutput) -> Unit { () }
+      ),
+    ),
+  ])
+  guard tools is [tool] else { fail("expected one parsed tool") }
+  guard tool.commands is [both, stderr_only] else {
+    fail("expected both output combinations")
+  }
+  debug_inspect(
+    both.params,
+    content=(
+      #|[
+      #|  ("output", Hidden(OutputStream)),
+      #|  ("diagnostics", Hidden(ErrorStream)),
+      #|]
+    ),
+  )
+  debug_inspect(
+    stderr_only.params,
+    content="[(\"diagnostics\", Hidden(ErrorStream))]",
+  )
+}
+
+///|
+test "tool output channel selectors reject invalid targets and duplicate roles" {
+  let non_output =
+    #|#derive.tool("channels")
+    #|struct Channels {}
+    #|#derive.arg("value", channel="stderr")
+    #|pub fn Channels::run(value : String) -> Unit { () }
+  assert_true(parse_error(non_output).contains("ProviderOutput"))
+  let duplicate =
+    #|#derive.tool("channels")
+    #|struct Channels {}
+    #|#derive.arg("first", channel="stderr")
+    #|#derive.arg("second", channel="stderr")
+    #|pub fn Channels::run(first : @tool.ProviderOutput, second : @tool.ProviderOutput) -> Unit { () }
+  assert_true(parse_error(duplicate).contains("duplicate stream parameters"))
 }
 
 ///|
@@ -166,7 +223,7 @@ test "typed raise and suberror variants" {
   )
   debug_inspect(
     tools[0].commands[0].errors[0].payload,
-    content="Some(Simple(\"String\"))",
+    content="Single(Simple(\"String\"))",
   )
   debug_inspect(tools[0].commands[0].errors[0].payload_label, content="None")
 }
@@ -182,6 +239,10 @@ test "labelled tool error payload" {
     #|  Broken(message~ : String)
     #|}
   let tools = @lib.parse_tools([("tool.mbt", source)])
+  debug_inspect(
+    tools[0].commands[0].errors[0].payload,
+    content="Single(Simple(\"String\"))",
+  )
   debug_inspect(
     tools[0].commands[0].errors[0].payload_label,
     content="Some(\"message\")",

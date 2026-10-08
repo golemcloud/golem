@@ -1,11 +1,11 @@
 ---
 name: creating-new-builtin-plugins
-description: Adds a built-in WASM plugin that is embedded in and provisioned by the registry service. Use when creating a plugin that ships with Golem and is granted to every environment.
+description: Adds a built-in WASM plugin that is externally released and provisioned by the registry service. Use when creating a plugin that ships with Golem and is granted to every environment.
 ---
 
 # Creating a New Built-in Plugin
 
-Use `plugins/otlp-exporter/` and `golem-registry-service/src/services/builtin_plugin_provisioner.rs` as the source of truth. Built-in plugins are standalone Golem applications whose committed WASM is embedded directly in the **registry-service binary**. Embedding keeps provisioning self-contained in every registry-service deployment; the CLI, bootstrap, and test framework do not load plugin paths or bytes.
+Use `plugins/otlp-exporter/`, `builtin-artifacts.lock.json`, and the registry plugin provisioner as the source of truth. Built-in plugins are standalone Golem applications whose generated WASMs are published as immutable assets in `golemcloud/golem-builtins`. The registry verifies, caches, and provisions those assets at startup.
 
 ## Workflow
 
@@ -37,10 +37,11 @@ golem_rust::oplog_processor::export_oplog_processor!(MyPluginComponent with_type
 
 4. Add a release-profile `copy` custom command that writes `plugins/<plugin>.wasm` from the actual `golem-temp/agents/*_release.wasm` output.
 5. Extend `build-plugins` in `Makefile.toml`. Keep it as duckscript, resolve the local binary through `CARGO_MAKE_CRATE_TARGET_DIRECTORY`, and pass `--yes` to every `golem build` invocation. Never hardcode `target/` or use `cargo metadata` in the task.
-6. Run `cargo make build-plugins`. Confirm the destination exists, is non-empty, changed when expected, and validates with `wasm-tools validate --features all plugins/<plugin>.wasm`. Commit the WASM because `include_bytes!` requires it while compiling registry service.
-7. Add one `BuiltinPluginDescriptor` entry to `BUILTIN_PLUGINS` with component name, plugin name, version, description, and `include_bytes!("../../../plugins/<plugin>.wasm")`. Add descriptor behavior only if the plugin uses a new `PluginSpecDto` variant.
+6. Run `cargo make build-plugins`. Confirm the generated destination exists, is non-empty, changed when expected, and validates with `wasm-tools validate --features all plugins/<plugin>.wasm`. Do not commit it.
+7. Add one `BuiltinPluginDescriptor` entry with component name, artifact ID, plugin name, version, and description. Add the component name, independent artifact version, and SHA-256 under that artifact ID in `builtin-artifacts.lock.json`.
+8. Load `publishing-builtin-artifacts`, publish an independent immutable component version, and verify the pinned URL before merging.
 
-Do **not** add per-plugin fields, bytes, or paths to `BuiltinPluginsConfig`; it only selects `Enabled` or `Disabled`. Do not add bootstrap, CLI embedding, environment variables, or test-framework wiring. Bootstrap calls the descriptor-driven provisioner once.
+Do **not** add per-plugin fields, bytes, or paths to `BuiltinPluginsConfig`; it only selects `Enabled` or `Disabled`. Do not add `include_bytes!` or commit generated WASMs. Bootstrap calls the descriptor-driven provisioner once through the shared artifact cache.
 
 ## Provisioning and Grants
 
@@ -58,4 +59,4 @@ is revised.
 - `wasm-tools validate --features all plugins/<plugin>.wasm`
 - `cargo check -p golem-registry-service`
 - `cargo make integration-tests-group7` for built-in plugin provisioning/grant behavior (the authoritative task; it runs `otlp_plugin` and `plugins` serially)
-- Inspect `git diff -- plugins Makefile.toml golem-registry-service` and confirm the new WASM is tracked.
+- Run a dry-run publication and inspect `git diff -- plugins builtin-artifacts.lock.json Makefile.toml golem-registry-service`; confirm the generated WASM is ignored.

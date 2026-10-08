@@ -110,8 +110,22 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "grep""""))
     assert(content.contains("def apply(): GrepClient = apply(toolName)"))
     assert(content.contains("def apply(lookupName: _root_.scala.Predef.String): GrepClient = new Root(lookupName)"))
-    assert(content.contains("ToolRpcClient.transport(lookupName)"))
-    assert(content.contains("_root_.golem.runtime.macros.ToolDefinitionMacro.tryMetadata[Grep]"))
+    assert(content.contains("ToolRpcClient.wireTransport(lookupName)"))
+    assert(!content.contains("new _root_.golem.tool.AmbientToolCallBackend"))
+  }
+
+  test("root-package tool clients use a resolvable macro type argument") {
+    val source =
+      """import golem.runtime.annotations._
+        |
+        |@toolDefinition
+        |trait RootTool {
+        |  def run(value: String): String
+        |}
+        |""".stripMargin
+
+    val content = generate("RootTool.scala" -> source).files.head.content
+    assert(content.contains("WireToolMacro.inputGraph[RootTool]"))
   }
 
   test("drops Principal and stdout parameters and keeps stdin; stdout returns a started invocation") {
@@ -127,23 +141,22 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
       )
     )
     assert(content.contains("_root_.scala.Some(stdin)"))
-    assert(content.contains("ToolClientRuntime.start"))
-    assert(content.contains("decodeValueResult"))
+    assert(content.contains("WireToolClientRuntime.start"))
+    assert(content.contains("WireToolClientRuntime.decodeValue"))
   }
 
   test("the implicit-body root command invokes with an empty command path") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
     // `grep` is the tool's root command: no path element is appended
     assert(
-      content.contains("_root_.golem.tool.ToolClientRuntime.start(__transport, _root_.scala.Nil, __input")
+      content.contains("WireToolClientRuntime.start(__wireTransport, _root_.scala.Nil, __input")
     )
   }
 
   test("unwraps Future results and decodes typed errors through the derived error schema") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("private lazy val __errorSchema_GrepError: _root_.golem.tool.ToolErrorSchema[GrepError]"))
-    assert(content.contains("_root_.golem.runtime.macros.ToolErrorSchemaDerivation.derive[GrepError]"))
-    assert(content.contains("__errorSchema_GrepError.fromErrorValue(_)"))
+    assert(content.contains("ToolErrorSchemaDerivation.wireDecoder[GrepError]"))
+    assert(!content.contains("ConcreteCodec.derived[GrepError]"))
     // subcommands inherit the root global `caseSensitive`
     assert(
       content.contains(
@@ -161,12 +174,12 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
           "_root_.scala.concurrent.Future[_root_.scala.Either[_root_.golem.tool.ToolError[_root_.scala.Nothing], String]]"
       )
     )
-    assert(content.contains("runInfallible"))
+    assert(content.contains("WireToolClientRuntime.run"))
   }
 
-  test("count-flag parameters encode through countFlagValue") {
+  test("count-flag parameters use a concrete field codec") {
     val content = generate("Grep.scala" -> grepSource).files.head.content
-    assert(content.contains("""("times", _root_.golem.tool.ToolClientRuntime.countFlagValue(times))"""))
+    assert(content.contains("ConcreteCodec.uint.xmap[Int]"))
   }
 
   test("subcommands inherit root globals and use canonical field names") {
@@ -182,44 +195,40 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     )
     assert(
       content.contains(
-        """("git-dir", _root_.scala.Predef.implicitly[_root_.golem.schema.IntoSchema[Option[String]]].toValue(gitDir))"""
+        """("git-dir", _root_.golem.schema.wire.ConcreteCodec.derived[Option[String]]"""
       )
     )
     assert(
       content.contains(
-        """_root_.golem.tool.ToolClientRuntime.run[GitError](__transport, _root_.scala.List("status"), __input"""
+        """WireToolClientRuntime.run(__wireTransport, _root_.scala.List("status"), __input"""
       )
     )
-    assert(content.contains("""private lazy val __model_status"""))
+    assert(content.contains("WireToolMacro.inputGraph[_root_.example.Git](_root_.scala.List(\"status\"))"))
   }
 
-  test("subtree methods return wrapper clients carrying the inherited canonical prefix") {
+  test("subtree methods return wrapper clients carrying concrete wire fields") {
     val result  = generate("Git.scala" -> gitSource)
     val content = result.files.find(_.relativePath == "example/GitClient.scala").get.content
 
     assert(content.contains("def remote(gitDir: Option[String], verbose: Boolean): GitClient.RemoteClient"))
     assert(content.contains("final class RemoteClient private[GitClient] ("))
     // prefix packs the inherited global then the subtree method's own flag
-    val prefixIdx  = content.indexOf("""prefixValue("git-dir"""")
-    val verboseIdx = content.indexOf("""prefixValue("verbose"""")
+    val prefixIdx  = content.indexOf("""WireToolInputField("git-dir"""")
+    val verboseIdx = content.indexOf("""WireToolInputField("verbose"""")
     assert(prefixIdx >= 0 && verboseIdx >= 0 && prefixIdx < verboseIdx)
-    // navigation appends the child command name and preserves the selected transport
-    assert(content.contains("""_root_.scala.List("remote")"""))
-    assert(content.contains("new GitClient.RemoteClient(\n        __transport,"))
+    assert(content.contains("new GitClient.RemoteClient(\n        __wireTransport,"))
   }
 
-  test("wrapper leaf methods use the dynamic input path when a prefix is inherited") {
+  test("wrapper leaf methods reuse concrete wire fields without schema-model conversion") {
     val result  = generate("Git.scala" -> gitSource)
     val content = result.files.find(_.relativePath == "example/GitClient.scala").get.content
 
     assert(content.contains("def add(name: String, url: String):"))
-    assert(content.contains("if (__inheritedPrefix.isEmpty)"))
-    assert(content.contains("buildDynamicInput"))
-    assert(content.contains("""__commandPath :+ "add""""))
-    // the child's implicit-body command does not extend the command path
-    assert(content.contains("runInfallible(__transport, __commandPath, __input"))
-    // the child descriptor backs the wrapper's canonical input models
-    assert(content.contains("ToolDefinitionMacro.tryMetadata[Remote]"))
+    assert(content.contains("WireToolClientRuntime.inputFields(__graph, __inheritedPrefix"))
+    assert(content.contains("WireToolClientRuntime.run(__wireTransport, _root_.scala.List(\"remote\", \"add\")"))
+    assert(!content.contains("ToolCallPreparation.encodeParams"))
+    assert(!content.contains("CanonicalInputValue"))
+    assert(!content.contains("SchemaValue"))
   }
 
   test("child wrappers omit parameters supplied through inherited canonical aliases") {
@@ -248,7 +257,7 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
 
     assert(content.contains("def group(config: String): RootToolClient.GroupClient"))
-    assert(content.contains("""prefixValue("config", _root_.scala.List("cfg"), config"""))
+    assert(content.contains("""WireToolInputField("config"""))
     assert(content.contains("def child():"))
     assert(!content.contains("def child(cfg: String):"))
     assert(!content.contains("""("cfg", _root_.scala.Predef.implicitly"""))
@@ -280,13 +289,13 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
 
     assert(content.contains("def group(config: String): RootToolClient.GroupClient"))
-    assert(content.contains("""prefixValue("config", _root_.scala.List("cfg"), config"""))
+    assert(content.contains("""WireToolInputField("config"""))
     assert(
-      !content.contains("""prefixValue("config", _root_.scala.List("cfg", "local-cfg"), config"""),
+      !content.contains("CanonicalInputValue"),
       "the inherited prefix should not advertise the subtree-local alias"
     )
     assert(content.contains("def child(localCfg: String):"))
-    assert(content.contains("""("local-cfg", _root_.scala.Predef.implicitly"""))
+    assert(content.contains("""WireToolInputField("local-cfg"""))
     assert(!content.contains("def child():"))
   }
 
@@ -323,10 +332,10 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val result  = generate("RootTool.scala" -> source)
     val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
 
-    assert(content.contains("""prefixValue("config", _root_.scala.List("root-cfg"), config"""))
+    assert(content.contains("""WireToolInputField("config"""))
     assert(content.contains("def nested(): RootToolClient.GroupNestedClient"))
     assert(content.contains("def grand(childCfg: String):"))
-    assert(content.contains("""("child-cfg", _root_.scala.Predef.implicitly"""))
+    assert(content.contains("""WireToolInputField("child-cfg"""))
     assert(!content.contains("def grand():"))
   }
 
@@ -364,11 +373,43 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val result  = generate("RootTool.scala" -> source)
     val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
 
-    assert(content.contains("""prefixValue("config", _root_.scala.List("root-cfg"), config"""))
+    assert(content.contains("""WireToolInputField("config"""))
     assert(content.contains("def nested(): RootToolClient.GroupNestedClient"))
     assert(content.contains("def grand(childCfg: String):"))
-    assert(content.contains("""("child-cfg", _root_.scala.Predef.implicitly"""))
+    assert(content.contains("""WireToolInputField("child-cfg"""))
     assert(!content.contains("def grand():"))
+  }
+
+  test("nested subtree wire calls use paths rooted at the generated client") {
+    val source =
+      """package example
+        |
+        |import golem.runtime.annotations._
+        |
+        |@toolDefinition(name = "root")
+        |trait RootTool {
+        |  def group(): ChildTool
+        |}
+        |
+        |@toolDefinition(name = "child")
+        |trait ChildTool {
+        |  def nested(value: Option[String]): GrandChildTool
+        |}
+        |
+        |@toolDefinition(name = "grand-child")
+        |trait GrandChildTool {
+        |  def run(): Unit
+        |}
+        |""".stripMargin
+
+    val result  = generate("RootTool.scala" -> source)
+    val content = result.files.find(_.relativePath == "example/RootToolClient.scala").get.content
+
+    assert(
+      content.contains(
+        "WireToolMacro.inputGraph[_root_.example.RootTool](_root_.scala.List(\"group\", \"nested\", \"run\"))"
+      )
+    )
   }
 
   test("every tool trait also gets its own standalone root client") {
@@ -430,6 +471,6 @@ class ToolRpcCodegenSpec extends munit.FunSuite {
     val content = generate("Grep2.scala" -> source).files.head.content
     assert(content.contains("""val toolName: _root_.scala.Predef.String = "super-grep""""))
     // the overridden root command is the implicit body: empty command path
-    assert(content.contains("runInfallible(__transport, _root_.scala.Nil, __input"))
+    assert(content.contains("WireToolClientRuntime.run(__wireTransport, _root_.scala.Nil, __input"))
   }
 }

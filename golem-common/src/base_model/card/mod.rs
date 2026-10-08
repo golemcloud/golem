@@ -17,6 +17,7 @@ mod class;
 mod defaults;
 mod envelope;
 mod monomorphization;
+pub mod network_target;
 pub mod owner;
 mod parsing;
 mod pattern;

@@ -40,6 +40,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use uuid::Uuid;
 
 pub mod benchmark;
@@ -168,7 +169,10 @@ pub trait TestDependencies: Send + Sync + Clone {
     }
 
     async fn kill_all(&self) {
-        self.worker_executor_cluster().kill_all().await;
+        self.worker_executor_cluster()
+            .kill_all_and_wait(tokio::time::Instant::now() + Duration::from_secs(60))
+            .await
+            .expect("failed to stop worker executors");
         self.worker_service().kill().await;
         self.component_compilation_service().kill().await;
         self.registry_service().kill().await;

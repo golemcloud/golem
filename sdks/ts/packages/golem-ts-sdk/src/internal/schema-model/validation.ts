@@ -246,6 +246,7 @@ function checkType(
       case 'bool':
       case 'char':
       case 'string':
+      case 'uuid':
       case 'path':
       case 'url':
       case 'datetime':
@@ -422,6 +423,28 @@ export function floatFromBits(bits: bigint): number | undefined {
   if (typeof bits !== 'bigint' || bits < 0n || bits > U64_MAX) return undefined;
   FLOAT_BITS.setBigUint64(0, bits);
   return FLOAT_BITS.getFloat64(0);
+}
+
+export function numericRestrictionsMatch(
+  restrictions: NumericRestrictions | undefined,
+  value: number | bigint,
+): boolean {
+  if (!restrictions) return true;
+  const compare = (bound: NumericBound): number | undefined => {
+    if (typeof value === 'number') {
+      if (bound.tag !== 'float-bits') return undefined;
+      const decoded = floatFromBits(bound.val);
+      if (decoded === undefined || !Number.isFinite(decoded) || Number.isNaN(value)) {
+        return undefined;
+      }
+      return value < decoded ? -1 : value > decoded ? 1 : 0;
+    }
+    if (bound.tag === 'float-bits') return undefined;
+    return value < bound.val ? -1 : value > bound.val ? 1 : 0;
+  };
+  const min = restrictions.min ? compare(restrictions.min) : 0;
+  const max = restrictions.max ? compare(restrictions.max) : 0;
+  return min !== undefined && max !== undefined && min >= 0 && max <= 0;
 }
 
 function checkTextRestrictions(

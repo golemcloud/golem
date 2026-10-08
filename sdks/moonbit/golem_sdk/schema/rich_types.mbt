@@ -19,6 +19,37 @@ pub fn Url::new(value : String) -> Url {
 }
 
 ///|
+pub(open) trait TextSpec {
+  fn type_id() -> String
+  fn languages() -> Array[String]
+  fn min_length() -> UInt?
+  fn max_length() -> UInt?
+  fn regex() -> String?
+}
+
+///|
+#warnings("-unused_type_variable")
+pub struct Text[S] {
+  value : String
+  language : String?
+} derive(Debug, Eq)
+
+///|
+pub fn[S] Text::new(value : String, language? : String) -> Text[S] {
+  { value, language, }
+}
+
+///|
+pub fn[S] Text::value(self : Text[S]) -> String {
+  self.value
+}
+
+///|
+pub fn[S] Text::language(self : Text[S]) -> String? {
+  self.language
+}
+
+///|
 pub(all) struct Duration {
   nanoseconds : Int64
 } derive(Debug, Eq)
@@ -90,6 +121,22 @@ fn default_url_restrictions() -> @types.UrlRestrictions {
 }
 
 ///|
+fn[S : TextSpec] text_restrictions(
+  _tag : TypeTag[S],
+) -> @types.TextRestrictions {
+  {
+    languages: if S::languages().is_empty() {
+      None
+    } else {
+      Some(S::languages())
+    },
+    min_length: S::min_length(),
+    max_length: S::max_length(),
+    regex: S::regex(),
+  }
+}
+
+///|
 pub impl IntoSchema for Path with fn type_id() {
   "golem.core.Path"
 }
@@ -134,6 +181,54 @@ pub impl FromSchema for Url with fn from_value(v) {
     Url(value) => { value, }
     other =>
       raise FromSchemaError::shape_mismatch("url", value_kind(other), "Url")
+  }
+}
+
+///|
+pub impl[S : TextSpec] IntoSchema for Text[S] with fn type_id() {
+  type_id_with_args("golem.core.Text", [S::type_id()])
+}
+
+///|
+pub impl[S : TextSpec] IntoSchema for Text[S] with fn register_in(_b) {
+  @model.schema_type(Text(text_restrictions((type_tag() : TypeTag[S]))))
+}
+
+///|
+pub impl[S : TextSpec] IntoSchema for Text[S] with fn to_value(self) {
+  Text(self.value, self.language)
+}
+
+///|
+pub impl[S] FromSchema for Text[S] with fn from_value(v) {
+  match v {
+    Text(value, language) => { value, language, }
+    other =>
+      raise FromSchemaError::shape_mismatch("text", value_kind(other), "Text")
+  }
+}
+
+///|
+pub impl IntoSchema for @types.Uuid with fn type_id() {
+  "golem.core.Uuid"
+}
+
+///|
+pub impl IntoSchema for @types.Uuid with fn register_in(_b) {
+  @model.schema_type(Uuid)
+}
+
+///|
+pub impl IntoSchema for @types.Uuid with fn to_value(self) {
+  Uuid(self)
+}
+
+///|
+pub impl FromSchema for @types.Uuid with fn from_value(v) {
+  match v {
+    Uuid(value) => value
+    other =>
+      raise FromSchemaError::shape_mismatch("uuid", value_kind(other), "Uuid")
   }
 }
 
@@ -235,4 +330,93 @@ pub impl[U : QuantityUnit] FromSchema for Quantity[U] with fn from_value(v) {
         "Quantity",
       )
   }
+}
+
+///|
+pub impl IntoWire for Url with fn append_wire(self, encoder) {
+  encoder.push(@types.UrlValue(self.value))
+}
+
+///|
+pub impl FromWire for Url with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.UrlValue(value) => Url::new(value)
+    _ => raise WireError::Invalid("expected URL value")
+  }
+}
+
+///|
+pub impl WireSchema for Url with fn append_wire_type(encoder) {
+  encoder.push(@types.UrlType(default_url_restrictions()))
+}
+
+///|
+pub impl[S] IntoWire for Text[S] with fn append_wire(self, encoder) {
+  encoder.push(@types.TextValue({ text: self.value, language: self.language, }))
+}
+
+///|
+pub impl[S] FromWire for Text[S] with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.TextValue(value) => { value: value.text, language: value.language, }
+    _ => raise WireError::Invalid("expected text value")
+  }
+}
+
+///|
+pub impl[S : TextSpec] WireSchema for Text[S] with fn append_wire_type(encoder) {
+  encoder.push(@types.TextType(text_restrictions((type_tag() : TypeTag[S]))))
+}
+
+///|
+pub impl IntoWire for Duration with fn append_wire(self, encoder) {
+  encoder.push(@types.DurationValue({ nanoseconds: self.nanoseconds, }))
+}
+
+///|
+pub impl FromWire for Duration with fn read_wire(reader, index) {
+  match wire_node(reader, index) {
+    @types.DurationValue(value) => Duration::new(value.nanoseconds)
+    _ => raise WireError::Invalid("expected duration value")
+  }
+}
+
+///|
+pub impl WireSchema for Duration with fn append_wire_type(encoder) {
+  encoder.push(@types.DurationType)
+}
+
+///|
+pub impl[U] IntoWire for Quantity[U] with fn append_wire(self, encoder) {
+  encoder.push(@types.QuantityValueNode(self.value()))
+}
+
+///|
+pub impl[U : QuantityUnit] FromWire for Quantity[U] with fn read_wire(
+  reader,
+  index,
+) {
+  match wire_node(reader, index) {
+    @types.QuantityValueNode(value) => {
+      guard unit_allowed((type_tag() : TypeTag[U]), value.unit) else {
+        raise WireError::Invalid("quantity unit is not allowed")
+      }
+      { mantissa: value.mantissa, scale: value.scale, unit: value.unit, }
+    }
+    _ => raise WireError::Invalid("expected quantity value")
+  }
+}
+
+///|
+pub impl[U : QuantityUnit] WireSchema for Quantity[U] with fn append_wire_type(
+  encoder,
+) {
+  encoder.push(
+    @types.QuantityType({
+      base_unit: U::base_unit(),
+      allowed_suffixes: U::allowed_suffixes(),
+      min: None,
+      max: None,
+    }),
+  )
 }

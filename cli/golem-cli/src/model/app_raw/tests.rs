@@ -99,6 +99,10 @@ fn arb_map_merge_mode_model() -> BoxedStrategy<MapMergeMode> {
     .boxed()
 }
 
+fn arb_guest_language_model() -> BoxedStrategy<GuestLanguage> {
+    prop::sample::select(GuestLanguage::iter().collect::<Vec<_>>()).boxed()
+}
+
 fn arb_vec_merge_mode_model() -> BoxedStrategy<VecMergeMode> {
     prop_oneof![
         Just(VecMergeMode::Append),
@@ -130,6 +134,55 @@ fn arb_config_key_scope_model() -> BoxedStrategy<ManifestConfigKeyScope> {
     .boxed()
 }
 
+fn arb_tool_middleware_installation_model() -> BoxedStrategy<ToolMiddlewareInstallation> {
+    let shortcut = (arb_tool_name(), arb_opt(arb_semver())).prop_map(|(name, version)| {
+        ToolMiddlewareInstallation::Shortcut(match version {
+            Some(version) => format!("{name}@{version}"),
+            None => name,
+        })
+    });
+    let structured = (
+        arb_tool_name(),
+        arb_opt(arb_semver()),
+        arb_json_value(),
+        arb_opt(
+            arb_ident()
+                .prop_map(|name| format!("{name}@example.com"))
+                .boxed(),
+        ),
+        arb_opt(arb_secret_key_scope_model()),
+        arb_opt(arb_secret_key_scope_model()),
+        prop_oneof![
+            Just(ToolFilesystemAccess::Unset),
+            Just(ToolFilesystemAccess::Allowed),
+            Just(ToolFilesystemAccess::Denied),
+        ],
+    )
+        .prop_map(
+            |(
+                name,
+                version,
+                parameters,
+                account,
+                secret_keys_readable,
+                secret_keys_revealable,
+                filesystem_access,
+            )| {
+                ToolMiddlewareInstallation::Structured(ToolMiddlewareInstallationStruct {
+                    name: ToolMiddlewareName::try_from(name).unwrap(),
+                    version,
+                    parameters: NormalizedJsonValue::new(parameters),
+                    account,
+                    secret_keys_readable,
+                    secret_keys_revealable,
+                    filesystem_access,
+                })
+            },
+        );
+
+    prop_oneof![shortcut, structured].boxed()
+}
+
 fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
     (
         arb_opt(arb_semver()),
@@ -150,6 +203,15 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
         arb_opt(arb_secret_key_scope_model()),
         arb_opt(Just(SecretKeyMergeMode::Intersect).boxed()),
         arb_opt(arb_secret_key_scope_model()),
+        arb_opt(prop::collection::vec(arb_tool_middleware_installation_model(), 0..=3).boxed()),
+        arb_opt(
+            prop_oneof![
+                Just(ToolMiddlewareMergeMode::Prepend),
+                Just(ToolMiddlewareMergeMode::Append),
+                Just(ToolMiddlewareMergeMode::Replace),
+            ]
+            .boxed(),
+        ),
     )
         .prop_map(
             |(
@@ -163,6 +225,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_readable,
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
+                middleware,
+                middleware_merge_mode,
             )| ToolBinding {
                 version,
                 parameters_merge_mode,
@@ -175,8 +239,8 @@ fn arb_tool_binding_model() -> BoxedStrategy<ToolBinding> {
                 secret_keys_revealable_merge_mode,
                 secret_keys_revealable,
                 filesystem_access: None,
-                middleware: None,
-                middleware_merge_mode: None,
+                middleware,
+                middleware_merge_mode,
             },
         )
         .boxed()
@@ -432,7 +496,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
 
 fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     (
-        arb_token_list_model(),
+        (arb_token_list_model(), arb_opt(arb_guest_language_model())),
         arb_opt(arb_ident()),
         arb_opt(arb_ident()),
         (
@@ -469,7 +533,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
     )
         .prop_map(
             |(
-                templates,
+                (templates, guest_language),
                 component_wasm,
                 output_wasm,
                 (build_merge_mode, build, custom_commands, clean),
@@ -479,6 +543,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 presets,
             )| ComponentTemplate {
                 templates,
+                guest_language,
                 component_wasm,
                 output_wasm,
                 dependencies: ComponentDependencies::default(),
@@ -906,9 +971,15 @@ fn arb_http_api_deployment_model() -> BoxedStrategy<HttpApiDeployment> {
             0..=3,
         )
         .prop_map(IndexMap::from_iter),
+        prop::bool::ANY,
     )
         .prop_map(
-            |(domain, webhook_url, openapi_endpoint, agents)| HttpApiDeployment {
+            |(domain, webhook_url, openapi_endpoint, agents, use_http)| HttpApiDeployment {
+                scheme: Some(if use_http {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http
+                } else {
+                    golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Https
+                }),
                 domain: Some(Domain(format!("{domain}.example.com")).into()),
                 subdomain: None,
                 webhook_url,
@@ -996,8 +1067,64 @@ fn arb_mcp_model() -> BoxedStrategy<Mcp> {
     )
     .prop_map(|deployments| Mcp {
         deployments: IndexMap::from_iter(deployments),
+        imports: IndexMap::new(),
     })
     .boxed()
+}
+
+#[test]
+fn mcp_imports_serde_and_schema_preserve_order_and_shapes() {
+    let yaml = r#"
+mcp:
+  imports:
+    prod:
+      - url: https://first.example.com/mcp
+        auth:
+          bearer: "{{ MCP_TOKEN }}"
+        prefix: first
+        include: ["read_*", "list_*"]
+      - url: https://second.example.com/mcp
+        auth:
+          basic:
+            user: alice
+            password: "{{ MCP_PASSWORD }}"
+        exclude: ["delete_*"]
+        version: "2025-03-26"
+      - url: https://third.example.com/mcp
+        securityScheme: oauth
+"#;
+    let value: serde_json::Value = serde_yaml::from_str(yaml).unwrap();
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    let app: Application = serde_yaml::from_str(yaml).unwrap();
+    let imports = &app.mcp.unwrap().imports[&EnvironmentName("prod".into())];
+    assert_eq!(imports.len(), 3);
+    assert_eq!(imports[0].prefix.as_deref(), Some("first"));
+    assert_eq!(imports[1].version.as_deref(), Some("2025-03-26"));
+}
+
+#[test]
+fn mcp_imports_schema_and_semantic_validation_reject_conflicting_fields() {
+    for extra in [
+        serde_json::json!({ "auth": {} }),
+        serde_json::json!({ "auth": { "bearer": "token", "basic": { "user": "u", "password": "p" } } }),
+        serde_json::json!({ "auth": { "bearer": "token" }, "securityScheme": "oauth" }),
+        serde_json::json!({ "include": [], "exclude": [] }),
+    ] {
+        let mut import = serde_json::json!({ "url": "http://internal.example/mcp" });
+        import
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let manifest = serde_json::json!({ "mcp": { "imports": { "prod": [import.clone()] } } });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&manifest));
+        let input: golem_common::model::mcp_import::McpImportDeployment =
+            serde_json::from_value(import).unwrap();
+        assert!(
+            input
+                .into_parts(golem_common::model::environment::EnvironmentId::new())
+                .is_err()
+        );
+    }
 }
 
 fn arb_bridge_sdk_language_targets() -> BoxedStrategy<BridgeSdkLanguageTargets> {
@@ -1029,11 +1156,117 @@ fn arb_bridge_sdk_internal_targets() -> BoxedStrategy<BridgeSdkInternalTargets> 
         .boxed()
 }
 
+fn arb_rust_bridge_sdk_language_targets() -> BoxedStrategy<RustBridgeSdkLanguageTargets> {
+    (
+        arb_opt(
+            (
+                arb_bridge_sdk_external_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkExternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+        arb_opt(
+            (
+                arb_bridge_sdk_internal_targets(),
+                arb_rust_bridge_derives(),
+                arb_rust_bridge_dependencies(),
+            )
+                .prop_map(|(common, additional_derives, additional_dependencies)| {
+                    RustBridgeSdkInternalTargets {
+                        common,
+                        additional_derives,
+                        additional_dependencies,
+                    }
+                })
+                .boxed(),
+        ),
+    )
+        .prop_map(|(external, internal)| RustBridgeSdkLanguageTargets { external, internal })
+        .boxed()
+}
+
+fn arb_rust_bridge_derives() -> BoxedStrategy<Vec<String>> {
+    prop::collection::vec(
+        (arb_ident(), arb_ident()).prop_map(|(pattern, derive)| format!("^{pattern}={derive}")),
+        0..=2,
+    )
+    .boxed()
+}
+
+fn arb_rust_bridge_dependencies() -> BoxedStrategy<BTreeMap<String, RustBridgeDependency>> {
+    let version = arb_ident().prop_map(RustBridgeDependency::Version);
+    let common = || {
+        (
+            arb_opt(arb_ident()),
+            prop::collection::vec(arb_ident(), 0..=2),
+            any::<Option<bool>>(),
+        )
+    };
+    let detailed_version =
+        (arb_ident(), common()).prop_map(|(version, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                version: Some(version),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_path =
+        (arb_ident(), common()).prop_map(|(path, (package, features, default_features))| {
+            RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                path: Some(path),
+                package,
+                features,
+                default_features,
+                ..Default::default()
+            })
+        });
+    let detailed_git = (
+        arb_ident(),
+        common(),
+        prop_oneof![
+            Just((None, None, None)),
+            arb_ident().prop_map(|value| (Some(value), None, None)),
+            arb_ident().prop_map(|value| (None, Some(value), None)),
+            arb_ident().prop_map(|value| (None, None, Some(value))),
+        ],
+    )
+        .prop_map(
+            |(git, (package, features, default_features), (branch, tag, rev))| {
+                RustBridgeDependency::Detailed(RustBridgeDependencyDetails {
+                    git: Some(git),
+                    package,
+                    features,
+                    default_features,
+                    branch,
+                    tag,
+                    rev,
+                    ..Default::default()
+                })
+            },
+        );
+    prop::collection::btree_map(
+        arb_ident(),
+        prop_oneof![version, detailed_version, detailed_path, detailed_git],
+        0..=2,
+    )
+    .boxed()
+}
+
 fn arb_bridge_sdks_model() -> BoxedStrategy<BridgeSdks> {
     (
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
-        arb_opt(arb_bridge_sdk_language_targets()),
+        arb_opt(arb_rust_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
         arb_opt(arb_bridge_sdk_language_targets()),
     )
@@ -1439,6 +1672,48 @@ fn schema_and_serde_accept_inherited_component_config_schema() {
 }
 
 #[test]
+fn schema_and_serde_accept_component_template_guest_language() {
+    for language in GuestLanguage::iter() {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language.id()}}
+        });
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value), "{}", language.id());
+        let app = serde_json::from_value::<Application>(value.clone()).unwrap();
+        assert_eq!(
+            app.component_templates["custom"].guest_language,
+            Some(language)
+        );
+        assert_eq!(serde_json::to_value(&app).unwrap(), value);
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_unknown_component_template_guest_language() {
+    for language in ["typescript", "TypeScript", "java"] {
+        let value = serde_json::json!({
+            "app": "test-app",
+            "componentTemplates": {"custom": {"guestLanguage": language}}
+        });
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value), "{language}");
+        assert!(
+            serde_json::from_value::<Application>(value).is_err(),
+            "{language}"
+        );
+    }
+}
+
+#[test]
+fn schema_and_serde_reject_component_guest_language() {
+    let value = serde_json::json!({
+        "app": "test-app",
+        "components": {"app:main": {"componentWasm": "main.wasm", "guestLanguage": "ts"}}
+    });
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&value));
+    assert!(serde_json::from_value::<Application>(value).is_err());
+}
+
+#[test]
 fn schema_is_loadable_and_validates_empty_app() {
     let app = Application {
         app: Some("app-name".to_string()),
@@ -1446,6 +1721,39 @@ fn schema_is_loadable_and_validates_empty_app() {
     };
 
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&serde_json::to_value(&app).unwrap()));
+}
+
+#[test]
+fn http_api_scheme_schema_and_serde_agree() {
+    use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    let mut json = serde_json::json!({"app": "test", "httpApi": {"deployments": {
+        "local": [{"domain": "localhost:9006", "agents": {}}]
+    }}});
+    for (value, expected) in [
+        (None, None),
+        (Some("http"), Some(HttpApiDeploymentScheme::Http)),
+        (Some("https"), Some(HttpApiDeploymentScheme::Https)),
+    ] {
+        if let Some(value) = value {
+            json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        }
+        assert!(JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        let app: Application = serde_json::from_value(json.clone()).unwrap();
+        let deployment = app
+            .http_api
+            .unwrap()
+            .deployments
+            .into_values()
+            .next()
+            .unwrap()
+            .remove(0);
+        assert_eq!(deployment.scheme, expected);
+    }
+    for value in ["ftp", "HTTP", "https://example.com"] {
+        json["httpApi"]["deployments"]["local"][0]["scheme"] = value.into();
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&json));
+        assert!(serde_json::from_value::<Application>(json.clone()).is_err());
+    }
 }
 
 #[test]
@@ -1572,6 +1880,103 @@ fn manifest_loading_accepts_wildcard_and_escaped_tool_binding_paths() {
         "# };
 
     Application::from_yaml_str(source).expect("valid scopes should load");
+}
+
+#[test]
+fn middleware_secret_scopes_preserve_omitted_empty_wildcard_and_concrete_values() {
+    let installations: Vec<ToolMiddlewareInstallation> = serde_yaml::from_str(
+        r#"
+- audit
+- name: audit
+  secretKeysReadable: []
+  secretKeysRevealable: "*"
+- name: audit
+  secretKeysReadable: ['credentials.github\=token']
+  secretKeysRevealable: ['"database url".password']
+"#,
+    )
+    .unwrap();
+
+    let common = installations
+        .into_iter()
+        .map(ToolMiddlewareInstallation::into_common)
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(common[0].secret_keys_readable, None);
+    assert_eq!(common[0].secret_keys_revealable, None);
+    assert_eq!(
+        common[1].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::new()
+        ))
+    );
+    assert_eq!(
+        common[1].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::All)
+    );
+    assert_eq!(
+        common[2].secret_keys_readable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["credentials".to_string(), "githubToken".to_string(),]
+                )]
+            )
+        ))
+    );
+    assert_eq!(
+        common[2].secret_keys_revealable,
+        Some(golem_common::model::tool::SecretKeyScope::Keys(
+            BTreeSet::from(
+                [golem_common::model::agent_secret::CanonicalAgentSecretPath(
+                    vec!["databaseUrl".to_string(), "password".to_string(),]
+                )]
+            )
+        ))
+    );
+}
+
+#[test]
+fn middleware_secret_scopes_reject_invalid_values_and_unknown_fields() {
+    for yaml in [
+        "name: audit\nsecretKeysReadable: anything\n",
+        "name: audit\nsecretKeysRevealable: ['*']\n",
+        "name: audit\nsecretKeysReadable: ['credentials\\']\n",
+        "name: audit\nsecretKeysReadble: []\n",
+    ] {
+        assert!(
+            serde_yaml::from_str::<ToolMiddlewareInstallation>(yaml).is_err(),
+            "middleware installation unexpectedly accepted:\n{yaml}"
+        );
+    }
+}
+
+#[test]
+fn schema_validates_middleware_secret_scopes() {
+    let valid = serde_json::json!({
+        "app": "test-app",
+        "environments": {
+            "local": {
+                "server": "local",
+                "tools": {
+                    "middleware": [
+                        {
+                            "name": "audit",
+                            "secretKeysReadable": [],
+                            "secretKeysRevealable": "*"
+                        }
+                    ]
+                }
+            }
+        }
+    });
+    assert!(JSON_SCHEMA_VALIDATOR.is_valid(&valid));
+
+    let mut invalid = valid;
+    invalid["environments"]["local"]["tools"]["middleware"][0]["secretKeysReadable"] =
+        serde_json::json!(["*"]);
+    assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&invalid));
 }
 
 #[test]
@@ -1885,9 +2290,61 @@ fn bridge_rust_agents_keeps_parsing_as_external_bridge_targets() {
     let rust = app.bridge.unwrap().rust.unwrap();
     let external = rust.external.unwrap();
 
-    assert_eq!(external.agents.into_vec(), vec!["CounterAgent".to_string()]);
-    assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
+    assert_eq!(
+        external.common.agents.into_vec(),
+        vec!["CounterAgent".to_string()]
+    );
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
     assert!(rust.internal.is_none());
+}
+
+#[test]
+fn rust_bridge_configuration_roundtrips_and_is_rejected_for_other_languages() {
+    let source = r#"
+app: test-app
+bridge:
+  rust:
+    external:
+      agents: "*"
+      additionalDerives:
+        - '^Order=serde::Serialize,custom::Marker'
+      additionalDependencies:
+        custom: { path: ../custom, package: custom-derive, features: [extra], defaultFeatures: false }
+        anyhow: "1"
+"#;
+    let app = Application::from_yaml_str(source).unwrap();
+    let serialized = serde_yaml::to_string(&app).unwrap();
+    let reparsed = Application::from_yaml_str(&serialized).unwrap();
+    let external = reparsed.bridge.unwrap().rust.unwrap().external.unwrap();
+    assert_eq!(external.additional_derives.len(), 1);
+    assert_eq!(external.additional_dependencies.len(), 2);
+    assert!(
+        JSON_SCHEMA_VALIDATOR.is_valid(&serde_yaml::from_str::<serde_json::Value>(source).unwrap())
+    );
+
+    let non_rust = source.replace("  rust:", "  ts:");
+    assert!(Application::from_yaml_str(&non_rust).is_err());
+    assert!(
+        !JSON_SCHEMA_VALIDATOR
+            .is_valid(&serde_yaml::from_str::<serde_json::Value>(&non_rust).unwrap())
+    );
+
+    for invalid_dependency in [
+        "{ version: '1', path: ../custom }",
+        "{ version: '1', branch: main }",
+        "{ git: https://example.test/repo, branch: main, tag: v1 }",
+        "{ workspace: true }",
+        "{ version: '1', optional: true }",
+    ] {
+        let invalid = format!(
+            "app: test-app\nbridge:\n  rust:\n    external:\n      agents: '*'\n      additionalDependencies:\n        custom: {invalid_dependency}\n"
+        );
+        assert!(
+            !JSON_SCHEMA_VALIDATOR
+                .is_valid(&serde_yaml::from_str::<serde_json::Value>(&invalid).unwrap()),
+            "schema accepted {invalid_dependency}"
+        );
+    }
 }
 
 #[test]
@@ -1912,12 +2369,18 @@ fn bridge_rust_guest_parses_as_guest_bridge_targets() {
     let guest = rust.internal.unwrap();
 
     assert_eq!(
-        external.agents.into_vec(),
+        external.common.agents.into_vec(),
         vec!["ExternalAgent".to_string()]
     );
-    assert_eq!(external.output_dir.as_deref(), Some("bridge/rust"));
-    assert_eq!(guest.agents.into_vec(), vec!["GuestAgent".to_string()]);
-    assert_eq!(guest.output_dir.as_deref(), Some("bridge/rust-guest"));
+    assert_eq!(external.common.output_dir.as_deref(), Some("bridge/rust"));
+    assert_eq!(
+        guest.common.agents.into_vec(),
+        vec!["GuestAgent".to_string()]
+    );
+    assert_eq!(
+        guest.common.output_dir.as_deref(),
+        Some("bridge/rust-guest")
+    );
 }
 
 #[test]

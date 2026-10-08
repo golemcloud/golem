@@ -41,6 +41,7 @@ pub fn realistic_schema_graph() -> SchemaGraph {
             },
         ],
         root: SchemaType::record(vec![
+            field("uuid", SchemaType::uuid()),
             field("local-config", SchemaType::ref_to(node_id.clone())),
             field(
                 "tool-input",

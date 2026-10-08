@@ -60,6 +60,37 @@ writes the session hard-errors and recovery falls to the enclosing durable scope
 Trap variant: if the guest trapped while the call was in flight, `abandon_for_trap` leaves the
 `Start` incomplete in exactly the same shape. A trap is never recorded as `Cancelled`.
 
+### 3a. Recovery data is temporarily unavailable during p2 HTTP body resumption
+
+The guest has received one response chunk and started the next read. The transport breaks, so
+inline HTTP resumption scans prior body-read results to calculate the Range offset. Downloading
+the recorded first chunk fails because Golem's payload backend is temporarily unavailable.
+
+```
+#19 Start { fn: incoming_body_stream/blocking_read }
+#20 End   { start_index: 19, response: first 256 bytes }
+#21 Start { fn: incoming_body_stream/blocking_read }
+     payload backend unavailable while counting delivered bytes
+#22 Error { kind: Recovery, retry_policy_state: None } (h)
+     ✕ Store and filesystem window are destroyed; #21 gets no terminal
+```
+
+This is not an HTTP response and not an application failure. The host abandons the non-cancellable
+durable session deliberately, preserving `Start#21` without inventing `End` or `Cancelled`.
+`RecoveryRequired` reaches the invocation loop before generic trap classification. The loop keeps
+the accepted invocation pending, records Recovery without changing semantic retry state, waits for
+infrastructure backoff, and creates a new physical runtime. Replay consumes the completed prefix
+and repairs the unfinished response-body operation. A second backend failure may leave another
+unfinished physical child and another Recovery hint; it still does not consume application retry
+budget. Once storage recovers, the original invocation key completes once with the exact assembled
+bytes.
+
+A missing or malformed payload is different: it is corrupt history, so it follows bounded ordinary
+failure handling rather than Recovery forever. A valid payload followed by an invalid HTTP resume
+response is a genuine HTTP/content failure and remains guest-visible. External HTTP effects retain
+their normal idempotency contract; reconstruction does not make a peer exactly-once unless it
+honours the request's idempotency key.
+
 ## 4. Guest drops a pending completion
 
 ```
@@ -129,19 +160,26 @@ Tests: `tests/api.rs::lost_card_transfer_response_converges_after_source_and_tar
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
-The serialized fire-and-forget `invoke` path records `Start → StartSpan → End → FinishSpan`.
-Replay must reconstruct `StartSpan` before awaiting the RPC terminal; the positional span entry
-otherwise blocks the terminal resolver. Each committed prefix is recoverable:
+The serialized `invoke` and non-streaming `invoke_and_await` paths record an admitted call as
+`Start(span_started = S) → End(span_finished = S)` (or a `Cancelled` carrying the close).
+Replay claims the ordinary request identity before restoring `S`; tracing metadata does not
+participate in matching and the cursor has no span-specific tail. Each committed prefix is
+recoverable:
 
-- After `Start` alone, resolve the incomplete call through the normal re-execution eligibility
-  and checked live-admission path before creating the missing span.
-- After `StartSpan`, reconstruct the span, then repair the incomplete call under the original key.
-- After `End`, reuse the recorded result without dispatching. If the cursor is exhausted, perform
-  the checked `switch_to_live` transition before appending the missing `FinishSpan`.
-- With `FinishSpan` recorded, consume it normally during replay.
+- After `Start` alone, restore its opening and repair the incomplete call under the original key
+  through normal re-execution eligibility.
+- After `End`, reuse the recorded result without dispatching and apply its embedded close. There
+  is no separate positional span entry to consume or append.
+- After `Cancelled`, replay the existing cancellation owner and apply its embedded close once.
 
-Tests: `tests/rpc.rs::completed_fire_and_forget_rpc_replays_span_before_result` and the
-fire-and-forget crash-prefix test, using committed `Start`, `StartSpan`, and `End` gates.
+Synchronous local denials remain spanless and persist the denial decision in the request before
+`End(Denied)`, so incomplete replay completes the denial without dispatch or re-authorization.
+Asynchronous validation and activation denials use their existing short durable operation with
+an embedded opening and failed/denied close; their baked future owns no later cleanup.
+
+Resource and guest-created spans can outlive their opening call. Finish, drop, and successful
+attribute mutation are short ordinary local operations whose terminals carry the close or
+applied updates; they do not hold the opening call or an atomic lease for the span lifetime.
 
 ## 7. Atomic region rollback keeps the RPC key
 
@@ -189,19 +227,40 @@ property this relies on (bare Wasmtime, no oplog); the marker mechanics are cove
 ## 9. Automatic update with snapshot
 
 ```
-#70 PendingUpdate { target revision r2, Automatic } (h)
+#40 Snapshot { filesystem_snapshot: p-… } (h)          record S of revision r1
+#41 SnapshotConfirmed { p-… } (h)
+#70 PendingUpdate { target revision r2, Automatic } (h)   admission P
     worker unloaded and reconstructed by the outer loop
+#71 PendingUpdate { SnapshotAssistedAutomatic { r2, source r1, S = #40, p-… },
+                    update_attempt_index: Some(#70) } (h)   strategy, frozen
+    … tail #41..#70 and later source work replayed …
+#90 SuccessfulUpdate { r2 } (h)
 ```
 
-Instance creation (`worker/mod.rs`, `component_version_for_replay`): because an update is
-pending, automatic snapshots are ignored and the baseline is the last manual-update snapshot (or
-`INITIAL`); the new instance is created for revision `r2`. `prepare_instance` then, for
-`Automatic`: `try_load_snapshot` loads that baseline (the load hook runs in snapshotting mode:
-no oplog append or consume), and `resume_replay` replays the remaining old history against the
-`r2` component; success appends `SuccessfulUpdate` during that replay. If replay fails while the
-update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
-`RetryDecision::Immediate`, so the outer loop rebuilds on the old revision with its automatic
-snapshot eligible again. Old-revision automatic snapshots are never used for `r2`
+When the agent is loaded at `#70` and the upload of its newest record is not confirmed, the agent
+waits for that upload before it unloads, so the update can select that record
+(`Worker::confirm_filesystem_snapshot_before_an_update`, at most `confirmation_wait`).
+
+Instance creation (`worker/mod.rs::create_instance`): `snapshot_selection::decide_start` sees the
+unselected admission `#70` at the queue head, selects `S` (the last usable record of r1 that
+passes; it can be newer than `#70`) and gives `PersistStrategy`. The start appends `#71` and
+decides again. Now the head is a selected snapshot-assisted update, so the baseline is
+`AssistedPending { S }`, the replay revision is r1, and the new instance is created for r2.
+`plan_start` gives one `StartPlan`: restore the filesystem snapshot `p-…`, then load the
+application snapshot of `#40` and skip `1..=#40`. `materialize` restores the tree; `prepare_instance`
+then runs `try_load_snapshot` (the load hook runs in snapshotting mode: no oplog append or
+consume) and `resume_replay` replays the tail against the r2 component with r1's metadata. At
+`ReplayFinished`, `update_state_to_new_component_revision(r2)` applies the initial-file rule from
+r1 to r2, and `SuccessfulUpdate` is appended. The fold promotes `S` to `authoritative_snapshot`
+with its name and keeps `component_revision_for_replay = r1`, so a later start from `S` restores
+`p-…`, replays the tail with r1's metadata and applies the rule at the replayed `#90`.
+
+Without a usable record, `#71` is a plain `Automatic` strategy: the baseline is the
+authoritative baseline (or `INITIAL`), and `resume_replay` replays all the remaining old history
+against r2. A failure of an attempt goes through `start_outcome::decide`, which builds the
+`FailedUpdate` (with `UPDATE_SNAPSHOT_INCOMPATIBLE`, `UPDATE_SNAPSHOT_UNAVAILABLE` or
+`UPDATE_REPLAY_FAILED` among others) and returns `RetryDecision::Immediate`, so the outer loop
+rebuilds on r1. Periodic records of r1 are never used as periodic baselines for r2
 (`tests/hot_update.rs::auto_update_invalidates_snapshot_from_previous_revision`).
 
 `SnapshotBased` differs: the save hook ran and the payload was recorded *before* unload;
@@ -212,13 +271,14 @@ A cursor rewind cannot do this: the component revision and metadata come from in
 creation in the outer loop, not from the cursor.
 
 With no update pending, failure to load an automatic snapshot or divergence while replaying its
-recorded suffix abandons it and returns `RetryDecision::Immediate`. The outer loop recreates the
-full Store and revision/plugin context from the authoritative manual-update baseline, so history
-before that migration is never replayed. Once this fallback has succeeded,
-`prepare_instance` persists the monotonic `rejected_periodic_snapshot_through` watermark under the
-worker's `AgentFingerprint` before publishing readiness. A payload-download failure is different:
-an in-memory unavailable watermark skips it only for that startup attempt and is cleared after a
-successful preparation. A manual-update snapshot load failure is terminal and retains its cause.
+recorded suffix rejects that exact record and returns `RetryDecision::Immediate`. The outer loop
+recreates the full Store and revision/plugin context and selects again: the previous usable
+record, the authoritative baseline, or a full replay, so history before a migration is never
+replayed. Once preparation has succeeded, `prepare_instance` merges the rejected indexes into the
+set stored under the worker's `AgentFingerprint` before publishing readiness. A payload-download
+failure, or a filesystem snapshot that does not restore, is different: an in-memory unavailable
+set skips the record only for that startup attempt and is cleared after a successful
+preparation. A manual-update snapshot load failure is terminal and retains its cause.
 
 ## 10. Suspend, interrupt/resume, evict, restart: one path
 
@@ -227,7 +287,9 @@ successful preparation. A manual-update snapshot load failure is terminal and re
 #80 Suspend (h)         or   #80 Interrupted (h)   or   #80 Restart (h) / nothing at all (crash)
 ```
 
-In every case the `Store` is discarded. The next incarnation runs `prepare_instance` →
+In every case the `Store` is discarded. Infrastructure-owned `RecoveryRequired` follows the same
+physical path: it records a Recovery error, retains the accepted invocation, and schedules a new
+incarnation without touching semantic retry state. The next incarnation runs `prepare_instance` →
 `resume_replay` from the snapshot baseline to the tail and publishes Live. The hints annotate
 *why* the previous incarnation stopped and drive status/scheduling (`Interrupted` stays
 interrupted until resumed; `Suspend` resumes on demand; `Restart` recovers automatically), but the
@@ -342,7 +404,7 @@ oplog.
 
 ```
 Owner O oplog
-#60 ... tool discovery / authorization reads (durable reads, ordinary Start/End pairs) ...
+#60 ... discovery snapshot / authorization (durable ordinary Start/End pairs) ...
 #61 Start { fn: golem-entity-invoke, entity: sidecar }              entity invocation id = 61
                                                                     (dispatch_tool_call; no outer
                                                                      call-tool Start wraps it)
@@ -401,3 +463,56 @@ ordinary durable path where a completed nested effect legitimately repeats, and 
 owns its idempotency.
 Test: `tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`
 expects the effect sequence `probe, callback, probe, callback`.
+
+## 16. Dynamic MCP call and ambiguous `-32602`
+
+Admission creates a synthetic native activation that freezes the complete projected tool,
+protocol version, binding/digest and exact deployment/import source. Its native body uses the
+executor's shared MCP transport and the ordinary derived durable key.
+
+```
+#90 Start { fn: mcp/tools-call, WriteRemote, key: derived(#90) }
+#91 End   { start_index: 90, response: encoded -32602 }   committed before projection/stdout/401 feedback
+#92 Start { fn: mcp/tool-presence, ReadRemote, exact admitted source, forced refresh }
+     ✕ quota suspension or crash
+```
+
+Replay returns `#91` offline and repairs only the presence read under `#92`; it does not resend
+`tools/call`. Ordinary atomic-region rollback can still roll back both entries. An observed absent
+tool maps to `InvalidToolName`; true or a missing observation preserves the protocol ambiguity and
+maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
+uses its recorded exact deployment reference, while this dynamic execution uses the full admission
+snapshot. Middleware and code-generation acceptance are outside this completed executor path.
+
+## 17. Revert with filesystem snapshots
+
+```
+#20 Snapshot { files: p-a }                 periodic record, its upload saves p-a
+#21 SnapshotConfirmed { p-a }
+#22..#29 invocations
+#30 Snapshot { files: p-b }
+#31 SnapshotConfirmed { p-b }
+#32 Revert { region: 22..=31 }              committed through commit_oplog_and_update_state
+```
+
+`reverted_snapshot_names` collects `p-b` from the dropped region, without a name that a live record
+outside it uses. Only after the commit of `#32` does `RevertHold::delete_snapshots([p-b])` ask the
+clean-up queue to delete it; the queue runs it when the busy count of the agent is 0. The next
+start folds the status without the region and restores `p-a`. When the commit of `#32` is refused,
+the revert gives `OplogFenced`, deletes nothing, and the caller retries on the new owner.
+
+## 18. Delete of an incarnation
+
+```
+remove: cached status, indexes, stream sessions    (derived state first)
+remove: oplog delete                                 oplog of fingerprint F gone
+          after_oplog_delete(F) → delete_all_snapshots(AgentSnapshots::agent(id, F))
+          ✕ crash here leaves the RunningWorkers member (id, F)
+remove: RunningWorkers member (id, F)
+```
+
+A crash between the oplog delete and the member removal leaves the member. The next recovery scan
+finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
+member. A crash after the member removal and before the store delete ended leaks the repository;
+no sweep removes it yet.
+

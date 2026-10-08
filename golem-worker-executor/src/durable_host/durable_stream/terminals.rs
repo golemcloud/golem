@@ -78,8 +78,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("resource exhaustion terminal batch returned no oplog entry");
@@ -235,8 +235,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream end batch returned no oplog entry");
@@ -366,8 +366,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("stream cancellation batch returned no oplog entry");
@@ -555,7 +555,7 @@ impl DurableStreamStore {
     ) -> u64 {
         let registration_id = self
             .next_source_cancellation_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 current.checked_add(1)
             })
             .expect("durable stream source cancellation registration IDs exhausted");

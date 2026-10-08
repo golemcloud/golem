@@ -19,11 +19,14 @@ use crate::base_model::{AgentId, OplogIndex};
 use crate::model::Timestamp;
 use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
-use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
+use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::oplog::OplogPayload;
 use crate::model::quota::ResourceName;
 use crate::model::worker::UntypedAgentConfigEntry;
-use desert_rust::BinaryCodec;
+use desert_rust::{
+    BinaryCodec, BinaryDeserializer, BinaryOutput, BinarySerializer, DeserializationContext,
+    SerializationContext,
+};
 use nonempty_collections::NEVec;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -54,6 +57,120 @@ pub struct CreateParameters {
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
 #[desert(transparent)]
 pub struct AttributeMap(pub HashMap<String, AttributeValue>);
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamEventSummary {
+    Registered,
+    Items { item_count: u64 },
+    End { outcome: DurableStreamOutcome },
+    Cancelled,
+    SessionResult,
+    SessionFinished { outcome: DurableStreamOutcome },
+    SessionCancellation,
+    SessionExpired,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum DurableStreamOutcome {
+    Success,
+    Error,
+}
+
+impl DurableStreamEventSummary {
+    pub fn items(record: &crate::model::durable_stream::StreamItemsRecord) -> Self {
+        Self::Items {
+            item_count: record.payload.logical_item_count() as u64,
+        }
+    }
+
+    pub fn end(record: &crate::model::durable_stream::StreamEndRecord) -> Self {
+        Self::End {
+            outcome: if matches!(
+                record.result,
+                crate::model::durable_stream::StreamEndResult::Ok
+            ) {
+                DurableStreamOutcome::Success
+            } else {
+                DurableStreamOutcome::Error
+            },
+        }
+    }
+
+    pub fn session(record: &crate::model::durable_stream::StreamSessionRecord) -> Option<Self> {
+        use crate::model::durable_stream::StreamSessionRecord;
+        match record {
+            StreamSessionRecord::InvocationResult(_) => Some(Self::SessionResult),
+            StreamSessionRecord::Finished(record) => Some(Self::SessionFinished {
+                outcome: if record.result.is_ok() {
+                    DurableStreamOutcome::Success
+                } else {
+                    DurableStreamOutcome::Error
+                },
+            }),
+            StreamSessionRecord::CancelRequested(_)
+            | StreamSessionRecord::ConsumerCancelIntent(_)
+            | StreamSessionRecord::ConsumerCancelApplied(_) => Some(Self::SessionCancellation),
+            StreamSessionRecord::Expired(_) => Some(Self::SessionExpired),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SpanKind {
+    Internal,
+    Client,
+    Server,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SpanOutcome {
+    Completed,
+    Failed,
+    Cancelled,
+    Abandoned,
+    Denied,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanLink {
+    pub trace_id: TraceId,
+    pub span_id: SpanId,
+    pub trace_states: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanStarted {
+    pub span_id: SpanId,
+    pub trace_id: TraceId,
+    pub trace_states: Vec<String>,
+    pub parent_span_id: Option<SpanId>,
+    pub links: Vec<SpanLink>,
+    pub started_at: Timestamp,
+    pub attributes: AttributeMap,
+    pub kind: SpanKind,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanFinished {
+    pub span_id: SpanId,
+    pub finished_at: Timestamp,
+    pub outcome: SpanOutcome,
+}
+
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SpanAttributes {
+    pub span_id: SpanId,
+    pub attributes: AttributeMap,
+}
 
 impl std::ops::Deref for AttributeMap {
     type Target = HashMap<String, AttributeValue>;
@@ -238,6 +355,88 @@ impl SpanData {
     }
 }
 
+/// The name of one filesystem snapshot of an agent.
+///
+/// The name is `p-<uuid>` for a periodic snapshot and `u-<uuid>` for a manual-update snapshot.
+/// The name does not depend on an oplog index.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FilesystemSnapshotName(Arc<str>);
+
+impl FilesystemSnapshotName {
+    /// The prefix of the name of a periodic snapshot.
+    pub const PERIODIC_PREFIX: &'static str = "p-";
+    /// The prefix of the name of a manual-update snapshot.
+    pub const UPDATE_PREFIX: &'static str = "u-";
+
+    /// Makes a new name for a periodic snapshot from a random UUID. Make the name before you
+    /// write the snapshot record that holds it.
+    pub fn periodic() -> Self {
+        Self::with_prefix(Self::PERIODIC_PREFIX)
+    }
+
+    /// Makes a new name for a manual-update snapshot from a random UUID. Make the name before
+    /// you write the snapshot record that holds it.
+    pub fn update() -> Self {
+        Self::with_prefix(Self::UPDATE_PREFIX)
+    }
+
+    fn with_prefix(prefix: &str) -> Self {
+        let mut name = String::with_capacity(prefix.len() + uuid::fmt::Hyphenated::LENGTH);
+        name.push_str(prefix);
+        name.push_str(
+            Uuid::new_v4()
+                .hyphenated()
+                .encode_lower(&mut [0; uuid::fmt::Hyphenated::LENGTH]),
+        );
+        Self(name.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+// desert has no codec for `Arc<str>`. This pair writes and reads the name as a plain string.
+impl BinarySerializer for FilesystemSnapshotName {
+    fn serialize<Output: BinaryOutput>(
+        &self,
+        context: &mut SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        self.as_str().serialize(context)
+    }
+}
+
+impl BinaryDeserializer for FilesystemSnapshotName {
+    fn deserialize(context: &mut DeserializationContext<'_>) -> desert_rust::Result<Self> {
+        String::deserialize(context).map(|name| Self(name.into()))
+    }
+}
+
+impl Display for FilesystemSnapshotName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::str::FromStr for FilesystemSnapshotName {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let uuid = value
+            .strip_prefix(Self::PERIODIC_PREFIX)
+            .or_else(|| value.strip_prefix(Self::UPDATE_PREFIX))
+            .ok_or_else(|| format!("Invalid filesystem snapshot name: {value}"))?;
+        Uuid::parse_str(uuid).map_err(|_| format!("Invalid filesystem snapshot name: {value}"))?;
+        Ok(Self(value.into()))
+    }
+}
+
+impl From<FilesystemSnapshotName> for String {
+    fn from(value: FilesystemSnapshotName) -> Self {
+        value.0.to_string()
+    }
+}
+
 /// Describes a pending update
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
@@ -245,11 +444,25 @@ pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
     Automatic { target_revision: ComponentRevision },
 
+    /// Automatic update using a periodic snapshot selected when the update reached the queue head.
+    SnapshotAssistedAutomatic {
+        target_revision: ComponentRevision,
+        source_component_revision: ComponentRevision,
+        source_revision_start_index: OplogIndex,
+        snapshot_index: OplogIndex,
+        snapshot_revision: ComponentRevision,
+        /// The filesystem snapshot of the selected record. `None` when the record has no name.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    },
+
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
         target_revision: ComponentRevision,
         payload: OplogPayload<Vec<u8>>,
         mime_type: String,
+        /// The filesystem snapshot that the executor captured with this application snapshot.
+        /// `None` means that the executor made no filesystem capture.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     },
 }
 
@@ -257,6 +470,9 @@ impl UpdateDescription {
     pub fn target_revision(&self) -> &ComponentRevision {
         match self {
             UpdateDescription::Automatic { target_revision } => target_revision,
+            UpdateDescription::SnapshotAssistedAutomatic {
+                target_revision, ..
+            } => target_revision,
             UpdateDescription::SnapshotBased {
                 target_revision, ..
             } => target_revision,
@@ -264,12 +480,34 @@ impl UpdateDescription {
     }
 }
 
+/// Provenance of a snapshot-assisted automatic update, persisted on its successful outcome.
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
-pub struct TimestampedUpdateDescription {
-    pub timestamp: Timestamp,
-    pub oplog_index: OplogIndex,
-    pub description: UpdateDescription,
+pub struct SnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
+}
+
+/// Provenance of a failed snapshot-assisted automatic update.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct FailedSnapshotAssistedUpdateDetails {
+    pub pending_update_index: OplogIndex,
+    pub source_component_revision: ComponentRevision,
+    pub source_revision_start_index: OplogIndex,
+    pub snapshot_index: OplogIndex,
+}
+
+/// Whether a failed update is about the record that the update selected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum SnapshotFault {
+    /// The store lost the filesystem snapshot of the selected record.
+    Unavailable,
+    /// The target could not load the selected record, or the history after it diverged.
+    Incompatible,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]

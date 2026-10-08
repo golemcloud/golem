@@ -26,6 +26,7 @@ use test_r::test;
 fn tool_definition() -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: Vec::new() },
         schema: crate::schema::SchemaGraph::empty(),
     }
@@ -76,6 +77,7 @@ fn activation() -> EntityActivation {
         EntityActivationPolicy::Tool {
             provision: ToolProvisionConfig::default(),
             binding: Box::new(binding),
+            mcp_import: None,
         },
         FilesystemCapability::Incapable,
     )
@@ -209,6 +211,8 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
             has_stdin: true,
             has_stdout: true,
             declares_stdout: true,
+            has_stderr: true,
+            declares_stderr: true,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -222,6 +226,7 @@ fn entity_invocation_request_binary_roundtrip_preserves_activation() {
                 .unwrap(),
         },
         assume_idempotence: false,
+        authority_wallet: Vec::new(),
     };
 
     let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -289,6 +294,112 @@ fn entity_invocation_plan_roundtrip_and_descendant_reference_do_not_repeat_plan(
 }
 
 #[test]
+fn entity_invocation_plan_validates_each_middleware_policy_against_recorded_leaf() {
+    use crate::model::agent_secret::CanonicalAgentSecretPath;
+    use std::collections::BTreeSet;
+
+    let scope = |keys: &[&str]| {
+        SecretKeyScope::Keys(BTreeSet::from_iter(
+            keys.iter()
+                .map(|key| CanonicalAgentSecretPath(vec![(*key).to_string()])),
+        ))
+    };
+    let set_middleware_scopes =
+        |mut activation: EntityActivation, readable: SecretKeyScope, revealable: SecretKeyScope| {
+            let EntityActivationPolicy::ToolMiddleware {
+                secret_keys_readable,
+                secret_keys_revealable,
+                ..
+            } = &mut activation.policy
+            else {
+                unreachable!()
+            };
+            *secret_keys_readable = readable;
+            *secret_keys_revealable = revealable;
+            activation
+        };
+    let set_leaf_scopes =
+        |mut activation: EntityActivation, readable: SecretKeyScope, revealable: SecretKeyScope| {
+            let EntityActivationPolicy::Tool { binding, .. } = &mut activation.policy else {
+                unreachable!()
+            };
+            binding.secret_keys_readable = readable;
+            binding.secret_keys_revealable = revealable;
+            activation
+        };
+    let plan = |middlewares: Vec<EntityActivation>, leaf: EntityActivation| {
+        let mut layers = middlewares
+            .into_iter()
+            .map(|activation| EntityInvocationPlanLayer::Middleware {
+                activation,
+                parameters: TypedSchemaValue::new(
+                    crate::schema::SchemaGraph::anonymous(crate::schema::SchemaType::tuple(
+                        Vec::new(),
+                    )),
+                    crate::schema::SchemaValue::Tuple {
+                        elements: Vec::new(),
+                    },
+                ),
+                expected_definition: None,
+                presented_definition: None,
+                next_effective_definition: tool_definition(),
+                compatibility: None,
+            })
+            .collect::<Vec<_>>();
+        layers.push(EntityInvocationPlanLayer::Tool { activation: leaf });
+        EntityInvocationPlan::new(layers)
+    };
+
+    let leaf = set_leaf_scopes(activation(), scope(&["a", "b"]), scope(&["a"]));
+    assert!(
+        plan(
+            vec![
+                set_middleware_scopes(middleware_activation(), scope(&["a"]), scope(&["a"])),
+                set_middleware_scopes(middleware_activation(), scope(&["b"]), scope(&[])),
+            ],
+            leaf.clone(),
+        )
+        .is_ok()
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&["outside"]),
+                scope(&[]),
+            )],
+            leaf.clone(),
+        )
+        .is_err(),
+        "middleware readable scope must not exceed the recorded leaf"
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&["a"]),
+                scope(&["b"]),
+            )],
+            leaf.clone(),
+        )
+        .is_err(),
+        "middleware revealable scope must not exceed the recorded leaf"
+    );
+    assert!(
+        plan(
+            vec![set_middleware_scopes(
+                middleware_activation(),
+                scope(&[]),
+                scope(&["a"]),
+            )],
+            leaf,
+        )
+        .is_err(),
+        "middleware revealable scope must remain within its readable scope"
+    );
+}
+
+#[test]
 fn entity_invocation_plan_rejects_middleware_activation_in_tool_layer() {
     let result = EntityInvocationPlan::new(vec![EntityInvocationPlanLayer::Tool {
         activation: middleware_activation(),
@@ -348,6 +459,8 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             has_stdin: true,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -363,6 +476,7 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             .unwrap(),
         },
         assume_idempotence: true,
+        authority_wallet: Vec::new(),
     };
     let identity = EntityInvocationRequestIdentity {
         entity: request.entity.clone(),
@@ -379,6 +493,7 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
             .unwrap()
             .args;
     descriptor.declares_stdout = true;
+    descriptor.declares_stderr = true;
 
     assert!(identity.matches(&differently_pinned, &input));
 
@@ -394,6 +509,10 @@ fn entity_invocation_claim_identity_ignores_pinned_dispatch_derivations_only() {
     let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
     descriptor.command_path.pop();
     descriptor.has_stdout = true;
+    assert!(!identity.matches(&differently_pinned, &input));
+    let EntityInvocationDescriptor::Tool(descriptor) = &mut differently_pinned.operation;
+    descriptor.has_stdout = false;
+    descriptor.has_stderr = true;
     assert!(!identity.matches(&differently_pinned, &input));
 
     let different_input = TypedSchemaValue::new(
@@ -460,6 +579,11 @@ fn invocation_scope_protobuf_roundtrip_preserves_activation_fingerprint() {
     assert_eq!(decoded, scope);
     assert_eq!(json_decoded, scope);
     assert_eq!(scope.idempotency_key().value, "scope-protobuf-seed");
+    assert_eq!(
+        scope.stream_session_idempotency_key().value,
+        "scope-stream-seed"
+    );
+    assert_eq!(scope.mode(), InvocationExecutionMode::ReplayingCompleted);
     assert!(!scope.assume_idempotence());
     assert!(scope.logical_key_positions());
 }
@@ -533,6 +657,8 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             has_stdin: false,
             has_stdout: false,
             declares_stdout: false,
+            has_stderr: false,
+            declares_stderr: false,
             output_contract: ToolOutputContract {
                 result: None,
                 errors: Vec::new(),
@@ -563,6 +689,7 @@ fn middleware_invocation_scope_roundtrips_through_binary_and_protobuf() {
             .unwrap(),
         },
         assume_idempotence: false,
+        authority_wallet: Vec::new(),
     };
 
     let request_bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
@@ -587,6 +714,119 @@ fn activation_protobuf_rejects_content_that_does_not_match_fingerprint() {
         result.unwrap_err(),
         "EntityActivation fingerprint does not match its contents"
     );
+}
+
+#[test]
+fn mcp_activation_is_pinned_and_bound_to_bridge_revision_and_owner_environment() {
+    use crate::model::mcp_import::{McpImportSource, mcp_import_bridge_source};
+
+    let owner = owner();
+    let base = host_activation();
+    let ToolSource::Host {
+        host_tool_id,
+        implementation_version,
+    } = mcp_import_bridge_source()
+    else {
+        unreachable!()
+    };
+    let mut policy = base.policy.clone();
+    let EntityActivationPolicy::Tool {
+        binding,
+        mcp_import,
+        ..
+    } = &mut policy
+    else {
+        unreachable!()
+    };
+    binding.source = mcp_import_bridge_source();
+    *mcp_import = Some(Box::new(McpImportActivation {
+        source: McpImportSource {
+            environment_id: owner.environment_id,
+            deployment_revision: base.deployment_revision,
+            import_index: 3,
+            upstream_tool_name: "Search_Remote".into(),
+        },
+        protocol_version: "2026-07-28".into(),
+        projected_tool: b"projection snapshot".to_vec(),
+    }));
+    let make = |policy| {
+        EntityActivation::new_host(
+            host_tool_id.clone(),
+            implementation_version.clone(),
+            base.deployment_revision,
+            policy,
+            FilesystemCapability::Incapable,
+        )
+    };
+    let activation = make(policy.clone()).unwrap();
+    let bytes = desert_rust::serialize_to_byte_vec(&activation).unwrap();
+    assert_eq!(
+        desert_rust::deserialize::<EntityActivation>(&bytes).unwrap(),
+        activation
+    );
+    let proto: golem_api_grpc::proto::golem::worker::EntityActivation = activation.clone().into();
+    assert_eq!(EntityActivation::try_from(proto).unwrap(), activation);
+
+    for mutation in 0..5 {
+        let mut changed = policy.clone();
+        let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+            unreachable!()
+        };
+        match mutation {
+            0 => *mcp_import = None,
+            1 => {
+                mcp_import.as_mut().unwrap().source.deployment_revision = 99_u64.try_into().unwrap()
+            }
+            2 => mcp_import
+                .as_mut()
+                .unwrap()
+                .source
+                .upstream_tool_name
+                .clear(),
+            3 => mcp_import.as_mut().unwrap().projected_tool.clear(),
+            _ => mcp_import.as_mut().unwrap().protocol_version.clear(),
+        }
+        assert!(make(changed).is_err(), "invalid mutation {mutation}");
+    }
+
+    let mut changed = policy.clone();
+    let EntityActivationPolicy::Tool { mcp_import, .. } = &mut changed else {
+        unreachable!()
+    };
+    mcp_import.as_mut().unwrap().projected_tool.push(1);
+    assert_ne!(
+        make(changed).unwrap().fingerprint(),
+        activation.fingerprint()
+    );
+
+    let make_scope = |owner: OwnedAgentId| {
+        EntityInvocationScope::new(
+            EntityInvocationId::new(
+                OwnedAgentEntityId {
+                    owner: owner.clone(),
+                    entity: activation.entity(),
+                },
+                OplogIndex::from_u64(8),
+            )
+            .unwrap(),
+            OplogIndex::from_u64(7),
+            Arc::new(activation.clone()),
+            Principal::Agent(AgentPrincipal {
+                agent_id: owner.agent_id,
+            }),
+            InvocationExecutionMode::ReplayingCompleted,
+            IdempotencyKey::new("mcp-activation-scope-seed".to_string()),
+            false,
+            true,
+            IdempotencyKey::new("mcp-activation-stream-seed".to_string()),
+        )
+    };
+    assert!(make_scope(owner.clone()).is_ok());
+    let other_environment = OwnedAgentId {
+        environment_id: EnvironmentId::new(),
+        ..owner
+    };
+    assert!(make_scope(other_environment).is_err());
 }
 
 #[test]
@@ -642,6 +882,7 @@ fn host_activation_rejects_source_policy_identity_mismatches() {
             EntityActivationPolicy::Tool {
                 provision: provision.clone(),
                 binding: binding.clone(),
+                mcp_import: None,
             },
             activation.filesystem,
         );
@@ -668,7 +909,11 @@ fn host_activation_rejects_invalid_source_contracts() {
             host_tool_id.clone(),
             "  ".to_string(),
             activation.deployment_revision,
-            EntityActivationPolicy::Tool { provision, binding },
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import: None,
+            },
             activation.filesystem,
         )
         .unwrap_err(),

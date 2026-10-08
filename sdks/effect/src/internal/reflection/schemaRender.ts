@@ -21,6 +21,7 @@ import type {
   SchemaValue,
 } from "../schema-model/model.js"
 import { floatFromBits } from "../schema-model/validation.js"
+import { parseUuid, uuidToString } from "golem:core/types@2.0.0"
 
 export type JsonValue =
   | null
@@ -140,6 +141,12 @@ export function fromCanonicalJson(
       return { tag: "path", value: expectNonEmptyString(json, path) }
     case "url":
       return { tag: "url", value: expectNonEmptyString(json, path) }
+    case "uuid":
+      try {
+        return { tag: "uuid", value: parseUuid(expectString(json, path)) }
+      } catch {
+        return fail(path, "invalid UUID")
+      }
     case "datetime":
       return { tag: "datetime", value: datetimeFromISOString(expectString(json, path)) }
     case "duration":
@@ -154,7 +161,10 @@ export function fromCanonicalJson(
       return {
         tag: "record",
         fields: body.fields.map((field) => {
-          if (!(field.name in object)) fail([...path, field.name], "missing field")
+          if (!Object.prototype.hasOwnProperty.call(object, field.name)) {
+            if (resolve(graph, field.body).body.tag === "option") return { tag: "option" }
+            fail([...path, field.name], "missing field")
+          }
           return fromCanonicalJson(graph, field.body, object[field.name], [...path, field.name])
         }),
       }
@@ -307,16 +317,21 @@ export function toCanonicalJson(
     case "path":
     case "url":
       return value.value
+    case "uuid":
+      return uuidToString(value.value)
     case "text":
       return {
         text: value.text,
         ...(value.language === undefined ? {} : { language: value.language }),
       }
-    case "binary":
+    case "binary": {
+      if (value.mimeType !== undefined && !MIME_TYPE_PATTERN.test(value.mimeType))
+        fail([...path, "mimeType"], "invalid MIME type")
       return {
         bytes: bytesToBase64(value.bytes),
         ...(value.mimeType === undefined ? {} : { mimeType: value.mimeType }),
       }
+    }
     case "datetime":
       return datetimeToISOString(value.value)
     case "duration":
@@ -453,9 +468,11 @@ export function toCanonicalJsonSchema(
   type: SchemaType,
   includeDraftMarker: boolean,
 ): JsonValue {
+  const referencedDefinitions = assertCanonicalJsonEligible(graph, type, true)
   const root = renderSchema(graph, type)
   const defs = Object.fromEntries(
-    [...graph.defs].map(([id, definition]) => {
+    [...referencedDefinitions].map((id) => {
+      const definition = graph.defs.get(id)!
       const rendered = renderSchema(graph, definition.body)
       return [
         id,
@@ -469,6 +486,91 @@ export function toCanonicalJsonSchema(
     ...(includeDraftMarker ? { $schema: "https://json-schema.org/draft/2020-12/schema" } : {}),
     ...root,
     ...(Object.keys(defs).length ? { $defs: defs } : {}),
+  }
+}
+
+export function assertCanonicalJsonEligible(
+  graph: SchemaGraph,
+  root: SchemaType,
+  allowUnsupportedLeaves = false,
+): ReadonlySet<string> {
+  const referencedDefinitions = new Set<string>()
+  const visit = (type: SchemaType, path: Path, aliasChain = new Set<string>()): void => {
+    const body = type.body
+    switch (body.tag) {
+      case "ref": {
+        const definition = graph.defs.get(body.id)
+        if (!definition) fail(path, `dangling reference '${body.id}'`)
+        if (aliasChain.has(body.id))
+          fail(path, `reference cycle through '${body.id}' has no structural JSON value`)
+        if (referencedDefinitions.has(body.id)) return
+        referencedDefinitions.add(body.id)
+        visit(definition.body, [...path, `$ref:${body.id}`], new Set([...aliasChain, body.id]))
+        return
+      }
+      case "record":
+        body.fields.forEach((field) => visit(field.body, [...path, field.name]))
+        return
+      case "variant":
+        body.cases.forEach((entry) => {
+          if (entry.payload) visit(entry.payload, [...path, entry.name])
+        })
+        return
+      case "tuple":
+        body.elements.forEach((element, index) => visit(element, [...path, index]))
+        return
+      case "list":
+      case "fixed-list":
+        visit(body.element, [...path, "items"])
+        return
+      case "map":
+        visit(body.key, [...path, "key"])
+        visit(body.value, [...path, "value"])
+        return
+      case "option":
+        if (canRenderNull(graph, body.element))
+          fail(path, "nested options cannot preserve None versus Some(None) in canonical JSON")
+        visit(body.element, path)
+        return
+      case "result":
+        if (body.ok) visit(body.ok, [...path, "ok"])
+        if (body.err) visit(body.err, [...path, "err"])
+        return
+      case "union":
+        body.branches.forEach((branch) => visit(branch.body, [...path, branch.tag]))
+        return
+      case "secret":
+      case "quota-token":
+      case "permission-card":
+        if (allowUnsupportedLeaves) return
+        return fail(path, `${body.tag} values cannot cross a canonical JSON boundary`)
+      case "future":
+      case "stream":
+        if (allowUnsupportedLeaves) return
+        return fail(path, `${body.tag} values have no canonical JSON representation`)
+      default:
+        return
+    }
+  }
+  visit(root, [])
+  return referencedDefinitions
+}
+
+function canRenderNull(graph: SchemaGraph, type: SchemaType, seen = new Set<string>()): boolean {
+  switch (type.body.tag) {
+    case "option":
+      return true
+    case "union":
+      return type.body.branches.some((branch) => canRenderNull(graph, branch.body, seen))
+    case "ref": {
+      if (seen.has(type.body.id)) return false
+      const definition = graph.defs.get(type.body.id)
+      return definition
+        ? canRenderNull(graph, definition.body, new Set([...seen, type.body.id]))
+        : false
+    }
+    default:
+      return false
   }
 }
 
@@ -491,7 +593,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(-(2 ** 31), 2 ** 31 - 1)
       break
     case "s64":
-      rendered = integerStringSchema(I64_MIN, I64_MAX, true, "int64")
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, I64_MIN, "min"),
+        restrictedIntegerBound(body.restrictions?.max, I64_MAX, "max"),
+        true,
+        "int64",
+      )
       break
     case "u8":
       rendered = integerSchema(0, 255)
@@ -503,7 +610,12 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       rendered = integerSchema(0, 2 ** 32 - 1)
       break
     case "u64":
-      rendered = integerStringSchema(0n, U64_MAX, false, "uint64")
+      rendered = integerStringSchema(
+        restrictedIntegerBound(body.restrictions?.min, 0n, "min"),
+        restrictedIntegerBound(body.restrictions?.max, U64_MAX, "max"),
+        false,
+        "uint64",
+      )
       break
     case "f32":
     case "f64":
@@ -522,12 +634,17 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       if (body.restrictions.regex !== undefined) text.pattern = body.restrictions.regex
       rendered = {
         type: "object",
-        properties: { text, language: { type: "string" } },
+        properties: {
+          text,
+          language: {
+            type: "string",
+            ...(body.restrictions.languages === undefined
+              ? {}
+              : { enum: body.restrictions.languages }),
+          },
+        },
         required: ["text"],
         additionalProperties: false,
-        ...(body.restrictions.languages === undefined
-          ? {}
-          : { description: `Allowed languages: ${body.restrictions.languages.join(", ")}` }),
       }
       break
     }
@@ -539,6 +656,7 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
           bytes: {
             type: "string",
             contentEncoding: "base64url",
+            pattern: BASE64URL_PATTERN,
             ...(body.restrictions.minBytes === undefined
               ? {}
               : { minLength: base64UrlLength(body.restrictions.minBytes) }),
@@ -546,12 +664,15 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
               ? {}
               : { maxLength: base64UrlLength(body.restrictions.maxBytes) }),
           },
-          mimeType: { type: "string", pattern: MIME_TYPE_PATTERN.source },
+          mimeType: {
+            type: "string",
+            pattern: MIME_TYPE_PATTERN.source,
+            ...(body.restrictions.mimeTypes === undefined
+              ? {}
+              : { enum: body.restrictions.mimeTypes }),
+          },
         },
         additionalProperties: false,
-        ...(body.restrictions.mimeTypes === undefined
-          ? {}
-          : { description: `Allowed MIME types: ${body.restrictions.mimeTypes.join(", ")}` }),
       }
       break
     case "path": {
@@ -589,6 +710,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
       }
       break
     }
+    case "uuid":
+      rendered = { type: "string", format: "uuid", title: "UUID" }
+      break
     case "datetime":
       rendered = { type: "string", format: "date-time" }
       break
@@ -625,7 +749,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
             attachMetadata(renderSchema(graph, field.body), field.metadata),
           ]),
         ),
-        required: body.fields.map((field) => field.name),
+        required: body.fields
+          .filter((field) => resolve(graph, field.body).body.tag !== "option")
+          .map((field) => field.name),
         additionalProperties: false,
       }
       break
@@ -713,11 +839,9 @@ function renderSchema(graph: SchemaGraph, type: SchemaType): Record<string, Json
     case "secret":
     case "quota-token":
     case "permission-card":
-      rendered = { writeOnly: true, "x-golem-capability": body.tag }
-      break
     case "future":
     case "stream":
-      rendered = { type: "null", description: "WASI P3 placeholder" }
+      rendered = { not: {} }
       break
   }
   if ((rendered.type === "integer" || rendered.type === "number") && "restrictions" in body) {
@@ -936,7 +1060,9 @@ function discriminatorMatches(rule: { tag: string; val?: unknown }, value: JsonV
   }
   return false
 }
-const MIME_TYPE_PATTERN = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u
+const MIME_TYPE_PATTERN = new RegExp("^[A-Za-z0-9!#$&^_.+\\-]+\\/[A-Za-z0-9!#$&^_.+\\-]+$", "u")
+const BASE64URL_PATTERN =
+  "^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-][AQgw]|[A-Za-z0-9_-]{2}[AEIMQUYcgkosw048])?$"
 
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -967,7 +1093,9 @@ function base64UrlToBytes(value: string, path: Path): Uint8Array {
     if (value[index + 2] !== undefined) bytes.push(((b & 15) << 4) | (c >> 2))
     if (value[index + 3] !== undefined) bytes.push(((c & 3) << 6) | d)
   }
-  return Uint8Array.from(bytes)
+  const result = Uint8Array.from(bytes)
+  if (bytesToBase64(result) !== value) fail(path, "invalid base64url without padding")
+  return result
 }
 
 function rejectUnknownFields(
@@ -1020,6 +1148,23 @@ function integerStringSchema(
     "x-golem-minimum": min.toString(),
     "x-golem-maximum": max.toString(),
   }
+}
+
+function restrictedIntegerBound(
+  bound: NumericRestrictions["min"] | undefined,
+  fallback: bigint,
+  side: "min" | "max",
+): bigint {
+  if (bound === undefined) return fallback
+  if (bound.tag === "float-bits") return fallback
+  const value = bound.val
+  return side === "min"
+    ? value > fallback
+      ? value
+      : fallback
+    : value < fallback
+      ? value
+      : fallback
 }
 
 export {

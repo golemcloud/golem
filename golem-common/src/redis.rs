@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, atomic};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use fred::clients::Transaction;
@@ -431,6 +431,176 @@ return 1
         self.record(start, "EVAL", result)
     }
 
+    /// Runs a Lua script, which Redis executes atomically. `keys` get the pool's key prefix.
+    pub async fn eval<K>(
+        &self,
+        script: &'static str,
+        keys: &[K],
+        args: Vec<Value>,
+        options: Option<&Options>,
+    ) -> RedisResult<Value>
+    where
+        K: AsRef<str>,
+    {
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let options = options.cloned().unwrap_or_default();
+        let mut command_args: Vec<Value> = Vec::with_capacity(2 + keys.len() + args.len());
+        command_args.push(script.into());
+        command_args.push((keys.len() as i64).into());
+        for key in keys {
+            command_args.push(self.prefixed_key(key).into());
+        }
+        command_args.extend(args);
+        let result = self
+            .pool
+            .next()
+            .with_options(&options)
+            .custom_raw(cmd!("EVAL"), command_args)
+            .await
+            .and_then(|frame| frame.try_into());
+        self.record(start, "EVAL", result)
+    }
+
+    pub async fn compare_and_mutate_many_hash<K>(
+        &self,
+        key: K,
+        field: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> RedisResult<bool>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+local current = redis.call('HGET', KEYS[1], ARGV[1])
+local expected_present = ARGV[2] == '1'
+if (current == false and expected_present) or (current ~= false and (not expected_present or current ~= ARGV[3])) then
+  return 0
+end
+local set_count = tonumber(ARGV[5])
+local index = 6
+for i = 1, set_count do
+  redis.call('HSET', KEYS[1], ARGV[index], ARGV[index + 1])
+  index = index + 2
+end
+local delete_count = tonumber(ARGV[index])
+index = index + 1
+for i = 1, delete_count do
+  redis.call('HDEL', KEYS[1], ARGV[index])
+  index = index + 1
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[4])
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let mut args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            field.into(),
+            (if expected.is_some() { "1" } else { "0" }).into(),
+            expected.unwrap_or_default().into(),
+            i64::try_from(expiry.as_millis())
+                .unwrap_or(i64::MAX)
+                .max(1)
+                .into(),
+            i64::try_from(sets.len()).unwrap_or(i64::MAX).into(),
+        ];
+        for (field, value) in sets {
+            args.push((*field).into());
+            args.push((*value).into());
+        }
+        args.push(i64::try_from(deletions.len()).unwrap_or(i64::MAX).into());
+        for field in deletions {
+            args.push((*field).into());
+        }
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>())
+            .map(|result| result == 1);
+        self.record(start, "EVAL", result)
+    }
+
+    pub async fn compare_and_delete<K>(&self, key: K, expected: Option<&[u8]>) -> RedisResult<bool>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+local current = redis.call('GET', KEYS[1])
+local expected_present = ARGV[1] == '1'
+if (current == false and expected_present) or (current ~= false and (not expected_present or current ~= ARGV[2])) then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            (if expected.is_some() { "1" } else { "0" }).into(),
+            expected.unwrap_or_default().into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>())
+            .map(|result| result == 1);
+        self.record(start, "EVAL", result)
+    }
+
+    pub async fn set_hash_with_expiry<K>(
+        &self,
+        key: K,
+        field: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> RedisResult<()>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = r#"
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[1], ARGV[3])
+return 1
+"#;
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            field.into(),
+            value.into(),
+            i64::try_from(expiry.as_millis())
+                .unwrap_or(i64::MAX)
+                .max(1)
+                .into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<i64>())
+            .map(|_| ());
+        self.record(start, "EVAL", result)
+    }
+
     pub async fn hset<R, K, V>(&self, key: K, values: V) -> RedisResult<R>
     where
         R: FromValue,
@@ -730,6 +900,29 @@ return 1
             "XTRIM",
             self.pool.xtrim(self.prefixed_key(key), cap).await,
         )
+    }
+
+    pub async fn xtrim_and_delete_if_empty<K>(&self, key: K, min_id: u64) -> RedisResult<u64>
+    where
+        K: AsRef<str>,
+    {
+        const SCRIPT: &str = "redis.call('XTRIM', KEYS[1], 'MINID', ARGV[1]); if redis.call('XLEN', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end; return 1";
+        self.ensure_connected().await?;
+        let start = Instant::now();
+        let args: Vec<Value> = vec![
+            SCRIPT.into(),
+            1.into(),
+            self.prefixed_key(key).into(),
+            min_id.to_string().into(),
+        ];
+        let result = self
+            .pool
+            .next()
+            .custom_raw(cmd!("EVAL"), args)
+            .await
+            .and_then(|frame| frame.try_into())
+            .and_then(|value: Value| value.convert::<u64>());
+        self.record(start, "EVAL", result)
     }
 
     pub async fn zadd<R, K, V>(

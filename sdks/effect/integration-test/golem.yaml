@@ -28,6 +28,7 @@ environments:
 
 componentTemplates:
   effect-golem-ts:
+    guestLanguage: effect
     presets:
       debug:
         default: true
@@ -87,6 +88,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   effect-golem-tool-middleware:
+    guestLanguage: effect
     presets:
       debug:
         build:
@@ -97,7 +99,7 @@ componentTemplates:
               GOLEM_APP_ROOT: "{{ appRootDir }}"
               GOLEM_TEMP: "{{ golemTempDir }}"
               GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/tool_middleware_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -111,7 +113,7 @@ componentTemplates:
               GOLEM_APP_ROOT: "{{ appRootDir }}"
               GOLEM_TEMP: "{{ golemTempDir }}"
               GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/tool_middleware_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -119,6 +121,7 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
   effect-golem-agent-tool-middleware:
+    guestLanguage: effect
     presets:
       debug:
         build:
@@ -129,7 +132,7 @@ componentTemplates:
               GOLEM_APP_ROOT: "{{ appRootDir }}"
               GOLEM_TEMP: "{{ golemTempDir }}"
               GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_tool_middleware_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -143,7 +146,7 @@ componentTemplates:
               GOLEM_APP_ROOT: "{{ appRootDir }}"
               GOLEM_TEMP: "{{ golemTempDir }}"
               GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
-          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_tool_middleware_guest.wasm"
+          - injectToPrebuiltQuickjs: "{{ appRootDir }}/node_modules/@golemcloud/effect-golem/wasm/agent_guest.wasm"
             module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
             into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -167,6 +170,9 @@ components:
 
 tools:
   effect-streaming: {}
+  middleware:
+    effect-combined-prefix:
+      component: effect-golem:tool-caller
 
 # Per-agent default config values for the local source. The secret
 # `connectionAddress` field is provisioned via `secretDefaults` below
@@ -203,7 +209,7 @@ agents:
 
 # Secret defaults applied automatically to the local environment at
 # deploy time. Production deployments would use
-# `golem secret create apiKey --secret-type String --secret-value ...`
+# `golem secret create apiKey --type String --value ...`
 # instead.
 resourceDefaults:
   local:

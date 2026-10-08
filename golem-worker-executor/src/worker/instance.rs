@@ -21,7 +21,7 @@ use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOper
 use crate::model::ExecutionStatus;
 use crate::services::active_agents::WorkerComponentCharge;
 use crate::services::agent_filesystem::FilesystemGenerationHandle;
-use crate::services::oplog::{CommitLevel, Oplog};
+use crate::services::oplog::{CommitLevel, Oplog, OplogFence};
 use crate::services::resource_limits::AtomicResourceEntry;
 use crate::services::{HasActiveAgents, HasComponentService, HasWasmtimeEngine};
 use crate::workerctx::WorkerCtx;
@@ -129,6 +129,10 @@ pub struct OwnerExecution {
     wall_clock_now_gate: Mutex<Option<Arc<ClockNowGate>>>,
     #[cfg(feature = "test-utils")]
     skip_wall_clock_now_durability: AtomicBool,
+    /// Pauses an invocation between buffering its `AgentInvocationStarted` and committing it, so
+    /// a test can act while the entry is in the buffer and nothing has queried storage yet.
+    #[cfg(feature = "test-utils")]
+    invocation_started_gate: Mutex<Option<Arc<ClockNowGate>>>,
 }
 
 #[cfg(feature = "test-utils")]
@@ -193,6 +197,8 @@ impl OwnerExecution {
             wall_clock_now_gate: Mutex::new(None),
             #[cfg(feature = "test-utils")]
             skip_wall_clock_now_durability: AtomicBool::new(false),
+            #[cfg(feature = "test-utils")]
+            invocation_started_gate: Mutex::new(None),
         }
     }
 
@@ -257,6 +263,7 @@ impl OwnerExecution {
         if let Some(replay) = self.replay.read().await.as_ref() {
             replay.ensure_reconstruction_claims_empty()?;
         }
+        self.tool_operations.join_owner_failure_cleanup().await?;
         self.tool_operations.begin_generation()?;
         self.deferred_tool_admission.begin_generation()?;
         self.reached_oplog_marker
@@ -356,7 +363,16 @@ impl OwnerExecution {
     pub(crate) async fn test_after_monotonic_clock_start(&self) -> Result<(), InterruptKind> {
         let gate = self.monotonic_clock_start_gate.lock().unwrap().take();
         if let Some(gate) = gate {
-            self.oplog.commit(CommitLevel::Always).await;
+            // The gate is entered from inside a host call, where the fence surfaces as the
+            // interrupt that gives the agent up; a transient storage failure is fatal here as
+            // everywhere else.
+            match self.oplog.commit(CommitLevel::Always).await {
+                Ok(_) => {}
+                Err(crate::services::oplog::OplogError::Fenced(_)) => {
+                    return Err(InterruptKind::ShardLost);
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
             if let Some(entered) = gate.entered.lock().unwrap().take() {
                 let _ = entered.send(());
             }
@@ -370,6 +386,34 @@ impl OwnerExecution {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub fn test_gate_next_invocation_started(&self) -> ClockNowGateHandle {
+        let (entered_tx, entered) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(ClockNowGate {
+            entered: Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+            abort_as_restart: AtomicBool::new(false),
+        });
+        *self.invocation_started_gate.lock().unwrap() = Some(gate.clone());
+        ClockNowGateHandle { entered, gate }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_after_invocation_started_buffered(&self) {
+        let gate = self.invocation_started_gate.lock().unwrap().take();
+        if let Some(gate) = gate {
+            if let Some(entered) = gate.entered.lock().unwrap().take() {
+                let _ = entered.send(());
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("invocation started gate was closed")
+                .forget();
+        }
     }
 
     #[cfg(feature = "test-utils")]
@@ -413,14 +457,11 @@ impl OwnerExecution {
         }
     }
 
-    pub async fn commit(&self, level: CommitLevel) -> OplogIndex {
-        self.commit.commit_and_update_state(level).await.0
-    }
-
-    pub async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.oplog.add(entry).await;
-        self.commit(CommitLevel::Always).await;
-        index
+    pub async fn commit(&self, level: CommitLevel) -> Result<OplogIndex, OplogFence> {
+        self.commit
+            .commit_and_update_state(level)
+            .await
+            .map(|(index, _)| index)
     }
 }
 
@@ -727,7 +768,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // process crash can replay and persist the same instantiation growth again.
             owner
                 .add_and_commit_oplog(OplogEntry::grow_memory(live_instantiation_growth))
-                .await;
+                .await?;
             owner
                 .startup_linear_memory_bytes
                 .store(allocated_bytes, Ordering::Release);
@@ -780,6 +821,10 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 component_metadata.component_size,
             )
             .await;
+        let authority_wallet = match scope {
+            Some(scope) => scope.authority_wallet().to_vec(),
+            None => owner.get_wallet_cards().await?,
+        };
         let mut context = owner
             .create_entity_context(
                 self.runtime.clone(),
@@ -794,6 +839,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
                 self.owner_component_metadata
                     .clone()
                     .expect("Entity instance host must pin its owner component metadata"),
+                authority_wallet,
             )
             .await?;
         if let Some(scope) = scope {
@@ -883,11 +929,17 @@ impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
     }
 
     pub(crate) async fn settle_tool_children(
-        &mut self,
+        mut self,
         parent: crate::worker::owner_lane::OwnerInvocationId,
     ) -> Result<(), WorkerExecutorError> {
-        crate::durable_host::tool::settle_tool_children(&mut self.store.as_context_mut(), parent)
-            .await
+        let result = crate::durable_host::tool::settle_tool_children(
+            &mut self.store.as_context_mut(),
+            parent,
+        )
+        .await;
+        // A trapped Store is disposed of, not driven to normal guest EXIT.
+        drop(self);
+        result
     }
 
     /// Runs one entity export with an installed invocation scope and then destroys its Store.

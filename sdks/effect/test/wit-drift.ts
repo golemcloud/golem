@@ -28,16 +28,14 @@ import * as AgentRuntime from "../src/index.js"
 import * as MiddlewareRuntime from "../src/Middleware.js"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 
-void (AgentRuntime satisfies typeof import("agent-guest"))
-void (AgentRuntime satisfies typeof import("agent-tool-middleware-guest"))
-void (MiddlewareRuntime satisfies typeof import("tool-middleware-guest"))
+void ({ ...AgentRuntime, ...MiddlewareRuntime } satisfies typeof import("agent-guest"))
 
 /**
  * Structural mutual-assignability check, recursively normalising
- * `readonly` modifiers. Schema-codec `.Type` projections add
- * `readonly` to every field while WIT records are emitted as
- * mutable, so a strict invariant `Equal` would always fail; we
- * only care that the two shapes are interchangeable at the wire.
+ * `readonly` modifiers. Schema-codec `.Encoded` projections add
+ * `readonly` to every field while WIT records are emitted as mutable,
+ * so a strict invariant `Equal` would always fail; we only care that
+ * the two encoded shapes are interchangeable at the wire.
  */
 type Mutable<T> = T extends (...args: never[]) => unknown
   ? T
@@ -67,12 +65,12 @@ type AssertAllTrue<T extends Record<string, true>> = T
  * continue to use the existing `WitTypes` primitive codecs.
  */
 export type _Drift_IdSchemaCodecs = AssertAllTrue<{
-  "Ids.Uuid": StructEqual<typeof Ids.Uuid.Type, CoreTypes.Uuid>
-  "Ids.ComponentId": StructEqual<typeof Ids.ComponentId.Type, CoreTypes.ComponentId>
-  "Ids.AgentId": StructEqual<typeof Ids.AgentId.Type, CoreTypes.AgentId>
-  "Ids.AccountId": StructEqual<typeof Ids.AccountId.Type, CoreTypes.AccountId>
-  "Ids.EnvironmentId": StructEqual<typeof Ids.EnvironmentId.Type, CoreTypes.EnvironmentId>
-  "Ids.PromiseId": StructEqual<typeof Ids.PromiseId.Type, CoreTypes.PromiseId>
+  "Ids.Uuid": StructEqual<typeof Ids.Uuid.Encoded, CoreTypes.Uuid>
+  "Ids.ComponentId": StructEqual<typeof Ids.ComponentId.Encoded, CoreTypes.ComponentId>
+  "Ids.AgentId": StructEqual<typeof Ids.AgentId.Encoded, CoreTypes.AgentId>
+  "Ids.AccountId": StructEqual<typeof Ids.AccountId.Encoded, CoreTypes.AccountId>
+  "Ids.EnvironmentId": StructEqual<typeof Ids.EnvironmentId.Encoded, CoreTypes.EnvironmentId>
+  "Ids.PromiseId": StructEqual<typeof Ids.PromiseId.Encoded, CoreTypes.PromiseId>
 }>
 
 /**

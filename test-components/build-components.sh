@@ -2,10 +2,11 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "external-durable-streams")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts")
+rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "tool-runtime-bypass" "trapped-leaf-observer" "external-durable-streams" "audit-middleware" "output-redaction")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
+effect_test_apps=("tool-streaming-effect")
 scala_test_apps=("tool-streaming-scala")
-moonbit_test_apps=("tool-streaming-moonbit")
+moonbit_test_apps=("tool-streaming-moonbit" "tool-streaming-moonbit-lifecycle-gol40")
 benchmark_apps=("benchmarks")
 
 RUST_CHUNKS=3 # Number of chunks to split rust apps into for parallel CI builds
@@ -68,8 +69,9 @@ print_groups_json() {
     printf '%s{"name":"ts-%d","needs-node":true,"needs-moonbit":true}' "$sep" "$i"
     sep=","
   done
+  printf '%s{"name":"effect","needs-node":true,"needs-effect":true}' "$sep"
   printf '%s{"name":"scala","needs-node":false,"needs-scala":true,"expected-artifact":"golem_it_tool_streaming_scala.wasm"}' "$sep"
-  printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true,"expected-artifact":"golem_it_tool_streaming_moonbit.wasm"}'
+  printf ',{"name":"moonbit","needs-node":false,"needs-moonbit":true}'
   printf ',{"name":"benchmarks","needs-node":true,"needs-moonbit":false}]\n'
 }
 
@@ -89,7 +91,7 @@ for arg in "$@"; do
     check)
       check_only=true
       ;;
-    rust|ts|scala|moonbit|benchmarks)
+    rust|ts|effect|scala|moonbit|benchmarks)
       single_group=true
       group="$arg"
       ;;
@@ -318,6 +320,9 @@ build_sdk_apps() {
         tool-streaming-moonbit)
           test -s ../golem_it_tool_streaming_moonbit.wasm
           ;;
+        tool-streaming-moonbit-lifecycle-gol40)
+          test -s ../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm
+          ;;
       esac
     fi
 
@@ -353,12 +358,54 @@ elif [ "$single_group" = "false" ] || [ "$group" = "ts" ]; then
   NODE_GROUP_LABEL="TS" build_node_apps "${ts_test_apps[@]}"
 fi
 
+if [ "$single_group" = "false" ] || [ "$group" = "effect" ]; then
+  NODE_GROUP_LABEL="Effect" build_node_apps "${effect_test_apps[@]}"
+fi
+
 if [ "$single_group" = "false" ] || [ "$group" = "scala" ]; then
   build_sdk_apps "Scala" "${scala_test_apps[@]}"
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "moonbit" ]; then
   build_sdk_apps "MoonBit" "${moonbit_test_apps[@]}"
+fi
+
+if [ "$group" = "benchmarks" ]; then
+  pushd "tool-streaming" || exit
+  if should_clean; then
+    echo "Cleaning tool-streaming..."
+    clean_current_app
+  fi
+  if [ "$check_only" = true ]; then
+    echo "Checking benchmark tool-streaming components..."
+    "$GOLEM_CLI" build golem-it:tool-streaming-rust-provider \
+      golem-it:tool-streaming-rust-caller --step check --yes
+  elif [ "$clean_only" = false ]; then
+    echo "Building benchmark tool-streaming components..."
+    "$GOLEM_CLI" --preset release build golem-it:tool-streaming-rust-provider \
+      golem-it:tool-streaming-rust-caller --yes --skip-check
+    cp golem-temp/agents/golem_it_tool_streaming_rust_provider_release.wasm \
+      ../golem_it_tool_streaming_rust_provider_release.wasm
+    cp golem-temp/agents/golem_it_tool_streaming_rust_caller_release.wasm \
+      ../golem_it_tool_streaming_rust_caller_release.wasm
+  fi
+  popd || exit
+
+  pushd "agent-rpc" || exit
+  if should_clean; then
+    echo "Cleaning agent-rpc..."
+    clean_current_app
+  fi
+  if [ "$check_only" = true ]; then
+    echo "Checking golem-it:agent-rpc-rust..."
+    "$GOLEM_CLI" build golem-it:agent-rpc-rust --step check --yes
+  elif [ "$clean_only" = false ]; then
+    echo "Building golem-it:agent-rpc-rust..."
+    "$GOLEM_CLI" --preset release build golem-it:agent-rpc-rust --yes --skip-check
+    cp golem-temp/agents/golem_it_agent_rpc_rust_release.wasm \
+      ../golem_it_agent_rpc_rust_release.wasm
+  fi
+  popd || exit
 fi
 
 if [ "$single_group" = "false" ] || [ "$group" = "benchmarks" ]; then

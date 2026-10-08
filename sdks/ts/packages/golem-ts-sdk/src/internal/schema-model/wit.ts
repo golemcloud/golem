@@ -78,6 +78,7 @@ import {
 } from './permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from './permissionCardInternal';
 import { SchemaDecodeError, SchemaEncodeError } from './errors';
+import { Uuid } from '../../uuid';
 
 // ============================================================
 // Schema type / graph
@@ -207,6 +208,8 @@ export class GraphEncoder {
         return { tag: 'char-type' };
       case 'string':
         return { tag: 'string-type' };
+      case 'uuid':
+        return { tag: 'uuid-type' };
       case 'record':
         return {
           tag: 'record-type',
@@ -400,6 +403,8 @@ export function schemaGraphRootsFromWit(
         return { tag: 'char' };
       case 'string-type':
         return { tag: 'string' };
+      case 'uuid-type':
+        return { tag: 'uuid' };
       case 'record-type':
         return {
           tag: 'record',
@@ -608,6 +613,19 @@ export function assertSchemaValueRepresentable(
           throw new SchemaEncodeError(
             `${v.tag} value must be a string: ${String((v as { value: unknown }).value)}`,
           );
+        }
+        return;
+      case 'uuid':
+        if (!(v.value instanceof Uuid)) {
+          throw new SchemaEncodeError('uuid value must be a Uuid');
+        }
+        if (
+          v.value.highBits < 0n ||
+          v.value.highBits >= 1n << 64n ||
+          v.value.lowBits < 0n ||
+          v.value.lowBits >= 1n << 64n
+        ) {
+          throw new SchemaEncodeError('uuid bits must be in the u64 range');
         }
         return;
       case 'datetime': {
@@ -832,6 +850,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: 'char-value', val: v.value };
       case 'string':
         return { tag: 'string-value', val: v.value };
+      case 'uuid':
+        return { tag: 'uuid-value', val: v.value };
       case 'record':
         return { tag: 'record-value', val: v.fields.map((f) => emit(f)) };
       case 'variant':
@@ -1170,6 +1190,10 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
           fail('char-value.val must contain one Unicode scalar');
         }
         return;
+      case 'uuid-value':
+        rangedBigint(n.val.highBits, 'uuid-value.val.highBits', 0n, (1n << 64n) - 1n);
+        rangedBigint(n.val.lowBits, 'uuid-value.val.lowBits', 0n, (1n << 64n) - 1n);
+        return;
       case 'string-value':
       case 'path-value':
       case 'url-value':
@@ -1459,6 +1483,8 @@ export function schemaValueFromWit(wit: WitSchemaValueTree): SchemaValue {
         return { tag: 'char', value: n.val };
       case 'string-value':
         return { tag: 'string', value: n.val };
+      case 'uuid-value':
+        return { tag: 'uuid', value: Uuid.from(n.val) };
       case 'record-value':
         return { tag: 'record', fields: n.val.map((i) => fromIdx(i)) };
       case 'variant-value':
@@ -1665,6 +1691,12 @@ export function drainUnconsumedQuotaAndPermissionCardHandles(
 
 export function typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue {
   return { graph: schemaGraphToWit(tv.graph), value: schemaValueToWit(tv.value) };
+}
+
+export async function typedSchemaValueToWitAsync(
+  tv: TypedSchemaValue,
+): Promise<WitTypedSchemaValue> {
+  return { graph: schemaGraphToWit(tv.graph), value: await schemaValueToWitAsync(tv.value) };
 }
 
 /**

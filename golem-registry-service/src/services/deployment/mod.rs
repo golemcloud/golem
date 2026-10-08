@@ -19,11 +19,12 @@ mod http_parameter_conversion;
 mod mcp;
 mod read;
 mod route_compilation;
+mod router_file_index;
 mod routes;
-pub mod tool_middlewares;
 mod write;
 
 pub use self::deploy_validation_error::DeployValidationError;
+pub(crate) use self::deployment_context::validate_final_http_api_router_for_origin;
 pub use self::mcp::{DeployedMcpError, DeployedMcpService};
 pub use self::read::{DeploymentError, DeploymentService};
 pub use self::routes::{DeployedRoutesError, DeployedRoutesService};

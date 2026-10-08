@@ -16,23 +16,28 @@ pub mod agent_secret;
 pub mod auth;
 pub mod component;
 pub mod environment;
+pub mod mcp_import;
 pub mod plugin_registration;
 pub mod quota_lease;
 pub mod retry_policy;
 
+use bytes::Bytes;
 use derive_more::Display;
 use desert_rust::BinaryCodec;
+use futures::Stream;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType};
 use golem_common::model::component::{
     AgentFilePermissions, ComponentRevision, PluginInstallationAction,
 };
+use golem_common::model::filesystem::{FileReadError, FileReadHead};
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
 use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
@@ -73,7 +78,11 @@ pub struct InterruptResponse {}
 pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
-pub struct UpdateWorkerResponse {}
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct UpdateWorkerResponse {
+    pub update_attempt_index: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct ActivatePluginResponse {}
@@ -148,6 +157,7 @@ pub struct ResourceLimits {
     pub per_invocation_rpc_call_limit: u64,
     pub available_http_calls: u64,
     pub available_rpc_calls: u64,
+    pub available_blob_storage_bytes: u64,
     pub max_concurrent_agents_per_executor: u64,
     pub oplog_writes_per_second: u64,
     pub usage_update_applied: bool,
@@ -188,6 +198,7 @@ impl From<ResourceLimits> for golem_api_grpc::proto::golem::common::ResourceLimi
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
+            available_blob_storage_bytes: value.available_blob_storage_bytes,
             max_concurrent_agents_per_executor: value.max_concurrent_agents_per_executor,
             oplog_writes_per_second: value.oplog_writes_per_second,
             usage_update_applied: value.usage_update_applied,
@@ -206,6 +217,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             per_invocation_rpc_call_limit: value.per_invocation_rpc_call_limit,
             available_http_calls: value.available_http_calls,
             available_rpc_calls: value.available_rpc_calls,
+            available_blob_storage_bytes: value.available_blob_storage_bytes,
             max_concurrent_agents_per_executor: normalize_concurrent_agents_limit(
                 value.max_concurrent_agents_per_executor,
             ),
@@ -274,6 +286,21 @@ pub enum GetFileSystemNodeResult {
     Ok(Vec<ComponentFileSystemNode>),
     File(ComponentFileSystemNode),
     NotFound,
+}
+
+/// Metadata and bounded bytes from one serialized filesystem generation. Consumers must poll
+/// the body to EOF or drop it; errors after the head terminate the read without retrying it.
+pub struct FileReadResponse {
+    pub head: FileReadHead,
+    pub body: Pin<Box<dyn Stream<Item = Result<Bytes, FileReadError>> + Send + 'static>>,
+}
+
+impl std::fmt::Debug for FileReadResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileReadResponse")
+            .field("head", &self.head)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -511,6 +538,7 @@ mod tests {
             per_invocation_rpc_call_limit: 0,
             available_http_calls: 0,
             available_rpc_calls: 0,
+            available_blob_storage_bytes: 0,
             max_concurrent_agents_per_executor: 0,
             oplog_writes_per_second: 0,
             usage_update_applied: false,
@@ -536,6 +564,7 @@ mod tests {
             per_invocation_rpc_call_limit: 0,
             available_http_calls: 0,
             available_rpc_calls: 0,
+            available_blob_storage_bytes: 9,
             max_concurrent_agents_per_executor: 7,
             oplog_writes_per_second: 500,
             usage_update_applied: true,
@@ -545,5 +574,6 @@ mod tests {
 
         assert_eq!(converted.max_concurrent_agents_per_executor, 7);
         assert_eq!(converted.oplog_writes_per_second, 500);
+        assert_eq!(converted.available_blob_storage_bytes, 9);
     }
 }

@@ -159,8 +159,8 @@ impl DurableStreamStore {
                 )]
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
         let (oplog_index, entry) = entries
             .pop()
             .expect("registration batch returned no oplog entry");
@@ -261,106 +261,76 @@ impl DurableStreamStore {
                         keys.push(ProducerMetadataKey::Stream(handle.stream_id));
                     }
                 }
+                ProducerOutputSource::Registered(handle, _) => {
+                    keys.push(ProducerMetadataKey::Stream(handle.stream_id));
+                }
             }
         }
         let mut index = self.index_for(keys).await?;
-        for output in &outputs {
-            if let ProducerOutputSource::Existing(handle) = &output.source
-                && self.owns_handle_identity(handle)
+        let invalid_existing_handle = outputs.iter().any(|output| {
+            matches!(&output.source, ProducerOutputSource::Existing(handle) | ProducerOutputSource::Registered(handle, _)
+                if self.owns_handle_identity(handle)
                 && index
                     .registrations
                     .get(&handle.stream_id)
-                    .is_none_or(|registration| !registration.accepts(handle, self.generation()))
-            {
-                return Err(StreamStoreError::InvalidHandle);
-            }
-        }
+                    .is_none_or(|registration| !registration.accepts(handle, self.generation())))
+                || matches!(&output.source, ProducerOutputSource::Registered(handle, source)
+                    if !self.owns_handle_identity(handle)
+                        || index.registrations.get(&handle.stream_id).is_none_or(|registration| {
+                            source != &StreamRecordReference::Local(LocalStreamId(
+                                registration.registration_oplog_index,
+                            ))
+                        }))
+        });
         let result_offset = index.invocation_results.get(&session_key).copied();
         let result_session_key = session_key.clone();
         let result_session_reference =
             StreamRegistrationInvocation::Local(session_key.idempotency_key.clone());
-        let mut cancellations = Vec::new();
-        for (position, output) in outputs.iter().enumerate() {
-            if let Some(epoch) = output.cancellation_epoch {
-                if epoch == 0 {
-                    return Err(StreamStoreError::InvalidAttachmentState);
-                }
-                let terminal = match &output.source {
-                    ProducerOutputSource::New(request) => {
-                        if let Some(stream_id) = index.coordinates.get(&request.coordinate) {
-                            let stream = index
-                                .streams
-                                .get(stream_id)
-                                .ok_or(StreamStoreError::UnknownStream(*stream_id))?;
-                            if stream.terminal {
-                                None
-                            } else {
-                                Some((
-                                    stream.next_sequence,
-                                    index.entity_parent_start_index(*stream_id)?,
-                                ))
-                            }
-                        } else {
-                            Some((0, entity_parent_start_index))
-                        }
-                    }
-                    ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle) => {
-                        let stream = index
-                            .streams
-                            .get(&handle.stream_id)
-                            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
-                        if stream.terminal {
-                            None
-                        } else {
-                            Some((
-                                stream.next_sequence,
-                                index.entity_parent_start_index(handle.stream_id)?,
-                            ))
-                        }
-                    }
-                    ProducerOutputSource::Existing(_) => None,
-                };
-                let applied_locally = matches!(&output.source, ProducerOutputSource::New(_))
-                    || matches!(&output.source, ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle));
-                cancellations.push((position, epoch, terminal, applied_locally));
-            }
+        if outputs
+            .iter()
+            .any(|output| output.cancellation_epoch == Some(0))
+        {
+            return Err(StreamStoreError::InvalidAttachmentState);
         }
         let mut requests = outputs
             .iter()
             .filter_map(|output| match &output.source {
                 ProducerOutputSource::New(request) => Some(request.clone()),
-                ProducerOutputSource::Existing(_) => None,
+                ProducerOutputSource::Existing(_) | ProducerOutputSource::Registered(_, _) => None,
             })
             .collect::<Vec<_>>();
-        let make_result = move |owned_sources: Vec<StreamRecordReference>| {
-            let mut owned_sources = owned_sources.into_iter();
-            let stream_mappings = outputs
-                .into_iter()
-                .map(|output| {
-                    let source = match output.source {
-                        ProducerOutputSource::New(_) => owned_sources
-                            .next()
-                            .expect("result allocation supplies one source per new output"),
-                        ProducerOutputSource::Existing(handle) => {
-                            StreamRecordReference::Foreign(handle)
+        let make_result =
+            move |outputs: Vec<ProducerOutputRegistration>,
+                  owned_sources: Vec<StreamRecordReference>| {
+                let mut owned_sources = owned_sources.into_iter();
+                let stream_mappings = outputs
+                    .into_iter()
+                    .map(|output| {
+                        let source = match output.source {
+                            ProducerOutputSource::New(_) => owned_sources
+                                .next()
+                                .expect("result allocation supplies one source per new output"),
+                            ProducerOutputSource::Existing(handle) => {
+                                StreamRecordReference::Foreign(handle)
+                            }
+                            ProducerOutputSource::Registered(_, source) => source,
+                        };
+                        StreamBindingRecord {
+                            transport_stream_id: output.transport_stream_id,
+                            source,
+                            role: output.role,
                         }
-                    };
-                    StreamBindingRecord {
-                        transport_stream_id: output.transport_stream_id,
-                        source,
-                        role: SessionStreamRole::Output,
-                    }
-                })
-                .collect::<Vec<_>>();
-            StreamSessionRecord::InvocationResult(
-                golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord {
-                    format_version: DURABLE_STREAM_FORMAT_VERSION,
-                    session_key: result_session_reference,
-                    result,
-                    stream_mappings,
-                },
-            )
-        };
+                    })
+                    .collect::<Vec<_>>();
+                StreamSessionRecord::InvocationResult(
+                    golem_common::base_model::durable_stream::StreamSessionInvocationResultRecord {
+                        format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        session_key: result_session_reference,
+                        result,
+                        stream_mappings,
+                    },
+                )
+            };
         index.ensure_producer_write_allowed()?;
         if requests.len() > MAX_NEW_STREAM_HANDLES_PER_VALUE {
             crate::metrics::durable_stream::record_limit_violation("streams_per_value");
@@ -376,7 +346,7 @@ impl DurableStreamStore {
         if requests.is_empty()
             && let Some(result_offset) = result_offset
         {
-            let expected = make_result(Vec::new());
+            let expected = make_result(outputs, Vec::new());
             let StreamSessionRecord::InvocationResult(_) = &expected else {
                 return Err(StreamStoreError::CorruptHistory(
                     "empty result registration did not build an invocation-result record"
@@ -429,7 +399,7 @@ impl DurableStreamStore {
                         ))
                     })
                     .collect();
-                let expected = make_result(sources);
+                let expected = make_result(outputs, sources);
                 drop(index);
                 let record = self.read_session_record(offset).await?;
                 if record == expected {
@@ -445,6 +415,68 @@ impl DurableStreamStore {
                 return Err(StreamStoreError::RegistrationDivergence);
             }
             registered_handles = handles;
+        }
+        // Exact committed replay preserves foreign handles without granting live authority.
+        if invalid_existing_handle {
+            return Err(StreamStoreError::InvalidHandle);
+        }
+        let mut cancellations = Vec::new();
+        for (position, output) in outputs.iter().enumerate() {
+            if let Some(epoch) = output.cancellation_epoch {
+                let terminal = match &output.source {
+                    ProducerOutputSource::New(request) => {
+                        if let Some(stream_id) = index.coordinates.get(&request.coordinate) {
+                            let stream = index
+                                .streams
+                                .get(stream_id)
+                                .ok_or(StreamStoreError::UnknownStream(*stream_id))?;
+                            if stream.terminal {
+                                None
+                            } else {
+                                Some((
+                                    stream.next_sequence,
+                                    index.entity_parent_start_index(*stream_id)?,
+                                ))
+                            }
+                        } else {
+                            Some((0, entity_parent_start_index))
+                        }
+                    }
+                    ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle) => {
+                        let stream = index
+                            .streams
+                            .get(&handle.stream_id)
+                            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
+                        if stream.terminal {
+                            None
+                        } else {
+                            Some((
+                                stream.next_sequence,
+                                index.entity_parent_start_index(handle.stream_id)?,
+                            ))
+                        }
+                    }
+                    ProducerOutputSource::Existing(_) => None,
+                    ProducerOutputSource::Registered(handle, _) => {
+                        let stream = index
+                            .streams
+                            .get(&handle.stream_id)
+                            .ok_or(StreamStoreError::UnknownStream(handle.stream_id))?;
+                        if stream.terminal {
+                            None
+                        } else {
+                            Some((
+                                stream.next_sequence,
+                                index.entity_parent_start_index(handle.stream_id)?,
+                            ))
+                        }
+                    }
+                };
+                let applied_locally = matches!(&output.source, ProducerOutputSource::New(_))
+                    || matches!(&output.source, ProducerOutputSource::Existing(handle) if self.owns_handle_identity(handle))
+                    || matches!(&output.source, ProducerOutputSource::Registered(_, _));
+                cancellations.push((position, epoch, terminal, applied_locally));
+            }
         }
         if index.finished_sessions.contains(&result_session_key) {
             return Err(StreamStoreError::SessionFinished(result_session_key));
@@ -533,6 +565,7 @@ impl DurableStreamStore {
                     ));
                 }
                 let session_record = make_result(
+                    outputs,
                     handles
                         .iter()
                         .map(|handle| {
@@ -613,8 +646,8 @@ impl DurableStreamStore {
                 result
             }))
             .await
-            .map_err(StreamStoreError::Oplog)?;
-        self.commit(context).await;
+            .map_err(StreamStoreError::from)?;
+        self.commit(context).await?;
 
         let registered_count = registered_handles.len();
         let mut handles = registered_handles;

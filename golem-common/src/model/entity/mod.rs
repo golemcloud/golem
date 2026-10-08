@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
+use crate::model::card::StoredCard;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
+use crate::model::oplog::SpanStarted;
 use crate::model::tool::{
     CompiledToolBinding, HostToolId, SecretKeyScope, ToolFilesystemAccess, ToolName,
     ToolProvisionConfig,
@@ -249,11 +251,21 @@ pub enum FilesystemCapability {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
 #[desert(evolution())]
+#[serde(rename_all = "camelCase")]
+pub struct McpImportActivation {
+    pub source: crate::model::mcp_import::McpImportSource,
+    pub protocol_version: String,
+    pub projected_tool: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, BinaryCodec)]
+#[desert(evolution())]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EntityActivationPolicy {
     Tool {
         provision: ToolProvisionConfig,
         binding: Box<CompiledToolBinding>,
+        mcp_import: Option<Box<McpImportActivation>>,
     },
     ToolMiddleware {
         middleware_name: ToolMiddlewareName,
@@ -432,7 +444,11 @@ impl EntityActivation {
         }
 
         match policy {
-            EntityActivationPolicy::Tool { provision, binding } => {
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import,
+            } => {
                 if binding.deployment_revision != deployment_revision {
                     return Err(
                         "Entity activation and tool binding deployment revisions differ"
@@ -478,6 +494,21 @@ impl EntityActivation {
                                 .to_string(),
                         );
                     }
+                }
+                let is_mcp_bridge =
+                    binding.source == crate::model::mcp_import::mcp_import_bridge_source();
+                if is_mcp_bridge != mcp_import.is_some() {
+                    return Err(
+                        "MCP bridge activation requires its dynamic projection exclusively".into(),
+                    );
+                }
+                if let Some(import) = mcp_import
+                    && (import.source.deployment_revision != deployment_revision
+                        || import.source.upstream_tool_name.is_empty()
+                        || import.protocol_version.is_empty()
+                        || import.projected_tool.is_empty())
+                {
+                    return Err("Invalid MCP import activation snapshot".into());
                 }
                 if !binding
                     .secret_keys_revealable
@@ -694,6 +725,27 @@ impl EntityInvocationPlan {
                 );
             }
         }
+        let leaf_binding = match layers.last().unwrap().activation().policy() {
+            EntityActivationPolicy::Tool { binding, .. } => binding,
+            EntityActivationPolicy::ToolMiddleware { .. } => unreachable!(),
+        };
+        for layer in &layers[..layers.len() - 1] {
+            let policy = layer.activation().policy();
+            if !policy
+                .secret_keys_readable()
+                .is_subset_of(&leaf_binding.secret_keys_readable)
+                || !policy
+                    .secret_keys_revealable()
+                    .is_subset_of(&leaf_binding.secret_keys_revealable)
+                || !policy
+                    .secret_keys_revealable()
+                    .is_subset_of(policy.secret_keys_readable())
+            {
+                return Err(
+                    "Entity middleware secret policy exceeds the recorded leaf binding".to_string(),
+                );
+            }
+        }
         Ok(())
     }
 
@@ -763,6 +815,8 @@ pub struct ToolInvocationDescriptor {
     pub has_stdin: bool,
     pub has_stdout: bool,
     pub declares_stdout: bool,
+    pub has_stderr: bool,
+    pub declares_stderr: bool,
     pub output_contract: ToolOutputContract,
 }
 
@@ -808,6 +862,7 @@ pub struct ToolInvocationDescriptorIdentity {
     pub command_path: Vec<String>,
     pub has_stdin: bool,
     pub has_stdout: bool,
+    pub has_stderr: bool,
 }
 
 /// Stable invocation-attempt identity used while replay has not yet determined whether the live
@@ -842,6 +897,7 @@ pub struct ToolInvocationRejectedIdentity {
     pub input_decode_failure: Option<ToolInputDecodeFailure>,
     pub has_stdin: bool,
     pub has_stdout: bool,
+    pub has_stderr: bool,
     pub call_mode: EntityCallMode,
 }
 
@@ -881,6 +937,7 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
             command_path: value.command_path.clone(),
             has_stdin: value.has_stdin,
             has_stdout: value.has_stdout,
+            has_stderr: value.has_stderr,
         }
     }
 }
@@ -897,9 +954,21 @@ pub struct EntityInvocationRequest {
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
     pub assume_idempotence: bool,
+    pub authority_wallet: Vec<StoredCard>,
 }
 
 pub type CallingAgentPrincipal = Principal;
+
+#[derive(Clone, Debug)]
+struct ResidentEntitySpan(SpanStarted);
+
+impl PartialEq for ResidentEntitySpan {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for ResidentEntitySpan {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -913,6 +982,12 @@ pub struct EntityInvocationScope {
     assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
+    /// Wallet snapshot pinned in the immutable entity invocation `Start`.
+    #[serde(skip)]
+    authority_wallet: Vec<StoredCard>,
+    /// Resident tracing context restored from the immutable entity invocation `Start`.
+    #[serde(skip)]
+    span_started: Option<ResidentEntitySpan>,
 }
 
 impl EntityInvocationScope {
@@ -940,6 +1015,14 @@ impl EntityInvocationScope {
                 "Entity invocation selector does not match the activation policy".to_string(),
             );
         }
+        if let EntityActivationPolicy::Tool {
+            mcp_import: Some(import),
+            ..
+        } = activation.policy()
+            && import.source.environment_id != invocation_id.owner_id().environment_id
+        {
+            return Err("MCP import activation belongs to a different environment".into());
+        }
         match &calling_principal {
             Principal::Agent(principal)
                 if principal.agent_id == invocation_id.owner_id().agent_id => {}
@@ -959,7 +1042,18 @@ impl EntityInvocationScope {
             assume_idempotence,
             logical_key_positions,
             stream_session_idempotency_key,
+            authority_wallet: Vec::new(),
+            span_started: None,
         })
+    }
+
+    pub fn with_authority_wallet(mut self, authority_wallet: Vec<StoredCard>) -> Self {
+        self.authority_wallet = authority_wallet;
+        self
+    }
+
+    pub fn authority_wallet(&self) -> &[StoredCard] {
+        &self.authority_wallet
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {
@@ -1000,6 +1094,15 @@ impl EntityInvocationScope {
 
     pub fn stream_session_idempotency_key(&self) -> &IdempotencyKey {
         &self.stream_session_idempotency_key
+    }
+
+    pub fn with_span_started(mut self, span_started: SpanStarted) -> Self {
+        self.span_started = Some(ResidentEntitySpan(span_started));
+        self
+    }
+
+    pub fn span_started(&self) -> Option<&SpanStarted> {
+        self.span_started.as_ref().map(|span| &span.0)
     }
 }
 
@@ -1072,7 +1175,7 @@ impl From<OwnerRuntime> for golem_api_grpc::proto::golem::worker::OwnerRuntime {
         use golem_api_grpc::proto::golem::worker::owner_runtime::Value;
 
         let value = match value {
-            OwnerRuntime::Agent => Value::Agent(golem_api_grpc::proto::golem::common::Empty {}),
+            OwnerRuntime::Agent => Value::Agent(golem_schema::proto::golem::common::Empty {}),
             OwnerRuntime::Entity(entity) => Value::Entity(entity.into()),
         };
         Self { value: Some(value) }
@@ -1209,10 +1312,24 @@ impl From<EntityActivationPolicy> for golem_api_grpc::proto::golem::worker::Enti
         use golem_api_grpc::proto::golem::worker::entity_activation_policy::Value;
 
         let value = match value {
-            EntityActivationPolicy::Tool { provision, binding } => Value::Tool(
+            EntityActivationPolicy::Tool {
+                provision,
+                binding,
+                mcp_import,
+            } => Value::Tool(
                 golem_api_grpc::proto::golem::worker::ToolEntityActivationPolicy {
                     provision: Some(provision.into()),
                     binding: Some((*binding).into()),
+                    mcp_import: mcp_import.map(|import| {
+                        golem_api_grpc::proto::golem::worker::McpImportActivation {
+                            environment_id: Some(import.source.environment_id.into()),
+                            deployment_revision: import.source.deployment_revision.into(),
+                            import_index: import.source.import_index,
+                            upstream_tool_name: import.source.upstream_tool_name,
+                            protocol_version: import.protocol_version,
+                            projected_tool: import.projected_tool,
+                        }
+                    }),
                 },
             ),
             EntityActivationPolicy::ToolMiddleware {
@@ -1261,6 +1378,24 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::EntityActivationPolicy>
                         .ok_or("Missing ToolEntityActivationPolicy.binding")?
                         .try_into()?,
                 ),
+                mcp_import: tool
+                    .mcp_import
+                    .map(|import| -> Result<_, String> {
+                        Ok(Box::new(McpImportActivation {
+                            source: crate::model::mcp_import::McpImportSource {
+                                environment_id: import
+                                    .environment_id
+                                    .ok_or("Missing MCP environment")?
+                                    .try_into()?,
+                                deployment_revision: import.deployment_revision.try_into()?,
+                                import_index: import.import_index,
+                                upstream_tool_name: import.upstream_tool_name,
+                            },
+                            protocol_version: import.protocol_version,
+                            projected_tool: import.projected_tool,
+                        }))
+                    })
+                    .transpose()?,
             }),
             Value::ToolMiddleware(middleware) => Ok(Self::ToolMiddleware {
                 middleware_name: ToolMiddlewareName::try_from(middleware.middleware_name)?,

@@ -88,6 +88,7 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) -> anyhow::Res
     let domain = user.register_domain(&env.id).await?;
 
     let http_api_deployment_creation = HttpApiDeploymentCreation {
+        scheme: Default::default(),
         domain: domain.clone(),
         agents: BTreeMap::from_iter([(
             AgentTypeName("InvocationContextAgent".to_string()),

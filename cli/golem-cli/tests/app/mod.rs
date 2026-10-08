@@ -19,18 +19,38 @@ mod agents;
 mod app;
 
 mod build_and_deploy_all;
+mod builtin_bash;
 mod cards;
+mod chunk_f_policy_boundary;
 mod directory_source_ifs;
+mod effect_http_router;
+mod effect_source_conformance;
 mod external_durable_streams;
+mod mcp_import;
+mod mcp_oauth;
 mod moonbit_guest_streams;
+mod moonbit_http_router;
+mod moonbit_mcp_import;
+mod moonbit_native_tool;
+mod moonbit_reflection;
 mod moonbit_tool_middleware;
 mod plugins;
 mod remote_releases;
+mod rust_minimal_exports;
 mod rust_streams;
+mod scala_gol40_reflection_acceptance;
 mod scala_guest_streams;
+mod scala_http_router;
 mod scala_tool_middleware;
+mod scala_tool_sources;
+mod secrets;
+mod ssh;
+mod tool_metadata_conformance;
 mod tool_middleware;
+mod tool_middleware_conformance;
 mod typescript_guest_streams;
+mod typescript_http_router;
+mod typescript_native_source;
 
 inherit_test_dep!(Tracing);
 
@@ -45,17 +65,37 @@ tag_suite!(agents, agents);
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
+tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
+tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
+tag_suite!(effect_source_conformance, agents_guest_bridge);
+tag_suite!(effect_http_router, deploy);
 tag_suite!(external_durable_streams, agents_streaming);
+tag_suite!(mcp_import, agents_guest_bridge);
+tag_suite!(mcp_oauth, agents_guest_bridge);
 tag_suite!(moonbit_guest_streams, agents_guest_bridge);
+tag_suite!(moonbit_http_router, deploy);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge);
+tag_suite!(moonbit_native_tool, agents_guest_bridge);
+tag_suite!(moonbit_reflection, deploy);
 tag_suite!(moonbit_tool_middleware, deploy);
 tag_suite!(plugins, deploy);
+tag_suite!(rust_minimal_exports, deploy);
 tag_suite!(rust_streams, agents_guest_bridge);
 tag_suite!(scala_guest_streams, agents_guest_bridge);
+tag_suite!(scala_gol40_reflection_acceptance, agents_guest_bridge);
+tag_suite!(scala_http_router, agents_guest_bridge);
+tag_suite!(scala_tool_sources, agents_guest_bridge);
 tag_suite!(scala_tool_middleware, deploy);
+tag_suite!(secrets, deploy);
+tag_suite!(ssh, deploy);
+tag_suite!(tool_metadata_conformance, deploy);
 tag_suite!(tool_middleware, deploy);
+tag_suite!(tool_middleware_conformance, deploy);
 tag_suite!(typescript_guest_streams, agents_guest_bridge);
+tag_suite!(typescript_http_router, deploy);
+tag_suite!(typescript_native_source, agents_guest_bridge);
 
 use crate::{Tracing, crate_path, workspace_path};
 use anyhow::Context;
@@ -79,15 +119,17 @@ use itertools::Itertools;
 use lenient_bool::LenientBool;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::thread::sleep;
 use std::time::Duration;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, tag_suite};
+use test_r::{inherit_test_dep, tag_suite, test};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
@@ -97,6 +139,94 @@ use url::Url;
 use uuid::Uuid;
 
 const GOLEM_CLI_TEST_BIN_PROFILE_ENV_VAR: &str = "GOLEM_CLI_TEST_BIN_PROFILE";
+
+fn builtin_artifact_sources() -> &'static [(PathBuf, String)] {
+    static SOURCES: OnceLock<Vec<(PathBuf, String)>> = OnceLock::new();
+
+    SOURCES.get_or_init(|| {
+        let workspace = workspace_path();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(workspace.join("builtin-artifacts.lock.json"))
+                .expect("failed to read builtin-artifacts.lock.json"),
+        )
+        .expect("failed to parse builtin-artifacts.lock.json");
+        let artifacts = manifest["artifacts"]
+            .as_object()
+            .expect("builtin-artifacts.lock.json must contain an artifacts object");
+        let local_artifacts = [
+            ("bash", "builtin-tools/bash.wasm"),
+            ("filesystem_tools", "builtin-tools/filesystem-tools.wasm"),
+            ("javascript_tools", "builtin-tools/javascript-tools.wasm"),
+            ("otlp_exporter", "plugins/otlp-exporter.wasm"),
+            ("typescript_tools", "builtin-tools/typescript-tools.wasm"),
+            ("web_fetch", "builtin-tools/web-fetch.wasm"),
+        ];
+
+        local_artifacts
+            .into_iter()
+            .map(|(artifact_id, relative_path)| {
+                let source = workspace.join(relative_path);
+                let expected = artifacts[artifact_id]["sha256"]
+                    .as_str()
+                    .expect("default built-in artifacts must have a SHA-256")
+                    .to_string();
+                let bytes = std::fs::read(&source).unwrap_or_else(|error| {
+                    panic!(
+                        "failed to read built-in artifact '{}': {error}; run 'cargo make fetch-builtin-artifacts' first",
+                        source.display()
+                    )
+                });
+                let actual = format!("{:x}", Sha256::digest(bytes));
+                assert_eq!(
+                    actual,
+                    expected,
+                    "built-in artifact '{}' does not match builtin-artifacts.lock.json",
+                    source.display()
+                );
+                (source, expected)
+            })
+            .collect()
+    })
+}
+
+fn install_builtin_artifact_cache(data_dir: &Path) {
+    let cache_dir = data_dir.join("builtin-artifacts");
+    std::fs::create_dir_all(&cache_dir)
+        .expect("failed to create built-in artifact cache directory");
+
+    for (source, sha256) in builtin_artifact_sources() {
+        let destination = cache_dir.join(format!("{sha256}.wasm"));
+        if destination.is_file() {
+            continue;
+        }
+        if std::fs::hard_link(source, &destination).is_err() {
+            std::fs::copy(source, &destination).unwrap_or_else(|error| {
+                panic!(
+                    "failed to install built-in artifact '{}' as '{}': {error}",
+                    source.display(),
+                    destination.display()
+                )
+            });
+        }
+    }
+}
+
+#[test]
+fn builtin_artifacts_are_installed_under_checksum_names() {
+    let data_dir = TempDir::new().unwrap();
+
+    install_builtin_artifact_cache(data_dir.path());
+    install_builtin_artifact_cache(data_dir.path());
+
+    let cache_dir = data_dir.path().join("builtin-artifacts");
+    for (source, sha256) in builtin_artifact_sources() {
+        let cached = cache_dir.join(format!("{sha256}.wasm"));
+        assert_eq!(
+            cached.metadata().unwrap().len(),
+            source.metadata().unwrap().len()
+        );
+    }
+}
 
 mod cmd {
     pub static NO_ARGS: &[&str] = &[];
@@ -117,6 +247,9 @@ mod cmd {
     pub static PROFILE: &str = "profile";
     pub static REGISTER: &str = "register";
     pub static REPL: &str = "repl";
+    pub static RESOURCE: &str = "resource";
+    pub static RETRY_POLICY: &str = "retry-policy";
+    pub static SECRET: &str = "secret";
     pub static TEMPLATES: &str = "templates";
     pub static TOOL: &str = "tool";
 }
@@ -514,6 +647,13 @@ impl TestContext {
             .as_ref()
             .expect("start_server must be called before router_port")
             .router_port
+    }
+
+    fn mcp_port(&self) -> u16 {
+        self.startup_ports
+            .as_ref()
+            .expect("start_server must be called before mcp_port")
+            .mcp_port
     }
 
     /// Base URL of the local worker service (the external invocation REST API),
@@ -919,6 +1059,7 @@ impl TestContext {
 
     async fn start_server(&mut self) {
         assert!(self.server_process.is_none(), "server is already running");
+        install_builtin_artifact_cache(self.data_dir.path());
 
         println!("{}", "> starting golem server".bold());
         println!(
@@ -1080,6 +1221,13 @@ impl TestContext {
                 tokio::time::sleep(sleep_interval).await;
             }
         }
+    }
+
+    fn enable_native_conformance_tool(&mut self) {
+        self.add_env_var(
+            golem_native_tool::conformance_fixture::TEST_FIXTURE_ENV,
+            "1",
+        );
     }
 
     fn cd<P: AsRef<Path>>(&mut self, path: P) {

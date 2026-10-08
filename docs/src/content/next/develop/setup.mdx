@@ -2,10 +2,16 @@ import { Callout, Tabs } from "nextra/components"
 
 ## Setting up the development environment
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 Golem's TypeScript toolchain uses npm as the underlying build tool.
 Install **Node.js** and **npm** on your system by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+</Tabs.Tab>
+
+<Tabs.Tab>
+Golem's Effect TypeScript toolchain uses npm, TypeScript, and Rollup. Install **Node.js** and **npm** by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
+
+Generated projects include compatible versions of `effect` and `@golemcloud/effect-golem`. Keep those versions aligned when updating dependencies; the Effect SDK currently uses Effect 4 APIs.
 </Tabs.Tab>
 
 <Tabs.Tab>

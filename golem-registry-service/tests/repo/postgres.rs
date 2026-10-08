@@ -237,7 +237,7 @@ async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     PostgresPool::configured(config).await.unwrap()
 }
 
-async fn make_deps(pool: PostgresPool) -> Deps {
+async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps {
     let deps = Deps {
         account_repo: Box::new(DbAccountRepo::logged(pool.clone())),
         account_usage_repo: std::sync::Arc::new(DbAccountUsageRepo::logged(pool.clone())),
@@ -247,7 +247,10 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         application_repo: Box::new(DbApplicationRepo::logged(pool.clone())),
-        environment_repo: Box::new(DbEnvironmentRepo::logged(pool.clone())),
+        environment_repo: std::sync::Arc::new(DbEnvironmentRepo::logged(pool.clone())),
+        blob_storage: std::sync::Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ),
         environment_tool_grant_repo: Box::new(DbEnvironmentToolGrantRepo::logged(pool.clone())),
         environment_tool_middleware_grant_repo: Box::new(
             DbEnvironmentToolMiddlewareGrantRepo::logged(pool.clone()),
@@ -263,6 +266,7 @@ async fn make_deps(pool: PostgresPool) -> Deps {
         tool_release_repo: Box::new(DbToolReleaseRepo::logged(pool.clone())),
         tool_middleware_release_repo: Box::new(DbToolMiddlewareReleaseRepo::logged(pool.clone())),
         test_db: TestDb::Postgres(pool.clone()),
+        routing_test_db: TestDb::Postgres(routing_test_pool),
     };
     deps.setup().await;
     deps
@@ -282,7 +286,11 @@ async fn postgres_db(_tracing: &Tracing) -> PostgresDb {
 
 #[test_dep(scope = Shared, tagged_as = "postgres")]
 async fn postgres_deps(db: &PostgresDb) -> Deps {
-    make_deps(db.pool.clone()).await
+    make_deps(
+        db.pool.clone(),
+        PostgresPool::configured(&db.config).await.unwrap(),
+    )
+    .await
 }
 
 #[test_dep(scope = Shared)]
@@ -298,7 +306,11 @@ async fn postgres_tls_db(_tracing: &Tracing) -> PostgresTlsDb {
 
 #[test_dep(scope = Shared, tagged_as = "postgres_tls")]
 async fn postgres_tls_deps(db: &PostgresTlsDb) -> Deps {
-    make_deps(db.pool.clone()).await
+    make_deps(
+        db.pool.clone(),
+        PostgresPool::configured(&db.config).await.unwrap(),
+    )
+    .await
 }
 
 #[test]
@@ -493,6 +505,11 @@ async fn test_component_stage(#[dimension(postgres_variant)] deps: &Deps) {
 }
 
 #[test]
+async fn test_http_agent_metadata_blob_roundtrip(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_http_agent_metadata_blob_roundtrip(deps).await;
+}
+
+#[test]
 async fn test_initial_permission_card_ids_by_account_are_unique(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
@@ -600,6 +617,11 @@ async fn test_update_http_call_counts(#[dimension(postgres_variant)] deps: &Deps
 }
 
 #[test]
+async fn test_mcp_http_policy(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_mcp_http_policy(deps).await;
+}
+
+#[test]
 async fn test_update_rpc_call_counts(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_update_rpc_call_counts(deps).await;
 }
@@ -619,6 +641,26 @@ async fn test_resolve_agent_type_no_deployment_returns_none(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_resolve_agent_type_no_deployment_returns_none(deps).await;
+}
+
+#[test]
+async fn missing_security_retains_active_route_barrier(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::missing_security_retains_active_route_barrier(deps).await;
+}
+
+#[test]
+async fn test_security_scheme_login_persistence(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::common::test_security_scheme_login_persistence(deps).await;
+}
+
+#[test]
+async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(
+        deps,
+    )
+    .await;
 }
 
 #[test]
@@ -686,7 +728,7 @@ async fn test_tool_middleware_release_and_grant_repository_contracts(
 
 #[test]
 async fn test_tool_depublication_waits_for_grant_eligibility_lock(db: &PostgresDb) {
-    let deps = make_deps(db.pool.clone()).await;
+    let deps = make_deps(db.pool.clone(), db.pool.clone()).await;
     let owner = deps.create_account().await;
     let actor = AccountId(owner.revision.account_id);
     let app = deps.create_application(actor.0).await;

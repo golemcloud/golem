@@ -417,6 +417,7 @@ pub struct ToolActivationSnapshot {
     pub binding: CompiledToolBinding,
     pub filesystem: FilesystemCapability,
     pub middleware_chain: Option<crate::model::tool_middleware::CompiledToolMiddlewareChain>,
+    pub mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
 }
 
 #[cfg(feature = "full")]
@@ -430,6 +431,7 @@ pub enum ToolDispatchTarget {
         provision: ToolProvisionConfig,
         binding: Box<CompiledToolBinding>,
         filesystem: FilesystemCapability,
+        mcp_import: Option<Box<crate::model::entity::McpImportActivation>>,
     },
 }
 
@@ -470,8 +472,11 @@ impl ToolActivationSnapshot {
                     component_revision,
                     ..
                 } = &occurrence.middleware.source;
-                let filesystem =
-                    filesystem_capability(occurrence.filesystem_access, &occurrence.provision)?;
+                let filesystem = filesystem_capability(
+                    occurrence.filesystem_access,
+                    &occurrence.provision,
+                    false,
+                )?;
                 let activation = EntityActivation::new(
                     ExecutableTarget::new(*component_id, *component_revision),
                     occurrence.middleware.deployment_revision,
@@ -500,6 +505,7 @@ impl ToolActivationSnapshot {
         let policy = EntityActivationPolicy::Tool {
             provision: self.registered_tool.provision.clone(),
             binding: Box::new(self.binding.clone()),
+            mcp_import: self.mcp_import.clone(),
         };
         let leaf = match &self.registered_tool.source {
             ToolSource::Component {
@@ -539,6 +545,7 @@ impl ToolActivationSnapshot {
                 EntityActivationPolicy::Tool {
                     provision: self.registered_tool.provision,
                     binding: Box::new(self.binding),
+                    mcp_import: self.mcp_import,
                 },
                 self.filesystem,
             )
@@ -553,25 +560,87 @@ impl ToolActivationSnapshot {
                 provision: self.registered_tool.provision,
                 binding: Box::new(self.binding),
                 filesystem: self.filesystem,
+                mcp_import: self.mcp_import,
             }),
         }
     }
 }
 
 #[cfg(feature = "full")]
-fn filesystem_capability(
+pub fn filesystem_capability(
     access: ToolFilesystemAccess,
     provision: &ToolProvisionConfig,
+    requires_filesystem: bool,
 ) -> Result<FilesystemCapability, String> {
-    match (access, provision.files.is_empty()) {
-        (ToolFilesystemAccess::Allowed, _) | (ToolFilesystemAccess::Unset, false) => {
+    filesystem_capability_for(access, !provision.files.is_empty(), requires_filesystem)
+}
+
+#[cfg(feature = "full")]
+fn filesystem_capability_for(
+    access: ToolFilesystemAccess,
+    has_provisioned_files: bool,
+    requires_filesystem: bool,
+) -> Result<FilesystemCapability, String> {
+    match (access, !has_provisioned_files, requires_filesystem) {
+        (ToolFilesystemAccess::Allowed, _, _) | (ToolFilesystemAccess::Unset, false, _) => {
             Ok(FilesystemCapability::Capable)
         }
-        (ToolFilesystemAccess::Denied, false) => {
-            Err("filesystem-denied middleware cannot provision files".to_string())
+        (ToolFilesystemAccess::Denied, _, true) => Err(
+            "tool requires filesystem access but filesystemAccess is denied; set filesystemAccess: allowed"
+                .to_string(),
+        ),
+        (ToolFilesystemAccess::Denied, false, false) => {
+            Err("filesystem-denied tool cannot provision files".to_string())
         }
-        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true) => {
+        (ToolFilesystemAccess::Unset, true, true) => Err(
+            "tool requires filesystem access but no files are provisioned; set filesystemAccess: allowed"
+                .to_string(),
+        ),
+        (ToolFilesystemAccess::Denied | ToolFilesystemAccess::Unset, true, false) => {
             Ok(FilesystemCapability::Incapable)
+        }
+    }
+}
+
+#[cfg(test)]
+mod filesystem_capability_tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn filesystem_policy_matrix_covers_access_provisioning_and_requirement() {
+        use FilesystemCapability::{Capable, Incapable};
+        use ToolFilesystemAccess::{Allowed, Denied, Unset};
+
+        let cases = [
+            (Allowed, false, false, Ok(Capable)),
+            (Allowed, false, true, Ok(Capable)),
+            (Allowed, true, false, Ok(Capable)),
+            (Allowed, true, true, Ok(Capable)),
+            (Unset, false, false, Ok(Incapable)),
+            (Unset, false, true, Err("set filesystemAccess: allowed")),
+            (Unset, true, false, Ok(Capable)),
+            (Unset, true, true, Ok(Capable)),
+            (Denied, false, false, Ok(Incapable)),
+            (Denied, false, true, Err("set filesystemAccess: allowed")),
+            (
+                Denied,
+                true,
+                false,
+                Err("filesystem-denied tool cannot provision files"),
+            ),
+            (Denied, true, true, Err("set filesystemAccess: allowed")),
+        ];
+
+        for (access, provisioned, required, expected) in cases {
+            let actual = filesystem_capability_for(access, provisioned, required);
+            match expected {
+                Ok(expected) => assert_eq!(actual, Ok(expected)),
+                Err(expected) => assert!(
+                    actual.is_err_and(|error| error.contains(expected)),
+                    "unexpected result for access={access:?}, provisioned={provisioned}, required={required}"
+                ),
+            }
         }
     }
 }
@@ -669,11 +738,12 @@ pub struct ToolInvocationInput {
     pub stdin: Option<golem_schema::schema::SchemaValueStream>,
 }
 
-/// Internal result value. The stdout handle can be registered before the outcome is ready.
+/// Internal result value. Output handles can be registered before the outcome is ready.
 #[derive(Clone, Debug, golem_schema_derive::FromSchema)]
 pub struct ToolInvocationOutput {
     pub outcome: Result<SerializableToolInvocationResult, SerializableToolRpcError>,
     pub stdout: Option<golem_schema::schema::SchemaValueStream>,
+    pub stderr: Option<golem_schema::schema::SchemaValueStream>,
 }
 
 impl crate::schema::conversion::IntoSchema for ToolInvocationInput {
@@ -714,12 +784,17 @@ impl crate::schema::conversion::IntoSchema for ToolInvocationOutput {
         SchemaType::record(vec![
             NamedFieldType { name: "outcome".into(), body: Result::<SerializableToolInvocationResult, SerializableToolRpcError>::register_in(builder), metadata: Default::default() },
             NamedFieldType { name: "stdout".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
+            NamedFieldType { name: "stderr".into(), body: SchemaType::option(SchemaType::stream(Some(SchemaType::u8()))), metadata: Default::default() },
         ])
     }
 
     fn to_value(&self) -> crate::schema::SchemaValue {
         crate::schema::SchemaValue::Record {
-            fields: vec![self.outcome.to_value(), self.stdout.to_value()],
+            fields: vec![
+                self.outcome.to_value(),
+                self.stdout.to_value(),
+                self.stderr.to_value(),
+            ],
         }
     }
 }
@@ -771,6 +846,9 @@ pub struct ToolDeploymentState {
     pub deployment_revision: DeploymentRevision,
     pub registered_tools: BTreeMap<ToolName, RegisteredTool>,
     pub tool_bindings: BTreeMap<ToolBindingOwner, BTreeMap<ToolName, CompiledToolBinding>>,
+    pub mcp_imports: Vec<crate::base_model::mcp_import::McpImport>,
+    pub tool_middleware_configuration:
+        crate::base_model::tool_middleware::ToolMiddlewareConfiguration,
     pub registered_tool_middlewares: BTreeMap<
         crate::model::tool_middleware::ToolMiddlewareName,
         crate::model::tool_middleware::RegisteredToolMiddleware,

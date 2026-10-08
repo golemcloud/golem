@@ -37,9 +37,11 @@ import {
 import { validateSchemaGraph } from "./internal/schema-model/validation.js"
 import {
   GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   peekGuestQuotaTokenHandle,
 } from "./internal/schema-model/quotaTokenHandle.js"
 import { QUOTA_INTERNAL } from "./internal/schema-model/quotaInternal.js"
+import { WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY } from "./internal/schema-model/annotations.js"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import {
@@ -71,6 +73,7 @@ import {
   peekGuestPermissionCardHandle,
 } from "./internal/schema-model/permissionCardHandle.js"
 import { PERMISSION_CARD_INTERNAL } from "./internal/schema-model/permissionCardInternal.js"
+import { SchemaRef, type JsonValue } from "./SchemaRef.js"
 
 // Branded so `Durability.wrap` (and any other downstream consumer that uses
 // nominal SDK-error detection) can route this into the defect channel without
@@ -165,6 +168,18 @@ export interface CompiledWitCodec<S extends Schema.Top> extends WitCodec<S> {
   readonly decode: (
     value: CoreTypes.SchemaValueTree,
   ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+}
+
+/** A compiled schema whose public boundary is the schema model's canonical JSON representation. */
+export interface CompiledJsonCodec<S extends Schema.Top> {
+  readonly schema: S
+  readonly jsonSchema: JsonValue
+  readonly decode: (
+    value: JsonValue,
+  ) => Effect.Effect<S["Type"], Schema.SchemaError, S["DecodingServices"]>
+  readonly encode: (
+    value: S["Type"],
+  ) => Effect.Effect<JsonValue, Schema.SchemaError, S["EncodingServices"]>
 }
 
 /** Leaf pair for a primitive whose schema value carries a single `value`. */
@@ -493,8 +508,19 @@ const discriminatorMatches = (rule: UnionBranch["discriminator"], value: unknown
 
 const declarationConstructorTag = (a: SchemaAST.AST): string | undefined => {
   if (a._tag !== "Declaration") return undefined
-  const tc = (a.annotations as { typeConstructor?: { _tag?: string } } | undefined)?.typeConstructor
-  return tc?._tag
+  const id = (a.annotations as { representation?: { id?: string } } | undefined)?.representation?.id
+  switch (id) {
+    case "effect/schema/Option":
+      return "effect/Option"
+    case "effect/schema/Result":
+      return "effect/Result"
+    case "effect/schema/ReadonlyMap":
+      return "ReadonlyMap"
+    case "effect/schema/HashMap":
+      return "effect/HashMap"
+    default:
+      return undefined
+  }
 }
 
 const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
@@ -502,6 +528,9 @@ const typedArrayKindOf = (a: SchemaAST.AST): WitTypedArrayKind | undefined =>
 
 const isQuotaTokenAST = (a: SchemaAST.AST): boolean =>
   annotationOf<boolean>(a, witQuotaTokenAnnotationKey) === true
+
+const quotaTokenResourceNameOf = (a: SchemaAST.AST): string | undefined =>
+  annotationOf<string>(a, WIT_QUOTA_TOKEN_RESOURCE_NAME_ANNOTATION_KEY)
 
 const isPrincipalAST = (a: SchemaAST.AST): boolean =>
   annotationOf<boolean>(a, witPrincipalAnnotationKey) === true
@@ -513,10 +542,10 @@ const isPrincipalAST = (a: SchemaAST.AST): boolean =>
 // `Principal` shape exactly (case order oidc/agent/golem-user/anonymous), and
 // the value pair round-trips a host `Principal` <-> `SchemaValue`.
 
-type HostUuid = { highBits: bigint; lowBits: bigint }
+type HostUuid = CoreTypes.Uuid
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType => t.record([field("highBits", t.u64()), field("lowBits", t.u64())])
+const uuidType = (): SchemaType => t.uuid()
 const componentIdType = (): SchemaType => t.record([field("uuid", uuidType())])
 const agentIdType = (): SchemaType =>
   t.record([field("componentId", componentIdType()), field("agentId", t.string())])
@@ -540,18 +569,15 @@ const golemUserType = (): SchemaType => t.record([field("accountId", accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): ReadonlyArray<SchemaValue> =>
   (sv as { tag: "record"; fields: ReadonlyArray<SchemaValue> }).fields
-const u64Of = (f: SchemaValue): bigint => (f as { tag: "u64"; value: bigint }).value
 const strOf = (f: SchemaValue): string => (f as { tag: "string"; value: string }).value
 const boolOf = (f: SchemaValue): boolean => (f as { tag: "bool"; value: boolean }).value
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
   (f as { tag: "option"; value?: SchemaValue }).value
 
 // --- codec helpers (round-trip via the host shape) ---
-const uuidToValue = (u: HostUuid): SchemaValue => v.record([v.u64(u.highBits), v.u64(u.lowBits)])
-const uuidFromValue = (sv: SchemaValue): HostUuid => {
-  const f = recFields(sv)
-  return { highBits: u64Of(f[0]!), lowBits: u64Of(f[1]!) }
-}
+const uuidToValue = (u: HostUuid): SchemaValue => v.uuid(u)
+const uuidFromValue = (sv: SchemaValue): HostUuid =>
+  (sv as Extract<SchemaValue, { tag: "uuid" }>).value
 
 const agentIdToValue = (a: AgentCommon.AgentId): SchemaValue =>
   v.record([v.record([uuidToValue(a.componentId.uuid)]), v.string(a.agentId)])
@@ -666,11 +692,11 @@ const principalNode = (): { type: SchemaType; pair: ValuePair } => ({
  * is moved exactly once; decoding a value whose handle was already consumed
  * throws.
  */
-const quotaTokenNode = (): { type: SchemaType; pair: ValuePair } => ({
-  type: t.quotaToken({}),
+const quotaTokenNode = (resourceName?: string): { type: SchemaType; pair: ValuePair } => ({
+  type: t.quotaToken({ resourceName }),
   pair: {
     toValue: (handle) => {
-      if (!(handle instanceof GuestQuotaTokenHandle)) {
+      if (!isGuestQuotaTokenHandle(handle)) {
         throw new Error("quota-token schemas only accept SDK-owned quota tokens")
       }
       return v.quotaToken(handle)
@@ -887,6 +913,8 @@ const walk = (
               return { type: t.path(native.spec), pair: primPair(v.path) }
             case "url":
               return { type: t.url(native.restrictions), pair: primPair(v.url) }
+            case "uuid":
+              return { type: t.uuid(), pair: primPair(v.uuid) }
             case "datetime":
               return { type: t.datetime(), pair: primPair(v.datetime) }
             case "duration":
@@ -1033,7 +1061,7 @@ const walk = (
             case "quota-token":
               return {
                 type: t.quotaToken({ resourceName: native.resourceName }),
-                pair: quotaTokenNode().pair,
+                pair: quotaTokenNode(native.resourceName).pair,
               }
             case "permission-card":
               return {
@@ -1185,7 +1213,7 @@ const walk = (
             // with `witQuotaTokenAnnotationKey`; emit the dedicated capability
             // node rather than treating it as an unknown declared type.
             if (isQuotaTokenAST(a)) {
-              return quotaTokenNode()
+              return quotaTokenNode(quotaTokenResourceNameOf(a))
             }
             // A `Principal` carried as data (annotated via `PrincipalSchema`):
             // emit the `principal` variant rather than an unknown declared type.
@@ -1656,37 +1684,49 @@ export const toWitCodec = <S extends Schema.Top>(
 
     const svToEncoded = SchemaValueCarrier.pipe(
       Schema.decodeTo(EncodedCarrier, {
-        decode: SchemaGetter.transformOrFail((sv: SchemaValue) => {
+        decode: SchemaGetter.transformEffect((sv: SchemaValue, options) => {
           const converted = Effect.try({
             try: () => {
               assertValueShape(graph, root, sv)
               return sv
             },
             catch: (error) =>
-              new SchemaIssue.InvalidValue(Option.some(sv), {
-                message: error instanceof Error ? error.message : String(error),
-              }),
+              new SchemaIssue.InvalidValue(
+                {
+                  message: error instanceof Error ? error.message : String(error),
+                },
+                sv,
+                options,
+              ),
           })
           return Effect.flatMap(converted, (checked) =>
             Effect.flatMap(Effect.context<any>(), (context) =>
               Effect.try({
                 try: () => withConversionContext(context, () => pair.fromValue(checked)),
                 catch: (error) =>
-                  new SchemaIssue.InvalidValue(Option.some(sv), {
-                    message: error instanceof Error ? error.message : String(error),
-                  }),
+                  new SchemaIssue.InvalidValue(
+                    {
+                      message: error instanceof Error ? error.message : String(error),
+                    },
+                    sv,
+                    options,
+                  ),
               }),
             ),
           )
         }),
-        encode: SchemaGetter.transformOrFail((enc: S["Encoded"]) =>
+        encode: SchemaGetter.transformEffect((enc: S["Encoded"], options) =>
           Effect.flatMap(Effect.context<any>(), (context) =>
             Effect.try({
               try: () => withConversionContext(context, () => pair.toValue(enc)),
               catch: (error) =>
-                new SchemaIssue.InvalidValue(Option.some(enc), {
-                  message: error instanceof Error ? error.message : String(error),
-                }),
+                new SchemaIssue.InvalidValue(
+                  {
+                    message: error instanceof Error ? error.message : String(error),
+                  },
+                  enc,
+                  options,
+                ),
             }),
           ),
         ),
@@ -1710,7 +1750,7 @@ export const toWitCodec = <S extends Schema.Top>(
 
 const wireSchemaError = (error: unknown): Schema.SchemaError =>
   new Schema.SchemaError(
-    new SchemaIssue.InvalidValue(Option.none(), {
+    new SchemaIssue.InvalidValue({
       message: error instanceof Error ? error.message : String(error),
     }),
   )
@@ -1719,22 +1759,54 @@ const wireSchemaError = (error: unknown): Schema.SchemaError =>
 export const compile = <S extends Schema.Top>(
   schema: S,
 ): Effect.Effect<CompiledWitCodec<S>, UnsupportedSchemaError> =>
-  Effect.map(toWitCodec(schema), (compiled) => ({
-    ...compiled,
-    schemaGraph: schemaGraphToWit(compiled.graph),
-    encode: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.try({ try: () => schemaValueToWit(encoded), catch: wireSchemaError }),
-      ),
-    encodeAsync: (value) =>
-      Effect.flatMap(Schema.encodeEffect(compiled.codec)(value), (encoded) =>
-        Effect.tryPromise({
-          try: (signal) => schemaValueToWitAsync(encoded, signal),
-          catch: wireSchemaError,
-        }),
-      ),
-    decode: (value) => decodeFromWire(compiled.codec, value),
-  }))
+  Effect.map(toWitCodec(schema), (compiled) => {
+    const encode = Schema.encodeEffect(compiled.codec)
+    const decode = makeWireDecoder(compiled.codec)
+    return {
+      ...compiled,
+      schemaGraph: schemaGraphToWit(compiled.graph),
+      encode: (value) =>
+        Effect.flatMap(encode(value), (encoded) =>
+          Effect.try({ try: () => schemaValueToWit(encoded), catch: wireSchemaError }),
+        ),
+      encodeAsync: (value) =>
+        Effect.flatMap(encode(value), (encoded) =>
+          Effect.tryPromise({
+            try: (signal) => schemaValueToWitAsync(encoded, signal),
+            catch: wireSchemaError,
+          }),
+        ),
+      decode,
+    }
+  })
+
+/** Compile an Effect Schema to its validated canonical JSON boundary. */
+export const compileJson = <S extends Schema.Top>(
+  schema: S,
+): Effect.Effect<CompiledJsonCodec<S>, UnsupportedSchemaError> =>
+  Effect.flatMap(compile(schema), (compiled) => {
+    const ref = new SchemaRef(compiled.schemaGraph)
+    const eligibility = ref.jsonEligibility()
+    if (!eligibility.success)
+      return Effect.fail(
+        new UnsupportedSchemaError(
+          eligibility.issues[0]?.message ?? "schema has no canonical JSON representation",
+        ),
+      )
+    return Effect.succeed({
+      schema,
+      jsonSchema: ref.toJsonSchema({ includeDraftMarker: false }),
+      decode: (value) =>
+        Effect.flatMap(
+          Effect.try({ try: () => ref.packJson(value), catch: wireSchemaError }),
+          compiled.decode,
+        ),
+      encode: (value) =>
+        Effect.flatMap(compiled.encodeAsync(value), (encoded) =>
+          Effect.try({ try: () => ref.unpackJson(encoded), catch: wireSchemaError }),
+        ),
+    })
+  })
 
 /** Decode a complete wire value while retaining ownership until validation succeeds.
  * @since 1.6.0 @category codecs
@@ -1742,13 +1814,21 @@ export const compile = <S extends Schema.Top>(
 export const decodeFromWire = <A, RD, RE>(
   codec: Schema.Codec<A, SchemaValue, RD, RE>,
   value: CoreTypes.SchemaValueTree,
-): Effect.Effect<A, Schema.SchemaError, RD> =>
-  withCapabilityTransaction((transaction) =>
-    Effect.flatMap(
-      Effect.try({
-        try: () => schemaValueFromWit(value, transaction),
-        catch: wireSchemaError,
-      }),
-      Schema.decodeEffect(codec),
-    ),
-  )
+): Effect.Effect<A, Schema.SchemaError, RD> => makeWireDecoder(codec)(value)
+
+/** Prepare a wire decoder once, with a fresh ownership transaction for every execution.
+ * @since 1.6.0 @category codecs
+ */
+export const makeWireDecoder = <A, RD, RE>(codec: Schema.Codec<A, SchemaValue, RD, RE>) => {
+  const decode = Schema.decodeEffect(codec)
+  return (value: CoreTypes.SchemaValueTree): Effect.Effect<A, Schema.SchemaError, RD> =>
+    withCapabilityTransaction((transaction) =>
+      Effect.flatMap(
+        Effect.try({
+          try: () => schemaValueFromWit(value, transaction),
+          catch: wireSchemaError,
+        }),
+        decode,
+      ),
+    )
+}

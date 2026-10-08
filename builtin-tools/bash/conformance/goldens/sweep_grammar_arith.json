@@ -1,0 +1,3498 @@
+{
+ "cases": {
+  "gram arith [ -eq rejects expressions": {
+   "script": "d872fbf9606a65c4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: [: 1+1: integer expected\n"
+   },
+   "stdout": {
+    "text": "status=2\n"
+   }
+  },
+  "gram arith [[ -eq evaluates expressions": {
+   "script": "675e51441a731b58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "yes\ngt\n"
+   }
+  },
+  "gram arith [[ -eq with unset": {
+   "script": "6e464b33b3e51bce",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "zero\n"
+   }
+  },
+  "gram arith arithmetic array element holding expression": {
+   "script": "dac53bd5a26bb62b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "gram arith arithmetic assign to positional": {
+   "script": "7a2c20f6538fa07b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 = 2: attempted assignment to non-variable (error token is \"= 2\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram arith arithmetic assign to special": {
+   "script": "17cf48c4ed591dd1",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: $ = 2 : arithmetic syntax error: operand expected (error token is \"$ = 2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram arith arithmetic deep parentheses": {
+   "script": "81edbcd7712975d5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram arith arithmetic for body status": {
+   "script": "b017c885a04a9d21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram arith arithmetic for empty parts": {
+   "script": "342a098305217e77",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram arith arithmetic for loop": {
+   "script": "0665a2487ef7dbff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1 2 \n"
+   }
+  },
+  "gram arith arithmetic for status": {
+   "script": "a9fae428fe357ffd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram arith arithmetic for with braces body": {
+   "script": "08e241a7fe7756fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b0\nb1\n"
+   }
+  },
+  "gram arith arithmetic for with comma": {
+   "script": "11d44ab74a9f580a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0:10 1:9 2:8 \n"
+   }
+  },
+  "gram arith arithmetic for with spaces": {
+   "script": "ac64e166718a19a6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n1\n"
+   }
+  },
+  "gram arith arithmetic in brace sequence is literal": {
+   "script": "1196cd8ad65d7014",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{1..2}\n"
+   }
+  },
+  "gram arith arithmetic in case": {
+   "script": "583b45246cca7bba",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "two\n"
+   }
+  },
+  "gram arith arithmetic in here-document": {
+   "script": "b10b48af21176c16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "42\n"
+   }
+  },
+  "gram arith arithmetic in if": {
+   "script": "e31146772d49d6f7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "lt\n"
+   }
+  },
+  "gram arith arithmetic in printf argument": {
+   "script": "d04d9519db99fcb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n5\n16\n8\n"
+   }
+  },
+  "gram arith arithmetic in until": {
+   "script": "cbd9acbd71a4f2fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram arith arithmetic in while": {
+   "script": "6e5a7ca048a28d72",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n"
+   }
+  },
+  "gram arith arithmetic long expression": {
+   "script": "28e1785c16a1194c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "210\n"
+   }
+  },
+  "gram arith arithmetic negation pipeline": {
+   "script": "115e33beaef31c0d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n"
+   }
+  },
+  "gram arith arithmetic nested variable depth": {
+   "script": "0cae27422b1e7160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n"
+   }
+  },
+  "gram arith arithmetic quoted": {
+   "script": "25fc37213724bfc3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 $((1+2))\n"
+   }
+  },
+  "gram arith arithmetic side effects order": {
+   "script": "ad2a59ac4de302e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "12\n"
+   }
+  },
+  "gram arith arithmetic string compare": {
+   "script": "818e8c119a8c9bd8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram arith arithmetic subscript with side effect": {
+   "script": "0050921102828fea",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 2\n"
+   }
+  },
+  "gram arith arithmetic variable holding assignment": {
+   "script": "34e6a9032b3a1ac6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 3\n"
+   }
+  },
+  "gram arith arithmetic variable holding base": {
+   "script": "99fb37bed5e06a82",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "gram arith arithmetic variable holding comma": {
+   "script": "a69522a1e48a13be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n"
+   }
+  },
+  "gram arith arithmetic variable holding empty": {
+   "script": "03f9251d11693233",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram arith arithmetic variable holding hex": {
+   "script": "17863bb73e253ba1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "17\n"
+   }
+  },
+  "gram arith arithmetic variable holding negative": {
+   "script": "c4fc98ff8a63032f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 25\n"
+   }
+  },
+  "gram arith arithmetic variable holding octal": {
+   "script": "71ac2e13b1cb3514",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "9\n"
+   }
+  },
+  "gram arith arithmetic variable holding spaces": {
+   "script": "3f8a9e149d1ab771",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram arith arithmetic with BASH_REMATCH": {
+   "script": "6d981765e2a16d6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "43\n"
+   }
+  },
+  "gram arith arithmetic with quotes inside": {
+   "script": "21810290e5a8cbb2",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 + '2' : arithmetic syntax error: operand expected (error token is \"'2' \")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith arithmetic with set -e": {
+   "script": "6bdf37592a47fb4e",
+   "status": 1,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "survived\n"
+   }
+  },
+  "gram arith arithmetic with set -u": {
+   "script": "78f545ec0e6b5f04",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith arithmetic with set -u in command": {
+   "script": "15dbb8c1aeb018d0",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined3: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith arithmetic with set -u in let": {
+   "script": "f8c1212e333fb1c5",
+   "status": 127,
+   "stderr": {
+    "text": "bash: line 1: undefined2: unbound variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith arithmetic word splitting": {
+   "script": "271fa08ae7c9ac16",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 \n"
+   }
+  },
+  "gram arith array index arithmetic": {
+   "script": "ff1590396a60a4a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "c d d\n"
+   }
+  },
+  "gram arith assignment through reference": {
+   "script": "94519afe96293cc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 unset\n"
+   }
+  },
+  "gram arith assoc index is not arithmetic": {
+   "script": "f17009736e544847",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1+1\n"
+   }
+  },
+  "gram arith declare -i append": {
+   "script": "14f429547ac686c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "10\n105\n"
+   }
+  },
+  "gram arith declare -i array": {
+   "script": "1a0ccece603f4df3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 6 3\n"
+   }
+  },
+  "gram arith declare -i assoc": {
+   "script": "2744584f50cf8ec4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 9\n"
+   }
+  },
+  "gram arith declare -i on assignment": {
+   "script": "2f35cbffdfa19140",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\n9\n18\n"
+   }
+  },
+  "gram arith declare -i with string": {
+   "script": "f173f1b715e0a71a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\n9\n"
+   }
+  },
+  "gram arith dollar bracket": {
+   "script": "2e5cee591cb90f9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6 4 4\n"
+   }
+  },
+  "gram arith double parentheses assignment result": {
+   "script": "f38788435fa11845",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 0\n0 7\n"
+   }
+  },
+  "gram arith double parentheses status": {
+   "script": "08cc571abc331dfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n1\n"
+   }
+  },
+  "gram arith error ends the shell: assign to literal": {
+   "script": "81ea407613e76f75",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1=2: attempted assignment to non-variable (error token is \"=2\")\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram arith error ends the shell: bad base": {
+   "script": "e5cefdb6cb156f8c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 2#3: value too great for base (error token is \"2#3\")\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram arith error ends the shell: bad subscript": {
+   "script": "407b0ba59a31e169",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "before\n0\nafter 0\nnext line\n"
+   }
+  },
+  "gram arith error ends the shell: divide by zero": {
+   "script": "78eb966bb4dc431c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram arith error ends the shell: recursion": {
+   "script": "5dd03fa1e7b38a11",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram arith error ends the shell: syntax": {
+   "script": "453b3b86bd02e9b2",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "before\nnext line\n"
+   }
+  },
+  "gram arith error in a command: assign to literal": {
+   "script": "17c4a3bf6782cbb7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1=2: attempted assignment to non-variable (error token is \"=2\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a command: bad base": {
+   "script": "8396e46e60b6ac98",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 2#3: value too great for base (error token is \"2#3\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a command: bad subscript": {
+   "script": "4cbf283c73891f26",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a command: divide by zero": {
+   "script": "b32a7598b06b095a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a command: recursion": {
+   "script": "45b29e96c6677515",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a command: syntax": {
+   "script": "03bb00801073ba86",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: assign to literal": {
+   "script": "876dafe57010626b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1=2: attempted assignment to non-variable (error token is \"=2\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: bad base": {
+   "script": "c10e053a0d7f710b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 2#3: value too great for base (error token is \"2#3\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: bad subscript": {
+   "script": "ba7049e65514d770",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "before\nafter 0\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: divide by zero": {
+   "script": "adf7c1e4115a8dc5",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: recursion": {
+   "script": "f59111c2b91330ca",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in a for header: syntax": {
+   "script": "6ac535e28b395e92",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in declare -i: assign to literal": {
+   "script": "1dcd207757994edb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1=2: attempted assignment to non-variable (error token is \"=2\")\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram arith error in declare -i: bad base": {
+   "script": "a30b1ee21bc7a8da",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 2#3: value too great for base (error token is \"2#3\")\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram arith error in declare -i: bad subscript": {
+   "script": "386e5318ba3cd0cc",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "before\nafter 0 v=0\nnext line\n"
+   }
+  },
+  "gram arith error in declare -i: divide by zero": {
+   "script": "31c789bff70a4048",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram arith error in declare -i: recursion": {
+   "script": "c5c2f27f28ebd292",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram arith error in declare -i: syntax": {
+   "script": "3df589eaa644d170",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "before\n"
+   }
+  },
+  "gram arith error in let: assign to literal": {
+   "script": "9e01e77435f5e5de",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1=2: attempted assignment to non-variable (error token is \"=2\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in let: bad base": {
+   "script": "a90fbbc526172b4a",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 2#3: value too great for base (error token is \"2#3\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in let: bad subscript": {
+   "script": "90c8a6e98eaac061",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in let: divide by zero": {
+   "script": "dfb27cac4347c5f8",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in let: recursion": {
+   "script": "d4e57ebb16374f1d",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith error in let: syntax": {
+   "script": "5c2dcc1c980be7a3",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": "before\nafter 1\nnext line\n"
+   }
+  },
+  "gram arith fixed add overflow": {
+   "script": "bff3cad981acbdcf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed and short circuit": {
+   "script": "76c0fa1e0e1a4432",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed array bad negative index": {
+   "script": "cf4622ef49a31cb7",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed array negative index": {
+   "script": "28ab5a79cd6d6b3c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[30]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed array star": {
+   "script": "339d61d944de239b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a[*]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed array without index": {
+   "script": "9e59f9c8f1bea9e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[10]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed assign chain": {
+   "script": "f433dbbd247c88bc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=3 c=3\n"
+   }
+  },
+  "gram arith fixed assignment to expression": {
+   "script": "3c296f1da7d83d28",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: (t) = 2: attempted assignment to non-variable (error token is \"= 2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed assignment to literal": {
+   "script": "f2a18b31f58b9142",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 = 2: attempted assignment to non-variable (error token is \"= 2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed assoc element": {
+   "script": "56bdb4b52f27bf02",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed assoc string key": {
+   "script": "c7d9f68433c53c7d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[7]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed backslash": {
+   "script": "4575bdcb027e73d2",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 \\+ 2: arithmetic syntax error: invalid arithmetic operator (error token is \"\\+ 2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base 16": {
+   "script": "5016b6de4aa7f3bd",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[255]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 36": {
+   "script": "9f148347724f44db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[35]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 37 lower": {
+   "script": "c3d3a26ac47adbde",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[10]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 37 upper": {
+   "script": "45c42a7bb896f619",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[36]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 64 at": {
+   "script": "2cac7067f0d16712",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[62]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 64 underscore": {
+   "script": "48b0cd4a8ce6031e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[63]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base 65": {
+   "script": "689cf6c8e68dbe14",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 65#1: invalid arithmetic base (error token is \"65#1\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base no digits": {
+   "script": "3fba59d04c545314",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 10#: invalid integer constant (error token is \"10#\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base one": {
+   "script": "eaf6505738d6b0e5",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1#0: invalid arithmetic base (error token is \"1#0\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base ten leading zeros": {
+   "script": "5b95adcfeb0569be",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[10]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base ten negative": {
+   "script": "2e1954823ee9458d",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 10#: invalid integer constant (error token is \"10#\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base two": {
+   "script": "1b3c990f31664169",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[10]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed base two bad digit": {
+   "script": "12e80b0c8b6aad16",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 2#12: value too great for base (error token is \"2#12\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base with variable": {
+   "script": "d0bacf6b73275dca",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: b#11: arithmetic syntax error: invalid arithmetic operator (error token is \"#11\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed base zero": {
+   "script": "6cb9caa20026dd17",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 0#1: invalid number (error token is \"0#1\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed bitwise not": {
+   "script": "7674c0ff9c1f2776",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed bitwise precedence": {
+   "script": "c11fa613e0c49902",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed character constant": {
+   "script": "54adfe2dcf4c6eb8",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 'a': arithmetic syntax error: operand expected (error token is \"'a'\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed comma": {
+   "script": "ee69730f35306098",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command add overflow": {
+   "script": "b080cd1996632b68",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command array bad negative index": {
+   "script": "981c0cd8f304372b",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: a: bad array subscript\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command assign chain": {
+   "script": "586a04949e0fd3e8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=3 c=3\n"
+   }
+  },
+  "gram arith fixed command assignment to expression": {
+   "script": "c211ece6ed142d74",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: (t) = 2 : attempted assignment to non-variable (error token is \"= 2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command assignment to literal": {
+   "script": "c3064c17b55e7e98",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 = 2 : attempted assignment to non-variable (error token is \"= 2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command backslash": {
+   "script": "b2f7b42b3e6cbf0c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 \\+ 2 : arithmetic syntax error: invalid arithmetic operator (error token is \"\\+ 2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command base 64 underscore": {
+   "script": "f2660195ac187555",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command base two bad digit": {
+   "script": "dd4937dacca298e9",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 2#12: value too great for base (error token is \"2#12\")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command base with variable": {
+   "script": "ba0068b678d6ab51",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: b#11 : arithmetic syntax error: invalid arithmetic operator (error token is \"#11 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command base zero": {
+   "script": "a4e96a10845fa220",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 0#1: invalid number (error token is \"0#1\")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command bitwise precedence": {
+   "script": "31f0ab3b7c692b6c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command character constant": {
+   "script": "cf959ecd8cc84eff",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 'a' : arithmetic syntax error: operand expected (error token is \"'a' \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command compound assign chain": {
+   "script": "812f4cb99fe79293",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=2 c=2\n"
+   }
+  },
+  "gram arith fixed command divide assign by zero": {
+   "script": "d9a17781beeea300",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: t /= 0 : division by 0 (error token is \"0 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command division truncates": {
+   "script": "ae33823abac46128",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command hash comment": {
+   "script": "1f86e3a4c9112154",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 # 2 : arithmetic syntax error: invalid arithmetic operator (error token is \"# 2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command hex empty": {
+   "script": "e0d11f174b49b7d1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command hex upper": {
+   "script": "906df10d0fc4eb6a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command huge literal": {
+   "script": "624ab4100835a088",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command integer attribute string": {
+   "script": "7c9ed88f2475afb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command logical precedence": {
+   "script": "c003efc6e0546c8a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command min divided by minus one": {
+   "script": "c5be6321a3a761f4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command modulo negative": {
+   "script": "212a9aac89cac425",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command post decrement in condition": {
+   "script": "943b365a32f77db0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=-1\n"
+   }
+  },
+  "gram arith fixed command recursive variable": {
+   "script": "a2b4bd0804ede81e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command spaces": {
+   "script": "d32b6145aa086ca0",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: ' 5 ' : arithmetic syntax error: operand expected (error token is \"' 5 ' \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command string variable": {
+   "script": "a780186e6f829ba8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command substitution": {
+   "script": "a3c7c2a21c354453",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[4]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command ternary assignment": {
+   "script": "89ca70c6324d4905",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=4 c=0\n"
+   }
+  },
+  "gram arith fixed command ternary short circuit": {
+   "script": "0116a98c35ef456e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1 t=1 c=0\n"
+   }
+  },
+  "gram arith fixed command two operands": {
+   "script": "c6840a634e966517",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: ((: 1 2 : arithmetic syntax error in expression (error token is \"2 \")\n"
+   },
+   "stdout": {
+    "text": "status=1 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed command unbalanced open": {
+   "script": "c5859eda3d254b11",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 2: syntax error: unexpected end of file from `(' command on line 1\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed command zero to zero": {
+   "script": "db1ebbcab3fca6db",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed comparison chain": {
+   "script": "a80d73e09a0e6874",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed compound assign chain": {
+   "script": "9bd8ad146e37f95c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0 t=2 c=2\n"
+   }
+  },
+  "gram arith fixed decimal": {
+   "script": "4671e592651a57ed",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[42]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed divide assign by zero": {
+   "script": "e7214b775130a48a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: t /= 0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed divide by zero": {
+   "script": "75bafa2e6296bd4a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 / 0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed division truncates": {
+   "script": "230d9b0d00e0c55c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed dollar hash": {
+   "script": "b606fca03c5660e7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed dollar in name": {
+   "script": "b3641407695aa1a9",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed double increment": {
+   "script": "6296fb02411c1291",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0 t=0 c=2\n"
+   }
+  },
+  "gram arith fixed empty": {
+   "script": "2c48609f7c105b45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed equality of strings": {
+   "script": "0de8c5773d0e7e3e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed exponent notation": {
+   "script": "127ede64a680f8ae",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1e3: value too great for base (error token is \"1e3\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed float": {
+   "script": "6fe40931ea6eadf9",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1.5: arithmetic syntax error: invalid arithmetic operator (error token is \".5\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed hash comment": {
+   "script": "730a21751a78f624",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: bad substitution: no closing `)' in \"[$((1 # 2))]\"\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed hex bad digit": {
+   "script": "6a141a89e0211710",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 0xg: value too great for base (error token is \"0xg\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed hex empty": {
+   "script": "e0de1db3099519c4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed hex upper": {
+   "script": "a4594289217e83d0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[255]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed huge literal": {
+   "script": "978bca94ad376214",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[7766279631452241919]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed increment expression": {
+   "script": "2160d000564074b7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed increment literal": {
+   "script": "ea3ea02d7274634a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 5++: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed integer attribute string": {
+   "script": "d6ac05e9a045279d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed large shift": {
+   "script": "97f36c8fd9f7db75",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed leading operator": {
+   "script": "58784981cddd6689",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: * 2: arithmetic syntax error: operand expected (error token is \"* 2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed leading zeros octal": {
+   "script": "ab8c76b5d93c7d83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[15]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed logical precedence": {
+   "script": "bbaba621e8ed12fc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed max int": {
+   "script": "8ef03ec7874a1dca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[9223372036854775807]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed min divided by minus one": {
+   "script": "48cd978b249ec852",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed min int": {
+   "script": "6545b2a861622d58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed min modulo minus one": {
+   "script": "580e457458659172",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed modulo by zero": {
+   "script": "2d36ee22fc9e8602",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 5 % 0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed modulo negative": {
+   "script": "3480555675453883",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed multiply overflow": {
+   "script": "c7f0db20568f4f57",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed negative exponent": {
+   "script": "e05edea4583d0e0c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 2 ** -1: exponent less than 0 (error token is \"1\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed negative shift": {
+   "script": "7856d43716cd9424",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed nested arithmetic": {
+   "script": "5c0777ec7d9a8400",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[6]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed nested ternary": {
+   "script": "c5682e7b2c898678",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed newline inside": {
+   "script": "a398a3913c12e09d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed not not": {
+   "script": "35754aaf19bf735e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed octal eight": {
+   "script": "0d1671fe351abd3b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 08: value too great for base (error token is \"08\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed octal nine": {
+   "script": "3b2d4228ae78344a",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 019: value too great for base (error token is \"019\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed only spaces": {
+   "script": "e4c50435ea0102e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed or short circuit": {
+   "script": "8fff536a3c19f3f6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed overflow literal": {
+   "script": "d34fd0103b0a392a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed parameter expansion": {
+   "script": "63702aeee4eb9c36",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[6]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed positional": {
+   "script": "1cac001e74034371",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[9]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed post decrement in condition": {
+   "script": "2d7f4dedf615e010",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[2]\nstatus=0 t=0 c=-1\n"
+   }
+  },
+  "gram arith fixed power precedence": {
+   "script": "cfbed6d4f43a2730",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[4]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed power right assoc": {
+   "script": "2091fe3451960e83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[512]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed quoted number": {
+   "script": "863f737b433ca3f1",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[5]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed readonly assignment": {
+   "script": "6f348562e1f026ae",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ro: readonly variable\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed recursive variable": {
+   "script": "7ba7961200403e95",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: rec: expression recursion level exceeded (error token is \"rec\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed right shift negative": {
+   "script": "a8d0aac4bba644fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-4]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed shift 63": {
+   "script": "f4af6efeac0e70f2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-9223372036854775808]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed spaces": {
+   "script": "82f6743640cdadb1",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ' 5 ': arithmetic syntax error: operand expected (error token is \"' 5 '\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed string variable": {
+   "script": "66d39b146bec315d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed tab inside": {
+   "script": "e50ff40aeeba7425",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed ternary assignment": {
+   "script": "ae416ba4cfc4c860",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[4]\nstatus=0 t=4 c=0\n"
+   }
+  },
+  "gram arith fixed ternary short circuit": {
+   "script": "8a61c9959609cc4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[0]\nstatus=0 t=1 c=0\n"
+   }
+  },
+  "gram arith fixed trailing operator": {
+   "script": "e1dba8da01d5b307",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 +: arithmetic syntax error: operand expected (error token is \"+\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed two operands": {
+   "script": "16f34ec06115cb4c",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 2: arithmetic syntax error in expression (error token is \"2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed unary chain": {
+   "script": "7ebcd72219e32f6f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[-3]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed unbalanced close": {
+   "script": "99da68d405aad37a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[3)]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed unbalanced open": {
+   "script": "d38cf4a9ebe64403",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: unexpected EOF while looking for matching `\"'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed unicode digit": {
+   "script": "db7bc44e7891b57b",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: ١: arithmetic syntax error: operand expected (error token is \"١\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed unknown operator": {
+   "script": "c15f1c1d4185421e",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 ** * 2: arithmetic syntax error: operand expected (error token is \"* 2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed unset variable arithmetic": {
+   "script": "39d838cce227d430",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith fixed variable with spaces": {
+   "script": "4602608fcfd84179",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1 2: arithmetic syntax error in expression (error token is \"2\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith fixed zero to zero": {
+   "script": "270de8764aafc160",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[1]\nstatus=0 t=0 c=0\n"
+   }
+  },
+  "gram arith generated 1 expansion: (36#z!=a[1] + 0!=z, r==z|7)": {
+   "script": "fbe651227b2d090c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 10 declare -i: (2#101, r)": {
+   "script": "54127cb4ffb14e26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 100 declare -i: +(z) & z": {
+   "script": "d930388284e67099",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 101 subscript: 36#z >= a[x-4]*(c |= s)^(0 ? --c : 010 | a[x-4])": {
+   "script": "82da4ccfc117bc13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 28\nx=5 c=6 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 102 legacy: x||36#z": {
+   "script": "d7395bdebde6e76c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 103 expansion: 0x1f>>7": {
+   "script": "2005ee953842f0fb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 104 command: (r ? 7 : c++) / 3": {
+   "script": "78d5f76c1f490440",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 105 let: 0x1f^010": {
+   "script": "85a5d21f7b01cb62",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 106 declare -i: (-((c /= 7)) ? x * r & 7 : (r ? s : 2#101) > 010)": {
+   "script": "fc3d73cdf4283607",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 107 subscript: a[1]-- * (r, 010)": {
+   "script": "3e4549a6274a065f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 160\nx=5 c=0 t=0 a=10 19 30\n"
+   }
+  },
+  "gram arith generated 108 legacy: ++c != (a[2] %= 2)": {
+   "script": "21845a4d8bd7290a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=1 t=0 a=10 20 0\n"
+   }
+  },
+  "gram arith generated 109 expansion: (t -= (a[1] ? $x : 36#z)) >= a[x-4] >> 2/2 ** 7": {
+   "script": "338503f6e77b8d47",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=-5 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 11 subscript: (t *= 2#101)": {
+   "script": "3ca320bbd0e90a8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 110 command: (s, $x)": {
+   "script": "cfb7d056581e91fa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 111 let: -(0x1f)": {
+   "script": "e4065d440914494e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 112 declare -i: (a[2] /= 2)": {
+   "script": "9f4821c30c3e5b32",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "15\nx=5 c=0 t=0 a=10 20 15\n"
+   }
+  },
+  "gram arith generated 113 subscript: (+(0) ? 010-y : --c)": {
+   "script": "5c9adb72e3447d37",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: b[(+(0) ? 010-y : --c)]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith generated 114 legacy: (s ? (((a[x-4], 7), (a[2] += a[1])), (a[2] %= 1)) : ~(1))": {
+   "script": "9501230b91fb22e2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 0\n"
+   }
+  },
+  "gram arith generated 115 expansion: (0 / 2 ? c++ : (c *= 36#z))": {
+   "script": "029cf5eb3cb28d5a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 116 command: r&-2&&t++": {
+   "script": "72ea5731a5bfbf95",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=1 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 117 let: $x ^ -2 > (1 ? x : 0x1f)": {
+   "script": "23c4ad641601d7a4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: $x ^ -2 > (1 ? x : 0x1f): arithmetic syntax error: operand expected (error token is \"$x ^ -2 > (1 ? x : 0x1f)\")\n"
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 118 declare -i: -(((z, y) ? -2/1 : +(010))&a[1]--)": {
+   "script": "b92fb9da9bef61ee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-20\nx=5 c=0 t=0 a=10 19 30\n"
+   }
+  },
+  "gram arith generated 119 subscript: (010 ? (y ? 010 : 0x1f) : +(r))": {
+   "script": "a00583528d1ad7a2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 8\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 12 legacy: 0 <= x": {
+   "script": "035df1c15314e9a0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 120 legacy: (y, (c /= 1)) / 7": {
+   "script": "122d998f0c02a36c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 13 expansion: ((1, 36#z), -2)/2": {
+   "script": "633863c6958b1759",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 14 command: (c %= 3)*a[x-4]": {
+   "script": "dc0e53ed17b1c7c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 15 let: (a[2] = x)**3": {
+   "script": "11949f090e647ad7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 5\n"
+   }
+  },
+  "gram arith generated 16 declare -i: !(z) * 0>1": {
+   "script": "1b67ee9016f9c119",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 17 subscript: s ** 7 >= 36#z >= ((1, 1) ? $x : -(36#z))": {
+   "script": "3cafb9cc8e3d6956",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 18 legacy: ++a[0]": {
+   "script": "b7a952e2097617ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\nx=5 c=0 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 19 expansion: -(c--)**3": {
+   "script": "8fc34de6b00a38b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 2 command: (a[x-4] ? 010 : 7)": {
+   "script": "966f41345d16ef67",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 20 command: (--c ? 36#z : +(2#101))": {
+   "script": "e084e30fae427c21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 21 let: (010 ? (c--, z) : 7 << 2)": {
+   "script": "8a9241a5611453e3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 22 declare -i: c--": {
+   "script": "5e9617906efa941f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 23 subscript: !(a[1])": {
+   "script": "af42547fc0ef904b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 24 legacy: (2#101 ? s : 1 | a[1])<36#z||0|1*z": {
+   "script": "3e727aae82470943",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 25 expansion: ~((0, 7))": {
+   "script": "4277b10fab3c2888",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-8\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 26 command: c++": {
+   "script": "2e2c955bc7f72dc4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 27 let: z^z - (a[2] <<= 3) << 1 != 36#z": {
+   "script": "f7a3b3d43fcdf158",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 240\n"
+   }
+  },
+  "gram arith generated 28 declare -i: (c *= a[1])": {
+   "script": "24095a9981b47586",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 29 subscript: (c %= 7)": {
+   "script": "96744c0bc7310f29",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 3 let: ((t |= z && 1) ? ((010, -2) ? 0 * 2#101 : c++) : +(($x, -2)))": {
+   "script": "7224da148fc27d7c",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: ((t |= z && 1) ? ((010, -2) ? 0 * 2#101 : c++) : +(($x, -2))): arithmetic syntax error: operand expected (error token is \"$x, -2)))\")\n"
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 30 legacy: 0x1f--2 > z / 1 & -2 || a[1]": {
+   "script": "a17746d94d600ad0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 31 expansion: (t >>= 2) ** 7<=010 != 7 | -(a[x-4])": {
+   "script": "9edd000bcbbbf248",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-19\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 32 command: (z % 2 ? s : 0x1f!=y)": {
+   "script": "14eb473e50d63087",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 33 let: (--c, ++a[0])": {
+   "script": "c63b6b463940a773",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=-1 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 34 declare -i: (1&(c >>= 2), ~(a[1]) || r)": {
+   "script": "53e9017d83f67a26",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 35 subscript: (z, s)": {
+   "script": "e2a089ec74c5cb66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 6\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 36 legacy: x << 3": {
+   "script": "c9e4c18ef49c22b2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "40\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 37 expansion: 36#z || 7 + a[1]": {
+   "script": "4e7c1f73af095df6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 38 command: r<=a[1]--": {
+   "script": "0379a374877b9bc0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 19 30\n"
+   }
+  },
+  "gram arith generated 39 let: z << 3": {
+   "script": "8951918902163554",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 4 declare -i: -(r)": {
+   "script": "3fae1b3e231b2e06",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-5\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 40 declare -i: a[x-4]>>3": {
+   "script": "072b401829065845",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 41 subscript: x/3": {
+   "script": "0be574ca416b5f1b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 42 legacy: z>=a[x-4] / 2": {
+   "script": "9c9916815367bbf0",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 43 expansion: z&&r": {
+   "script": "e5230a79ea1fa950",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 44 command: (c >>= 7)": {
+   "script": "b2be4f5b0b12bcca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 45 let: ((!(z), 0x1f) ? (a[2] = $x) <= (7 ? 7 : $x) : a[1] >> 7)": {
+   "script": "6b941bdce81845be",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: ((!(z), 0x1f) ? (a[2] = $x) <= (7 ? 7 : $x) : a[1] >> 7): arithmetic syntax error: operand expected (error token is \"$x) <= (7 ? 7 : $x) : a[1] >> 7)\")\n"
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 46 declare -i: (a[1], !(y<1))": {
+   "script": "b15c15d76242d479",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 47 subscript: (36#z ? 010 : z)": {
+   "script": "d812d6e913f02f9b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 8\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 48 legacy: ~(--c>>2)": {
+   "script": "a7e12382cfd6131d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 49 expansion: !((c %= 2)|-(-2))": {
+   "script": "6347c7dde803ec37",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 5 subscript: (0 ? a[x-4]<7 : 1)": {
+   "script": "88fb07e811a37f30",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 50 command: (s, ~(c-- >= 1))": {
+   "script": "78f7479e2a870b05",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 51 let: (r, z)": {
+   "script": "8f32e83225214f22",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 52 declare -i: !(a[x-4] - 1**7||+(1))": {
+   "script": "1c06ce17157ac08d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 53 subscript: -(1)": {
+   "script": "5be6f45b92a55968",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: b[-(1)]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith generated 54 legacy: (c = 010)": {
+   "script": "2b113db353568236",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "8\nx=5 c=8 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 55 expansion: (t &= r)": {
+   "script": "b5691a84231ed154",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 56 command: +(--c)": {
+   "script": "6c6cee7e0fa4e56f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 57 let: ++a[0] < (2#101 ? 010 : y)": {
+   "script": "3ad47cb978919467",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 58 declare -i: $x|x": {
+   "script": "c00a80c0c391da73",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: $x|x: arithmetic syntax error: operand expected (error token is \"$x|x\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith generated 59 subscript: ~((2#101 ? a[1] : 0))": {
+   "script": "f071db914b3fdf27",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: b[~((2#101 ? a[1] : 0))]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith generated 6 legacy: ++a[0]==0 <= -(a[1]|y)|((a[1], s)-($x, x), (c = !(0x1f)))": {
+   "script": "409716ab42a1703e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 60 legacy: (0x1f&0 ? (z, !(a[1])) : ++a[0])": {
+   "script": "d921ee88fc7e7e45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "11\nx=5 c=0 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 61 expansion: a[1]-- >= (c = (2#101 && 1 ? 0x1f : (r, 2#101)))": {
+   "script": "073d6c0c88498831",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=31 t=0 a=10 19 30\n"
+   }
+  },
+  "gram arith generated 62 command: (($x, (a[2] += 010)) >= x&&1, r%7)": {
+   "script": "be513e7e37c8e991",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 38\n"
+   }
+  },
+  "gram arith generated 63 let: (a[2] &= r)": {
+   "script": "97a015d88af1af5d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 4\n"
+   }
+  },
+  "gram arith generated 64 declare -i: !(0)": {
+   "script": "a3a6392914444698",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 65 subscript: +(0)**2": {
+   "script": "78623d2cf83af0d4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 66 legacy: (t /= 1)": {
+   "script": "0ba2ec22ad18dbe5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 67 expansion: 7 == 010 | s": {
+   "script": "c79c6572331e2933",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 68 command: -2 / 2": {
+   "script": "71c35641c0a70daa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 69 let: +((a[2] %= 3) ** 1)": {
+   "script": "d57e97478b7f2e1c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 0\n"
+   }
+  },
+  "gram arith generated 7 expansion: +(~(7) <= y - z)": {
+   "script": "b824b8385ba4fc4c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 70 declare -i: -(36#z)": {
+   "script": "a7cc88a7796a7c25",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-35\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 71 subscript: (7, (010 ? $x : -2))|(t ^= -2-a[x-4])": {
+   "script": "2baeba547e7b79bb",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: b[(7, (010 ? $x : -2))|(t ^= -2-a[x-4])]: bad array subscript\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "gram arith generated 72 legacy: +(~(a[1]))": {
+   "script": "c7040b2d9cfaea80",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-21\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 73 expansion: (t = 1)": {
+   "script": "186dfc9e0efb0ff4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nx=5 c=0 t=1 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 74 command: (a[2] ^= z)": {
+   "script": "3d66f0b4dcb6057d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 75 let: $x * x": {
+   "script": "1ac1a46391562ea4",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: $x * x: arithmetic syntax error: operand expected (error token is \"$x * x\")\n"
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 76 declare -i: (++a[0] ? s : +(1))==((1, 7), 36#z>>2)": {
+   "script": "b7d3ed203b9e2085",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=11 20 30\n"
+   }
+  },
+  "gram arith generated 77 subscript: (t ^= (0x1f, 1) > r>c++)": {
+   "script": "9f69ad1382108651",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 0\nx=5 c=1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 78 legacy: ((y&&7, 36#z), c++ & (x ? 36#z : $x))": {
+   "script": "0cdc7f1b131f4e13",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 79 expansion: (s || (t ^= y) ? z : (a[2] <<= 2) | --c)": {
+   "script": "c7ee9e00770928bb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 8 command: 36#z != 2#101": {
+   "script": "5a62c0bebfdb3ddc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 80 command: !(c--+(~(010) ? x : s>r))": {
+   "script": "a588bca911c41862",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=-1 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 81 let: (z, r)": {
+   "script": "5ce1c59949255b70",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 82 declare -i: -((y, (a[2] |= 2#101 ** 1)))": {
+   "script": "688750cf7598f81b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-31\nx=5 c=0 t=0 a=10 20 31\n"
+   }
+  },
+  "gram arith generated 83 subscript: (z ? (z, 010) : x*a[1])": {
+   "script": "175caf3809978252",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 100\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 84 legacy: +(a[x-4])": {
+   "script": "527f360f9d2ffdeb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "20\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 85 expansion: (a[2] %= 1)": {
+   "script": "5738711e0bd84c44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 0\n"
+   }
+  },
+  "gram arith generated 86 command: (a[2] = 36#z)": {
+   "script": "a6b3bb7170009567",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 35\n"
+   }
+  },
+  "gram arith generated 87 let: (t <<= 7)": {
+   "script": "7e7840d39251bedb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 88 declare -i: ((1 ? 0x1f : z), r - 0)>>3": {
+   "script": "5ef9e66006f5ed8c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 89 subscript: -2 ^ y": {
+   "script": "199e18c5ab82081f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 3\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 9 let: 0 % 1%1*!(y)-~(7)": {
+   "script": "61fab6c95f216a66",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 90 legacy: ((a[1] ? x : a[x-4]) ? z&&010 : -2 << 7) / 3**2": {
+   "script": "9a4c0c466a431a1e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 91 expansion: (y, 36#z)": {
+   "script": "21db360dba9ebe41",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "35\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 92 command: (y ? 0 : 2#101)": {
+   "script": "37dd265b51ebdeb8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 93 let: 7<(t += z)>>2": {
+   "script": "ce3a29ff4c2c399c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 94 declare -i: (36#z ? 0 : 2#101) << 2 / 1": {
+   "script": "3b10cd6a42512f21",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 95 subscript: s||$x | 010 * -2>=a[1]%2": {
+   "script": "0ad896925e08743c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0 1\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 96 legacy: (a[1], 1) ** 3--(r)": {
+   "script": "e7eccb32b44a2eee",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "6\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 97 expansion: (t >>= 3)": {
+   "script": "02d8db6120746f0b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 98 command: a[x-4]**1": {
+   "script": "8ddac5c96a0638eb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\nx=5 c=0 t=0 a=10 20 30\n"
+   }
+  },
+  "gram arith generated 99 let: +(t++)": {
+   "script": "bf77e3483f136923",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\nx=5 c=0 t=1 a=10 20 30\n"
+   }
+  },
+  "gram arith increment string variable": {
+   "script": "f628fed0695ecddf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "gram arith increment through reference": {
+   "script": "a8e914012055cca3",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2 1\n"
+   }
+  },
+  "gram arith increment unset": {
+   "script": "096a2c90ba8ed941",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n-1\n"
+   }
+  },
+  "gram arith integer and lowercase": {
+   "script": "23292e9a8dc1a992",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram arith let no arguments": {
+   "script": "bee770301e28e830",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: expression expected\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram arith let several arguments": {
+   "script": "bedb339601c750ab",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2 6\n"
+   }
+  },
+  "gram arith let status of zero": {
+   "script": "a4aa109921d5ea97",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n1\n"
+   }
+  },
+  "gram arith let with spaces unquoted": {
+   "script": "88bf91398cad8739",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: let: =: arithmetic syntax error: operand expected (error token is \"=\")\n"
+   },
+   "stdout": {
+    "text": "status=1\n"
+   }
+  },
+  "gram arith local -i": {
+   "script": "cf360884f2518f56",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n"
+   }
+  },
+  "gram arith nameref arithmetic": {
+   "script": "ba0cbc43c0328d01",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5\n"
+   }
+  },
+  "gram arith readonly arithmetic assignment": {
+   "script": "50eb8e6017cdb487",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: k: readonly variable\n"
+   },
+   "stdout": {
+    "text": "status=1 k=1\n"
+   }
+  },
+  "gram arith substring offsets": {
+   "script": "9578c72a70e0a519",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cd ef\n"
+   }
+  },
+  "gram arith test -lt with spaces": {
+   "script": "79aa72eb56d57518",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=0\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

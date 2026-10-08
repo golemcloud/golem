@@ -28,7 +28,7 @@ pub(super) type EphemeralArchival = watch::Sender<Option<Result<(), StreamStoreE
 #[derive(Default)]
 pub(super) struct DurableStreamProducerSlot {
     state: Mutex<SlotState>,
-    responses_changed: tokio::sync::Notify,
+    state_changed: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -40,6 +40,7 @@ struct SlotState {
     retired: bool,
     retirement: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
     archival: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
+    recovery: Option<watch::Receiver<Option<Result<(), StreamStoreError>>>>,
 }
 
 /// Keeps normal ephemeral archival behind the response and all of its stream readers.
@@ -51,16 +52,20 @@ pub struct EphemeralResponseLease {
 impl Drop for EphemeralResponseLease {
     fn drop(&mut self) {
         self.slot.state.lock().unwrap().responses -= 1;
-        self.slot.responses_changed.notify_waiters();
+        self.slot.state_changed.notify_waiters();
     }
 }
 
 impl DurableStreamProducerSlot {
+    pub(super) fn changed(&self) -> &tokio::sync::Notify {
+        &self.state_changed
+    }
+
     pub(super) fn retain_response(
         self: &Arc<Self>,
     ) -> Result<Arc<EphemeralResponseLease>, StreamStoreError> {
         let mut state = self.state.lock().unwrap();
-        if state.retired {
+        if state.retired || state.recovery.is_some() {
             return Err(StreamStoreError::RecoveryRequired);
         }
         state.responses += 1;
@@ -73,7 +78,7 @@ impl DurableStreamProducerSlot {
     ) -> Result<Option<Arc<EphemeralResponseLease>>, StreamStoreError> {
         let archival = {
             let mut state = self.state.lock().unwrap();
-            if !state.retired {
+            if !state.retired && state.recovery.is_none() {
                 state.responses += 1;
                 return Ok(Some(Arc::new(EphemeralResponseLease {
                     slot: self.clone(),
@@ -90,7 +95,7 @@ impl DurableStreamProducerSlot {
 
     pub(super) async fn wait_for_responses_and_fence(&self) -> Option<EphemeralArchival> {
         loop {
-            let changed = self.responses_changed.notified();
+            let changed = self.state_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             {
@@ -103,6 +108,7 @@ impl DurableStreamProducerSlot {
                     let (reply, archival) = watch::channel(None);
                     state.archival = Some(archival);
                     state.retired = true;
+                    self.state_changed.notify_waiters();
                     if let Some(producer) = &state.producer {
                         producer.poison();
                     }
@@ -117,13 +123,74 @@ impl DurableStreamProducerSlot {
         self.state.lock().unwrap().retired
     }
 
+    pub(super) fn is_recovering(&self) -> bool {
+        self.state.lock().unwrap().recovery.is_some()
+    }
+
+    /// Temporarily fences admission and drains every mutation admitted by the old history.
+    /// The detached owner makes the fence and drain cancellation-safe across startup retries.
+    pub(super) fn begin_recovery(
+        self: &Arc<Self>,
+    ) -> impl Future<Output = Result<(), StreamStoreError>> + Send + 'static {
+        let recovery = {
+            let mut state = self.state.lock().unwrap();
+            if let Some(recovery) = &state.recovery {
+                recovery.clone()
+            } else {
+                let loading = state.loading.clone();
+                let slot = self.clone();
+                let (reply, recovery) = watch::channel(None);
+                state.recovery = Some(recovery.clone());
+                if let Some(producer) = &state.producer {
+                    producer.poison();
+                }
+                self.state_changed.notify_waiters();
+                tokio::spawn(async move {
+                    let result = std::panic::AssertUnwindSafe(async {
+                        if let Some(loading) = loading {
+                            let _ = wait_for_result(loading).await;
+                        }
+                        let producer = slot.state.lock().unwrap().producer.clone();
+                        if let Some(producer) = producer {
+                            producer.poison();
+                            producer.wait_durable_drained().await;
+                        }
+                    })
+                    .catch_unwind()
+                    .await
+                    .map_err(|_| {
+                        StreamStoreError::Oplog(
+                            "durable stream producer recovery drain panicked".to_string(),
+                        )
+                    });
+                    reply.send_replace(Some(result));
+                });
+                recovery
+            }
+        };
+        wait_for_result(recovery)
+    }
+
+    /// Reopens the slot only after startup has reloaded metadata from the repaired history.
+    pub(super) fn finish_recovery(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.recovery.is_none() || state.retired {
+            return;
+        }
+        state.producer = None;
+        state.failure = None;
+        state.loading = None;
+        state.recovery = None;
+        self.state_changed.notify_waiters();
+    }
+
     pub(super) fn fence(&self) {
         let mut state = self.state.lock().unwrap();
         state.retired = true;
         if let Some(producer) = &state.producer {
             producer.poison();
         }
-        self.responses_changed.notify_waiters();
+        self.state_changed.notify_waiters();
     }
 
     pub(super) fn retire(
@@ -148,7 +215,7 @@ impl DurableStreamProducerSlot {
         let retirement = {
             let mut state = self.state.lock().unwrap();
             state.retired = true;
-            self.responses_changed.notify_waiters();
+            self.state_changed.notify_waiters();
             if let Some(producer) = &state.producer {
                 producer.poison();
             }
@@ -212,6 +279,7 @@ impl DurableStreamProducerSlot {
             return false;
         }
         state.retired = true;
+        self.state_changed.notify_waiters();
         true
     }
 
@@ -231,7 +299,7 @@ impl DurableStreamProducerSlot {
     {
         let loading = {
             let mut state = self.state.lock().unwrap();
-            if state.retired {
+            if state.retired || state.recovery.is_some() {
                 return Err(StreamStoreError::RecoveryRequired);
             }
             if let Some(failure) = &state.failure {
@@ -254,6 +322,7 @@ impl DurableStreamProducerSlot {
                 let slot = self.clone();
                 let (reply, loading) = watch::channel(None);
                 state.loading = Some(loading.clone());
+                self.state_changed.notify_waiters();
                 tokio::spawn(async move {
                     let activity = ActivityGate::new();
                     let guard = activity.try_enter().unwrap();
@@ -278,7 +347,7 @@ impl DurableStreamProducerSlot {
                     let mut state = slot.state.lock().unwrap();
                     match &result {
                         Ok(producer) => {
-                            if state.retired {
+                            if state.retired || state.recovery.is_some() {
                                 producer.poison();
                             }
                             state.producer = Some(producer.clone());
@@ -288,7 +357,7 @@ impl DurableStreamProducerSlot {
                         }
                         Err(_) => {}
                     }
-                    if state.retired {
+                    if state.retired || state.recovery.is_some() {
                         result = Err(StreamStoreError::RecoveryRequired);
                     }
                     state.loading = None;

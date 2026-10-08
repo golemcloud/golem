@@ -1,0 +1,708 @@
+{
+ "cases": {
+  "expand: GLOBIGNORE": {
+   "script": "23ee0e742e25da42",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "keep\n"
+   }
+  },
+  "expand: IFS mixing whitespace and delimiters": {
+   "script": "8b6bcde26ca732ec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n[a][b][][c]\n"
+   }
+  },
+  "expand: alternative": {
+   "script": "eb643534b417fcfb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[] [] [c] [] [e]\n"
+   }
+  },
+  "expand: arithmetic assignment operators": {
+   "script": "f7468116eacbbdc2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 6 18 9 1 4 5 5 6 7 7 5\n"
+   }
+  },
+  "expand: arithmetic bases": {
+   "script": "746689da89dd7d83",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "31 15 10 35 255 63\n"
+   }
+  },
+  "expand: arithmetic command status": {
+   "script": "e6a439771a5f9300",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n0\n3\n6\n"
+   }
+  },
+  "expand: arithmetic errors": {
+   "script": "6e4c676d38315920",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: 1/0: division by 0 (error token is \"0\")\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "expand: arithmetic operators": {
+   "script": "a033b2490471a837",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 1 -3 -1 1024 16 15 1 7 6 -6 1 0\n"
+   }
+  },
+  "expand: arithmetic overflow wraps": {
+   "script": "d7acdbeea8b7faec",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-9223372036854775808 9223372036854775807 -9223372036854775808\n"
+   }
+  },
+  "expand: arithmetic precedence and ternary": {
+   "script": "9368fdab07716a64",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "7 9 512 2 3 3 1 0\n"
+   }
+  },
+  "expand: arithmetic with variables and strings": {
+   "script": "2b7dddc3461af132",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4 9\n10\n1\n"
+   }
+  },
+  "expand: array keys": {
+   "script": "86d21aa7a247196c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0 1 2 7\none\n"
+   }
+  },
+  "expand: array star with IFS": {
+   "script": "f2f202a7a5169706",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "x,y,z\nx y z\n"
+   }
+  },
+  "expand: backquotes and nesting": {
+   "script": "144db81732a7ada4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c d e\n"
+   }
+  },
+  "expand: backslash in double quotes": {
+   "script": "359b71f6fc56f4c2",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "$HOME ` \" \\ \\a \\n\n"
+   }
+  },
+  "expand: brace lists and sequences": {
+   "script": "2e21a9bdf9716caa",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b c x1y x2y x3y 5 4 3 2 1 a c e 01 04 07 10 -2 -1 0 1 2\n"
+   }
+  },
+  "expand: brace nesting and invalid forms": {
+   "script": "8de886dda0a90775",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a bd cd {a} {a..} 1 2 3 {a,b} {a,b} x\n"
+   }
+  },
+  "expand: brace sequences at the ends of 64-bit integers": {
+   "script": "5b033c1d125e95d6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "-9223372036854775807 -9223372036854775808\n9223372036854775806 9223372036854775807\n{9223372036854775805..-9223372036854775805}\n{1..3..99999999999999999999}\n{a..e..99999999999999999999}\n1\n1 2 3 4 5 6 7 8 9 10\n"
+   }
+  },
+  "expand: brace with variables is literal": {
+   "script": "32c448c9b6b7f4ff",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "{1..3}\n{a,b}\n"
+   }
+  },
+  "expand: case modification": {
+   "script": "7068912604e893af",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Hello world HELLO WORLD hello world\nhello hELLO hellO wOrld\n"
+   }
+  },
+  "expand: command substitution strips trailing newlines": {
+   "script": "03b61e8aef9b6e9f",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a]\n[\n\na]\n"
+   }
+  },
+  "expand: custom IFS": {
+   "script": "aceea6fe22f7a091",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n[a][][b][c]\n"
+   }
+  },
+  "expand: default and assign": {
+   "script": "844e805d6aed68d8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a b  d\nx x\ny y\n"
+   }
+  },
+  "expand: default splitting": {
+   "script": "fe09e9404921bf28",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "4\n[a][b][c][d]\n"
+   }
+  },
+  "expand: dollar quotes": {
+   "script": "548ef2afbfe65ae4",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "0000000   t   a   b  \\t   h   e   r   e       A 303 251       i   t   '\n0000020   s       A       a 001  \\n\n"
+   }
+  },
+  "expand: dotglob": {
+   "script": "cf147c1c5546d403",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "vis\n.dot vis\n"
+   }
+  },
+  "expand: empty IFS disables splitting": {
+   "script": "05f47ee6a9b52af7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\n"
+   }
+  },
+  "expand: empty and unset words vanish": {
+   "script": "7e6b27a05f4da422",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\n2\n3\n"
+   }
+  },
+  "expand: error operator": {
+   "script": "3d8db8afad93585e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: u: custom message\n"
+   },
+   "stdout": {
+    "text": "status=1\nstatus=1\n"
+   }
+  },
+  "expand: error operator on empty": {
+   "script": "e93a79c5dd636c4e",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: e: empty\n"
+   },
+   "stdout": {
+    "text": "status=1\n1\n"
+   }
+  },
+  "expand: extglob enabled on the same line": {
+   "script": "8059e64c31de0bcf",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `shopt -s extglob; echo @(a|b)'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "expand: extglob in conditions and case": {
+   "script": "51919f0d418439a2",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `shopt -s extglob; [[ abcabc == +(abc) ]] && echo plus; case x.tar.gz in *.@(gz|bz2)) echo compressed;; esac; v=aaab; echo ${v##+(a)}'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "expand: extglob in conditions and case on a later line": {
+   "script": "f5e8d6c3fc62551e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "plus\ncompressed\nb\n"
+   }
+  },
+  "expand: extglob off by default": {
+   "script": "0ab80d51c8c2d18d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "status=1\naaab\n"
+   }
+  },
+  "expand: extglob patterns": {
+   "script": "af22e2c5347d7964",
+   "status": 2,
+   "stderr": {
+    "text": "bash: -c: line 1: syntax error near unexpected token `('\nbash: -c: line 1: `shopt -s extglob; cd /tmp; touch a.txt b.log c.txt abc; echo *.@(txt|log); echo !(*.txt); echo +(a|b)c; echo ?(a)bc'\n"
+   },
+   "stdout": {
+    "text": ""
+   }
+  },
+  "expand: extglob patterns on a later line": {
+   "script": "ece829baefd4ba44",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a.txt b.log c.txt\nabc b.log\nabc\nabc\n"
+   }
+  },
+  "expand: glob after splitting": {
+   "script": "d11031cc37f22a2b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "p1 p2 q\n"
+   }
+  },
+  "expand: glob basics": {
+   "script": "8d6b9c1ae5c40e10",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "a1 a2\na1 b1\na1 b1\nb1\na1 a2 b1\nnomatch*\n"
+   }
+  },
+  "expand: glob character classes": {
+   "script": "327fed56283615a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "A1\n[[:digit:]]*\nA1 b2\n"
+   }
+  },
+  "expand: glob ordering and dirs": {
+   "script": "89983161167e938c",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "d1/ d2/\nd1/sub d1/x d2/y\n./d1 ./d2\n"
+   }
+  },
+  "expand: globstar": {
+   "script": "8b385dbdb8c5ee1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "g/ g/1 g/a g/a/2 g/a/b g/a/b/3\ng/a/b/3\n"
+   }
+  },
+  "expand: indirection": {
+   "script": "e8575af60b091b45",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "value\nb\n[]\n"
+   }
+  },
+  "expand: legacy arithmetic": {
+   "script": "f2749dc561ffbb51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3 12\n"
+   }
+  },
+  "expand: length": {
+   "script": "e3ce08c193440da8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "5 3 2 0\n"
+   }
+  },
+  "expand: locale quotes": {
+   "script": "dd4da4741fb80800",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "translated text\n"
+   }
+  },
+  "expand: nested defaults": {
+   "script": "b5c697bf37c9f180",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "deep\nmid\nquoted default\n"
+   }
+  },
+  "expand: nested quotes in substitution": {
+   "script": "ada6ff83bb9cd6e6",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "inner \"quoted\"\nab cd\n"
+   }
+  },
+  "expand: nocaseglob": {
+   "script": "c0d4469f00cee12a",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "Upper\nlower\n"
+   }
+  },
+  "expand: nullglob and failglob": {
+   "script": "f2bbcc5bec7e579f",
+   "status": 1,
+   "stderr": {
+    "text": "bash: line 1: no match: nomatch*\n"
+   },
+   "stdout": {
+    "text": "x y\n"
+   }
+  },
+  "expand: prefix names": {
+   "script": "41daefa86c8e7600",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc1 abc2\nabc1 abc2\n"
+   }
+  },
+  "expand: process substitution as input": {
+   "script": "43efa4aaa95ff88e",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "got x\ngot y\n3\n2\n"
+   }
+  },
+  "expand: process substitution as operands": {
+   "script": "952460fe0af16901",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1c1\n< a\n---\n> b\nstatus=1\n1\t3\n2\t4\n\t\ta\nb\n\tc\n"
+   }
+  },
+  "expand: process substitution as output": {
+   "script": "948d0ac3b6b4be1d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "2\nHI\ndone\n"
+   }
+  },
+  "expand: process substitution path": {
+   "script": "7b853145ac087826",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1\nvia-function\n"
+   }
+  },
+  "expand: quoted at and star": {
+   "script": "89178891a4bd5964",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[a b][c]\n[a b c]\n[a b-c]\n[a b][c]\n"
+   }
+  },
+  "expand: quoted globs are literal": {
+   "script": "5562bb513655de4b",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "star* star* star*\nstar1 star*\n"
+   }
+  },
+  "expand: replace forms": {
+   "script": "21f44f98f304befc",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "X-b-c-a X-b-c-X X-b-c-a a-b-c-X abca a--c-a\n"
+   }
+  },
+  "expand: replace on arrays": {
+   "script": "5ca5ff3b8faed1a7",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "foo bAr bAz foo br bz\n-foo -bar -baz\n"
+   }
+  },
+  "expand: replace with patterns and slashes": {
+   "script": "49020d56b2f211cf",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "_a_b_c /Z/Z/c root/b/c\na_b\n"
+   }
+  },
+  "expand: splitting results of substitution": {
+   "script": "66dcf8884003d0a8",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n1\n"
+   }
+  },
+  "expand: substitution in a subshell environment": {
+   "script": "00733cb528059bbb",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 2\n/\n"
+   }
+  },
+  "expand: substitution reads a file": {
+   "script": "8b017d626621b952",
+   "status": 0,
+   "stderr": {
+    "text": "bash: line 1: /tmp/nosuch: No such file or directory\n"
+   },
+   "stdout": {
+    "text": "content\nstatus=1\n"
+   }
+  },
+  "expand: substitution status": {
+   "script": "fd5b50ac1e2dca63",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "3\n1\nok\n"
+   }
+  },
+  "expand: substring": {
+   "script": "a693465e65af2e58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "cdefgh cde fgh fg abcdef\n"
+   }
+  },
+  "expand: substring of arrays and positionals": {
+   "script": "1deee7bcdc81f2e5",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "b c d e\n2 3 4 bash 1\n"
+   }
+  },
+  "expand: transform operators": {
+   "script": "931e66ecd8314fae",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "'a b'\\''c'\nx y\ni\ndeclare -a a='1'\nA B'C a b'c A b'c\n"
+   }
+  },
+  "expand: trim patterns": {
+   "script": "08d1ae19c5455c58",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "usr/local/lib/libfoo.so.1 libfoo.so.1 /usr/local/lib/libfoo.so /usr/local/lib/libfoo /usr/local/lib/libfoo.so.1\n"
+   }
+  },
+  "expand: trim with brackets and classes": {
+   "script": "54ccdca4cce50595",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "abc bc123def def\n"
+   }
+  },
+  "expand: unset in arithmetic and strings": {
+   "script": "f1b72966f967f979",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1 []\n"
+   }
+  },
+  "expand: word joining": {
+   "script": "8980678955ab3588",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "xy$ax\nx_suffix\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

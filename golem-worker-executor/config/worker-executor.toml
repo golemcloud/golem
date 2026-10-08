@@ -58,7 +58,6 @@ external_batch_max_size = "8388608 B"
 lease_ttl = "1m"
 reconciliation_batch_size = 256
 reconciliation_interval = "30s"
-renewal_interval = "20s"
 
 [engine]
 enable_fs_cache = false
@@ -71,6 +70,11 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
+[filesystem_snapshots]
+type = "Disabled"
+
+[filesystem_snapshots.config]
+
 [filesystem_storage.cleanup_retry]
 max_attempts = 4
 max_delay = "250ms"
@@ -81,6 +85,9 @@ multiplier = 4.0
 maximum_objects = 131072
 minimum_objects = 8192
 objects_per_gib = 32768
+
+[filesystem_storage.mode]
+type = "Temporary"
 
 [filesystem_storage.pressure]
 minimum_available_bytes = 67108864
@@ -111,9 +118,12 @@ max_idle_per_host = 8
 max_total_connections = 200
 
 [indexed_storage]
-type = "KVStoreRedis"
+type = "Sqlite"
 
 [indexed_storage.config]
+database = "../data/worker-executor-indexed-storage.db"
+foreign_keys = false
+max_connections = 10
 
 [indexed_storage_retry]
 max_attempts = 3
@@ -181,6 +191,17 @@ max_invocation_context_stack_depth = 1024
 max_oplog_query_pages_size = 100
 max_tool_attachment_bytes = 16777216
 tail_work_settle_timeout = "30s"
+
+[mcp_transport]
+concurrency = 16
+json_depth = 512
+listing_bytes = 16777216
+notifications = 1024
+pages = 64
+request_bytes = 8388608
+response_bytes = 16777216
+timeout = "1m"
+tools = 1024
 
 [memory]
 acquire_retry_delay = "500ms"
@@ -460,6 +481,7 @@ without_time = false
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
@@ -495,7 +517,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false
@@ -508,6 +529,11 @@ without_time = false
 # nanos = 0
 # secs = 300
 #
+# [filesystem_snapshots]
+# type = "Disabled"
+#
+# [filesystem_snapshots.config]
+#
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
@@ -518,6 +544,9 @@ without_time = false
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
+#
+# [filesystem_storage.mode]
+# type = "Temporary"
 #
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
@@ -607,6 +636,17 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [mcp_transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "1m"
+# tools = 1024
 #
 # [memory]
 # acquire_retry_delay = "500ms"
@@ -905,7 +945,6 @@ without_time = false
 # lease_ttl = "1m"
 # reconciliation_batch_size = 256
 # reconciliation_interval = "30s"
-# renewal_interval = "20s"
 #
 # [engine]
 # enable_fs_cache = false
@@ -918,6 +957,11 @@ without_time = false
 # nanos = 0
 # secs = 300
 #
+# [filesystem_snapshots]
+# type = "Disabled"
+#
+# [filesystem_snapshots.config]
+#
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
@@ -928,6 +972,9 @@ without_time = false
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
+#
+# [filesystem_storage.mode]
+# type = "Temporary"
 #
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
@@ -1003,6 +1050,17 @@ without_time = false
 # max_oplog_query_pages_size = 100
 # max_tool_attachment_bytes = 16777216
 # tail_work_settle_timeout = "30s"
+#
+# [mcp_transport]
+# concurrency = 16
+# json_depth = 512
+# listing_bytes = 16777216
+# notifications = 1024
+# pages = 64
+# request_bytes = 8388608
+# response_bytes = 16777216
+# timeout = "1m"
+# tools = 1024
 #
 # [memory]
 # acquire_retry_delay = "500ms"

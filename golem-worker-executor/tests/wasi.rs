@@ -29,11 +29,13 @@ use golem_common::model::worker::{
 use golem_common::model::{AgentStatus, IdempotencyKey, OplogIndex, RetryConfig};
 use golem_common::schema::SchemaValue;
 use golem_common::schema::schema_value::ResultValuePayload;
+#[cfg(target_os = "linux")]
+use golem_service_base::storage::blob::agent_path_segment;
 use golem_test_framework::dsl::{
     TestDsl, count_agent_invocation_pair_since, drain_connection, stderr_events, stdout_events,
 };
 use golem_test_framework::model::IFSEntry;
-use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::services::golem_config::{FilesystemStorageMode, SnapshotPolicy};
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_with_overrides,
@@ -62,6 +64,9 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, info};
+
+/// The shard manager process every shard push in these tests names.
+const TEST_SHARD_MANAGER: &str = "5eed0000-0000-4000-8000-000000000001";
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -147,6 +152,13 @@ async fn assert_reconstructed_writable_file(
 fn full_replay_config(config: &mut golem_worker_executor::services::golem_config::GolemConfig) {
     config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
     config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+}
+
+#[cfg(target_os = "linux")]
+fn reflink_xfs_test_root() -> PathBuf {
+    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
+        .map(PathBuf::from)
+        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
 }
 
 #[cfg(target_os = "linux")]
@@ -518,6 +530,75 @@ async fn initial_file_p3_parity(
     initial_file_p3_parity_impl(last_unique_id, deps, initial_file_system).await
 }
 
+#[test]
+#[tracing::instrument]
+async fn initial_file_directory_hard_link_gives_not_permitted_through_p2_and_p3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .store()
+        .await?;
+    let agent_id = agent_id!("P3FileSystem", "directory-hard-link");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let linked = executor
+        .invoke_and_await_agent(&component, &agent_id, "run_directory_link", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+    executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "write_replay_target",
+            data_value!("written after the refused links".to_string()),
+        )
+        .await?;
+    let inspected = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "inspect_path",
+            data_value!("replay-target.txt".to_string()),
+        )
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("expected return value"))?;
+
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    assert_eq!(
+        schema_string_list(linked),
+        [
+            "directory_create_p2=ok",
+            "directory_link_p2=err:not-permitted",
+            "create_after_directory_link_p2=ok",
+            "directory_create_p3=ok",
+            "directory_link_p3=err:not-permitted",
+            "create_after_directory_link_p3=ok",
+        ]
+        .map(String::from)
+    );
+    assert_eq!(
+        schema_string_list(inspected),
+        [
+            "p2_read=written after the refused links",
+            "p3_read=written after the refused links",
+        ]
+        .map(String::from)
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
@@ -805,7 +886,7 @@ async fn filesystem_downgrade_blocks_guest_until_limit_recovers(
     let runtime_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(worker_id.agent_name_encoded());
+        .join(agent_path_segment(&worker_id));
     assert!(runtime_path.exists());
 
     quota.set_limit(4096).await?;
@@ -993,6 +1074,39 @@ async fn managed_xfs_resource_billing_survives_idle_and_replay(
 }
 
 #[cfg(target_os = "linux")]
+const PRESSURE_MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+const PRESSURE_OBSERVATION_DELAY: Duration = Duration::from_millis(25);
+
+/// The pressure settings of the physical-pressure tests: recovery starts below 64 MiB and stops at
+/// 384 MiB of free space, with fresh observations 25 ms apart.
+#[cfg(target_os = "linux")]
+fn physical_pressure_config()
+-> golem_worker_executor::services::golem_config::FilesystemPressureConfig {
+    let default_pressure =
+        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
+    golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
+        PRESSURE_MINIMUM_AVAILABLE_BYTES,
+        PRESSURE_TARGET_AVAILABLE_BYTES,
+        default_pressure.minimum_available_filesystem_objects(),
+        default_pressure.target_available_filesystem_objects(),
+        200,
+        PRESSURE_OBSERVATION_DELAY,
+    )
+    .unwrap()
+}
+
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "requires the privileged managed XFS test runner"]
 #[timeout("2m")]
@@ -1003,52 +1117,90 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    use golem_common::{agent_id, data_value};
-    use std::io::{Seek, SeekFrom, Write};
-
-    const MINIMUM_AVAILABLE_BYTES: u64 = 64 * 1024 * 1024;
-    const TARGET_AVAILABLE_BYTES: u64 = 384 * 1024 * 1024;
-    const PROJECT_QUOTA_BYTES: u64 = 256 * 1024 * 1024;
-    const VICTIM_ALLOCATION_BYTES: u64 = 224 * 1024 * 1024;
-    const PRESSURE_GATE_BYTES: u64 = 224 * 1024 * 1024;
-    const POST_GATE_TARGET_MARGIN_BYTES: u64 = 32 * 1024 * 1024;
-
-    assert_eq!(
-        PROJECT_QUOTA_BYTES - VICTIM_ALLOCATION_BYTES,
-        32 * 1024 * 1024,
-        "the victim allocation must remain safely below its project quota"
-    );
-    assert!(VICTIM_ALLOCATION_BYTES < TARGET_AVAILABLE_BYTES);
-    assert_eq!(
-        VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES - TARGET_AVAILABLE_BYTES,
-        64 * 1024 * 1024,
-        "victim and gate reclamation must retain margin above the recovery target"
-    );
-
+    const {
+        assert!(
+            PRESSURE_PROJECT_QUOTA_BYTES - PRESSURE_VICTIM_ALLOCATION_BYTES == 32 * 1024 * 1024,
+            "the victim allocation must remain safely below its project quota"
+        );
+    }
     let root = managed_xfs_test_root();
-    let allocation_unit = filesystem_fragment_size(&root)?;
-    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
     let context = TestContext::new(last_unique_id);
-    let default_pressure =
-        golem_worker_executor::services::golem_config::FilesystemPressureConfig::default();
-    let observation_delay = Duration::from_millis(25);
-    let pressure = golem_worker_executor::services::golem_config::FilesystemPressureConfig::new(
-        MINIMUM_AVAILABLE_BYTES,
-        TARGET_AVAILABLE_BYTES,
-        default_pressure.minimum_available_filesystem_objects(),
-        default_pressure.target_available_filesystem_objects(),
-        200,
-        observation_delay,
-    )
-    .unwrap();
     let executor = start_with_agent_storage_quota_and_pressure_without_metering_on_managed_xfs(
         deps,
         &context,
-        PROJECT_QUOTA_BYTES,
+        PRESSURE_PROJECT_QUOTA_BYTES,
         root.clone(),
-        pressure,
+        physical_pressure_config(),
     )
     .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        Some(PRESSURE_PROJECT_QUOTA_BYTES),
+    )
+    .await
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires the unprivileged reflink XFS test runner"]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_worker_executor_test_utils::start_with_pressure_on_reflink_xfs;
+
+    let root = reflink_xfs_test_root();
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_pressure_on_reflink_xfs(
+        deps,
+        &context,
+        root.clone(),
+        physical_pressure_config(),
+    )
+    .await?;
+    physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+        executor,
+        &context,
+        host_api_tests,
+        root,
+        None,
+    )
+    .await
+}
+
+/// Fills the XFS volume at `root` until a write of an agent on `executor` finds no space, and
+/// checks that pressure recovery unloads an idle loaded agent and retries the write once the
+/// volume reaches its target. With `project_quota`, the agents have that project quota, and the
+/// write must fail for lack of space and not for the quota.
+#[cfg(target_os = "linux")]
+async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
+    executor: TestWorkerExecutor,
+    context: &TestContext,
+    host_api_tests: &PrecompiledComponent,
+    root: PathBuf,
+    project_quota: Option<u64>,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+    use std::io::{Seek, SeekFrom, Write};
+
+    const {
+        assert!(PRESSURE_VICTIM_ALLOCATION_BYTES < PRESSURE_TARGET_AVAILABLE_BYTES);
+        assert!(
+            PRESSURE_VICTIM_ALLOCATION_BYTES + PRESSURE_GATE_BYTES
+                - PRESSURE_TARGET_AVAILABLE_BYTES
+                == 64 * 1024 * 1024,
+            "victim and gate reclamation must retain margin above the recovery target"
+        );
+    }
+    let allocation_unit = filesystem_fragment_size(&root)?;
+    let retry_contents = "r".repeat(usize::try_from(allocation_unit)?);
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -1070,14 +1222,11 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let victim_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(victim_worker.agent_name_encoded());
-    assert!(
-        victim_path.is_dir(),
-        "managed victim did not use the XFS root"
-    );
+        .join(agent_path_segment(&victim_worker));
+    assert!(victim_path.is_dir(), "the victim did not use the XFS root");
     create_allocated_file(
         &victim_path.join("pressure-allocation"),
-        VICTIM_ALLOCATION_BYTES,
+        PRESSURE_VICTIM_ALLOCATION_BYTES,
         0x5a,
     )?;
 
@@ -1097,10 +1246,10 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     let trigger_path = root
         .join(context.default_environment_id.to_string())
         .join(component.id.to_string())
-        .join(trigger_worker.agent_name_encoded());
+        .join(agent_path_segment(&trigger_worker));
     assert!(
         trigger_path.is_dir(),
-        "managed trigger did not use the XFS root"
+        "the trigger did not use the XFS root"
     );
 
     let observation_gate = root.join(format!("pressure-target-gate-{}", uuid::Uuid::new_v4()));
@@ -1117,7 +1266,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     );
     let probe_start_available = filesystem_available_bytes(&root)?;
     assert!(
-        probe_start_available < MINIMUM_AVAILABLE_BYTES,
+        probe_start_available < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "global filler did not cross the configured physical-pressure watermark: available={probe_start_available}"
     );
     let probe_fragment = vec![0x4d; usize::try_from(allocation_unit)?];
@@ -1172,15 +1321,17 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         anyhow!("pressure residual probe never reached physical ENOSPC within its bounded attempts")
     })?;
     assert_eq!(probe_failure.raw_os_error(), Some(libc::ENOSPC));
-    let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
-    assert!(
-        trigger_project_allocated_bytes < PROJECT_QUOTA_BYTES / 2,
-        "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={PROJECT_QUOTA_BYTES}"
-    );
+    if let Some(project_quota) = project_quota {
+        let trigger_project_allocated_bytes = filesystem_tree_allocated_bytes(&trigger_path)?;
+        assert!(
+            trigger_project_allocated_bytes < project_quota / 2,
+            "pressure residual probe approached the trigger project quota: allocated={trigger_project_allocated_bytes}, quota={project_quota}"
+        );
+    }
 
     let before_invocation = filesystem_available_bytes(&root)?;
     assert!(
-        before_invocation < MINIMUM_AVAILABLE_BYTES,
+        before_invocation < PRESSURE_MINIMUM_AVAILABLE_BYTES,
         "test setup did not cross the configured physical-pressure watermark"
     );
     assert_eq!(
@@ -1209,19 +1360,19 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
             "verified victim deletion did not increase fresh available capacity"
         );
         assert!(
-            before_gate_release < TARGET_AVAILABLE_BYTES,
+            before_gate_release < PRESSURE_TARGET_AVAILABLE_BYTES,
             "victim deletion unexpectedly reached the configured target before the observation gate was released: available={before_gate_release}"
         );
-        let minimum_margin_setup = TARGET_AVAILABLE_BYTES
+        let minimum_margin_setup = PRESSURE_TARGET_AVAILABLE_BYTES
             .saturating_sub(PRESSURE_GATE_BYTES)
-            .saturating_add(POST_GATE_TARGET_MARGIN_BYTES);
+            .saturating_add(PRESSURE_POST_GATE_TARGET_MARGIN_BYTES);
         assert!(
             before_gate_release >= minimum_margin_setup,
             "victim deletion left insufficient gate-release margin: available={before_gate_release}, required={minimum_margin_setup}"
         );
         // Allow recovery polling while leaving budget for verified unloading and
         // a target-reaching observation within the 250 ms recovery deadline.
-        tokio::time::sleep(observation_delay * 2).await;
+        tokio::time::sleep(PRESSURE_OBSERVATION_DELAY * 2).await;
         assert_eq!(
             std::fs::read(trigger_path.join("pressure-target"))?,
             b"seed",
@@ -1232,7 +1383,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let available = filesystem_available_bytes(&root)?;
-                if available >= TARGET_AVAILABLE_BYTES {
+                if available >= PRESSURE_TARGET_AVAILABLE_BYTES {
                     return Ok::<(u64, u64), anyhow::Error>((before_gate_release, available));
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1248,7 +1399,7 @@ async fn managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_writ
     .expect("physical-pressure recovery did not finish");
     let retried = retried?;
     let (before_gate_release, observed_target) = observed_target?;
-    assert!(observed_target >= TARGET_AVAILABLE_BYTES);
+    assert!(observed_target >= PRESSURE_TARGET_AVAILABLE_BYTES);
     assert!(
         observed_target > before_gate_release,
         "removing the observation gate did not increase fresh available capacity"
@@ -1331,7 +1482,24 @@ async fn initial_file_p3_parity_impl(
                     target_path: CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
                     permissions: AgentFilePermissions::ReadWrite,
                 },
-            ],
+            ]
+            .into_iter()
+            .chain(["p2", "p3"].into_iter().flat_map(|preview| {
+                [
+                    ("unlink.txt", AgentFilePermissions::ReadOnly),
+                    ("rename.txt", AgentFilePermissions::ReadOnly),
+                    ("link.txt", AgentFilePermissions::ReadOnly),
+                    ("dir/inner.txt", AgentFilePermissions::ReadOnly),
+                    ("writable.txt", AgentFilePermissions::ReadWrite),
+                ]
+                .map(|(name, permissions)| IFSEntry {
+                    source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                    target_path: CanonicalFilePath::from_abs_str(&format!("/{preview}/{name}"))
+                        .unwrap(),
+                    permissions,
+                })
+            }))
+            .collect::<Vec<_>>(),
         )
         .store()
         .await?;
@@ -1372,12 +1540,66 @@ async fn initial_file_p3_parity_impl(
         "ro_parent_open_write_p3=err:not-permitted".to_string(),
         "ro_invalid_flags_p2=err:unsupported".to_string(),
         "ro_invalid_flags_p3=err:unsupported".to_string(),
-        "ro_parent_unlink_p2=err:not-permitted".to_string(),
-        "ro_parent_unlink_p3=err:not-permitted".to_string(),
-        "ro_parent_rename_p2=err:not-permitted".to_string(),
-        "ro_parent_rename_p3=err:not-permitted".to_string(),
-        "ro_parent_link_p2=err:not-permitted".to_string(),
-        "ro_parent_link_p3=err:not-permitted".to_string(),
+        "ro_unlink_p2=ok".to_string(),
+        "ro_rename_p2=ok".to_string(),
+        "ro_link_p2=ok".to_string(),
+        "ro_directory_move_p2=ok".to_string(),
+        "ro_installed_open_write_p2=err:not-permitted".to_string(),
+        "ro_installed_truncate_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_installed_set_size_p2=err:not-permitted".to_string(),
+        "ro_installed_set_times_p2=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p2=false".to_string(),
+        "ro_renamed_open_write_p2=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p2=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p2=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p2=false".to_string(),
+        "ro_linked_open_write_p2=err:not-permitted".to_string(),
+        "ro_linked_truncate_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_linked_set_size_p2=err:not-permitted".to_string(),
+        "ro_linked_set_times_p2=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p2=false".to_string(),
+        "ro_moved_open_write_p2=err:not-permitted".to_string(),
+        "ro_moved_truncate_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p2=err:not-permitted".to_string(),
+        "ro_moved_set_size_p2=err:not-permitted".to_string(),
+        "ro_moved_set_times_p2=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p2=false".to_string(),
+        "rw_write_after_directory_move_p2=ok".to_string(),
+        "create_after_directory_move_p2=ok".to_string(),
+        "ro_unlink_p3=ok".to_string(),
+        "ro_rename_p3=ok".to_string(),
+        "ro_link_p3=ok".to_string(),
+        "ro_directory_move_p3=ok".to_string(),
+        "ro_installed_open_write_p3=err:not-permitted".to_string(),
+        "ro_installed_truncate_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_installed_set_size_p3=err:not-permitted".to_string(),
+        "ro_installed_set_times_p3=err:not-permitted".to_string(),
+        "ro_installed_flags_write_p3=false".to_string(),
+        "ro_renamed_open_write_p3=err:not-permitted".to_string(),
+        "ro_renamed_truncate_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_size_p3=err:not-permitted".to_string(),
+        "ro_renamed_set_times_p3=err:not-permitted".to_string(),
+        "ro_renamed_flags_write_p3=false".to_string(),
+        "ro_linked_open_write_p3=err:not-permitted".to_string(),
+        "ro_linked_truncate_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_linked_set_size_p3=err:not-permitted".to_string(),
+        "ro_linked_set_times_p3=err:not-permitted".to_string(),
+        "ro_linked_flags_write_p3=false".to_string(),
+        "ro_moved_open_write_p3=err:not-permitted".to_string(),
+        "ro_moved_truncate_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_at_p3=err:not-permitted".to_string(),
+        "ro_moved_set_size_p3=err:not-permitted".to_string(),
+        "ro_moved_set_times_p3=err:not-permitted".to_string(),
+        "ro_moved_flags_write_p3=false".to_string(),
+        "rw_write_after_directory_move_p3=ok".to_string(),
+        "create_after_directory_move_p3=ok".to_string(),
         "ro_alias_create_p2=ok".to_string(),
         "ro_alias_open_write_p2=err:not-permitted".to_string(),
         "ro_alias_unlink_p2=ok".to_string(),
@@ -1428,6 +1650,244 @@ async fn initial_file_p3_parity_impl(
     Ok(())
 }
 
+async fn filesystem_tree_apply(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+    operation: &str,
+    path: &str,
+    argument: &str,
+) -> anyhow::Result<Option<SchemaValue>> {
+    use golem_common::data_value;
+
+    let (operation, path, argument) = (
+        operation.to_string(),
+        path.to_string(),
+        argument.to_string(),
+    );
+    Ok(executor
+        .invoke_and_await_agent(
+            component,
+            agent,
+            "apply",
+            data_value!(operation, path, argument),
+        )
+        .await?
+        .into_return_value())
+}
+
+async fn filesystem_tree_describe(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::base_model::component::ComponentDto,
+    agent: &golem_common::model::agent::ParsedAgentId,
+) -> anyhow::Result<Vec<String>> {
+    use golem_common::data_value;
+
+    let result = executor
+        .invoke_and_await_agent(component, agent, "describe", data_value!())
+        .await?
+        .into_return_value()
+        .ok_or_else(|| anyhow!("describe returned no value"))?;
+    Ok(schema_string_list(result))
+}
+
+async fn start_on_empty_root_without_snapshots(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    root: &std::path::Path,
+) -> anyhow::Result<TestWorkerExecutor> {
+    let root = root.to_path_buf();
+    start_with_overrides(
+        deps,
+        context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
+                config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
+                config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
+            })),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn full_replay_on_an_empty_root_rebuilds_the_tree_after_initial_file_operations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::agent_id;
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let first_root = tempfile::tempdir()?;
+    let second_root = tempfile::tempdir()?;
+    let executor = start_on_empty_root_without_snapshots(deps, &context, first_root.path()).await?;
+    let entry = |source: &str, target: &str, permissions| IFSEntry {
+        source_path: PathBuf::from(format!("initial-file-system/files/{source}")),
+        target_path: CanonicalFilePath::from_abs_str(target).unwrap(),
+        permissions,
+    };
+    let component = executor
+        .component_dep(&context.default_environment_id, initial_file_system)
+        .with_files(
+            "FilesystemTree",
+            &[
+                entry("foo.txt", "/ro-kept.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-deleted.txt", AgentFilePermissions::ReadOnly),
+                entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
+                entry("bar.txt", "/ro-linked.txt", AgentFilePermissions::ReadOnly),
+                entry(
+                    "bar.txt",
+                    "/dir/ro-in-dir.txt",
+                    AgentFilePermissions::ReadOnly,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-modified.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+                entry(
+                    "baz.txt",
+                    "/rw-deleted.txt",
+                    AgentFilePermissions::ReadWrite,
+                ),
+            ],
+        )
+        .store()
+        .await?;
+    let agent = agent_id!("FilesystemTree", "full-replay");
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+    let ok = Some(SchemaValue::String("ok".to_string()));
+
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "ro-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "rw-modified.txt",
+            "modified by the agent"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "remove",
+            "rw-deleted.txt",
+            ""
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "rename",
+            "ro-renamed.txt",
+            "renamed.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "ro-linked.txt",
+            "second-name.txt"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(&executor, &component, &agent, "rename", "dir", "moved-dir").await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "write",
+            "agent.txt",
+            "agent data"
+        )
+        .await?,
+        ok
+    );
+    assert_eq!(
+        filesystem_tree_apply(
+            &executor,
+            &component,
+            &agent,
+            "link",
+            "agent.txt",
+            "agent-alias.txt"
+        )
+        .await?,
+        ok
+    );
+    let live = filesystem_tree_describe(&executor, &component, &agent).await?;
+    assert_eq!(
+        live,
+        [
+            r#"agent-alias.txt file links=2 writable=true content="agent data""#,
+            r#"agent.txt file links=2 writable=true content="agent data""#,
+            "moved-dir dir",
+            r#"moved-dir/ro-in-dir.txt file links=1 writable=false content="bar\n""#,
+            r#"renamed.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-kept.txt file links=1 writable=false content="foo\n""#,
+            r#"ro-linked.txt file links=2 writable=false content="bar\n""#,
+            r#"rw-modified.txt file links=1 writable=true content="modified by the agent""#,
+            r#"second-name.txt file links=2 writable=false content="bar\n""#,
+        ]
+        .map(String::from)
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(&entry.entry, PublicOplogEntry::Snapshot(_))),
+        "the oplog holds a snapshot, so the restart could skip part of the replay"
+    );
+    drop(executor);
+
+    let restarted =
+        start_on_empty_root_without_snapshots(deps, &context, second_root.path()).await?;
+    let replayed = filesystem_tree_describe(&restarted, &component, &agent).await?;
+
+    assert_eq!(replayed, live);
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run with integration-tests/scripts/managed-filesystem/run-lima.sh --filesystem-benchmark"]
@@ -1473,8 +1933,9 @@ async fn filesystem_guest_latency_benchmark(
                 &context,
                 TestExecutorOverrides {
                     configure: Some(Arc::new(move |config| {
-                        config.filesystem_storage.deterministic_root_dir =
-                            Some(unmanaged_root.clone());
+                        config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                            root: unmanaged_root.clone().into(),
+                        };
                         config.resource_usage_metering = Default::default();
                         config.oplog.default_snapshotting = SnapshotPolicy::Disabled;
                         config.oplog.oplog_processor_snapshotting = SnapshotPolicy::Disabled;
@@ -2029,7 +2490,9 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -2082,6 +2545,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         .revoke_shards(RevokeShardsRequest {
             shard_ids: vec![shard],
             revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2107,6 +2571,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             // round trip does not depend on timing.
             revision: 1,
             number_of_shards: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
         })
         .await?
         .into_inner();
@@ -2125,7 +2590,9 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
         &context,
         TestExecutorOverrides {
             configure: Some(Arc::new(move |config| {
-                config.filesystem_storage.deterministic_root_dir = Some(root.clone());
+                config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                };
                 full_replay_config(config);
             })),
             ..TestExecutorOverrides::default()
@@ -2272,6 +2739,7 @@ async fn initial_file_listing_through_api(
 }
 
 #[test]
+#[timeout("120s")]
 #[tracing::instrument]
 async fn initial_file_reading_through_api(
     last_unique_id: &LastUniqueId,
@@ -2328,6 +2796,73 @@ async fn initial_file_reading_through_api(
 
     assert_eq!(result1, "foo\n");
     assert_eq!(result2, "hello world");
+
+    // Retain the lookup result across unload: intake must restore through this handle,
+    // replaying writable contents without starting a new invocation.
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let worker = executor
+        .active_agent(&owned_agent_id)
+        .await
+        .expect("active agent")
+        .primary();
+    let before_index = executor.oplog_max_index(&worker_id).await?;
+
+    for read_contents in [true, false] {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !worker.stop_if_idle().await {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await?;
+        assert!(!executor.worker_is_loaded(&owned_agent_id).await);
+
+        if read_contents {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.read_file(
+                    CanonicalFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+                    golem_common::model::filesystem::FileByteSelection::Full,
+                ),
+            )
+            .await
+            .expect("read through unloaded handle did not restore")?;
+            assert!(matches!(
+                result.head,
+                golem_common::model::filesystem::FileReadHead::File(_)
+            ));
+            let mut body = result.body;
+            let mut contents = Vec::new();
+            while let Some(chunk) = body.next().await {
+                contents.extend_from_slice(&chunk?);
+            }
+            assert_eq!(contents, b"hello world");
+        } else {
+            let result = tokio::time::timeout(
+                Duration::from_secs(30),
+                worker.get_file_system_node(CanonicalFilePath::from_abs_str("/bar").unwrap()),
+            )
+            .await
+            .expect("listing through unloaded handle did not restore")?;
+            let golem_service_base::model::GetFileSystemNodeResult::Ok(nodes) = result else {
+                panic!("expected restored directory");
+            };
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0].name, "baz.txt");
+            assert_eq!(
+                nodes[0].details,
+                golem_service_base::model::ComponentFileSystemNodeDetails::File {
+                    permissions: AgentFilePermissions::ReadWrite,
+                    size: 11,
+                }
+            );
+        }
+    }
+
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        count_agent_invocation_pair_since(&after, before_index),
+        (0, 0)
+    );
 
     Ok(())
 }

@@ -6,7 +6,51 @@ As described in the general [Agents](/next/concepts/agents) page, each agent run
 
 ## Automatic update
 
-The **automatic update** mode works as it is described in the general [Agents](/next/concepts/agents) page.
+The **automatic update** mode works as described in the general [Agents](/next/concepts/agents) page.
+
+```shell copy
+golem agent update <AGENT_ID> auto --await
+```
+
+Golem restarts the agent at once. When the agent is loaded and an upload of its newest automatic snapshot is in progress, the agent first waits for that upload, for at most a limit that the operator sets, 60 seconds by default. A stop or an interrupt of the agent ends the wait earlier. Then the update can use that snapshot. When the update gets to the head of the update queue, Golem selects the strategy of the update and writes it into the oplog before the update runs. After that, the strategy does not change. A restart or a retry of the update uses the same strategy.
+
+The replay continues through the source history that the agent committed before it stopped. It does not stop at the update request. So the work that the agent committed after the request stays, and an invocation that was in progress continues on the target revision. `--await` returns only after the update writes `SuccessfulUpdate` or `FailedUpdate`. Golem writes `SuccessfulUpdate` before the target revision does live work.
+
+### The snapshot-assisted strategy
+
+When the agent has a usable automatic snapshot, the update starts from it and replays only the history after it. Golem looks at two automatic snapshot records: the last record, and the usable record before it. It selects the first record that obeys all these rules:
+
+- The record is usable: a confirmation record follows it, or it has no filesystem snapshot name.
+- The record has the current revision of the agent, and the target revision is newer than the current revision.
+- Golem did not reject the record. Golem rejects a record when a start without a pending update could not load its snapshot or diverged in the replay after it, and when an update found that the store lost its snapshot.
+- The record is before each snapshot-based manual update that waits in the update queue.
+- The record has no filesystem snapshot name, or the executor has [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots).
+- No earlier update to the same target revision from the same source failed with `UPDATE_SNAPSHOT_INCOMPATIBLE`. See [Failure codes](#failure-codes).
+
+The record can be newer than the update request. When no record obeys the rules, the strategy is a full replay. The target revision then replays all the history after the authoritative recovery baseline: the snapshot of the last successful manual update or snapshot-assisted update, or the start of the oplog.
+
+### How the update restores the agent's files
+
+An application snapshot does not hold the agent's files. So the update uses the application snapshot of a record only together with the files of the same record:
+
+1. Golem restores the filesystem snapshot that the record names. A record without a filesystem snapshot name gives the initial files of the source revision, because Golem writes such a record only while the agent's files are its initial files.
+2. The target revision loads the application snapshot of the record.
+3. The target revision replays the history after the record. During this replay, the agent sees the configuration, the environment and the initial files of the source revision, as during a full replay.
+4. At the update point, Golem applies the initial files of the target revision, as a full replay does. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The rule is the same as for a [manual update](/next/develop/snapshotting#manual-updates).
+
+After a successful update, the selected record is the authoritative recovery baseline. A later start can use a newer automatic snapshot. When the start cannot use that snapshot, it restores the files of the selected record, loads its application snapshot and replays the history after it, in the same order as the update. It never replays the history before the selected record. Golem does not delete the filesystem snapshot of the selected record while the successful update stays in the oplog.
+
+A revert that removes a successful or failed outcome but keeps the update request makes the same request pending again, with the same strategy.
+
+The snapshot-assisted strategy limits the **replayed history** to the history after the selected record. It does not limit the time of the update: the restore of the files, the load, the replay, the compilation of the target revision and the wait for resources take time.
+
+### When an automatic update fails
+
+When an attempt fails, Golem writes one `FailedUpdate` and starts the agent again on the source revision. This is also true when a full replay diverges at a host call: the update fails with `UPDATE_REPLAY_FAILED`, and the agent runs on its source revision. There is one exception. A full replay starts from the authoritative recovery baseline. When the filesystem snapshot of that baseline is lost, does not restore, or needs filesystem snapshots that the executor does not have, the start of the agent fails with a visible cause, as every start from that baseline does, and Golem writes no `FailedUpdate`. In the same attempt, Golem does not try another snapshot record, and it does not change to a full replay. The details of some failures start with a code that tells you what to do next. See [Failure codes](#failure-codes).
+
+Some failures do not fail the update. When the component service does not answer, when blob storage has a temporary error, or when the executor has no free memory for the agent, Golem writes no `FailedUpdate`. The update stays pending, and Golem tries the start again with the same strategy.
+
+While the start replays the history for a pending automatic update, the agent keeps the status that it had before the restart. An idle agent keeps the status `Idle`, so Golem ignores an interrupt of the agent during that replay. Golem writes no `Interrupted` entry and no `FailedUpdate`, and the update completes. You do not need to resume the agent. When another executor takes over the agent during the replay, that executor runs the update attempt again.
 
 ## Manual snapshot-based update
 
@@ -14,123 +58,143 @@ The **automatic update** mode works as it is described in the general [Agents](/
 Snapshots can also be used for fast recovery during normal operation, not just for updates. See [Snapshotting](/next/develop/snapshotting) for details on snapshot-based recovery, default snapshotting implementations, and configuring periodic snapshots.
 </Callout>
 
-It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working. Future versions of Golem may also use the same snapshotting functions for optimizing recovery time of agents.
+It is also possible to manually implement a pair of functions for saving and loading an agent's state into an arbitrary byte array. This is useful when making significant changes to the implementation of an agent, such that the automatic replay based update mechanism is no longer working.
 
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
-        In TypeScript, all agents inherit the `BaseAgent` class. There are two methods in `BaseAgent` that can
-        be overridden to implement snapshot saving and loading for an agent.
+        Put `snapshot` inside `.implement({ ... })`. This fragment assumes the complete state is `{ value: number }`. `load` is a factory that returns fresh state; it does not mutate an instance created by `init`:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```typescript
-            override async saveSnapshot(): Promise<Uint8Array> {
-                const snapshot = new Uint8Array(4);
-                const view = new DataView(snapshot.buffer);
-                view.setUint32(0, this.value);
-                return snapshot;
+        snapshot: {
+          save() {
+            const bytes = new Uint8Array(8)
+            new DataView(bytes.buffer).setFloat64(0, this.value)
+            return bytes
+          },
+          load(bytes, _context) {
+            return {
+              value: new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength,
+              ).getFloat64(0),
             }
-
-            override async loadSnapshot(bytes: Uint8Array): Promise<void> {
-                let view = new DataView(bytes.buffer);
-                this.value = view.getUint32(0);
-            }
+          },
+        }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In Rust, all agent traits (i.e., annotated with the `#[agent_definition]` macro) are generated with two extra methods along with the methods defined in the trait. These methods are `save_snapshot` and `load_snapshot`.
-        These methods can be overridden to implement snapshot saving and loading for an agent.
+        Select `Snapshot.custom(...)` in `defineAgent({ ... })`, then provide `save` and `restore` effects on the implementation. This fragment assumes `Ref.Ref<number>` state initialized with `Ref.make(0)`:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
+        ```typescript
+        import { Effect, Ref } from "effect"
+        import { Snapshot } from "@golemcloud/effect-golem"
+
+        snapshotting: Snapshot.custom({
+          policy: Snapshot.policy.manual,
+        })
+
+        // In .implement({ ... }):
+        snapshot: {
+          save: (state) =>
+            Ref.get(state).pipe(
+              Effect.map((value) => {
+                const bytes = new Uint8Array(8)
+                new DataView(bytes.buffer).setFloat64(0, value)
+                return bytes
+              }),
+            ),
+          restore: (bytes, _context) =>
+            Ref.make(
+              new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+                .getFloat64(0),
+            ),
+        }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Add both methods inside the existing `#[agent_implementation] impl CounterAgent for CounterImpl` block. This fragment assumes the complete state is `value: u32`; `load_snapshot` is an associated factory that returns `Self`:
+
         ```rust
-        impl CounterAgent for CounterImpl {
-            // ...
+        async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
+            Ok(self.value.to_le_bytes().to_vec())
+        }
 
-            async fn load_snapshot(&mut self, bytes: Vec<u8>) -> Result<(), String> {
-                let arr: [u8; 4] = bytes
-                    .try_into()
-                    .map_err(|_| "Expected a 4-byte long snapshot")?;
-                self.count = u32::from_be_bytes(arr);
-                Ok(())
-            }
-
-            async fn save_snapshot(&self) -> Result<Vec<u8>, String> {
-                Ok(self.count.to_be_bytes().to_vec())
-            }
+        async fn load_snapshot(
+            bytes: Vec<u8>,
+            _context: golem_rust::agentic::SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            let arr: [u8; 4] = bytes
+                .try_into()
+                .map_err(|_| "Expected a 4-byte snapshot".to_string())?;
+            Ok(Self {
+                value: u32::from_le_bytes(arr),
+            })
         }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In Scala, custom snapshot saving and loading can be implemented on the agent implementation class by defining `saveSnapshot` and `loadSnapshot` methods.
+        Define `saveSnapshot()` on the annotated implementation and the restoring factory on its companion object. Identity field `0` is the counter's `String` name; ordinary agent methods are omitted:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```scala
+        import golem.runtime.SnapshotRestoreContext
+        import golem.runtime.annotations.agentImplementation
+
+        import scala.concurrent.Future
+
         @agentImplementation()
-        final class CounterAgentImpl(@unused private val name: String) extends CounterAgent {
-          private var count: Int = 0
+        final class CounterImpl(private val name: String) extends Counter {
+          private var value: Int = 0
 
-          def saveSnapshot(): Future[Array[Byte]] =
-            Future.successful {
-              Array(
-                ((count >>> 24) & 0xff).toByte,
-                ((count >>> 16) & 0xff).toByte,
-                ((count >>> 8) & 0xff).toByte,
-                (count & 0xff).toByte
-              )
-            }
+          // Counter methods ...
 
-          def loadSnapshot(bytes: Array[Byte]): Future[Unit] =
-            Future.successful {
-              count = ((bytes(0) & 0xff) << 24) |
-                ((bytes(1) & 0xff) << 16) |
-                ((bytes(2) & 0xff) << 8) |
-                (bytes(3) & 0xff)
-            }
+          def saveSnapshot(): Future[Array[Byte]] = Future.successful {
+            val buffer = java.nio.ByteBuffer.allocate(4)
+            buffer.putInt(value)
+            buffer.array()
+          }
+        }
 
-          override def increment(): Future[Int] =
-            Future.successful {
-              count += 1
-              count
-            }
+        object CounterImpl {
+          def loadSnapshot(
+            bytes: Array[Byte],
+            context: SnapshotRestoreContext
+          ): Future[CounterImpl] = Future.successful {
+            val instance = new CounterImpl(context.identity[String](0))
+            instance.value = java.nio.ByteBuffer.wrap(bytes).getInt()
+            instance
+          }
         }
         ```
     </Tabs.Tab>
     <Tabs.Tab>
-        In MoonBit, custom snapshot saving and loading can be implemented by adding a `Snapshottable` implementation to the agent type.
+        For an existing `Counter` with `name: String`, `mut value: UInt64`, and its name at identity index `0`, implement saving with `@agents.Snapshottable` and define a separate static restoration factory:
 
-        The following example implements these methods for the simple counter example used [on the Quickstart page](/next/quickstart):
         ```moonbit
-        pub impl @agents.Snapshottable for CounterAgent with save_snapshot(self) -> Bytes {
-          Bytes::from_array([
-            ((self.value >> 56) & 0xff).to_byte(),
-            ((self.value >> 48) & 0xff).to_byte(),
-            ((self.value >> 40) & 0xff).to_byte(),
-            ((self.value >> 32) & 0xff).to_byte(),
-            ((self.value >> 24) & 0xff).to_byte(),
-            ((self.value >> 16) & 0xff).to_byte(),
-            ((self.value >> 8) & 0xff).to_byte(),
-            (self.value & 0xff).to_byte(),
-          ])
+        pub impl @agents.Snapshottable for Counter with save_snapshot(self) {
+          let arr: Array[Byte] = []
+          for i = 7; i >= 0; i = i - 1 {
+            arr.push(((self.value >> (i * 8)).to_int() & 0xff).to_byte())
+          }
+          Bytes::from_array(arr)
         }
 
-        pub impl @agents.Snapshottable for CounterAgent with load_snapshot(
-          self,
-          bytes,
-        ) -> Result[Unit, String] {
+        pub fn Counter::load_snapshot(
+          bytes: Bytes,
+          context: @agents.SnapshotRestoreContext,
+        ) -> Result[Counter, String] {
           if bytes.length() != 8 {
-            return Err("Expected an 8-byte long snapshot")
+            return Err("Expected an 8-byte snapshot")
           }
-
-          self.value =
-            (bytes[0].to_int().to_uint64() << 56) |
-            (bytes[1].to_int().to_uint64() << 48) |
-            (bytes[2].to_int().to_uint64() << 40) |
-            (bytes[3].to_int().to_uint64() << 32) |
-            (bytes[4].to_int().to_uint64() << 24) |
-            (bytes[5].to_int().to_uint64() << 16) |
-            (bytes[6].to_int().to_uint64() << 8) |
-            bytes[7].to_int().to_uint64()
-          Ok(())
+          let mut value: UInt64 = 0
+          for i = 0; i < 8; i = i + 1 {
+            value = value | (bytes[i].to_uint64() << ((7 - i) * 8))
+          }
+          let name: String = context.identity(0) catch {
+            error => return Err(error.to_string())
+          }
+          Ok({ name, value })
         }
         ```
     </Tabs.Tab>
@@ -147,3 +211,21 @@ Alternatively, you can update all agents when deploying the updated component:
 ```shell copy
 golem deploy --update-agents manual
 ```
+
+## Failure codes
+
+When an update fails, Golem writes a `FailedUpdate` entry. For the causes below, the details of the entry start with a code. The cause of the failure follows the code and its text. `golem agent get <AGENT_ID>` shows the details in the update history of the agent, and `golem agent oplog <AGENT_ID>` shows them as the error of the `FAILED UPDATE` entry. In each case, the agent stays on its source revision.
+
+| Code | Update mode | Cause | What to do |
+| --- | --- | --- | --- |
+| `UPDATE_SNAPSHOT_UNAVAILABLE` | Automatic | The store lost the filesystem snapshot or the application snapshot of the selected record. Golem rejects the record. | Request the update again. Golem uses an earlier snapshot record, or a full replay. |
+| `UPDATE_SNAPSHOT_INCOMPATIBLE` | Automatic | The target revision could not load the selected snapshot, or the replay of the history after it diverged. | Request the update again. A new request for the same target revision from the same source revision replays the full history. If the target revision cannot replay the history of the agent, use a manual update. |
+| `UPDATE_REPLAY_FAILED` | Automatic | The target revision could not replay the history of the agent in a full replay, from the authoritative recovery baseline or from the start of the oplog. A missing application snapshot of that baseline gives this code too. | Use a manual update. |
+| `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` | Manual | The executor has no filesystem snapshots, and the agent's files are not its initial files. Golem cannot take a snapshot for the update. | Run the update on an executor with filesystem snapshots. |
+| `UPDATE_SNAPSHOT_UNAVAILABLE` | Manual | The store lost the filesystem snapshot of the manual update. | Request the manual update again. It takes a new snapshot. |
+| `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | Automatic, manual | The snapshot of the update names a filesystem snapshot, and the executor that starts the update has no filesystem snapshots. | Run the update on an executor with filesystem snapshots. |
+| `UPDATE_SNAPSHOT_RESTORE_FAILED` | Automatic, manual | The filesystem snapshot of the update did not restore on this executor. When the text says that the local disk of the executor is full, the disk has no space for the files. | Request the update again. When the disk is full, request it again after the executor has space. |
+| `UPDATE_TARGET_NOT_FOUND` | Automatic, manual | The target revision does not exist. | Request an update to a revision that exists. |
+| `UPDATE_TARGET_REFUSED` | Automatic, manual | The component service refused the target revision. The text names the kind of the refusal, for example `unauthorized` or `missing binary`. | Make sure that the executor has access to the component service and that the target revision is correct. Then request the update again. |
+
+Other failures have no code. Their details give the cause, for example a change of the agent mode in the target revision, a conflict of the initial files at the update point, or a failure of the target revision to start.

@@ -220,6 +220,13 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::BadFileType(_) => {
                 Self::bad_request(api::error_code::BAD_FILE_TYPE, error)
             }
+            WorkerServiceError::FileRead(
+                golem_common::model::filesystem::FileReadError::InvalidTarget
+                | golem_common::model::filesystem::FileReadError::InvalidSelection,
+            ) => Self::bad_request(api::error_code::VALIDATION_ERROR, error),
+            WorkerServiceError::FileRead(_) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, error)
+            }
             WorkerServiceError::ComponentNotFound(_) => {
                 Self::not_found(api::error_code::COMPONENT_NOT_FOUND, error)
             }
@@ -311,13 +318,12 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::FailedToResumeAgent { .. } => {
                 Self::internal(api::error_code::INTERNAL_AGENT_RESUME_FAILED, error)
             }
-            WorkerExecutorError::ComponentDownloadFailed { .. } => {
+            WorkerExecutorError::ComponentDownloadFailed { .. }
+            | WorkerExecutorError::ComponentServiceUnavailable { .. }
+            | WorkerExecutorError::ComponentServiceRefused { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
             WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. } => {
-                Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
-            }
-            WorkerExecutorError::InitialAgentFileDownloadFailed { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
             WorkerExecutorError::ComponentParseFailed { .. } => {
@@ -453,9 +459,9 @@ impl From<RequestHandlerError> for ApiEndpointError {
                 Self::conflict(api::error_code::OIDC_SCHEME_MISMATCH, value)
             }
 
-            RequestHandlerError::ResolvingRouteFailed(RouteResolverError::NoMatchingRoute) => {
-                Self::not_found(api::error_code::ROUTE_NOT_FOUND, value)
-            }
+            RequestHandlerError::ResolvingRouteFailed(
+                RouteResolverError::NoMatchingRoute | RouteResolverError::UnknownSite,
+            ) => Self::not_found(api::error_code::ROUTE_NOT_FOUND, value),
 
             RequestHandlerError::OidcTokenExchangeFailed => {
                 Self::forbidden(api::error_code::OIDC_TOKEN_EXCHANGE_FAILED, value)
@@ -482,7 +488,16 @@ impl From<RequestHandlerError> for ApiEndpointError {
             RequestHandlerError::InternalError(_) => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
-            RequestHandlerError::OpenApiSpecGenerationFailed => {
+            RequestHandlerError::OpenApi(_) => {
+                Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
+            }
+            RequestHandlerError::RawRequest(_) => {
+                Self::bad_request(api::error_code::REQUEST_VALUE_PARSING_FAILED, value)
+            }
+            RequestHandlerError::RawBadGateway | RequestHandlerError::RawDeadline => {
+                Self::internal(api::error_code::INTERNAL_AGENT_EXECUTION_FAILED, value)
+            }
+            RequestHandlerError::RawInternal => {
                 Self::internal(api::error_code::INTERNAL_UNKNOWN, value)
             }
         }

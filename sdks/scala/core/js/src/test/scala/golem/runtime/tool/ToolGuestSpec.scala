@@ -47,6 +47,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
   /** An absent `stdin` parameter, pre-typed for `js.Dynamic` application. */
   private val noStdin: js.Any  = js.undefined.asInstanceOf[js.Any]
   private val noStdout: js.Any = js.undefined.asInstanceOf[js.Any]
+  private val noStderr: js.Any = js.undefined.asInstanceOf[js.Any]
 
   private def typed(s: String): WitTypedSchemaValue =
     SchemaWire.typedSchemaValueToWit(TypedSchemaValue(strGraph, SchemaValue.StringValue(s)))
@@ -79,7 +80,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private lazy val echoCaptured: Captured = {
     val captured                          = new Captured
-    val invoker: ToolRegistry.ToolInvoker = (path, input, stdin, _, principal) => {
+    val invoker: ToolRegistry.ToolInvoker = (path, input, stdin, _, _, principal) => {
       captured.commandPath = path
       captured.principal = principal
       captured.stdinPresent = stdin.isDefined
@@ -90,7 +91,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
   }
 
   private lazy val failingRegistered: Unit = {
-    val invoker: ToolRegistry.ToolInvoker = (_, _, _, _, _) =>
+    val invoker: ToolRegistry.ToolInvoker = (_, _, _, _, _, _) =>
       Future.successful(Left(WitToolError.CustomError(WitCustomToolError("failure", typed("boom")))))
     ToolRegistry.registerInvoker(echoTool("guest-failing"), invoker)
   }
@@ -117,6 +118,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
               None,
               Some(StreamSpec(doc(""), Nil, required = true)),
               None,
+              None,
               Nil,
               None
             )
@@ -124,6 +126,64 @@ object ToolGuestSpec extends ZIOSpecDefault {
         )
       )
     )
+
+  private def dualOutputTool(name: String): ExtendedToolType = {
+    val base = stdoutTool(name)
+    base.copy(commands =
+      base.commands.map(node =>
+        node.copy(body = node.body.map(_.copy(stderr = Some(StreamSpec(doc(""), Nil, required = true)))))
+      )
+    )
+  }
+
+  private def lifecycleInvoker(
+    tool: ExtendedToolType,
+    stdoutBytes: Array[Byte],
+    stderrBytes: Array[Byte],
+    stdoutFailure: Option[ByteStreamFailure],
+    outcome: Either[ToolInvokeError[TypedSchemaValue], Unit]
+  ): ToolRegistry.ToolInvoker = {
+    val handle = ToolImplementationHandle(
+      _ => Right(tool),
+      List(
+        ToolMethodBinding(
+          tool.commands.head.name,
+          Nil,
+          ctx =>
+            ToolInvokerRuntime.decodeArgs(ctx, List(ToolParamDecoder.StdoutParam, ToolParamDecoder.StderrParam)) match {
+              case Left(error)                   => Future.successful(Left(error))
+              case Right((args, stdout, stderr)) =>
+                val out = args(0).asInstanceOf[ToolOutputStream]
+                val err = args(1).asInstanceOf[ToolOutputStream]
+                out
+                  .write(stdoutBytes)
+                  .flatMap {
+                    case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                    case Right(_)    =>
+                      err
+                        .write(stderrBytes)
+                        .flatMap {
+                          case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                          case Right(_)    =>
+                            val terminal =
+                              stdoutFailure.fold(Future.successful(Right(()): Either[StreamWriteError, Unit]))(out.fail)
+                            terminal.flatMap {
+                              case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                              case Right(_)    =>
+                                outcome match {
+                                  case Left(error) => Future.successful(Left(error))
+                                  case Right(_)    => Future.successful(ToolInvokerRuntime.encodeUnit(stdout, stderr))
+                                }
+                            }(ToolInvokerRuntime.executionContext)
+                        }(ToolInvokerRuntime.executionContext)
+                  }(ToolInvokerRuntime.executionContext)
+            }
+        )
+      ),
+      Nil
+    )
+    ToolImplementationRuntime.adaptHandler(tool, handle)
+  }
 
   private def stdoutInvoker(
     tool: ExtendedToolType,
@@ -154,8 +214,9 @@ object ToolGuestSpec extends ZIOSpecDefault {
               ctx,
               List(ToolParamDecoder.StdinParam, ToolParamDecoder.StdoutParam)
             ) match {
-              case Left(error)              => Future.successful(Left(error))
-              case Right((_, stdoutHandle)) => Future.successful(ToolInvokerRuntime.encodeUnit(stdoutHandle))
+              case Left(error)                            => Future.successful(Left(error))
+              case Right((_, stdoutHandle, stderrHandle)) =>
+                Future.successful(ToolInvokerRuntime.encodeUnit(stdoutHandle, stderrHandle))
             }
         )
       ),
@@ -174,9 +235,12 @@ object ToolGuestSpec extends ZIOSpecDefault {
 
   private final case class InvocationAttachments(
     stdin: ToolHostApi.RawByteStream,
-    stdout: ToolHostApi.RawToolStdoutWriter,
+    stdout: ToolHostApi.RawToolOutputWriter,
     stdinCloses: () => Int,
+    stdoutBytes: () => List[Byte],
+    stdoutTerminal: () => Option[String],
     stdoutFinishes: () => Int,
+    stdoutFailures: () => Int,
     stdoutDisposals: () => Int
   )
 
@@ -185,7 +249,10 @@ object ToolGuestSpec extends ZIOSpecDefault {
     disposeFails: Boolean = false
   ): InvocationAttachments = {
     var stdinCloses                                 = 0
+    var stdoutBytes                                 = List.empty[Byte]
+    var stdoutTerminal                              = Option.empty[String]
     var stdoutFinishes                              = 0
+    var stdoutFailures                              = 0
     var stdoutDisposals                             = 0
     val done                                        = js.Dynamic.literal("done" -> true, "value" -> js.undefined)
     def resolved(value: js.Any): js.Promise[js.Any] =
@@ -209,12 +276,20 @@ object ToolGuestSpec extends ZIOSpecDefault {
       js.Any.fromFunction0(() => iterator)
     )
     val rawStdout = js.Dynamic.literal(
-      "write"  -> js.Any.fromFunction1((_: js.typedarray.Uint8Array) => js.Promise.resolve[Unit](())),
+      "write" -> js.Any.fromFunction1 { (bytes: js.typedarray.Uint8Array) =>
+        stdoutBytes = stdoutBytes ++ bytes.toArray.map(_.toByte)
+        js.Promise.resolve[Unit](())
+      },
       "finish" -> js.Any.fromFunction0 { () =>
         stdoutFinishes += 1
+        stdoutTerminal = Some("ended")
         cleanup(js.undefined)
       },
-      "fail" -> js.Any.fromFunction1((_: js.Any) => js.Promise.resolve[Unit](()))
+      "fail" -> js.Any.fromFunction1 { (reason: js.Dynamic) =>
+        stdoutFailures += 1
+        stdoutTerminal = Some(s"failed:${reason.tag.asInstanceOf[String]}")
+        cleanup(js.undefined)
+      }
     )
     js.Dynamic.global.Reflect.set(
       rawStdout,
@@ -226,9 +301,12 @@ object ToolGuestSpec extends ZIOSpecDefault {
     )
     InvocationAttachments(
       rawStdin.asInstanceOf[ToolHostApi.RawByteStream],
-      rawStdout.asInstanceOf[ToolHostApi.RawToolStdoutWriter],
+      rawStdout.asInstanceOf[ToolHostApi.RawToolOutputWriter],
       () => stdinCloses,
+      () => stdoutBytes,
+      () => stdoutTerminal,
       () => stdoutFinishes,
+      () => stdoutFailures,
       () => stdoutDisposals
     )
   }
@@ -237,7 +315,8 @@ object ToolGuestSpec extends ZIOSpecDefault {
     toolName: String,
     input: js.Any,
     stdin: Option[ToolHostApi.RawByteStream],
-    stdout: Option[ToolHostApi.RawToolStdoutWriter],
+    stdout: Option[ToolHostApi.RawToolOutputWriter],
+    stderr: Option[ToolHostApi.RawToolOutputWriter] = None,
     commandPath: js.Array[String] = js.Array[String]()
   ): js.Promise[JsInvocationResult] =
     guest
@@ -247,6 +326,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
         input,
         stdin.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
         stdout.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
+        stderr.fold[js.Any](js.undefined)(_.asInstanceOf[js.Any]),
         anonymousPrincipal
       )
       .asInstanceOf[js.Promise[JsInvocationResult]]
@@ -296,7 +376,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
           var injected    = Option.empty[ToolOutputStream]
           ToolRegistry.registerInvoker(
             tool,
-            (_, _, _, out, _) => {
+            (_, _, _, out, _, _) => {
               calls += 1
               injected = out
               Future.successful(Right(ToolInvocationResult(None)))
@@ -308,7 +388,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
               encodedInput(emptyInput(base)),
               None,
               Option.when(supplied)(attachments.stdout),
-              js.Array("c")
+              commandPath = js.Array("c")
             )
           ).either.map { outcome =>
             val lookedUp     = golem.host.ToolWireInterop.toolFromJs(guest.getTool(tool.toolName).asInstanceOf[JsTool])
@@ -368,7 +448,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         res <- fromPromise(
                  guest
-                   .invoke("guest-echo", js.Array[String](), input, noStdin, noStdout, anonymousPrincipal)
+                   .invoke("guest-echo", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
         result = res.result.toOption.map(SchemaWireInterop.typedFromJs)
@@ -385,7 +465,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       val child    = echoTool("leaf").commands.head.copy(aliases = List("l"))
       ToolRegistry.registerInvoker(
         ExtendedToolType("0.1.0", Vector(root, child)),
-        (path, input, _, _, _) => {
+        (path, input, _, _, _, _) => {
           captured = path
           Future.successful(Right(ToolInvocationResult(Some(input))))
         }
@@ -394,7 +474,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         _ <- fromPromise(
                guest
-                 .invoke("guest-nested", js.Array("l"), input, noStdin, noStdout, anonymousPrincipal)
+                 .invoke("guest-nested", js.Array("l"), input, noStdin, noStdout, noStderr, anonymousPrincipal)
                  .asInstanceOf[js.Promise[JsInvocationResult]]
              )
       } yield assertTrue(captured == List("l"))
@@ -404,7 +484,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke("guest-nope", js.Array[String](), input, noStdin, noStdout, anonymousPrincipal)
+                   .invoke("guest-nope", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
       } yield assertTrue(
@@ -467,7 +547,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
                      encodedInput(emptyInput(tool)),
                      Some(attachments.stdin),
                      Some(attachments.stdout),
-                     js.Array("missing")
+                     commandPath = js.Array("missing")
                    )
                  )
       } yield assertTrue(
@@ -483,7 +563,15 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke("guest-definition-only", js.Array[String](), input, noStdin, noStdout, anonymousPrincipal)
+                   .invoke(
+                     "guest-definition-only",
+                     js.Array[String](),
+                     input,
+                     noStdin,
+                     noStdout,
+                     noStderr,
+                     anonymousPrincipal
+                   )
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
       } yield assertTrue(err.tag.asInstanceOf[String] == "invalid-tool-name")
@@ -494,7 +582,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       for {
         err <- rejectionOf(
                  guest
-                   .invoke("guest-failing", js.Array[String](), input, noStdin, noStdout, anonymousPrincipal)
+                   .invoke("guest-failing", js.Array[String](), input, noStdin, noStdout, noStderr, anonymousPrincipal)
                    .asInstanceOf[js.Promise[JsInvocationResult]]
                )
         custom  = err.selectDynamic("val")
@@ -523,9 +611,9 @@ object ToolGuestSpec extends ZIOSpecDefault {
         assertTrue(hasNoResult, attachments.stdoutFinishes() == 1)
       }
     },
-    test("provider invocation default-finishes stdout after a declared error") {
+    test("provider invocation preserves a declared error when default-finishing stdout fails") {
       val tool        = stdoutTool("guest-stdout-error")
-      val attachments = invocationAttachments()
+      val attachments = invocationAttachments(cleanupFails = true)
       ToolRegistry.registerInvoker(
         tool,
         stdoutInvoker(
@@ -559,7 +647,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
       val completed                         = Promise[Either[WitToolError, ToolInvocationResult]]()
       var acceptedIn                        = Option.empty[ToolInputStream]
       var acceptedOut                       = Option.empty[ToolOutputStream]
-      val invoker: ToolRegistry.ToolInvoker = (_, _, stdin, stdout, _) => {
+      val invoker: ToolRegistry.ToolInvoker = (_, _, stdin, stdout, _, _) => {
         acceptedIn = stdin
         acceptedOut = stdout
         completed.future
@@ -628,11 +716,11 @@ object ToolGuestSpec extends ZIOSpecDefault {
     test("cleanup failures do not mask synchronous or asynchronous invocation failures") {
       val syncTool    = stdoutTool("guest-sync-failure")
       val syncFailure = new RuntimeException("synchronous failure")
-      ToolRegistry.registerInvoker(syncTool, (_, _, _, _, _) => throw syncFailure)
+      ToolRegistry.registerInvoker(syncTool, (_, _, _, _, _, _) => throw syncFailure)
       val syncAttachments = invocationAttachments(cleanupFails = true)
       val asyncTool       = stdoutTool("guest-async-failure")
       val asyncFailure    = new RuntimeException("asynchronous failure")
-      ToolRegistry.registerInvoker(asyncTool, (_, _, _, _, _) => Future.failed(asyncFailure))
+      ToolRegistry.registerInvoker(asyncTool, (_, _, _, _, _, _) => Future.failed(asyncFailure))
       val asyncAttachments = invocationAttachments(cleanupFails = true)
       for {
         syncError <- fromPromise(
@@ -654,10 +742,12 @@ object ToolGuestSpec extends ZIOSpecDefault {
       } yield assertTrue(
         syncError.getMessage.contains(syncFailure.getMessage),
         syncAttachments.stdinCloses() == 1,
-        syncAttachments.stdoutFinishes() == 1,
+        syncAttachments.stdoutFinishes() == 0,
+        syncAttachments.stdoutFailures() == 1,
         asyncError.getMessage.contains(asyncFailure.getMessage),
         asyncAttachments.stdinCloses() == 1,
-        asyncAttachments.stdoutFinishes() == 1
+        asyncAttachments.stdoutFinishes() == 0,
+        asyncAttachments.stdoutFailures() == 1
       )
     },
     test("malformed input releases invocation attachments before returning invalid-input") {
@@ -701,6 +791,83 @@ object ToolGuestSpec extends ZIOSpecDefault {
         )
       }
     },
+    test("provider terminal tuples preserve partial stdout, stderr, outcome, and cleanup independently") {
+      final case class Scenario(
+        name: String,
+        failure: Option[ByteStreamFailure],
+        outcome: Either[ToolInvokeError[TypedSchemaValue], Unit],
+        expectedResult: String,
+        expectedTerminal: String
+      )
+      val payload   = TypedSchemaValue(strGraph, SchemaValue.StringValue("bad request"))
+      val scenarios = List(
+        Scenario("success", None, Right(()), "success", "ended"),
+        Scenario(
+          "declared-error",
+          None,
+          Left(ToolInvokeError.UnknownToolError("invalid-request", payload)),
+          "custom-error",
+          "ended"
+        ),
+        Scenario(
+          "explicit-failure-success",
+          Some(ByteStreamFailure.Failed("stdout failed")),
+          Right(()),
+          "success",
+          "failed:failed"
+        ),
+        Scenario(
+          "explicit-cancellation-success",
+          Some(ByteStreamFailure.Cancelled),
+          Right(()),
+          "success",
+          "failed:cancelled"
+        )
+      )
+      ZIO
+        .foreach(scenarios.zipWithIndex) { case (scenario, index) =>
+          val tool   = dualOutputTool(s"guest-terminal-${scenario.name}-$index")
+          val stdin  = invocationAttachments()
+          val stdout = invocationAttachments()
+          val stderr = invocationAttachments()
+          ToolRegistry.registerInvoker(
+            tool,
+            lifecycleInvoker(
+              tool,
+              "partial-out".getBytes("UTF-8"),
+              Array[Byte](0, 1, 2),
+              scenario.failure,
+              scenario.outcome
+            )
+          )
+          fromPromise(
+            invokeAtGuest(
+              tool.toolName,
+              encodedInput(emptyInput(tool)),
+              Some(stdin.stdin),
+              Some(stdout.stdout),
+              Some(stderr.stdout)
+            )
+          ).either.map { result =>
+            val resultTag = result match {
+              case Right(_)                          => "success"
+              case Left(js.JavaScriptException(raw)) => raw.asInstanceOf[js.Dynamic].tag.asInstanceOf[String]
+              case Left(other)                       => other.getClass.getSimpleName
+            }
+            assertTrue(
+              resultTag == scenario.expectedResult,
+              stdout.stdoutBytes() == "partial-out".getBytes("UTF-8").toList,
+              stdout.stdoutTerminal().contains(scenario.expectedTerminal),
+              stderr.stdoutBytes() == List[Byte](0, 1, 2),
+              stderr.stdoutTerminal().contains("ended"),
+              stdin.stdinCloses() == 1,
+              stdout.stdoutDisposals() == 1,
+              stderr.stdoutDisposals() == 1
+            )
+          }
+        }
+        .map(_.reduce(_ && _))
+    },
     test("invoke_rejects_malformed_input_with_invalid_input") {
       val captured = echoCaptured
       val _        = captured
@@ -711,6 +878,7 @@ object ToolGuestSpec extends ZIOSpecDefault {
                      "guest-echo",
                      js.Array[String](),
                      js.Dynamic.literal("graph" -> js.Dynamic.literal()),
+                     js.undefined,
                      js.undefined,
                      js.undefined,
                      anonymousPrincipal

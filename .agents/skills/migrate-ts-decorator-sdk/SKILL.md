@@ -169,7 +169,7 @@ OLD overrode `saveSnapshot()` / `loadSnapshot()` on the `BaseAgent` subclass. NE
 snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
 ```
 
-Policy: `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. A bare policy (no `state`) falls back to reflective JSON serialization of the whole state.
+Policy: `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. An enabled policy without `state` needs a `snapshot: { save, load }` block on `.implement(...)`; without the block, the registration of the agent fails.
 
 For fully custom bytes, supply a `snapshot` block on `.implement(...)` — `this` is the state:
 

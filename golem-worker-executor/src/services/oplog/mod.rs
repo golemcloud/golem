@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
 use crate::services::stream_session_index::StreamSessionIndexService;
-use crate::storage::indexed::{IndexedStorageError, ScanResume};
+use crate::storage::indexed::{
+    IndexedStorage, IndexedStorageError, IndexedStorageNamespace, ScanResume,
+};
 pub use crate::worker::tasks::WorkerTasks;
 use async_trait::async_trait;
 use base64::Engine;
@@ -33,14 +36,16 @@ use golem_common::model::durable_stream::{
     StreamSessionRecord,
 };
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, RawOplogPayload, UpdateDescription,
+    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
+    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, Timestamp,
+    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -53,7 +58,7 @@ pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchive, Oplo
 pub use primary::PrimaryOplogService;
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::{Arc, Weak};
@@ -63,6 +68,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 mod blob;
 mod compressed;
 mod ephemeral;
+mod fenced_stream;
 mod multilayer;
 pub mod plugin;
 mod primary;
@@ -71,10 +77,42 @@ mod raw_session;
 mod reader;
 
 #[cfg(test)]
+pub use ephemeral::tests::fixture as gated_ephemeral_fixture;
+
+#[cfg(test)]
 pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, fail_stop};
 
 #[cfg(test)]
 pub mod tests;
+
+/// The permission to publish one staged oplog as the target of a fork. It is used once: a
+/// publication takes it by value, and it can be neither cloned nor copied. Only the filesystem
+/// snapshot service makes one, so each publication of a fork goes through the decision of that
+/// service about the snapshots of the stage.
+pub struct StagePublication {
+    stage_id: uuid::Uuid,
+}
+
+impl StagePublication {
+    /// The permission to publish the stage `stage_id`.
+    pub(crate) fn new(
+        stage_id: uuid::Uuid,
+        _key: crate::services::agent_filesystem_snapshots::PublicationKey,
+    ) -> Self {
+        Self { stage_id }
+    }
+
+    /// The stage that the permission publishes.
+    pub(crate) fn stage_id(&self) -> uuid::Uuid {
+        self.stage_id
+    }
+
+    /// The permission to publish the stage `stage_id`, for the tests of the oplog.
+    #[cfg(test)]
+    pub(crate) fn for_tests(stage_id: uuid::Uuid) -> Self {
+        Self { stage_id }
+    }
+}
 
 /// Whether an archive step returns once its transfer is queued or once the transfer has finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,14 +165,23 @@ pub trait OplogService: Debug + Send + Sync {
         Err("staged oplogs are unsupported by this oplog service".to_string())
     }
 
-    /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
-    /// and drop its staged writer first. `false` means a competing target exists; errors may
-    /// have indeterminate outcomes and must be reconciled using the target's fork provenance.
+    /// Checks whether one particular hidden stage still awaits publication.
+    async fn staged_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+    ) -> Result<bool, String>;
+
+    /// Publishes a fully committed stage, the stage of `publication`, if no primary oplog exists.
+    /// The caller must stop and drop its staged writer first. `false` means a competing target
+    /// exists; errors may have indeterminate outcomes and must be reconciled using the target's
+    /// fork provenance.
     async fn publish_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _stage_id: uuid::Uuid,
+        _publication: StagePublication,
         _expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         Err("staged oplogs are unsupported by this oplog service".to_string())
@@ -159,6 +206,7 @@ pub trait OplogService: Debug + Send + Sync {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog>;
 
     /// Creates an oplog whose absence has already been established by the caller.
@@ -175,6 +223,7 @@ pub trait OplogService: Debug + Send + Sync {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog>;
 
     /// Opens an existing oplog for the given worker.
@@ -195,6 +244,7 @@ pub trait OplogService: Debug + Send + Sync {
         initial_worker_metadata: AgentMetadata,
         last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Arc<dyn Oplog>;
 
     async fn get_last_index(
@@ -203,12 +253,37 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
     ) -> OplogIndex;
 
+    async fn try_get_last_index(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<OplogIndex, String> {
+        Ok(self.get_last_index(owned_agent_id, agent_mode).await)
+    }
+
+    /// Deletes the agent's oplog, in every layer. With `expected_epoch` - the epoch the caller's
+    /// own handle asserts - only while that is still the epoch recorded for the oplog and this
+    /// executor recorded it: otherwise nothing is deleted and the delete is refused with
+    /// [`OplogError::Fenced`], as a write at that epoch would be. `None` is an ephemeral oplog,
+    /// deleted unconditionally: nothing fences it or the archive layers behind it.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-    );
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), OplogError>;
+
+    /// Confirms `expected_epoch` still owns the agent's oplog without writing anything else: the
+    /// compare-and-set an open makes, at the epoch the caller already holds. Refused with
+    /// [`OplogError::Fenced`] once another executor's epoch is recorded, so state the oplog does not
+    /// carry is removed only while the oplog is still this executor's.
+    async fn assert_owning_epoch(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: ShardEpoch,
+    ) -> Result<(), OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(
@@ -235,6 +310,14 @@ pub trait OplogService: Debug + Send + Sync {
 
     /// Checks whether the oplog exists in the oplog, without opening it
     async fn exists(&self, owned_agent_id: &OwnedAgentId, agent_mode: AgentMode) -> bool;
+
+    async fn try_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<bool, String> {
+        Ok(self.exists(owned_agent_id, agent_mode).await)
+    }
 
     /// Scans the oplog for all workers belonging to the given component, in a paginated way.
     ///
@@ -269,6 +352,18 @@ pub trait OplogService: Debug + Send + Sync {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
+
+    async fn download_raw_payload_classified(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
 }
 
 /// Level of commit guarantees
@@ -276,6 +371,9 @@ pub trait OplogService: Debug + Send + Sync {
 pub enum CommitLevel {
     /// Always commit immediately and do not return until it is done
     Always,
+    /// Flush and report entries, allowing ephemeral storage writes to finish asynchronously.
+    /// Durable oplogs still wait for persistence. Explicit protocol barriers use `Always`.
+    Deferred,
     /// Only commit immediately if the worker is durable
     DurableOnly,
 }
@@ -406,6 +504,116 @@ where
     }
 }
 
+/// Runs a storage operation under the retry policy, handing a fence back instead of panicking
+/// on it.
+///
+/// A fenced write is not a storage failure: the storage is healthy and refused the write on
+/// purpose, because this executor no longer owns the agent's shard. Retrying cannot change that,
+/// and panicking would take the whole executor down over one agent that simply moved. Every other
+/// permanent failure still panics, so the fail-stop contract is unchanged for everything else -
+/// including the primary-key collision that has always been the crude fence.
+pub(crate) async fn retry_storage_op_fenceable<T, F, Fut>(
+    retry_config: &golem_common::model::RetryConfig,
+    op_name: &str,
+    key: &str,
+    mut op: F,
+) -> Result<T, IndexedStorageError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, IndexedStorageError>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        attempts += 1;
+        match op().await {
+            Ok(val) => return Ok(val),
+            Err(err @ IndexedStorageError::Fenced { .. }) => return Err(err),
+            Err(IndexedStorageError::Transient(msg)) => {
+                if let Some(delay) = get_delay(retry_config, attempts) {
+                    crate::metrics::oplog::record_oplog_storage_retry(op_name);
+                    tracing::warn!(
+                        op = op_name,
+                        key = key,
+                        attempt = attempts,
+                        delay_ms = delay.as_millis() as u64,
+                        "Transient indexed storage error, retrying: {msg}"
+                    );
+                    tokio::time::sleep(delay).await;
+                } else {
+                    panic!(
+                        "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts: Transient storage error: {msg}"
+                    );
+                }
+            }
+            Err(err) => {
+                panic!("Indexed storage operation '{op_name}' failed for key '{key}': {err}");
+            }
+        }
+    }
+}
+
+/// Records the epoch this executor is allowed to write `key` with, and reports the fence when
+/// the stored record is already ahead of it.
+///
+/// Monotonic on the storage side once a record exists, so a re-grant at a higher epoch takes the
+/// key over while an executor holding a stale one cannot claim it back. A key with no record
+/// (new, deleted, or from before the record existed) is claimed by whichever epoch opens it
+/// first. Written before the key's first entry - an absent record fences too, which is what
+/// closes the window between creating a key and recording who owns it. The primary oplog and
+/// each compressed archive level record their own key.
+pub(crate) async fn record_owning_epoch(
+    indexed_storage: &(dyn IndexedStorage + Send + Sync),
+    retry_config: &golem_common::model::RetryConfig,
+    namespace: IndexedStorageNamespace,
+    agent_id: &AgentId,
+    key: &str,
+    shard_epoch: ShardEpoch,
+) -> Option<OplogFence> {
+    let (svc_name, metric_op) = match namespace {
+        IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
+        IndexedStorageNamespace::BlobOplogManifest { .. } => ("blob_oplog", "archive_record"),
+        _ => ("oplog", "record"),
+    };
+    let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
+        let namespace = namespace.clone();
+        async move {
+            indexed_storage
+                .set_key_epoch(svc_name, "set_key_epoch", namespace, key, shard_epoch)
+                .await
+        }
+    })
+    .await;
+    record_oplog_epoch_fence(metric_op, outcome.is_err());
+    let fence = OplogFence::refused(agent_id.clone(), outcome.err()?);
+    tracing::warn!(
+        agent_id = %agent_id,
+        store = svc_name,
+        expected_epoch = fence.expected_epoch.0,
+        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+        "Oplog opened at a stale shard epoch: the shard has a new owner"
+    );
+    Some(fence)
+}
+
+/// Records the verdict of an epoch-checked storage write: accepted, or refused because a newer
+/// owner's generation is recorded. A write that failed for another reason reached no verdict and
+/// records nothing.
+pub(crate) fn record_epoch_verdict<T>(op: &'static str, outcome: &Result<T, IndexedStorageError>) {
+    match outcome {
+        Ok(_) => record_oplog_epoch_fence(op, false),
+        Err(IndexedStorageError::Fenced { .. }) => record_oplog_epoch_fence(op, true),
+        Err(_) => {}
+    }
+}
+
+/// Refuses a new write once `fence` has latched, before anything reaches the storage.
+pub(crate) fn refuse_if_fenced(fence: Option<&OplogFence>) -> Result<(), OplogError> {
+    match fence {
+        Some(fence) => Err(OplogError::Fenced(fence.clone())),
+        None => Ok(()),
+    }
+}
+
 /// A handle to an external blob upload that [`Oplog::add_start_with_reserved_raw_payload`] started
 /// (spawned) but which may not have finished yet.
 ///
@@ -533,24 +741,38 @@ impl DurableStreamOplogRecord {
                 Ok(OplogEntry::stream_registered(
                     entity_parent_start_index,
                     raw.into_payload_with_cache(Arc::from(record))?,
+                    Some(DurableStreamEventSummary::Registered),
                 ))
             }
-            Self::Items(entity_parent_start_index, record) => Ok(OplogEntry::stream_items(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::new(record))?,
-            )),
-            Self::End(entity_parent_start_index, record) => Ok(OplogEntry::stream_end(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::new(record))?,
-            )),
+            Self::Items(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::items(&record);
+                Ok(OplogEntry::stream_items(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                    Some(summary),
+                ))
+            }
+            Self::End(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::end(&record);
+                Ok(OplogEntry::stream_end(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::new(record))?,
+                    Some(summary),
+                ))
+            }
             Self::Cancel(entity_parent_start_index, record) => Ok(OplogEntry::stream_cancel(
                 entity_parent_start_index,
                 raw.into_payload_with_cache(Arc::new(record))?,
+                Some(DurableStreamEventSummary::Cancelled),
             )),
-            Self::Session(entity_parent_start_index, record) => Ok(OplogEntry::stream_session(
-                entity_parent_start_index,
-                raw.into_payload_with_cache(Arc::from(record))?,
-            )),
+            Self::Session(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::session(&record);
+                Ok(OplogEntry::stream_session(
+                    entity_parent_start_index,
+                    raw.into_payload_with_cache(Arc::from(record))?,
+                    summary,
+                ))
+            }
             Self::InlineEntry(entry) => Ok(entry),
         }
     }
@@ -560,21 +782,36 @@ impl DurableStreamOplogRecord {
             Self::Registered(entity_parent_start_index, record) => OplogEntry::stream_registered(
                 entity_parent_start_index,
                 OplogPayload::Inline(record),
+                Some(DurableStreamEventSummary::Registered),
             ),
-            Self::Items(entity_parent_start_index, record) => OplogEntry::stream_items(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ),
-            Self::End(entity_parent_start_index, record) => OplogEntry::stream_end(
-                entity_parent_start_index,
-                OplogPayload::Inline(Box::new(record)),
-            ),
+            Self::Items(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::items(&record);
+                OplogEntry::stream_items(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(Box::new(record)),
+                    Some(summary),
+                )
+            }
+            Self::End(entity_parent_start_index, record) => {
+                let summary = DurableStreamEventSummary::end(&record);
+                OplogEntry::stream_end(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(Box::new(record)),
+                    Some(summary),
+                )
+            }
             Self::Cancel(entity_parent_start_index, record) => OplogEntry::stream_cancel(
                 entity_parent_start_index,
                 OplogPayload::Inline(Box::new(record)),
+                Some(DurableStreamEventSummary::Cancelled),
             ),
             Self::Session(entity_parent_start_index, record) => {
-                OplogEntry::stream_session(entity_parent_start_index, OplogPayload::Inline(record))
+                let summary = DurableStreamEventSummary::session(&record);
+                OplogEntry::stream_session(
+                    entity_parent_start_index,
+                    OplogPayload::Inline(record),
+                    summary,
+                )
             }
             Self::InlineEntry(entry) => entry,
         }
@@ -590,10 +827,123 @@ pub type ReservedRawStartBuilder =
 pub type IndexedReservedStartBuilder =
     Box<dyn FnOnce(OplogIndex) -> Result<(Vec<u8>, ReservedRawStartBuilder), String> + Send>;
 
+/// Why an oplog write was refused by the storage: the shard epoch this executor asserted is
+/// behind the one recorded for the oplog, because another executor owns the shard now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OplogFence {
+    pub agent_id: AgentId,
+    pub expected_epoch: ShardEpoch,
+    pub actual_epoch: Option<ShardEpoch>,
+}
+
+impl OplogFence {
+    /// The fence a refused storage write reports for `agent_id`. Only a fence comes back from
+    /// the fenceable storage retries: every other storage failure panics inside them.
+    pub(crate) fn refused(agent_id: AgentId, error: IndexedStorageError) -> Self {
+        match error {
+            IndexedStorageError::Fenced {
+                expected, actual, ..
+            } => OplogFence {
+                agent_id,
+                expected_epoch: expected,
+                actual_epoch: actual,
+            },
+            other => unreachable!("a fenceable storage write failed without a fence: {other}"),
+        }
+    }
+}
+
+/// Why an oplog operation failed without taking the executor down.
+///
+/// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
+/// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
+/// stopped and left to the shard's new owner. Storage failures on execution-critical reads and
+/// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
+/// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
+/// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OplogError {
+    Fenced(OplogFence),
+    Payload(String),
+    Maintenance(String),
+}
+
+impl From<String> for OplogError {
+    fn from(details: String) -> Self {
+        OplogError::Payload(details)
+    }
+}
+
+impl From<OplogError> for WorkerExecutorError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => WorkerExecutorError::oplog_fenced(
+                fence.agent_id,
+                fence.expected_epoch.0,
+                fence.actual_epoch.map(|epoch| epoch.0),
+            ),
+            OplogError::Payload(details) => WorkerExecutorError::runtime(details),
+            OplogError::Maintenance(details) => WorkerExecutorError::runtime(details),
+        }
+    }
+}
+
+impl Display for OplogError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OplogError::Fenced(fence) => write!(
+                f,
+                "oplog write for {} fenced: asserted shard epoch {}, stored {}",
+                fence.agent_id,
+                fence.expected_epoch,
+                fence
+                    .actual_epoch
+                    .map(|epoch| epoch.to_string())
+                    .unwrap_or_else(|| "none".to_string())
+            ),
+            OplogError::Payload(details) => write!(f, "oplog payload error: {details}"),
+            OplogError::Maintenance(details) => write!(f, "oplog maintenance error: {details}"),
+        }
+    }
+}
+
+impl std::error::Error for OplogError {}
+
 /// A single oplog append that has already been synchronously enqueued in the oplog's ordering
 /// domain. Creating this receipt reserves the entry's position; awaiting it returns the assigned
 /// index after the append finishes.
-pub type OplogAddReceipt = BoxFuture<'static, OplogIndex>;
+pub type OplogAddReceipt = BoxFuture<'static, Result<OplogIndex, OplogError>>;
+pub type OplogAddPairReceipt = BoxFuture<'static, Result<(OplogIndex, OplogIndex), OplogError>>;
+
+#[derive(Clone)]
+pub struct OplogShutdownHandle {
+    fence: Arc<dyn Fn() + Send + Sync>,
+    close_and_wait: Arc<dyn Fn() -> BoxFuture<'static, Result<(), String>> + Send + Sync>,
+}
+
+impl OplogShutdownHandle {
+    pub fn new(
+        fence: impl Fn() + Send + Sync + 'static,
+        close_and_wait: impl Fn() -> BoxFuture<'static, Result<(), String>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            fence: Arc::new(fence),
+            close_and_wait: Arc::new(close_and_wait),
+        }
+    }
+
+    pub fn from_completion(completion: OplogCloseCompletion) -> Self {
+        Self::new(|| {}, move || completion.clone().boxed())
+    }
+
+    pub fn fence(&self) {
+        (self.fence)();
+    }
+
+    pub async fn close_and_wait(&self) -> Result<(), String> {
+        (self.close_and_wait)().await
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
@@ -604,6 +954,16 @@ pub struct RawDurableStreamSessionStatus {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
+    /// A non-owning, exact-generation executor-shutdown capability. The synchronous fence is
+    /// installed before executor-owned tasks are cancelled; after those tasks stop, the close
+    /// action joins every captured oplog layer even if the outer handle has already disappeared.
+    fn executor_shutdown_handle(&self) -> OplogShutdownHandle {
+        self.inner().map_or_else(
+            || OplogShutdownHandle::from_completion(self.closed()),
+            |inner| inner.executor_shutdown_handle(),
+        )
+    }
+
     /// Retires this open handle after its worker's durable state has been deleted.
     ///
     /// Cached implementations unregister the exact handle and propagate retirement through
@@ -646,7 +1006,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     }
 
     /// Adds a single entry to the oplog (possibly buffered), and returns its index
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
         self.enqueue_add(entry).await
     }
 
@@ -666,7 +1026,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_durable_stream_batch(
         &self,
         make_batch: DurableStreamBatchBuilder,
-    ) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
+    ) -> Result<Vec<(OplogIndex, OplogEntry)>, OplogError> {
         let first_index = self.current_oplog_index().await.next();
         let records = make_batch(first_index);
         let mut result = Vec::with_capacity(records.len());
@@ -677,7 +1037,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
                     index.next()
                 });
             let entry = record.into_inline_entry();
-            let index = self.add(entry.clone()).await;
+            let index = self.add(entry.clone()).await?;
             assert_eq!(
                 index, expected_index,
                 "oplog add_durable_stream_batch default observed a concurrent writer"
@@ -687,12 +1047,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
         Ok(result)
     }
 
-    /// A variant of add that can inject failures in tests. TO BE REMOVED
-    async fn fallible_add(&self, entry: OplogEntry) -> Result<(), String> {
-        self.add(entry).await;
-        Ok(())
-    }
-
     /// Drop a chunk of entries from the beginning of the oplog
     ///
     /// This should only be called _after_ `append` succeeded in the layer below this one
@@ -700,11 +1054,22 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the number of dropped entries.
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
+    async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
+        Ok(self.drop_prefix(last_dropped_id).await)
+    }
+
     /// Commits the buffered entries to the oplog
-    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry>;
+    async fn commit(
+        &self,
+        level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>;
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
+
+    async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
+        Ok(self.current_oplog_index().await)
+    }
 
     /// Returns actor-ordered lifecycle metadata including buffered raw appends. Absence is proven
     /// through the returned watermark; storage failures must not be reported as absence.
@@ -726,7 +1091,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// available).
     /// Returns true if the maximum possible number of replicas is reached within the timeout,
     /// otherwise false.
-    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool;
+    async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> Result<bool, OplogError>;
 
     /// Reads exactly `n` contiguous entries starting at `oplog_index`.
     async fn read_exact(&self, oplog_index: OplogIndex, n: u64)
@@ -741,6 +1106,14 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.read_exact(oplog_index, n).await
     }
 
+    async fn try_read_source(
+        &self,
+        oplog_index: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, String> {
+        Ok(self.read_source(oplog_index, n).await)
+    }
+
     /// Reads the entry at the given oplog index.
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
         self.read_exact(oplog_index, 1)
@@ -751,22 +1124,18 @@ pub trait Oplog: Any + Debug + Send + Sync {
             })
     }
 
-    /// Notifies the oplog implementation that the worker's replay cursor committed a new
-    /// position: `last_replayed_index` is the index of the last replayed entry. This fires only
-    /// when replay progress is actually published (consuming an entry, skipping hint entries or
-    /// deleted regions, or switching to live mode) — speculative or random-access oplog reads
-    /// never trigger it. The default implementation ignores it; wrapper oplogs that track replay
-    /// progress (such as the debugging service's oplog) override it.
-    async fn on_replay_progress(&self, _last_replayed_index: OplogIndex) {}
-
     /// Gets the total number of entries in the oplog
     async fn length(&self) -> u64;
 
+    async fn try_length(&self) -> Result<u64, String> {
+        Ok(self.length().await)
+    }
+
     /// Adds an entry to the oplog and immediately commits it
-    async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
-        let index = self.add(entry).await;
-        self.commit(CommitLevel::Always).await;
-        index
+    async fn add_and_commit(&self, entry: OplogEntry) -> Result<OplogIndex, OplogError> {
+        let index = self.add(entry).await?;
+        self.commit(CommitLevel::Always).await?;
+        Ok(index)
     }
 
     /// Uploads a big oplog payload and returns a reference to it
@@ -778,6 +1147,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
         payload_id: PayloadId,
         md5_hash: Vec<u8>,
     ) -> Result<Vec<u8>, String>;
+
+    async fn download_raw_payload_classified(
+        &self,
+        payload_id: PayloadId,
+        md5_hash: Vec<u8>,
+    ) -> Result<Vec<u8>, RawOplogPayloadDownloadError> {
+        self.download_raw_payload(payload_id, md5_hash)
+            .await
+            .map_err(|message| RawOplogPayloadDownloadError::Backend(anyhow::Error::msg(message)))
+    }
 
     /// Reserves a reference for a (possibly large) `serialized_request` payload, builds the call's
     /// `Start` from that reference with the **synchronous** `build_start`, and appends it — all so
@@ -817,7 +1196,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
         &self,
         serialized_request: Vec<u8>,
         build_start: ReservedRawStartBuilder,
-    ) -> Result<OrderedOplogStart, String>;
+    ) -> Result<OrderedOplogStart, OplogError>;
 
     /// Like [`Self::add_start_with_reserved_raw_payload`], but builds the request after the leaf
     /// oplog has assigned the exact `Start` index. The leaf must invoke `build_request` and append
@@ -826,10 +1205,11 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String>;
+    ) -> Result<OrderedOplogStart, OplogError>;
 
-    /// Atomically appends a `Start` entry and a second entry (its `End` or
-    /// `Cancelled`) that references the `Start`'s `OplogIndex`.
+    /// Synchronously enqueues an atomic `Start` and second entry (its `End` or
+    /// `Cancelled`) that references the `Start`'s `OplogIndex`, returning their asynchronous
+    /// completion receipt.
     ///
     /// `make_second` builds the second entry from the freshly assigned `Start`
     /// index (a durable call is identified by the `OplogIndex` of its `Start`).
@@ -837,29 +1217,44 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// [`OplogOps::add_completed_host_call`]) to write a matched host-call
     /// `Start`/`End` pair atomically.
     ///
-    /// Implementations must ensure no other writer can interleave between the
-    /// two appends and that no commit threshold check fires between them, so
+    /// Implementations must reserve one writer job before returning, in the same ordering domain
+    /// as [`Self::enqueue_add`]. Dropping the receipt must not cancel that job. No other writer may
+    /// interleave between the two appends and no commit threshold check may fire between them, so
     /// the pair is never split across a commit/crash boundary. This is a
     /// required method (no default) deliberately: a default `add`-twice
     /// composition would silently violate that atomicity for any implementor
     /// that forgot to override it.
+    fn enqueue_add_pair(
+        &self,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+    ) -> OplogAddPairReceipt;
+
+    /// Async convenience for [`Self::enqueue_add_pair`].
     async fn add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex);
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
+        self.enqueue_add_pair(start, make_second).await
+    }
 
-    /// Like [`add_pair`](Self::add_pair) but for two already-built entries, returning a
-    /// `Result` so test wrappers can inject a write failure on either entry. The default
-    /// delegates to `add_pair`, inheriting its atomic buffering, so the two entries are
-    /// never split by a commit-threshold check or a crash boundary.
-    async fn fallible_add_pair(
-        &self,
-        first: OplogEntry,
-        second: OplogEntry,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
-        let (first_idx, second_idx) = self.add_pair(first, Box::new(move |_| second)).await;
-        Ok((first_idx, second_idx))
+    /// The shard epoch this oplog's primary writes assert, or `None` without a primary oplog. An
+    /// ephemeral oplog has none: its archive layers assert the epoch it was opened with, and a
+    /// refusal there is reported by [`Self::fence`].
+    ///
+    /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
+    fn shard_epoch(&self) -> Option<ShardEpoch> {
+        self.inner().and_then(|inner| inner.shard_epoch())
+    }
+
+    /// The refusal this oplog has latched, if the storage has turned one of its writes away:
+    /// every later write fails on it, so the handle is finished. Answered without a round trip,
+    /// so the open-oplog cache can decline to hand a finished handle to a new opener, and a write
+    /// known to be refused is not started: a remote side effect, or the plugin forwarder's flush
+    /// and checkpoint.
+    fn fence(&self) -> Option<OplogFence> {
+        self.inner().and_then(|inner| inner.fence())
     }
 
     /// Returns the inner oplog wrapped by this implementation, if any.
@@ -887,14 +1282,63 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>>
 
 async fn deserialize_oplog_payload<T: BinaryCodec + Send + 'static>(
     bytes: Vec<u8>,
-) -> Result<T, String> {
+) -> Result<T, anyhow::Error> {
     tokio::task::spawn_blocking(move || {
-        golem_common::serialization::try_deserialize(&bytes)?.ok_or_else(|| {
-            "oplog payload has an unsupported or missing serialization version".into()
-        })
+        golem_common::serialization::try_deserialize(&bytes)
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| {
+                anyhow::anyhow!("oplog payload has an unsupported or missing serialization version")
+            })
     })
     .await
-    .map_err(|error| format!("oplog payload deserialization task failed: {error}"))?
+    .map_err(anyhow::Error::new)?
+}
+
+#[derive(Debug)]
+pub enum RawOplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Missing(PayloadId),
+}
+
+impl std::fmt::Display for RawOplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Missing(payload_id) => write!(formatter, "payload {payload_id} is missing"),
+        }
+    }
+}
+
+impl std::error::Error for RawOplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) => Some(error.as_ref()),
+            Self::Missing(_) => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OplogPayloadDownloadError {
+    Backend(anyhow::Error),
+    Corrupt(anyhow::Error),
+}
+
+impl std::fmt::Display for OplogPayloadDownloadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Backend(error) => write!(formatter, "payload backend failure: {error}"),
+            Self::Corrupt(error) => write!(formatter, "corrupt payload: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for OplogPayloadDownloadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Backend(error) | Self::Corrupt(error) => Some(error.as_ref()),
+        }
+    }
 }
 
 #[async_trait]
@@ -934,7 +1378,9 @@ pub trait OplogOps: Oplog {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -944,7 +1390,53 @@ pub trait OplogOps: Oplog {
                 ..
             } => {
                 let bytes = self.download_raw_payload(payload_id, md5_hash).await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+
+    async fn download_payload_classified<
+        T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
+    >(
+        &self,
+        payload: OplogPayload<T>,
+    ) -> Result<T, OplogPayloadDownloadError> {
+        match payload {
+            OplogPayload::Inline(value) => Ok(*value),
+            OplogPayload::SerializedInline {
+                cached: Some(value),
+                ..
+            }
+            | OplogPayload::External {
+                cached: Some(value),
+                ..
+            } => Ok((*value).clone()),
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(OplogPayloadDownloadError::Corrupt),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+                ..
+            } => {
+                let bytes = self
+                    .download_raw_payload_classified(payload_id, md5_hash)
+                    .await
+                    .map_err(|error| match error {
+                        RawOplogPayloadDownloadError::Backend(error) => {
+                            OplogPayloadDownloadError::Backend(error)
+                        }
+                        RawOplogPayloadDownloadError::Missing(payload_id) => {
+                            OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                                "referenced oplog payload {payload_id} is missing"
+                            ))
+                        }
+                    })?;
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(OplogPayloadDownloadError::Corrupt)
             }
         }
     }
@@ -964,7 +1456,7 @@ pub trait OplogOps: Oplog {
         &self,
         request: T,
         build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
-    ) -> Result<(OplogIndex, PendingUpload), String>
+    ) -> Result<(OplogIndex, PendingUpload), OplogError>
     where
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     {
@@ -989,7 +1481,7 @@ pub trait OplogOps: Oplog {
         &self,
         build_request: impl FnOnce(OplogIndex) -> Result<T, String> + Send + 'static,
         build_start: impl FnOnce(OplogPayload<T>) -> OplogEntry + Send + 'static,
-    ) -> Result<(OplogIndex, PendingUpload), String>
+    ) -> Result<(OplogIndex, PendingUpload), OplogError>
     where
         T: BinaryCodec + Debug + Clone + PartialEq + Send + Sync + 'static,
     {
@@ -1036,7 +1528,7 @@ pub trait OplogOps: Oplog {
         response: &HostResponse,
         function_type: DurableFunctionType,
         parent_start_index: Option<OplogIndex>,
-    ) -> Result<(OplogIndex, OplogIndex), String> {
+    ) -> Result<(OplogIndex, OplogIndex), OplogError> {
         let request_payload: OplogPayload<HostRequest> = self.upload_payload(request).await?;
         let response_payload: OplogPayload<HostResponse> = self.upload_payload(response).await?;
         let now = Timestamp::now_utc();
@@ -1048,6 +1540,7 @@ pub trait OplogOps: Oplog {
             observational_owner: None,
             request: Some(request_payload),
             durable_function_type: function_type,
+            span_started: None,
         };
         let (start_idx, end_idx) = self
             .add_pair(
@@ -1057,41 +1550,46 @@ pub trait OplogOps: Oplog {
                     start_index,
                     response: Some(response_payload),
                     forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
                 }),
             )
-            .await;
+            .await?;
         Ok((start_idx, end_idx))
     }
 
     async fn add_agent_invocation_started(
         &self,
         invocation: AgentInvocation,
+        invocation_context: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogEntry, OplogError> {
         let entry = self
-            .agent_invocation_started_entry(invocation, wallet_pin)
+            .agent_invocation_started_entry(invocation, invocation_context, wallet_pin)
             .await?;
-        self.add(entry.clone()).await;
+        self.add(entry.clone()).await?;
         Ok(entry)
     }
 
     async fn add_agent_invocation_started_with_index(
         &self,
         invocation: AgentInvocation,
+        invocation_context: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, OplogError> {
         let entry = self
-            .agent_invocation_started_entry(invocation, wallet_pin)
+            .agent_invocation_started_entry(invocation, invocation_context, wallet_pin)
             .await?;
-        Ok(self.add(entry).await)
+        self.add(entry).await
     }
 
     async fn agent_invocation_started_entry(
         &self,
         invocation: AgentInvocation,
+        ctx: InvocationContextStack,
         wallet_pin: InvocationWalletPin,
     ) -> Result<OplogEntry, String> {
-        let (idempotency_key, invocation_payload, ctx) = invocation.into_parts();
+        let (idempotency_key, invocation_payload, _) = invocation.into_parts();
         let payload = self.upload_payload_owned(invocation_payload).await?;
         let invocation_context = ctx.to_oplog_data();
         Ok(OplogEntry::AgentInvocationStarted {
@@ -1111,7 +1609,7 @@ pub trait OplogOps: Oplog {
         method_name: Option<String>,
         consumed_fuel: u64,
         component_revision: ComponentRevision,
-    ) -> Result<OplogEntry, String> {
+    ) -> Result<OplogIndex, OplogError> {
         let consumed_fuel = if consumed_fuel > i64::MAX as u64 {
             i64::MAX
         } else {
@@ -1126,8 +1624,7 @@ pub trait OplogOps: Oplog {
             consumed_fuel,
             component_revision,
         };
-        self.add(entry.clone()).await;
-        Ok(entry)
+        self.add(entry).await
     }
 
     async fn create_snapshot_based_update_description(
@@ -1135,12 +1632,14 @@ pub trait OplogOps: Oplog {
         target_revision: ComponentRevision,
         payload: Vec<u8>,
         mime_type: String,
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     ) -> Result<UpdateDescription, String> {
         let payload = self.upload_payload_owned(payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,
             mime_type,
+            filesystem_snapshot,
         })
     }
 
@@ -1155,7 +1654,8 @@ pub trait OplogOps: Oplog {
                 let bytes = self.download_payload(payload).await?;
                 Ok(Some((bytes, mime_type)))
             }
-            UpdateDescription::Automatic { .. } => Ok(None),
+            UpdateDescription::Automatic { .. }
+            | UpdateDescription::SnapshotAssistedAutomatic { .. } => Ok(None),
         }
     }
 }
@@ -1195,7 +1695,9 @@ pub trait OplogServiceOps: OplogService {
             OplogPayload::SerializedInline {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
-            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes).await,
+            OplogPayload::SerializedInline { bytes, .. } => deserialize_oplog_payload(bytes)
+                .await
+                .map_err(|error| error.to_string()),
             OplogPayload::External {
                 cached: Some(v), ..
             } => Ok((*v).clone()),
@@ -1207,7 +1709,9 @@ pub trait OplogServiceOps: OplogService {
                 let bytes = self
                     .download_raw_payload(owned_agent_id, agent_mode, payload_id, md5_hash)
                     .await?;
-                deserialize_oplog_payload(bytes).await
+                deserialize_oplog_payload(bytes)
+                    .await
+                    .map_err(|error| error.to_string())
             }
         }
     }
@@ -1221,6 +1725,8 @@ pub type OplogCloseCompletion = Shared<BoxFuture<'static, Result<(), String>>>;
 struct OpenOplogEntry {
     oplog: Weak<dyn Oplog>,
     closed: OplogCloseCompletion,
+    /// The epoch the opener that constructed this handle asked it to assert.
+    requested_epoch: Option<ShardEpoch>,
 }
 
 type OplogSlot = Arc<Mutex<Option<OpenOplogEntry>>>;
@@ -1302,6 +1808,7 @@ impl OpenOplogs {
         constructor: impl OplogConstructor,
     ) -> Arc<dyn Oplog> {
         lifecycle.assert_agent(agent_id);
+        let requested_epoch = constructor.shard_epoch();
         let slot = self.slot(agent_id).await;
         let is_primary = Arc::ptr_eq(
             &slot,
@@ -1319,16 +1826,25 @@ impl OpenOplogs {
         } else {
             lifecycle.slot.as_ref().unwrap().as_ref()
         };
-        if let Some(oplog) = cached.and_then(|entry| entry.oplog.upgrade()) {
-            if !oplog.is_retired() {
-                return oplog;
+        match cached.and_then(|entry| entry.oplog.upgrade()) {
+            Some(oplog) if !oplog.is_retired() => {
+                let opened_with = cached.and_then(|entry| entry.requested_epoch);
+                if can_reuse(&*oplog, opened_with, requested_epoch) {
+                    return oplog;
+                }
+                // Replaced without waiting for it to close: see `can_reuse`.
             }
-            oplog.retire();
-        }
-        if let Some(cached) = cached {
-            // Completion, including an error, proves the old layer no longer owns running work.
-            // The new attempt reloads persisted state rather than inheriting the old error.
-            let _ = cached.closed.clone().await;
+            live => {
+                if let Some(oplog) = live {
+                    oplog.retire();
+                }
+                if let Some(cached) = cached {
+                    // Completion, including an error, proves the old layer no longer owns running
+                    // work. The new attempt reloads persisted state rather than inheriting the old
+                    // error.
+                    let _ = cached.closed.clone().await;
+                }
+            }
         }
         let owner = self.clone();
         let close_agent_id = agent_id.clone();
@@ -1339,6 +1855,7 @@ impl OpenOplogs {
         let entry = Some(OpenOplogEntry {
             oplog: Arc::downgrade(&oplog),
             closed: closed.clone(),
+            requested_epoch,
         });
         if let Some(wrapper) = &mut wrapper_slot {
             **wrapper = entry;
@@ -1358,6 +1875,26 @@ impl OpenOplogs {
     }
 }
 
+/// Whether a live cached handle can be handed to an opener asking for `requested`. It cannot,
+/// and is replaced, when:
+/// - it is fenced: the storage refused one of its writes, so every later one is refused too;
+/// - or it belongs to an older ownership generation: `requested` is newer than the epoch it was
+///   opened with (`None` is older than any epoch). The replacement records the newer epoch, on
+///   the primary oplog or, for an ephemeral oplog, on its archive layers.
+///
+/// A replaced handle may still be held by a worker that is stopping, so nobody waits for it to
+/// close; it keeps any background work, such as an archive transfer, until its holder drops it.
+/// An equal or older request gets the cached handle, so no two live handles assert one epoch.
+fn can_reuse(
+    oplog: &dyn Oplog,
+    opened_with: Option<ShardEpoch>,
+    requested: Option<ShardEpoch>,
+) -> bool {
+    let fenced = oplog.fence().is_some();
+    let older_generation = requested > opened_with;
+    !fenced && !older_generation
+}
+
 impl Debug for OpenOplogs {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenOplogs").finish()
@@ -1371,4 +1908,10 @@ pub trait OplogConstructor: Send {
         lifecycle: &mut OplogLifecycleGuard,
         close: Box<dyn FnOnce() + Send + Sync>,
     ) -> Arc<dyn Oplog>;
+
+    /// The epoch the oplog this constructor builds is asked to assert, or `None` when it asserts
+    /// none. The open-oplog cache compares it with the epoch a cached
+    /// handle was opened with, so it has no default: a layer that left it out would hand an
+    /// older generation's handle to every newer opener.
+    fn shard_epoch(&self) -> Option<ShardEpoch>;
 }

@@ -9,7 +9,7 @@
  * (no `ChildProcessSpawner` leaking into the per-test R channel).
  */
 import { Cause, Context, Data, Effect, Layer, Stream } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { ChildProcess, ChildProcessSpawner } from "effect/process"
 
 export class GolemCliError extends Data.TaggedError("GolemCliError")<{
   readonly command: ReadonlyArray<string>

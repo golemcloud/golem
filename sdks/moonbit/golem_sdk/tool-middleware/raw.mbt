@@ -216,11 +216,12 @@ pub fn RawTypedSchemaValue::schema_graph(
 priv struct RawInvocationResultState {
   mut result : RawTypedSchemaValue?
   mut stdout : @async-core.Stream[Byte]?
+  mut stderr : @async-core.Stream[Byte]?
   mut ownership : RawCarrierState
 }
 
 ///|
-/// Opaque zero-copy owner of an underlying invocation result and stdout.
+/// Opaque zero-copy owner of an underlying invocation result and output streams.
 pub struct RawInvocationResult {
   priv context : OwnershipContext
   priv state : Ref[RawInvocationResultState]
@@ -235,6 +236,7 @@ fn OwnershipContext::own_raw_invocation_result(
     val: {
       result: result.result.map(value => self.own_raw_typed_schema_value(value)),
       stdout: result.stdout,
+      stderr: result.stderr,
       ownership: Available,
     },
   }
@@ -248,8 +250,10 @@ fn RawInvocationResult::drop_if_available(self : RawInvocationResult) -> Unit {
   if self.state.val.ownership == Available {
     let result = self.state.val.result
     let stdout = self.state.val.stdout
+    let stderr = self.state.val.stderr
     self.state.val.result = None
     self.state.val.stdout = None
+    self.state.val.stderr = None
     self.state.val.ownership = Dropped
     match result {
       Some(result) => ignore(result.drop())
@@ -257,6 +261,10 @@ fn RawInvocationResult::drop_if_available(self : RawInvocationResult) -> Unit {
     }
     match stdout {
       Some(stdout) => stdout.drop_sync()
+      None => ()
+    }
+    match stderr {
+      Some(stderr) => stderr.drop_sync()
       None => ()
     }
   }
@@ -287,10 +295,12 @@ pub fn RawInvocationResult::take_for_final(
     None => None
   }
   let stdout = self.state.val.stdout.map(stream => stream.transfer())
+  let stderr = self.state.val.stderr.map(stream => stream.transfer())
   self.state.val.result = None
   self.state.val.stdout = None
+  self.state.val.stderr = None
   self.state.val.ownership = TransferredFinal
-  Ok({ result, stdout, })
+  Ok({ result, stdout, stderr, })
 }
 
 ///|
@@ -316,7 +326,8 @@ pub struct RawToolInvocation {
   priv command_path : Array[String]
   priv input : RawTypedSchemaValue
   priv stdin : MiddlewareStdin?
-  priv mut stdout : @toolStreams.ToolStdoutWriter?
+  priv mut stdout : @toolStreams.ToolOutputWriter?
+  priv mut stderr : @toolStreams.ToolOutputWriter?
   priv principal : @agentCommon.Principal
 }
 
@@ -332,7 +343,8 @@ pub fn RawToolInvocation::from_wit(
   stdin : @async-core.Stream[
     Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
   ]?,
-  stdout : @toolStreams.ToolStdoutWriter?,
+  stdout : @toolStreams.ToolOutputWriter?,
+  stderr : @toolStreams.ToolOutputWriter?,
   principal : @agentCommon.Principal,
 ) -> RawToolInvocation {
   {
@@ -344,6 +356,7 @@ pub fn RawToolInvocation::from_wit(
     input: context.own_raw_typed_schema_value(input),
     stdin: stdin.map(stream => context.own_wire_stdin(stream)),
     stdout,
+    stderr,
     principal,
   }
 }
@@ -407,10 +420,20 @@ pub fn RawToolInvocation::stdin(self : RawToolInvocation) -> MiddlewareStdin? {
 #doc(hidden)
 pub fn RawToolInvocation::take_host_stdout(
   self : RawToolInvocation,
-) -> @toolStreams.ToolStdoutWriter? {
+) -> @toolStreams.ToolOutputWriter? {
   let stdout = self.stdout
   self.stdout = None
   stdout
+}
+
+///|
+#doc(hidden)
+pub fn RawToolInvocation::take_host_stderr(
+  self : RawToolInvocation,
+) -> @toolStreams.ToolOutputWriter? {
+  let stderr = self.stderr
+  self.stderr = None
+  stderr
 }
 
 ///|
@@ -425,7 +448,11 @@ pub fn RawToolInvocation::principal(
 pub fn RawToolInvocation::empty_result(
   self : RawToolInvocation,
 ) -> RawInvocationResult {
-  self.context.own_raw_invocation_result({ result: None, stdout: None, })
+  self.context.own_raw_invocation_result({
+    result: None,
+    stdout: None,
+    stderr: None,
+  })
 }
 
 ///|
@@ -477,7 +504,13 @@ fn[T : @schema.IntoSchema] encode_middleware_result_value(
 pub fn[E] RawToolInvocation::typed_result_empty(
   self : RawToolInvocation,
 ) -> Result[RawInvocationResult, ToolInvokeError[E]] {
-  Ok(self.context.own_raw_invocation_result({ result: None, stdout: None, }))
+  Ok(
+    self.context.own_raw_invocation_result({
+      result: None,
+      stdout: None,
+      stderr: None,
+    }),
+  )
 }
 
 ///|
@@ -492,6 +525,7 @@ pub fn[T : @schema.IntoSchema, E] RawToolInvocation::typed_result_value(
         self.context.own_raw_invocation_result({
           result: Some(value),
           stdout: None,
+          stderr: None,
         }),
       )
     Err(message) => Err(InvalidResult(message))
@@ -508,6 +542,7 @@ pub fn[E] RawToolInvocation::typed_result_stdout(
     self.context.own_raw_invocation_result({
       result: None,
       stdout: Some(stdout),
+      stderr: None,
     }),
   )
 }
@@ -525,10 +560,88 @@ pub fn[T : @schema.IntoSchema, E] RawToolInvocation::typed_result_value_with_std
         self.context.own_raw_invocation_result({
           result: Some(value),
           stdout: Some(stdout),
+          stderr: None,
         }),
       )
     Err(message) => {
       stdout.drop_sync()
+      Err(InvalidResult(message))
+    }
+  }
+}
+
+///|
+#doc(hidden)
+pub fn[E] RawToolInvocation::typed_result_stderr(
+  self : RawToolInvocation,
+  stderr : @async-core.Stream[Byte],
+) -> Result[RawInvocationResult, ToolInvokeError[E]] {
+  Ok(
+    self.context.own_raw_invocation_result({
+      result: None,
+      stdout: None,
+      stderr: Some(stderr),
+    }),
+  )
+}
+
+///|
+#doc(hidden)
+pub fn[T : @schema.IntoSchema, E] RawToolInvocation::typed_result_value_with_stderr(
+  self : RawToolInvocation,
+  value : T,
+  stderr : @async-core.Stream[Byte],
+) -> Result[RawInvocationResult, ToolInvokeError[E]] {
+  match encode_middleware_result_value(value) {
+    Ok(value) =>
+      Ok(
+        self.context.own_raw_invocation_result({
+          result: Some(value),
+          stdout: None,
+          stderr: Some(stderr),
+        }),
+      )
+    Err(message) => {
+      stderr.drop_sync()
+      Err(InvalidResult(message))
+    }
+  }
+}
+
+///|
+#doc(hidden)
+pub fn[E] RawToolInvocation::typed_result_outputs(
+  self : RawToolInvocation,
+  outputs : ToolOutputStreams,
+) -> Result[RawInvocationResult, ToolInvokeError[E]] {
+  Ok(
+    self.context.own_raw_invocation_result({
+      result: None,
+      stdout: Some(outputs.stdout),
+      stderr: Some(outputs.stderr),
+    }),
+  )
+}
+
+///|
+#doc(hidden)
+pub fn[T : @schema.IntoSchema, E] RawToolInvocation::typed_result_value_with_outputs(
+  self : RawToolInvocation,
+  value : T,
+  outputs : ToolOutputStreams,
+) -> Result[RawInvocationResult, ToolInvokeError[E]] {
+  match encode_middleware_result_value(value) {
+    Ok(value) =>
+      Ok(
+        self.context.own_raw_invocation_result({
+          result: Some(value),
+          stdout: Some(outputs.stdout),
+          stderr: Some(outputs.stderr),
+        }),
+      )
+    Err(message) => {
+      outputs.stdout.drop_sync()
+      outputs.stderr.drop_sync()
       Err(InvalidResult(message))
     }
   }
@@ -603,6 +716,19 @@ pub async fn UnderlyingTool::invoke_raw(
   }
   let observer = (self.invoke)(command_path.copy(), wire_input, wire_stdin)
   defer (observer.drop)()
+  if observer.stdout is Some(_) || observer.stderr is Some(_) {
+    match observer.stdout {
+      Some(stdout) => stdout.drop_sync()
+      None => ()
+    }
+    match observer.stderr {
+      Some(stderr) => stderr.drop_sync()
+      None => ()
+    }
+    return Err(
+      InvalidResult("output-bearing underlying invocations must use start_raw"),
+    )
+  }
   match (observer.get)() {
     Ok(result) => Ok(self.ownership.own_raw_invocation_result(result))
     Err(@underlying.UnderlyingError::ToolError(error)) =>
@@ -687,6 +813,7 @@ pub async fn UnderlyingTool::start_raw(
   }
   Ok({
     stdout_stream: observer.stdout,
+    stderr_stream: observer.stderr,
     cancel_call: observer.cancel,
     drop_observer: close,
     state,
@@ -720,6 +847,22 @@ pub async fn UnderlyingTool::start_raw(
       }
     },
   })
+}
+
+///|
+/// Observes a raw invocation while draining both outputs concurrently, then
+/// attaches replayable streams to the returned opaque raw result.
+pub async fn UnderlyingInvocation::get_raw_buffering_outputs(
+  self : UnderlyingInvocation[RawInvocationResult, RawTypedSchemaValue],
+) -> Result[RawInvocationResult, ToolInvokeError[RawTypedSchemaValue]] {
+  match self.get_buffering_outputs() {
+    Err(error) => Err(error)
+    Ok(collected) => {
+      collected.result.state.val.stdout = collected.stdout
+      collected.result.state.val.stderr = collected.stderr
+      Ok(collected.result)
+    }
+  }
 }
 
 ///|

@@ -1,1 +1,0 @@
-Pure tool middleware SDK world. This deliberately excludes ambient tool-host.

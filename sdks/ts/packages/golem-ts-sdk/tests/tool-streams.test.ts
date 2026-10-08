@@ -38,6 +38,7 @@ describe('started tool invocations', () => {
     const result = new Promise<string>((resolve) => (finish = resolve));
     const invocation = startedToolInvocation(
       chunks(Uint8Array.of(1, 2)),
+      undefined,
       settleToolResult(result),
       vi.fn(),
     );
@@ -52,6 +53,7 @@ describe('started tool invocations', () => {
     const cancel = vi.fn();
     const invocation = startedToolInvocation(
       chunks(),
+      undefined,
       settleToolResult(Promise.resolve(undefined)),
       cancel,
     );
@@ -69,6 +71,7 @@ describe('started tool invocations', () => {
     try {
       const invocation = startedToolInvocation(
         chunks(),
+        undefined,
         settleToolResult(Promise.reject(failure)),
         vi.fn(),
       );
@@ -84,12 +87,14 @@ describe('started tool invocations', () => {
   it('collects stdout and result concurrently without deadlocking', async () => {
     const invocation = startedToolInvocation(
       chunks(Uint8Array.of(1), Uint8Array.of(2, 3)),
+      undefined,
       settleToolResult(Promise.resolve(42)),
       vi.fn(),
     );
     await expect(invocation.collect()).resolves.toEqual({
-      result: 42,
-      stdout: Uint8Array.of(1, 2, 3),
+      result: { status: 'fulfilled', value: 42 },
+      stdout: { status: 'fulfilled', value: Uint8Array.of(1, 2, 3) },
+      stderr: { status: 'fulfilled', value: undefined },
     });
   });
 
@@ -99,12 +104,39 @@ describe('started tool invocations', () => {
     }
     const invocation = startedToolInvocation(
       failed(),
+      undefined,
       settleToolResult(Promise.resolve(undefined)),
       vi.fn(),
     );
     const read = invocation.stdout.getReader().read();
     await expect(read).rejects.toBeInstanceOf(ToolStreamError);
     await expect(read).rejects.toMatchObject({ failure });
+  });
+
+  it('closes a failed stderr attachment and preserves its failure after collect', async () => {
+    const closed = vi.fn();
+    async function* failedStderr() {
+      try {
+        yield { tag: 'err' as const, val: { tag: 'failed' as const, val: 'broken stderr' } };
+      } finally {
+        closed();
+      }
+    }
+    const invocation = startedToolInvocation(
+      undefined,
+      failedStderr(),
+      settleToolResult(Promise.resolve(undefined)),
+      vi.fn(),
+    );
+
+    const collected = await invocation.collect();
+    expect(collected.result).toEqual({ status: 'fulfilled', value: undefined });
+    expect(collected.stdout).toEqual({ status: 'fulfilled', value: undefined });
+    expect(collected.stderr).toMatchObject({
+      status: 'rejected',
+      reason: { failure: { tag: 'failed', val: 'broken stderr' } },
+    });
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it('keeps stdout consumable after a structured result failure', async () => {
@@ -119,6 +151,7 @@ describe('started tool invocations', () => {
     const failure = new Error('structured result failed');
     const invocation = startedToolInvocation(
       stdout,
+      undefined,
       settleToolResult(Promise.reject(failure)),
       vi.fn(),
     );
@@ -130,7 +163,7 @@ describe('started tool invocations', () => {
     await expect(collectStream(invocation.stdout)).resolves.toEqual(Uint8Array.of(1, 2, 3));
   });
 
-  it('waits for stdout to terminate before collect reports a structured failure', async () => {
+  it('waits for stdout to terminate and preserves every outcome', async () => {
     let closeStdout!: () => void;
     const stdout = new ReadableStream<
       { tag: 'ok'; val: Uint8Array } | { tag: 'err'; val: { tag: 'cancelled' } }
@@ -142,6 +175,7 @@ describe('started tool invocations', () => {
     const failure = new Error('structured result failed');
     const invocation = startedToolInvocation(
       stdout,
+      undefined,
       settleToolResult(Promise.reject(failure)),
       vi.fn(),
     );
@@ -161,6 +195,10 @@ describe('started tool invocations', () => {
     expect(settled).toBe(false);
 
     closeStdout();
-    await expect(collect).rejects.toBe(failure);
+    await expect(collect).resolves.toEqual({
+      result: { status: 'rejected', reason: failure },
+      stdout: { status: 'fulfilled', value: new Uint8Array() },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
   });
 });

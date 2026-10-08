@@ -57,11 +57,13 @@ import { QUOTA_INTERNAL } from '../internal/schema-model/quotaInternal';
 import {
   adoptGuestPermissionCardHandle,
   GuestPermissionCardHandle,
+  permissionCardHandleWasLiftedFromWire,
   releaseGuestPermissionCardHandle,
 } from '../internal/schema-model/permissionCardHandle';
 import { PERMISSION_CARD_INTERNAL } from '../internal/schema-model/permissionCardInternal';
 import type {
   BinaryRestrictions,
+  TextRestrictions,
   PathDirection,
   PathKind,
   QuantitySpec,
@@ -76,6 +78,7 @@ import { StandardSchemaV1 } from './standardSchema';
 import { Result } from '../host/result';
 import { Principal, sdkPrincipalToHost, sdkPrincipalFromHost } from '../principal';
 import { AgentStream, agentStreamFromHandle, agentStreamToHandle } from './agentStream';
+import { Uuid } from '../uuid';
 import type {
   Principal as HostPrincipal,
   OidcPrincipal as HostOidcPrincipal,
@@ -330,6 +333,23 @@ function charMarker(): MarkerSchema<string> {
     graph: { defs: new Map(), root: t.char() },
     toValue: (value) => v.char(value as string),
     fromValue: (sv) => (sv as { tag: 'char'; value: string }).value,
+  });
+  return marker(validate, descriptor);
+}
+
+function uuidMarker(): MarkerSchema<Uuid> {
+  const validate: Validator<Uuid> = (value) =>
+    value instanceof Uuid &&
+    value.highBits >= 0n &&
+    value.highBits < 1n << 64n &&
+    value.lowBits >= 0n &&
+    value.lowBits < 1n << 64n
+      ? ok(value)
+      : fail('Expected a Uuid with unsigned 64-bit halves');
+  const descriptor: MarkerDescriptor = () => ({
+    graph: { defs: new Map(), root: t.uuid() },
+    toValue: (value) => v.uuid(value as Uuid),
+    fromValue: (sv) => (sv as { tag: 'uuid'; value: Uuid }).value,
   });
   return marker(validate, descriptor);
 }
@@ -599,6 +619,37 @@ function binaryMarker(options: BinaryRestrictions = {}): MarkerSchema<Uint8Array
   );
 }
 
+function textMarker(options: TextRestrictions = {}): MarkerSchema<string> {
+  const restrictions: TextRestrictions = {
+    languages: options.languages ? [...options.languages] : undefined,
+    minLength: options.minLength,
+    maxLength: options.maxLength,
+    regex: options.regex,
+  };
+  return marker(
+    (value) => {
+      if (typeof value !== 'string') return fail('Expected a string for WIT text');
+      const length = [...value].length;
+      if (restrictions.minLength !== undefined && length < restrictions.minLength) {
+        return fail(`Text value has fewer than ${restrictions.minLength} characters`);
+      }
+      if (restrictions.maxLength !== undefined && length > restrictions.maxLength) {
+        return fail(`Text value has more than ${restrictions.maxLength} characters`);
+      }
+      if (restrictions.regex !== undefined && !new RegExp(restrictions.regex, 'u').test(value)) {
+        return fail('Text value does not match the required pattern');
+      }
+      return ok(value);
+    },
+    () => ({
+      graph: { defs: new Map(), root: schemaType({ tag: 'text', restrictions }) },
+      concrete: { tag: 'plain-text' },
+      toValue: (value) => v.text(value as string),
+      fromValue: (value) => (value as Extract<SchemaValue, { tag: 'text' }>).text,
+    }),
+  );
+}
+
 /** A filesystem path value backed by the rich WIT `path` schema node. */
 export function Path(options?: PathOptions): MarkerSchema<string> {
   return pathMarker(options);
@@ -753,6 +804,7 @@ function streamMarker<Output>(
     const itemCodec = recurse(inner);
     return {
       graph: { defs: itemCodec.graph.defs, root: t.stream(itemCodec.graph.root) },
+      streamItem: itemCodec,
       toValue: (value) => v.stream(agentStreamToHandle(value as AgentStream<Output>, itemCodec)),
       fromValue: (value) => {
         if (value.tag !== 'stream') {
@@ -774,16 +826,20 @@ export interface PermissionCardOptions {
   polymorphic: boolean;
 }
 
-function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawPermissionCard> {
-  const validate: Validator<RawPermissionCard> = (value) =>
+function permissionCardMarker(
+  options: PermissionCardOptions,
+): MarkerSchema<GuestPermissionCardHandle> {
+  const validate: Validator<GuestPermissionCardHandle> = (value) =>
     value !== null && typeof value === 'object'
-      ? ok(value as RawPermissionCard)
+      ? ok(value as GuestPermissionCardHandle)
       : fail('Expected an opaque permission-card handle for WIT permission-card');
   const descriptor: MarkerDescriptor = () => ({
     graph: { defs: new Map(), root: t.permissionCard(options) },
     toValue: (value) =>
       v.permissionCard(
-        adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
+        value instanceof GuestPermissionCardHandle
+          ? value
+          : adoptGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, value as RawPermissionCard),
       ),
     fromValue: (sv) => {
       const handle = (
@@ -792,12 +848,9 @@ function permissionCardMarker(options: PermissionCardOptions): MarkerSchema<RawP
           handle: GuestPermissionCardHandle;
         }
       ).handle;
+      if (permissionCardHandleWasLiftedFromWire(PERMISSION_CARD_INTERNAL, handle)) return handle;
       const raw = releaseGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, handle);
-      if (raw === undefined) {
-        throw new Error(
-          'permission-card handle was already consumed; an owned permission-card can only be decoded once',
-        );
-      }
+      if (raw === undefined) throw new Error('permission-card handle was already consumed');
       return raw;
     },
   });
@@ -1038,8 +1091,7 @@ function resultMarker<Ok, Err>(
 const PRINCIPAL_TAGS = ['oidc', 'agent', 'golem-user', 'anonymous'];
 
 // --- graph type builders (no recursion: everything is built inline) ---
-const uuidType = (): SchemaType =>
-  t.record([field('highBits', t.u64()), field('lowBits', t.u64())]);
+const uuidType = (): SchemaType => t.uuid();
 const componentIdType = (): SchemaType => t.record([field('uuid', uuidType())]);
 const agentIdType = (): SchemaType =>
   t.record([field('componentId', componentIdType()), field('agentId', t.string())]);
@@ -1063,7 +1115,6 @@ const golemUserType = (): SchemaType => t.record([field('accountId', accountIdTy
 // --- SchemaValue field accessors (positional record reads) ---
 const recFields = (sv: SchemaValue): SchemaValue[] =>
   (sv as { tag: 'record'; fields: SchemaValue[] }).fields;
-const u64Of = (f: SchemaValue): bigint => (f as { tag: 'u64'; value: bigint }).value;
 const strOf = (f: SchemaValue): string => (f as { tag: 'string'; value: string }).value;
 const boolOf = (f: SchemaValue): boolean => (f as { tag: 'bool'; value: boolean }).value;
 const optOf = (f: SchemaValue): SchemaValue | undefined =>
@@ -1073,11 +1124,11 @@ const optOf = (f: SchemaValue): SchemaValue | undefined =>
 type HostUuid = { highBits: bigint; lowBits: bigint };
 
 function uuidToValue(u: HostUuid): SchemaValue {
-  return v.record([v.u64(u.highBits), v.u64(u.lowBits)]);
+  return v.uuid(Uuid.from(u));
 }
 function uuidFromValue(sv: SchemaValue): HostUuid {
-  const f = recFields(sv);
-  return { highBits: u64Of(f[0]), lowBits: u64Of(f[1]) };
+  const uuid = (sv as { tag: 'uuid'; value: Uuid }).value;
+  return { highBits: uuid.highBits, lowBits: uuid.lowBits };
 }
 
 function agentIdToValue(a: HostAgentId): SchemaValue {
@@ -1233,9 +1284,11 @@ export const s = {
 
   // Scalars Standard Schema can't pin.
   char: () => charMarker(),
+  uuid: () => uuidMarker(),
   datetime: () => datetimeMarker(),
   duration: () => durationMarker(),
   url: () => urlMarker(),
+  text: (opts?: TextRestrictions) => textMarker(opts),
   bytes: () => typedArrayMarker({ ctor: Uint8Array, elemType: t.u8, elemValue: v.u8 }),
   binary: (opts?: BinaryRestrictions) => binaryMarker(opts),
 

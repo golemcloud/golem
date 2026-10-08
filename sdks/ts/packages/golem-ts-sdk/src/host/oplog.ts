@@ -45,12 +45,10 @@ import type {
   DeactivatePluginParameters,
   RevertParameters,
   CancelPendingInvocationParameters,
-  StartSpanParameters,
-  FinishSpanParameters,
-  SetSpanAttributeParameters,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
   PluginInstallationDescription,
   LocalAgentConfigEntry,
@@ -71,7 +69,7 @@ export type {
   SchemaValueTree,
   ComponentRevision,
   OplogIndex,
-  Snapshot,
+  SnapshotBasedUpdateParameters,
   Attribute,
   AttributeValue,
   SpanId,
@@ -115,17 +113,22 @@ export type {
   CreateResourceParameters,
   DropResourceParameters,
   LogLevel,
+  LogTraceContext,
   LogParameters,
   ActivatePluginParameters,
   DeactivatePluginParameters,
   RevertParameters,
   CancelPendingInvocationParameters,
-  StartSpanParameters,
-  FinishSpanParameters,
-  SetSpanAttributeParameters,
+  SpanKind,
+  SpanOutcome,
+  SpanLink,
+  SpanStarted,
+  SpanFinished,
+  SpanAttributes,
   BeginRemoteTransactionParameters,
   RemoteTransactionParameters,
   SnapshotParameters,
+  SnapshotConfirmedParameters,
   Timestamp,
 } from 'golem:api/oplog@1.5.0';
 
@@ -138,6 +141,12 @@ export type {
   RawStartParameters,
   RawEndParameters,
   RawCancelledParameters,
+  RawCompletionDiscardedParameters,
+  RawCompletionDeliveredParameters,
+  RawHostStreamFrameParameters,
+  DurableStreamOutcome,
+  DurableStreamEventSummary,
+  RawDurableStreamRecordParameters,
   RawAgentInvocationStartedParameters,
   RawAgentInvocationFinishedParameters,
   RawErrorParameters,
@@ -216,15 +225,13 @@ export type PublicOplogEntry =
   | { tag: 'deactivate-plugin'; val: DeactivatePluginParameters }
   | { tag: 'revert'; val: RevertParameters }
   | { tag: 'cancel-pending-invocation'; val: CancelPendingInvocationParameters }
-  | { tag: 'start-span'; val: StartSpanParameters }
-  | { tag: 'finish-span'; val: FinishSpanParameters }
-  | { tag: 'set-span-attribute'; val: SetSpanAttributeParameters }
   | { tag: 'begin-remote-transaction'; val: BeginRemoteTransactionParameters }
   | { tag: 'pre-commit-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'pre-rollback-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'committed-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'rolled-back-remote-transaction'; val: RemoteTransactionParameters }
   | { tag: 'snapshot'; val: SnapshotParameters }
+  | { tag: 'snapshot-confirmed'; val: SnapshotConfirmedParameters }
   | { tag: 'oplog-processor-checkpoint'; val: OplogProcessorCheckpointParameters };
 
 // Wrapping helpers

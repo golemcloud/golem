@@ -2,6 +2,7 @@ manifestVersion: 1.6.0
 
 componentTemplates:
   rust-test-component:
+    guestLanguage: rust
     presets:
       debug:
         customCommands:
@@ -12,14 +13,33 @@ componentTemplates:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
       quick:
+        build:
+        - command: cargo build --target wasm32-wasip2 --release
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
         customCommands:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
       optimized:
+        build:
+        - command: cargo build --target wasm32-wasip2 --release
+          sources:
+          - "{{ componentDir }}/src"
+          - "{{ componentDir }}/Cargo.toml"
+          targets:
+          - "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
+        outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
         customCommands:
           copy:
           - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}_release.wasm"
   ts-test-component:
+    guestLanguage: ts
     customCommands:
       copy:
       - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"

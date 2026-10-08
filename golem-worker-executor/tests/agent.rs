@@ -19,7 +19,7 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_common::model::{AgentId, IdempotencyKey};
+use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -129,7 +129,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     let agent_id = agent_id!("StreamingRpcTarget", "rejected-schedule");
     let worker_id = AgentId::from_agent_id(component.id, &agent_id).map_err(anyhow::Error::msg)?;
     let (_, input) = data_value!(vec![1_u32, 2, 3]).into_parts();
-    let input: golem_api_grpc::proto::golem::schema::SchemaValue =
+    let input: golem_schema::proto::golem::schema::SchemaValue =
         input.try_into().map_err(anyhow::Error::msg)?;
     let component_id = component.id.to_string();
     let blobs_before = files_below(&deps.blob_storage_root())?
@@ -872,6 +872,58 @@ async fn create_oplog_entry_persists_ephemeral_agent_mode(
         .expect("Expected a Create entry at the start of the oplog");
 
     assert_eq!(create_entry.agent_mode, AgentMode::Ephemeral);
+    Ok(())
+}
+
+#[test]
+#[timeout("60s")]
+#[tracing::instrument]
+async fn archived_ephemeral_agent_remains_observable_and_can_be_deleted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("constructor_parameter_echo_unnamed")]
+    constructor_parameter_echo_unnamed: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(
+            &context.default_environment_id,
+            constructor_parameter_echo_unnamed,
+        )
+        .store()
+        .await?;
+    let logical_agent_id = agent_id!("EphemeralEchoAgent", "archived-delete");
+
+    let result = executor
+        .invoke_and_await_agent(&component, &logical_agent_id, "changeAndGet", data_value!())
+        .await?;
+    let final_agent_id = result.agent_id().clone();
+    assert_eq!(result.into_typed::<String>()?, "archived-delete!");
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &final_agent_id);
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while executor.worker_is_cached(&owned_agent_id).await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    let metadata = executor.get_worker_metadata(&final_agent_id).await?;
+    assert_eq!(metadata.agent_id, final_agent_id);
+    assert!(
+        !executor
+            .get_oplog(&final_agent_id, OplogIndex::INITIAL)
+            .await?
+            .is_empty()
+    );
+
+    executor.delete_worker(&final_agent_id).await?;
+    assert_eq!(
+        executor.get_worker_metadata_opt(&final_agent_id).await?,
+        None
+    );
     Ok(())
 }
 

@@ -1,0 +1,463 @@
+import { Callout, Steps } from "nextra/components"
+
+# Filesystem Snapshots
+
+A filesystem snapshot is a copy of an agent's files that the worker executor keeps in blob storage. A snapshot record in the oplog of the agent names it. With filesystem snapshots, an agent keeps its files after a start from a snapshot record, after a manual update and after a snapshot-assisted automatic update. [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots) describes what agents see. This page describes how to enable and operate the feature.
+
+Filesystem snapshots are disabled by default. A disabled executor does not save agent files. It writes a snapshot record, without a filesystem snapshot name, only when the agent's files can come back with it: when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory. An agent whose files changed takes no automatic snapshot and recovers by a replay, and a snapshot-based manual update of it fails. See [Availability](/next/develop/snapshotting#availability). Ephemeral agents take no snapshots.
+
+## Requirements
+
+- The executor runs on Linux 5.8 or later and keeps the agent filesystems on XFS storage with reflink: `ManagedXfs` (with project quotas) or `ReflinkXfs` (without project quotas). Each executor has its own XFS filesystem. See [Prepare XFS storage](#prepare-xfs-storage).
+- With `ManagedXfs`, the executor process must be able to change XFS project quotas. `ReflinkXfs` needs no capability.
+- All executors that can run the same agents enable filesystem snapshots, and use the same blob storage and the same `repository_key`.
+- With S3 blob storage, `filesystem_snapshots_bucket` is set, names a bucket other than `custom_data_bucket`, and the bucket exists. The executor does not create buckets. With an S3-compatible service, the service supports conditional writes (`If-None-Match: *` on `PutObject`) and `CopyObject`.
+- With file system blob storage, all executors that can run the same agents use the same `root`.
+
+## Enable filesystem snapshots
+
+<Steps>
+
+### Prepare XFS storage
+
+#### Choose the XFS storage mode
+
+Filesystem snapshots need storage that makes copy-on-write copies: a capture and a restore copy each file by reflink, so they take time for the number of files and not for their bytes. Two storage modes do that. Both use a dedicated XFS filesystem with reflink.
+
+| | `ManagedXfs` | `ReflinkXfs` |
+| --- | --- | --- |
+| Per-agent disk limit (`max_disk_space_per_worker`) | Enforced by a project quota of each agent | Not enforced. The executor logs this at startup |
+| Filesystem metering (`resource_usage_metering.filesystem`) | Supported | Refused at startup |
+| Free-space checks of the volume, capture admission, write pressure recovery | Yes | Yes |
+| Mount option | `prjquota` | no quota option for projects (`noquota`) |
+| Privilege | `CAP_SYS_ADMIN`, host user namespace | No capability |
+
+Use `ManagedXfs` when the executor must limit or meter the disk space of each agent. Use `ReflinkXfs` when per-agent disk limits are not needed or are enforced another way.
+
+The storage mode is one setting, `[filesystem_storage.mode]`. It also has the development modes `Temporary` (the default, a temporary directory for each agent) and `Directory` (plain directories under a root). The development modes do not make copy-on-write copies, and filesystem snapshots refuse them.
+
+#### Managed XFS storage (`ManagedXfs`)
+
+Make a dedicated XFS filesystem with reflink enabled, and mount it with project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o prjquota /dev/<device> /var/lib/golem/agents
+```
+
+Make the mount persist across reboots, for example with a line in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  prjquota  0 0
+```
+
+The executor reads and sets XFS project quotas, and sets the project of directories. Linux allows these calls only for a process with the `CAP_SYS_ADMIN` capability. In a container, run the executor as a privileged container or add `CAP_SYS_ADMIN`, and mount the XFS filesystem into the container. Linux changes the project of a directory only for a process in the initial user namespace, so the container must run in the host user namespace. A container in its own user namespace fails, also with `CAP_SYS_ADMIN`.
+
+Set the storage mode to `ManagedXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ManagedXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+#### XFS storage without project quotas (`ReflinkXfs`)
+
+Make a dedicated XFS filesystem with reflink enabled, and mount it without project quotas:
+
+```shell
+mkfs.xfs -m reflink=1 -n ftype=1 /dev/<device>
+mount -t xfs -o noquota /dev/<device> /var/lib/golem/agents
+```
+
+Make the mount persist across reboots, for example with a line in `/etc/fstab`:
+
+```text
+/dev/<device>  /var/lib/golem/agents  xfs  noquota  0 0
+```
+
+Give the root directory of the filesystem to the user that runs the executor, so that the executor can make directories in it:
+
+```shell
+chown <executor-user>:<executor-group> /var/lib/golem/agents
+```
+
+The executor needs no capability. It never changes the project id or the flags of the root. The root must have no XFS project: when an earlier tool set a project or the project-inherit flag on it, clear them once as root, for example with `xfs_io -c 'chproj 0' -c 'chattr -P' /var/lib/golem/agents`.
+
+Set the storage mode to `ReflinkXfs`, with the mount point as the root:
+
+```toml
+[filesystem_storage.mode]
+type = "ReflinkXfs"
+
+[filesystem_storage.mode.config]
+root = "/var/lib/golem/agents"
+```
+
+The environment variables are `GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ReflinkXfs` and `GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/agents`.
+
+What `ReflinkXfs` does not give:
+
+- **No per-agent disk limit.** The kernel enforces no limit for one agent. The executor logs `Per-agent disk limits are not enforced on storage without per-agent accounting` at startup, and an agent can fill the volume. The free-space targets of `[filesystem_storage.pressure]` still apply to the whole volume: when a write finds the volume full, the executor unloads idle agents and tries the write again, and capture admission skips a snapshot while the volume is below its targets. When the unload frees too little space, the write fails with an out-of-space error. An agent never gets a quota error on `ReflinkXfs`.
+- **No filesystem metering.** The executor measures the disk usage of each agent only through project quotas. An executor with `ReflinkXfs` and `[resource_usage_metering] filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`.
+
+#### Both XFS modes
+
+Give the container the root directory of the XFS filesystem, for example with a `hostPath` volume at the host mount point. Do not give it a subdirectory of the filesystem, a bind mount of a subdirectory, or a `subPath`: the startup check of the mount root then fails.
+
+Use one XFS root for each executor process. At startup, the executor takes an exclusive lock on the root, so a second process on the same root does not start.
+
+The filesystem must compare names with their case. A filesystem made with `mkfs.xfs -n version=ci` is refused.
+
+At startup, the executor checks the volume and refuses to start when a check fails. The error has the form `failed to <check> filesystem <path>`, sometimes followed by `: <cause>`. `<path>` is the configured root or a path below it, a path below `/proc/self/fd/`, `/proc/self/mountinfo` for the read of the mount table, `<filesystem-volume>` for the read of the free space, or `<configuration>` for a check of the settings, such as the pressure targets against the size of the volume. The `<check>` part tells which check failed.
+
+Checks of both XFS modes:
+
+| Check | `<check>` in the error |
+| --- | --- |
+| The executor can open the path and read its filesystem. | `open XFS root`, `inspect XFS root` or `identify XFS root` |
+| The path is an XFS filesystem. | `validate XFS root filesystem type` |
+| The filesystem compares names with their case. | `inspect XFS root geometry` or `validate XFS names are case-sensitive` |
+| The path is the root of its mount, and the mount starts at the root directory of the XFS filesystem: the line of the mount in `/proc/self/mountinfo` has the root `/`. A subdirectory, also through a bind mount, fails. | `inspect XFS root mount location`, `read the mount table` or `validate XFS root is the filesystem mount root` |
+| No other process holds the lock on the root. | `acquire exclusive ownership of XFS root` |
+| The filesystem has a valid block size. | `validate XFS filesystem block size` |
+| The executor can open the root through its open file. | `open XFS root through its stable descriptor` |
+| `target_available_bytes` of `[filesystem_storage.pressure]` is not larger than the size of the volume, and `target_available_filesystem_objects` is not larger than its object count. | `fit filesystem pressure byte target within the volume capacity` or `fit filesystem pressure object target within the volume capacity` |
+| The executor can make the directories `.scratch` and `.initial-files` under the root, and they have no project identity. | `create host directory root`, `create host directory`, `remove what an earlier process left under a host directory name`, `remove the scratch directory after a failed host directory`, `open XFS host directory`, `inspect XFS host directory project attributes`, `verify XFS host directory has no project identity` or `remove a host directory that has a project identity` |
+| The executor can read the free space of the volume, the volume is mounted read-write, and it is still the volume of the root. | `observe filesystem volume space`, with the cause `XFS volume is mounted read-only` or `XFS volume identity changed` |
+
+Checks of `ManagedXfs` only:
+
+| Check | `<check>` in the error |
+| --- | --- |
+| Project quota accounting and enforcement are on. | `validate managed XFS project quota accounting and enforcement`, with the cause `managed XFS project quota accounting or enforcement is disabled` |
+| The executor can read project quotas. | `validate managed XFS project quota query permissions` |
+| The executor can read the quota of a 32-bit project id. | `validate 32-bit XFS project quota query` |
+| The project id 2147483648, which the check uses, is not in use. | `reserve unused 32-bit XFS startup probe project` |
+| The executor can change project quotas. | `validate XFS project quota update permissions` |
+| The executor can write to the root. It makes the directory `.golem-xfs-project-probe` there for the next check, and removes it after the check. | `remove stale managed XFS startup probe`, `create managed XFS startup probe`, `remove managed XFS startup probe` or `clear managed XFS startup probe project` |
+| A new directory gets the project of its parent, and reflink copies work. | `validate managed XFS project assignment and inheritance` |
+| The executor removes any project from the root, and the root then belongs to no project. | `inspect managed XFS root project attributes`, `clear managed XFS root project inheritance`, `verify managed XFS root project attributes` or `verify managed XFS root has neutral project identity` |
+
+Checks of `ReflinkXfs` only:
+
+| Check | `<check>` in the error |
+| --- | --- |
+| The mount accounts no project quotas: its options in `/proc/self/mountinfo` have neither `prjquota` nor `pqnoenforce`. | `verify XFS volume has no project quota accounting` |
+| The root has no project id and no project-inherit flag. The executor does not change the project id or the flags of the root. | `inspect XFS root project attributes` or `verify XFS root has no project identity` |
+| A reflink works. The executor makes the directory `.golem-xfs-reflink-probe` under the root, reflinks a file in it, reads the copy back, and removes the directory. A filesystem made with `-m reflink=0` fails with the cause `Operation not supported`. | `remove stale XFS reflink probe`, `create XFS reflink probe`, `validate XFS reflink support` or `remove XFS reflink probe` |
+
+The executor makes the directories `.scratch` and `.initial-files` directly under the root, outside every agent directory, and with `ManagedXfs` outside the quota of every agent. A capture goes into `.scratch`. At startup, the executor removes what an earlier process left in these directories.
+
+### Make the encryption key
+
+The key encrypts the snapshots. It is 64 bytes, written as 128 hex characters:
+
+```shell
+openssl rand -hex 64
+```
+
+Keep the key secret, and give the same key to every executor. Do not change the key after executors wrote snapshots with it. An executor with a different key cannot read the existing snapshots:
+
+- No named automatic snapshot of an existing location restores, so a start uses an older record without a name, the authoritative recovery baseline, or a full replay.
+- When the authoritative recovery baseline, the record of the last successful manual update or snapshot-assisted update, names a filesystem snapshot, the start of the agent does not succeed.
+- Uploads, retention and deletes of single snapshots in an existing location fail.
+- A fork whose new agent starts from the snapshot of a manual update or a snapshot-assisted update fails, because the check of that snapshot needs the key.
+- A delete of all snapshots of an agent still works.
+
+### Set the blob storage bucket
+
+With S3 blob storage, the executor keeps filesystem snapshots in the bucket that `filesystem_snapshots_bucket` names, in the `[blob_storage.config]` section. An S3 configuration must set this field, also when filesystem snapshots are disabled; without it the executor does not start. The example configuration uses `filesystem-snapshots`. Make the bucket before you start the executor:
+
+```toml
+[blob_storage.config]
+filesystem_snapshots_bucket = "filesystem-snapshots"
+```
+
+The environment variable is `GOLEM__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`.
+
+<Callout type="warning">
+  Use a separate bucket for filesystem snapshots. Do not set `filesystem_snapshots_bucket` to the value of `custom_data_bucket`. If the two buckets are the same:
+
+  - An agent can delete or overwrite the filesystem snapshots of other agents in its environment. The keys of both are below `<object_prefix>/<environment id>/`, so a `wasi:blobstore` container can have the same key prefix as the filesystem snapshots of an agent.
+  - The blob storage quota of the account counts the filesystem snapshots.
+</Callout>
+
+The executor makes these S3 calls on the bucket. Give its credentials the permissions in the table:
+
+| S3 call | Permission |
+| --- | --- |
+| `ListObjectsV2` | `s3:ListBucket` |
+| `GetObject`, also with a byte range, and `HeadObject` | `s3:GetObject` |
+| `PutObject`, also with `If-None-Match: *` | `s3:PutObject` |
+| `DeleteObject` and `DeleteObjects` | `s3:DeleteObject` |
+| `CopyObject`, for a fork | `s3:GetObject` on the source and `s3:PutObject` on the target, both in this bucket |
+
+With file system blob storage, the snapshots go below the `root` of the `[blob_storage.config]` section. The whole tree below `root` must be on one volume. With SQLite blob storage, they go into the same database as the other blobs. These backends need no extra setting. See [Where the snapshots are](#where-the-snapshots-are).
+
+### Set the type to `Managed`
+
+```toml
+[filesystem_snapshots]
+type = "Managed"
+
+[filesystem_snapshots.config]
+repository_key = "<128 hex characters>"
+```
+
+You can give the type and the key as environment variables instead:
+
+```shell
+GOLEM__FILESYSTEM_SNAPSHOTS__TYPE=Managed
+GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY=<128 hex characters>
+```
+
+The other settings have defaults. See [Configuration](#configuration).
+
+### Keep memory outside the agents
+
+Uploads and restores use memory outside the memory of the agents. `worker_memory_ratio` in the `[memory]` section sets the share of the executor's memory that agents get. The default is `0.8`. Set it so that the rest leaves room for the executor itself and for the uploads and restores. See [Memory](#memory).
+
+### Do the same on every executor
+
+Enable filesystem snapshots on every executor that can run the same agents, with the same key and the same blob storage.
+
+A snapshot record without a filesystem snapshot name means that the agent's files were its initial files. A disabled executor writes such a record only when the agent's files are its untouched read-only initial files, with no other files and no provisioned files, and the agent did not rename or hard link any file, and did not set a given modification time on a file or directory, so the start gives the agent its files. The files of an agent are saved from its first snapshot after you enabled the feature.
+
+### Check that it works
+
+- At startup, the executor logs its configuration after `Using configuration:`. Below `filesystem snapshots:`, it shows `managed:` and the settings. The key shows as `****`. Below `filesystem storage:`, it shows the storage mode, for example `mode: reflink XFS at /var/lib/golem/agents`.
+- Make an agent that writes a file take snapshots. Without filesystem snapshots, such an agent takes no automatic snapshot. An agent that has only its untouched read-only initial files and no provisioned files, and that did not rename or hard link any file, and did not set a given modification time on a file or directory, uploads nothing, and its snapshot records have no filesystem snapshot name. Snapshots are off by default: the agent definition enables them with a snapshotting policy (see [Configuring snapshot-based recovery](/next/develop/snapshotting#configuring-snapshot-based-recovery)). An agent whose policy is `enabled` uses the executor setting `[oplog.default_snapshotting]`, which is `type = "Disabled"` by default.
+- After the agent takes a snapshot, `filesystem_snapshot_upload_seconds_count{outcome="confirmed"}` grows.
+- `golem agent oplog <agent_id>` shows a `SNAPSHOT` entry with a `filesystem:` name, and a `SNAPSHOT CONFIRMED` entry with the same name.
+
+</Steps>
+
+An executor that enables filesystem snapshots on storage without copy-on-write copies, `Temporary` or `Directory`, does not start. Its startup fails with this error:
+
+```text
+filesystem snapshots require storage with copy-on-write copies (XFS with reflink)
+```
+
+<Callout type="warning">
+  Enable filesystem snapshots on every executor or on none. On an executor without them, a start does not use an automatic snapshot record that names a filesystem snapshot, and uses an older record without a name, the authoritative recovery baseline or a full replay. A start whose authoritative recovery baseline, the record of the last successful manual update or snapshot-assisted update, names a filesystem snapshot fails with this cause: `the record names a filesystem snapshot, and filesystem snapshots are disabled on this executor`. A pending update whose snapshot names a filesystem snapshot fails with `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`, and the agent stays on its revision.
+</Callout>
+
+## Configuration
+
+All settings except `type` are in the `[filesystem_snapshots.config]` section. The executor reads them only when `type = "Managed"`. This is the full set with the default values:
+
+```toml
+[filesystem_snapshots]
+type = "Managed"
+
+[filesystem_snapshots.config]
+repository_key = "<128 hex characters>"
+max_concurrent_uploads = 4
+max_concurrent_restores = 8
+storage_call_deadline = "60s"
+restore_reader_threads = 6
+save_threads = 2
+confirmation_wait = "60s"
+store_check_limit = "5s"
+capture_wait = "5s"
+retained_periodic_snapshots = 128
+retained_update_snapshots = 2
+max_pending_deletes_per_agent = 1024
+
+[filesystem_snapshots.config.storage_retry]
+max_attempts = 5
+min_delay = "2s"
+max_delay = "2m"
+multiplier = 4.0
+```
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `repository_key` | none | The key that encrypts the snapshots, as 128 hex characters. You must set it. Environment variable: `GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY`. |
+| `max_concurrent_uploads` | `4` | The number of snapshot operations that save, delete, copy or list snapshots at the same time on one executor. It is also the number of clean-ups that run at the same time. |
+| `max_concurrent_restores` | `8` | The number of restores that run at the same time on one executor. A start that finds no free slot waits for one. |
+| `storage_call_deadline` | `60s` | The longest time that one blob storage call waits for an answer. A call that gets no answer in this time fails. Keep it well above the slowest normal call of your storage. It stops a call that never returns. It must be from `1s` to `112.5s`. |
+| `restore_reader_threads` | `6` | The number of threads that read data in one restore. |
+| `save_threads` | `2` | The number of threads of each parallel stage of one save. |
+| `confirmation_wait` | `60s` | How long a start of an agent waits for an upload of the same agent on this executor, together with the check of blob storage after the wait. A loaded agent that an automatic update restarts waits for the upload of its newest snapshot for the same time. It is also the longest time that a manual update waits for a running upload of the agent and for a free upload slot. |
+| `store_check_limit` | `5s` | How long a start that did not wait for an upload may check blob storage for the snapshot of the agent's newest unconfirmed record. A loaded agent that an automatic update restarts, and that has no running upload of its newest record, checks blob storage in the same time. A fork checks the snapshot of its baseline in the same time. |
+| `capture_wait` | `5s` | How long a capture waits for the agent's open file calls. When a call is still open after this time, the capture gives up. |
+| `retained_periodic_snapshots` | `128` | The number of automatic filesystem snapshots that retention keeps for each agent. A revert restores exactly only from a snapshot that blob storage still holds, so this number sets how far back a revert can go without a full replay. |
+| `retained_update_snapshots` | `2` | The number of manual-update filesystem snapshots that retention keeps for each agent, among those that no successful or pending update uses. |
+| `max_pending_deletes_per_agent` | `1024` | The largest number of snapshots of a revert of one agent that wait in the clean-up queue for deletion. See [Clean-up](#clean-up). |
+| `storage_retry` | see [Retries](#retries) | When a snapshot operation fails, how often and after which waits the executor runs it again. |
+
+Write each duration in the [humantime](https://docs.rs/humantime) format, for example `"500ms"`, `"60s"` or `"2m"`. Each count and each wait must be greater than zero. The executor refuses to start with an invalid value and names the setting in the error, for example `max_concurrent_restores must be greater than zero` or `repository_key must be 128 hex characters`.
+
+The default values of `max_concurrent_restores` and `restore_reader_threads` come from a benchmark on the AWS node type c8gd.4xlarge (16 vCPU, 32 GiB of memory). Another node type needs its own values. For example, on i8g.2xlarge (8 vCPU), the benchmark gave 4 restores with 4 reader threads each, because the CPU limited the restores before the disk did.
+
+### Retries
+
+Each snapshot operation (a save, a restore, a delete, a copy or a listing) runs again after a run that failed in blob storage, by the policy in `[filesystem_snapshots.config.storage_retry]`:
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `max_attempts` | `5` | The number of runs, including the first one. Must be greater than zero. |
+| `min_delay` | `2s` | The wait after the first failed run. Must not be greater than `max_delay`. |
+| `max_delay` | `2m` | The longest wait. |
+| `multiplier` | `4.0` | The factor by which the wait grows after each failed run. Must be at least 1. Golem uses the whole-number part of the value. |
+| `max_jitter_factor` | none | Optional. Each wait grows by a random part of itself, from 0 to this factor, and stays at most `max_delay`. Must be from 0 to 1. |
+
+When you set this section, give `max_attempts`, `min_delay`, `max_delay` and `multiplier`. With the defaults, the waits are 2 s, 8 s, 32 s and 2 minutes. When the last run fails, the operation fails. For an upload, the snapshot record then stays without a confirmation, and a start uses an older snapshot. The error texts of this section start with `storage_retry.`, for example `storage_retry.multiplier must be at least 1`.
+
+## Where the snapshots are
+
+The executor keeps the snapshots of each agent incarnation in their own location. An agent that is deleted and created again with the same id is a new incarnation, and so is the target of a fork. Each gets a new location. A re-created agent starts with an empty one. The location of a fork target holds the copy of the snapshots of its source. All incarnations of one agent share the agent part of the location.
+
+| Blob storage | Location of the snapshots of one incarnation |
+| --- | --- |
+| S3 | Bucket `filesystem_snapshots_bucket`, key prefix `<object_prefix>/<environment id>/<agent>/<incarnation id>/`. Without `object_prefix`, the prefix starts at `<environment id>`. |
+| File system | `<root>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
+| SQLite (`Sqlite` and `KVStoreSqlite`) | The namespace `filesystem_snapshots-<environment id>-<agent>-<incarnation id>` in the `blob_storage` table |
+| In memory | The memory of the executor. The snapshots are lost when the executor stops. Use it only for tests. |
+
+`<agent>` is the agent name, with each character other than an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters (`agent` when the name is empty), then `-` and the BLAKE3 hash, in hex, of `<component id>/<agent name>`. `<incarnation id>` is a UUID.
+
+## How the executor uses the settings
+
+### Captures
+
+At a snapshot boundary, the executor first admits the snapshot. It refuses the snapshot, and the agent's snapshot code does not run, in these cases:
+
+- The free space or the free filesystem objects of the volume are below the targets of `[filesystem_storage.pressure]` (`target_available_bytes` and `target_available_filesystem_objects`), or the executor cannot read them.
+- A delete of all snapshots of the agent waits or runs.
+- An upload of the agent, its confirmation or its retention runs. At most one upload runs for each agent. There is an exception: when an automatic upload failed and waits for its next run, also while it waits until its own earlier writes to blob storage have settled, the new snapshot replaces it. The replaced upload never confirms its record. A start can still confirm that record while it is the newest snapshot record of the agent, as described in [Uploads and confirmations](#uploads-and-confirmations).
+
+For a manual update, the first two refusals fail the update at once. When an upload of the agent runs, the update waits for the run in flight, and then replaces the upload or waits for its end. All waits of the update end `confirmation_wait` after the update began. The update then fails.
+
+Then the capture stops the agent's file calls, waits for the open calls for at most `capture_wait`, and makes a reflink copy of the files into `.scratch`. The copy shares the data blocks of the files, so it uses no space when it is made. When the agent then writes to a shared block, that block gets its own copy. Deleted files also keep their blocks until the upload ends and the executor removes the capture.
+
+A guest that returns from an invocation with an unflushed write to a WASI output stream keeps a file call open. Its captures stop after `capture_wait`, with the outcome `busy`.
+
+### Uploads and confirmations
+
+The executor uploads a capture in the background. When the upload is complete, the running agent writes a confirmation record into its oplog. The stop of an agent does not wait for its upload. When the agent no longer runs at the end of the upload, the executor keeps the snapshot. The next start confirms it:
+
+1. A start on the executor that runs the upload waits for the upload, for at most `confirmation_wait`, when the upload has started saving: it got its first upload slot. This happens before the start takes an account slot or memory. A terminal interrupt of the agent ends the wait.
+2. Then the start checks blob storage once, for at most the rest of `confirmation_wait`, or for at most `store_check_limit` when it did not wait. It does not check when the upload on this executor ended with the outcome `superseded`, or when a terminal interrupt of the agent waits.
+3. When blob storage holds the whole snapshot, the start writes the confirmation record itself.
+
+A start on another executor does only steps 2 and 3. An upload that still runs when the agent moves to another executor is lost for that start, and the start uses an older snapshot.
+
+An automatic update of a loaded agent restarts the agent on the same executor. Before the restart, when the update has no strategy yet and its newest snapshot record is not confirmed, the agent waits for the upload of that record, for at most `confirmation_wait`, so the update can use that record. When no upload of the record runs, the agent checks blob storage once, for at most `store_check_limit`. A stop of the agent, a retirement of the agent on this executor and a terminal interrupt end the wait. The wait does not count against the time limit of the unload for the restart.
+
+When an update or a revert replaced the snapshot record during the upload, the confirmation finds no record with the name. The executor then deletes the snapshot and counts a dropped confirmation.
+
+### Restores
+
+A start restores the filesystem snapshot of its baseline before the agent's code runs. A restore downloads the whole tree, so a large tree makes the start slower. At most `max_concurrent_restores` restores run at the same time, each with `restore_reader_threads` reader threads. On `ManagedXfs`, a restored tree counts against the storage quota of the agent, as the files did before.
+
+### Retention
+
+After an upload confirms an automatic snapshot, the executor deletes the older automatic snapshots of the agent. A confirmation that a start writes does not apply retention; the next upload that confirms applies it. Retention keeps:
+
+- the new snapshot and the `retained_periodic_snapshots - 1` newest older ones,
+- the snapshots of the records that a start of the agent can select now, whatever their age,
+- the snapshots of the successful and pending updates of the agent, manual and snapshot-assisted, and of its authoritative recovery baseline, whatever their age,
+- each snapshot whose time is at most 2 minutes before the time of the new snapshot, or later, because the clocks of two executors can differ.
+
+The last three kinds do not count toward `retained_periodic_snapshots`.
+
+After a manual update record is written, the executor applies the same rule to the manual-update snapshots with `retained_update_snapshots`. It never deletes the snapshot of a successful or pending update of the agent, because a revert or a fork can make that update the baseline again. `retained_update_snapshots` limits only the other manual-update snapshots.
+
+A failed retention delete is logged, and the next retention tries again.
+
+### Clean-up
+
+The executor deletes filesystem snapshots in the background when the life of an agent ends or changes:
+
+- **Delete.** After it deletes the oplog of an agent, the executor deletes all filesystem snapshots of that incarnation. It first stops the upload of the agent, and waits until every snapshot operation of the agent has ended.
+- **Revert.** A revert first writes its revert entry. Then the executor deletes the snapshots of the records in the reverted part of the oplog, except a snapshot that a remaining record uses. When another executor took over the agent before the revert entry was written, the revert fails with `OplogFenced` and deletes nothing.
+- **Fork.** The executor copies the snapshots of the source incarnation into the location of the new agent, inside blob storage, before it creates the new agent. With S3 and SQLite, the data does not pass through the executor. With file system blob storage, the executor copies the files. The executor checks the last successful snapshot-based manual update or snapshot-assisted automatic update in the part of the oplog that the fork copies. When that update names a filesystem snapshot that is not in blob storage, the fork is refused: `Cannot fork worker at oplog index <index>: the filesystem snapshot <name> of the target's baseline is not in the store`. An executor without filesystem snapshots copies nothing, so it refuses such a fork too. A fork attempt that does not create the new agent deletes its copy.
+
+The clean-ups wait in a queue in the memory of the executor. At most `max_concurrent_uploads` clean-ups run at the same time. Retention does not use this queue. These deletes do: the deletes of a revert, the delete of all snapshots of a deleted agent, the delete of all snapshots of an incarnation that the recovery of a shard finds stale, and the delete of the copy of a fork attempt that did not create its new agent.
+
+Only the snapshots of a revert wait in the queue by name. Retention deletes directly, and the queue does not limit it. A delete of all snapshots carries no names. One agent can have at most `max_pending_deletes_per_agent` snapshots of a revert waiting for deletion. The snapshots that wait keep their place. A revert gives its snapshots newest first. The executor queues them up to the bound, refuses the rest, which are the oldest snapshots of the reverted part, and counts a leaked clean-up with the operation `overflow`. The refused snapshots stay in the location of the agent. Retention deletes a refused automatic snapshot after the agent has made about `retained_periodic_snapshots` newer automatic snapshots, and a refused manual-update snapshot after more manual updates. The delete of the agent also deletes them.
+
+The queue also has fixed bounds over all agents: 65,536 agents with waiting work, and 786,432 waiting snapshots. A revert past these bounds is also counted as `overflow`. When 65,536 agents have waiting work, a delete of all snapshots of an agent removes the oldest waiting revert deletes of another agent to make room, and counts them as `overflow`. Only when no such deletes wait is the delete of all snapshots refused, and counted as `overflow`.
+
+Snapshots can stay in blob storage. They use space. They do not make a start wrong:
+
+- A clean-up delete, or the delete of a snapshot that no confirmation record names, that fails after its retries. The executor counts it in `filesystem_snapshot_leaked_cleanups_total`.
+- A clean-up that waited or ran when the executor shut down. The executor counts it with the operation `shutdown`. After a crash, nothing counts the lost clean-ups.
+- The copy of a fork attempt whose outcome the executor does not know. The executor counts it with the operation `fork_stage`.
+
+To find what stays, list the locations in [Where the snapshots are](#where-the-snapshots-are). An incarnation whose agent no longer exists holds only snapshots that no agent uses.
+
+### Memory
+
+Each restore holds memory for each of its reader threads, and each upload holds memory while it saves. This memory is outside the memory that the executor gives to agents. `worker_memory_ratio` sets the share for agents, and its default is `0.8`. The rest must hold the executor itself and the uploads and restores.
+
+The benchmark setup on the node type c8gd.4xlarge (16 vCPU, 32 GiB of memory) used a pod limit of about 28 GiB and this share for agents:
+
+```toml
+[memory]
+worker_memory_ratio = 0.78
+```
+
+In that setup, 4 uploads and 8 restores with the default thread counts needed about 6 GiB outside the memory of the agents. Measure again for another node type or for other values of the settings.
+
+## Metrics
+
+The worker executor exports these metrics for filesystem snapshots. The labels have fixed values and hold no agent identifiers. See [Metrics](/next/operate/metrics) for the other metrics.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `filesystem_snapshot_capture_seconds` | histogram | `outcome` | The time that a capture stops the agent's file calls. `outcome` is `captured`, `unchanged`, `initial_files`, `busy`, `invalidated` or `failed`. An executor without filesystem snapshots records its check of the files here, with `initial_files`, `changed`, `busy`, `invalidated` or `failed`. |
+| `filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | The time of an upload with its retries, until its confirmation (`periodic`) or the end of the save (`update`). `kind` is `periodic` for an automatic snapshot or `update` for a manual update. For `periodic`, `outcome` is `confirmed`, `superseded`, `deferred`, `replaced` or `failed`. For `update`, it is `saved` or `failed`. |
+| `filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | The sum of the file sizes of the trees of the uploaded snapshots. It is not the number of bytes sent to blob storage. |
+| `filesystem_snapshot_uploads_in_progress` | gauge | | The runs of uploads that hold a slot now. |
+| `filesystem_snapshot_restore_seconds` | histogram | `outcome` | The time of a restore, with the wait for a restore slot and the retries. `outcome` is `restored` or `failed`. |
+| `filesystem_snapshot_copy_seconds` | histogram | `outcome` | The time of the copy of the snapshots of a fork source. `outcome` is `copied`, `stopped` or `failed`. |
+| `filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded snapshots that no confirmation record names. `reason` is `superseded`. |
+| `filesystem_snapshot_cleanups_pending` | gauge | | The agents with clean-up work that waits or runs. |
+| `filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Clean-ups that left snapshots in blob storage. `operation` is `delete` (a delete of some snapshots failed), `delete_all` (a delete of all snapshots of an agent failed), `overflow` (a full queue refused a request, or removed the waiting revert deletes of another agent to make room), `shutdown` (the executor shut down before the clean-up ended) or `fork_stage` (the outcome of a fork attempt is not known). |
+| `filesystem_snapshot_failed_space_reclaims_total` | counter | | Deletes after which the release of unused storage failed. The next delete of the agent tries again. |
+
+Watch these values:
+
+- **Busy captures.** `filesystem_snapshot_capture_seconds_count{outcome="busy"}` counts the snapshots that Golem skipped, or the manual updates that failed, because a guest left a file call open.
+- **Changed files without filesystem snapshots.** On an executor without filesystem snapshots, `filesystem_snapshot_capture_seconds_count{outcome="changed"}` counts the snapshots that Golem skipped, or the manual updates that failed, because the agent's files are not its initial files.
+- **Failed uploads.** `filesystem_snapshot_upload_seconds_count{outcome="failed"}` counts uploads that failed after their retries.
+- **Deferred uploads.** `filesystem_snapshot_upload_seconds_count{outcome="deferred"}` counts uploads that the instance that made the capture could not confirm, for example because the agent stopped or restarted, or its shard moved. This is normal for agents that stop soon after a snapshot. A later start confirms them.
+- **Dropped confirmations.** `filesystem_snapshot_dropped_confirmations_total` counts uploads that an update or a revert made useless.
+- **Leaked clean-ups.** `filesystem_snapshot_leaked_cleanups_total` counts clean-ups that left snapshots in blob storage. A growing `overflow` count means that deletes come faster than the clean-ups run. A `shutdown` count shows clean-ups that a shutdown cut off.
+- **Pending clean-ups.** A `filesystem_snapshot_cleanups_pending` value that grows all the time means that the clean-ups do not keep up.
+- **Unused storage.** `filesystem_snapshot_failed_space_reclaims_total` counts deletes that did not give back their storage yet.
+- **Restore time.** `filesystem_snapshot_restore_seconds` shows how much a restore adds to the start of an agent, with the wait for a restore slot.
+
+## Logs
+
+The executor writes these messages. Search for the quoted text.
+
+| Message | Level | Meaning |
+| --- | --- | --- |
+| `Skipping the snapshot: the agent filesystem was not captured` | WARN | The capture failed. The `error` field gives the cause, for example `agent filesystem has an open call` when a file call stayed open for `capture_wait`. No snapshot record is written. For a manual update, the update fails. |
+| `The check of the agent filesystem failed: the snapshot writes no record, and an update fails` | WARN | On an executor without filesystem snapshots, the check of the agent's files failed. The `error` field gives the cause, for example `agent filesystem has an open call` when a file call stayed open. The check waits a fixed 5 seconds, which no setting changes. No snapshot record is written. For a manual update, the update fails. |
+| `Periodic snapshot save function failed; restarting worker to recover the store` | WARN | The agent's snapshot code failed. The agent restarts and replays its oplog. |
+| `Failed to make the periodic snapshot record` | WARN | The executor could not make the periodic snapshot record, for example because the upload of the application snapshot failed. It writes no record, discards the capture, and the agent continues. |
+| `Failed to append the periodic snapshot record` | WARN | The executor could not write the periodic snapshot record to the oplog. It discards the capture, and the agent restarts. |
+| `Pending update failed at the start` | WARN | A pending update failed before the start replayed the history, for example because the snapshot of the update did not restore, or because an initial file of the target revision of a manual update conflicts with a file that the agent wrote, changed or deleted, or with a file of the agent in the place of a directory that the initial file needs. The `entry` field holds the failed update with its details. The update is recorded as failed, and the agent stays on its revision. |
+| `Failed to upload a filesystem snapshot; no confirmation record follows its record` | WARN | The upload of an automatic snapshot failed after its retries. A start uses an older snapshot. A failed upload of a manual update does not write this message: it fails the update with the error `failed to upload the filesystem snapshot for the update`. |
+| `The filesystem snapshot of an automatic snapshot record does not restore; the start uses the usable record before it` | WARN | A restore failed at a start. The start falls back. |
+| `Failed to check a filesystem snapshot before a start` | WARN | The check of blob storage at a start failed. The start uses an older snapshot. |
+| `Failed to list the filesystem snapshots for retention` | WARN | Retention could not read the snapshots of an agent. The next retention tries again. |
+| `Failed to delete old filesystem snapshots; the next retention tries again` | WARN | A retention delete failed. |
+| `Failed to delete a filesystem snapshot that no confirmation record names` | WARN | The delete of a snapshot after a dropped confirmation failed. The snapshot stays until a later retention deletes it. |
+| `Failed to delete filesystem snapshots` | WARN | A clean-up failed after its retries. The `operation` field is `delete` or `delete_all`. The snapshots stay in blob storage. |
+| `The clean-up queue of filesystem snapshots is full; a clean-up is lost` | WARN | The queue refused a delete request. The `agent` field names the agent of the request. |
+| `The clean-up queue of filesystem snapshots is full; the waiting deletes of the snapshots of this agent are lost` | WARN | A delete of all snapshots of another agent removed the waiting revert deletes of an agent to make room. The `agent` field names the agent whose deletes were removed. |
+| `The clean-up queue of filesystem snapshots is full; the snapshots of a fork stage are lost` | WARN | The queue refused the delete of the copy of a failed fork attempt. |
+| `The publication of a fork ended with an unknown outcome; the snapshots of its stage stay` | WARN | The executor does not know whether a fork created its new agent, so it keeps the copy. |
+| `A prune of the filesystem snapshots of an agent failed; the next delete prunes again` | WARN | A delete succeeded, but the release of the storage that the deleted snapshots used failed. The next delete of the agent tries again. |
+| `Failed to observe the free space of the volume` | WARN | The executor could not read the free space of the volume, so it skips automatic snapshots and refuses manual updates until it can. |

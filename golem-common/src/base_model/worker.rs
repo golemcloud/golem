@@ -88,17 +88,36 @@ declare_structs! {
     pub struct PendingUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct SuccessfulUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
     }
 
     pub struct FailedUpdate {
         pub timestamp: Timestamp,
         pub target_revision: ComponentRevision,
         pub details: Option<String>,
+        pub pending_update_index: Option<OplogIndex>,
+        pub mode: AgentUpdateMode,
+        pub snapshot_assisted_details: Option<SnapshotAssistedUpdateMetadata>,
+    }
+
+    pub struct SnapshotAssistedUpdateMetadata {
+        pub source_component_revision: ComponentRevision,
+        pub source_revision_start_index: OplogIndex,
+        pub snapshot_index: OplogIndex,
+        pub snapshot_revision: ComponentRevision,
+        /// The filesystem snapshot of the selected record. Absent when the record has no
+        /// filesystem snapshot.
+        pub filesystem_snapshot: Option<String>,
     }
 
     pub struct ExportedResourceMetadata {

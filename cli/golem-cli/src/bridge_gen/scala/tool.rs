@@ -360,8 +360,11 @@ impl ScalaToolBridgeGenerator {
         let result_ty = self.result_type(body)?;
         let path_expr = self.command_path_expr(command_index)?;
         let error_type = self.error_type_ref(command_index, body);
+        let has_stdout = body.stdout.is_some();
+        let has_stderr = body.stderr.is_some();
+        let has_output = has_stdout || has_stderr;
 
-        if body.stdout.is_some() {
+        if has_output {
             writer.line(format!(
                 "def {method_name}({}): _root_.scala.Either[_root_.golem.tool.ToolError[{error_type}], _root_.golem.tool.ToolInvocation[{error_type}, {result_ty}]] = {{",
                 params.join(", "),
@@ -402,7 +405,7 @@ impl ScalaToolBridgeGenerator {
         writer.line("}");
         writer.dedent();
 
-        if body.stdout.is_some() {
+        if has_output {
             let error_decoder = if body.errors.is_empty() {
                 format!(
                     "((_: _root_.golem.tool.NamedToolError) => _root_.scala.Left(\"remote tool returned an undeclared custom error\"): _root_.scala.Either[_root_.scala.Predef.String, {SCALA_NOTHING}])"
@@ -411,7 +414,7 @@ impl ScalaToolBridgeGenerator {
                 format!("{}.decodeError", self.error_type_ref(command_index, body))
             };
             writer.line(format!(
-                "_root_.golem.tool.ToolClientRuntime.start[{error_type}, {result_ty}](rpc, {path_expr}, __input, {stdin_expr}, {error_decoder}) {{ __result =>"
+                "_root_.golem.tool.ToolClientRuntime.start[{error_type}, {result_ty}](rpc, {path_expr}, __input, {stdin_expr}, {has_stdout}, {has_stderr}, {error_decoder}) {{ __result =>"
             ));
         } else {
             let call = self.invoke_call(command_index, body, &path_expr, &stdin_expr)?;
@@ -452,8 +455,8 @@ impl ScalaToolBridgeGenerator {
         writer: &mut ScalaWriter,
         body: &CommandBody,
     ) -> anyhow::Result<()> {
-        match (&body.result, &body.stdout) {
-            (Some(result), Some(_)) => {
+        match &body.result {
+            Some(result) => {
                 let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
                 writer.line("for {");
                 writer.indent();
@@ -462,23 +465,7 @@ impl ScalaToolBridgeGenerator {
                 writer.dedent();
                 writer.line("} yield __decoded");
             }
-            (Some(result), None) => {
-                let dec = self.inner.decode_expr("__typed.value", &result.type_, 0)?;
-                writer.line("for {");
-                writer.indent();
-                writer.line("__typed <- __result.result.toRight(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result did not contain a value\"))");
-                writer.line(format!("__decoded <- decodeResultValue({dec})"));
-                writer.dedent();
-                writer.line("} yield __decoded");
-            }
-            (None, Some(_)) => {
-                writer.line("for {");
-                writer.indent();
-                writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
-                writer.dedent();
-                writer.line("} yield ()");
-            }
-            (None, None) => {
+            None => {
                 writer.line("for {");
                 writer.indent();
                 writer.line("_ <- if (__result.result.isDefined) _root_.scala.Left(_root_.golem.tool.ToolClientRuntime.protocolError(\"tool result unexpectedly contained a value\")) else _root_.scala.Right(())");
@@ -947,6 +934,7 @@ mod tests {
             constraints: vec![],
             stdin: None,
             stdout: None,
+            stderr: None,
             result: None,
             errors: vec![],
             annotations: None,
@@ -1078,6 +1066,7 @@ mod tests {
         });
         Tool {
             version: "1".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![root, replace],
             },

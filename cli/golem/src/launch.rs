@@ -25,8 +25,8 @@ use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::model::plan::{PlanId, PlanName};
 use golem_registry_service::RegistryService;
 use golem_registry_service::config::{
-    BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig, PrecreatedAccount,
-    PrecreatedPlan, RegistryServiceConfig,
+    BuiltinArtifactsConfig, BuiltinPluginsConfig, ComponentCompilationEnabledConfig, LoginConfig,
+    PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };
 use golem_service_base::clients::shard_manager::GrpcShardManagerConfig;
 use golem_service_base::config::BlobStorageConfig;
@@ -39,11 +39,12 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
+use golem_worker_executor::services::shutdown::Shutdown;
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::{
     RouteResolverConfig, SqliteSessionStoreConfig, WorkerServiceConfig,
@@ -95,7 +96,7 @@ pub struct StartupPorts {
 
 pub async fn launch_golem_services(
     args: &LaunchArgs,
-) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts)> {
+) -> anyhow::Result<(JoinSet<anyhow::Result<()>>, StartupPorts, Shutdown)> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install crypto provider");
@@ -130,6 +131,7 @@ pub async fn launch_golem_services(
     write_registry_db_compat(&args.data_dir).await?;
     let custom_request_port = started_components.worker_service.custom_request_port;
     let mcp_port = started_components.worker_service.mcp_port;
+    let worker_shutdown = started_components.worker_executor.shutdown.clone();
 
     let router_port = start_router(
         &args.router_addr,
@@ -153,7 +155,7 @@ pub async fn launch_golem_services(
         custom_request_port, mcp_port, "Started Golem services"
     );
 
-    Ok((join_set, startup_ports))
+    Ok((join_set, startup_ports, worker_shutdown))
 }
 
 async fn write_startup_ports_file(path: &PathBuf, ports: &StartupPorts) -> anyhow::Result<()> {
@@ -169,9 +171,15 @@ async fn start_components(
     args: &LaunchArgs,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
+    let component_compilation_service_config = component_compilation_service_config(args);
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        prometheus::default_registry().clone(),
+        component_compilation_service_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
     let component_compilation_service =
-        run_component_compilation_service(component_compilation_service_config(args), join_set)
-            .await?;
+        run_component_compilation_service(component_compilation_service_config, join_set).await?;
 
     let registry_service = run_registry_service(
         registry_service_config(args, &component_compilation_service)?,
@@ -250,6 +258,7 @@ fn registry_service_config(
                     component_limit: u64::MAX,
                     worker_connection_limit: u64::MAX,
                     storage_limit: u64::MAX,
+                    blob_storage_limit: u64::MAX,
                     monthly_gas_limit: u64::MAX,
                     monthly_upload_limit: u64::MAX,
                     max_memory_per_worker: u64::MAX,
@@ -310,6 +319,10 @@ fn registry_service_config(
             accounts
         },
         builtin_plugins: BuiltinPluginsConfig::Enabled(Empty {}),
+        builtin_artifacts: BuiltinArtifactsConfig {
+            cache_dir: Some(args.data_dir.join("builtin-artifacts")),
+            ..Default::default()
+        },
         security_scheme: golem_registry_service::config::SecuritySchemeConfig {
             strict_issuer_url_validation: false,
         },
@@ -434,7 +447,12 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            deterministic_root_dir: args.agent_filesystem_root.clone(),
+            mode: args
+                .agent_filesystem_root
+                .clone()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                }),
             ..Default::default()
         },
         ..Default::default()
@@ -454,6 +472,7 @@ fn worker_service_config(
         port: 0,
         custom_request_port: args.custom_request_port,
         mcp_port: args.mcp_port,
+        blob_storage: blob_storage_config(args),
         grpc: golem_worker_service::config::GrpcApiConfig {
             port: 0,
             ..Default::default()
@@ -485,6 +504,7 @@ fn worker_service_config(
             router_cache_max_capacity: 0,
             router_cache_ttl: Default::default(),
             router_cache_eviction_period: Default::default(),
+            trusted_ingress_addresses: Vec::new(),
         },
         ..Default::default()
     })
@@ -598,6 +618,29 @@ mod tests {
             );
             assert_eq!(config.memory.worker_memory_ratio, 0.8);
             assert!(config.memory.enable_measured_admission);
+            let registry_config = registry_service_config(
+                &args,
+                &golem_component_compilation_service::RunDetails {
+                    http_port: 0,
+                    grpc_port: 0,
+                },
+            )
+            .unwrap();
+            let worker_config = worker_service_config(&args, &shard_manager, &registry).unwrap();
+            let BlobStorageConfig::LocalFileSystem(registry_blobs) = registry_config.blob_storage
+            else {
+                panic!("expected filesystem blobs")
+            };
+            let BlobStorageConfig::LocalFileSystem(worker_blobs) = worker_config.blob_storage
+            else {
+                panic!("expected filesystem blobs")
+            };
+            assert_eq!(worker_blobs.root, registry_blobs.root);
+            assert_eq!(worker_blobs.root, args.data_dir.join("blobs"));
+            assert_eq!(
+                registry_config.builtin_artifacts.cache_dir,
+                Some(args.data_dir.join("builtin-artifacts"))
+            );
         }
     }
 }

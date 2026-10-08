@@ -40,11 +40,15 @@ import type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
+  Uuid,
 } from "golem:core/types@2.0.0"
-import { GuestSecretHandle } from "./secretHandle.js"
+import { GuestSecretHandle, isGuestSecretHandle } from "./secretHandle.js"
 import { GuestQuotaTokenHandle } from "./quotaTokenHandle.js"
 import { GuestSchemaValueStreamHandle } from "./schemaValueStreamHandle.js"
-import { GuestPermissionCardHandle } from "./permissionCardHandle.js"
+import {
+  type GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
+} from "./permissionCardHandle.js"
 
 export type {
   TypeId,
@@ -61,6 +65,7 @@ export type {
   PermissionCardSpec,
   DiscriminatorRule,
   Datetime,
+  Uuid,
 }
 
 // These are part of the schema-model public surface but are only ever re-exported
@@ -72,7 +77,6 @@ export type {
   PathDirection,
   PathKind,
   FieldDiscriminator,
-  Uuid,
   EnvironmentId,
 } from "golem:core/types@2.0.0"
 
@@ -119,6 +123,7 @@ export type SchemaTypeBody =
   | { tag: "binary"; restrictions: BinaryRestrictions }
   | { tag: "path"; spec: PathSpec }
   | { tag: "url"; restrictions: UrlRestrictions }
+  | { tag: "uuid" }
   | { tag: "datetime" }
   | { tag: "duration" }
   | { tag: "quantity"; spec: QuantitySpec }
@@ -176,6 +181,154 @@ const SCHEMA_SHAPE_MAX_DEPTH = 32
 /** Compare canonical value shape while ignoring metadata and refinable restrictions. */
 export function schemaShapesMatch(left: SchemaGraph, right: SchemaGraph): boolean {
   return schemaTypesMatch(left, left.root, right, right.root, SCHEMA_SHAPE_MAX_DEPTH, new Map())
+}
+
+/** Compare exact value semantics across graphs while ignoring refs, definition IDs, and metadata. */
+export function schemaGraphsEquivalent(left: SchemaGraph, right: SchemaGraph): boolean {
+  return equivalentSchemaTypes(left, left.root, right, right.root, new Map())
+}
+
+function equivalentSchemaTypes(
+  leftGraph: SchemaGraph,
+  leftType: SchemaType,
+  rightGraph: SchemaGraph,
+  rightType: SchemaType,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  if (leftType.body.tag === "ref" && rightType.body.tag === "ref") {
+    const rightIds = visiting.get(leftType.body.id)
+    if (rightIds?.has(rightType.body.id)) return true
+    if (rightIds) rightIds.add(rightType.body.id)
+    else visiting.set(leftType.body.id, new Set([rightType.body.id]))
+  }
+
+  const left = resolveShapeType(leftGraph, leftType)
+  const right = resolveShapeType(rightGraph, rightType)
+  if (!left || !right || left.tag !== right.tag) return false
+
+  switch (left.tag) {
+    case "record": {
+      const other = right as typeof left
+      return (
+        left.fields.length === other.fields.length &&
+        left.fields.every(
+          (field, index) =>
+            field.name === other.fields[index].name &&
+            equivalentSchemaTypes(
+              leftGraph,
+              field.body,
+              rightGraph,
+              other.fields[index].body,
+              visiting,
+            ),
+        )
+      )
+    }
+    case "variant": {
+      const other = right as typeof left
+      return (
+        left.cases.length === other.cases.length &&
+        left.cases.every((variantCase, index) => {
+          const otherCase = other.cases[index]
+          return (
+            variantCase.name === otherCase.name &&
+            equivalentOptionalSchemaTypes(
+              leftGraph,
+              variantCase.payload,
+              rightGraph,
+              otherCase.payload,
+              visiting,
+            )
+          )
+        })
+      )
+    }
+    case "enum":
+      return stringArraysEqual(left.cases, (right as typeof left).cases)
+    case "flags":
+      return stringArraysEqual(left.names, (right as typeof left).names)
+    case "tuple": {
+      const other = right as typeof left
+      return (
+        left.elements.length === other.elements.length &&
+        left.elements.every((element, index) =>
+          equivalentSchemaTypes(leftGraph, element, rightGraph, other.elements[index], visiting),
+        )
+      )
+    }
+    case "list":
+    case "option": {
+      const other = right as typeof left
+      return equivalentSchemaTypes(leftGraph, left.element, rightGraph, other.element, visiting)
+    }
+    case "fixed-list": {
+      const other = right as typeof left
+      return (
+        left.length === other.length &&
+        equivalentSchemaTypes(leftGraph, left.element, rightGraph, other.element, visiting)
+      )
+    }
+    case "map": {
+      const other = right as typeof left
+      return (
+        equivalentSchemaTypes(leftGraph, left.key, rightGraph, other.key, visiting) &&
+        equivalentSchemaTypes(leftGraph, left.value, rightGraph, other.value, visiting)
+      )
+    }
+    case "result": {
+      const other = right as typeof left
+      return (
+        equivalentOptionalSchemaTypes(leftGraph, left.ok, rightGraph, other.ok, visiting) &&
+        equivalentOptionalSchemaTypes(leftGraph, left.err, rightGraph, other.err, visiting)
+      )
+    }
+    case "union": {
+      const other = right as typeof left
+      return (
+        left.branches.length === other.branches.length &&
+        left.branches.every((branch, index) => {
+          const otherBranch = other.branches[index]
+          return (
+            branch.tag === otherBranch.tag &&
+            deepEqual(branch.discriminator, otherBranch.discriminator) &&
+            equivalentSchemaTypes(leftGraph, branch.body, rightGraph, otherBranch.body, visiting)
+          )
+        })
+      )
+    }
+    case "secret": {
+      const other = right as typeof left
+      return (
+        deepEqual(left.spec, other.spec) &&
+        equivalentSchemaTypes(leftGraph, left.inner, rightGraph, other.inner, visiting)
+      )
+    }
+    case "future":
+    case "stream": {
+      const other = right as typeof left
+      return equivalentOptionalSchemaTypes(
+        leftGraph,
+        left.element,
+        rightGraph,
+        other.element,
+        visiting,
+      )
+    }
+    default:
+      return deepEqual(left, right)
+  }
+}
+
+function equivalentOptionalSchemaTypes(
+  leftGraph: SchemaGraph,
+  left: SchemaType | undefined,
+  rightGraph: SchemaGraph,
+  right: SchemaType | undefined,
+  visiting: Map<TypeId, Set<TypeId>>,
+): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : equivalentSchemaTypes(leftGraph, left, rightGraph, right, visiting)
 }
 
 function schemaTypesMatch(
@@ -431,6 +584,7 @@ export type SchemaValue =
   | { tag: "binary"; bytes: Uint8Array; mimeType?: string }
   | { tag: "path"; value: string }
   | { tag: "url"; value: string }
+  | { tag: "uuid"; value: Uuid }
   | { tag: "datetime"; value: Datetime }
   | { tag: "duration"; nanoseconds: bigint }
   | { tag: "quantity"; value: QuantityValue }
@@ -510,6 +664,7 @@ export const t = {
     schemaType({ tag: "binary", restrictions }),
   path: (spec: PathSpec): SchemaType => schemaType({ tag: "path", spec }),
   url: (restrictions: UrlRestrictions): SchemaType => schemaType({ tag: "url", restrictions }),
+  uuid: (): SchemaType => schemaType({ tag: "uuid" }),
   datetime: (): SchemaType => schemaType({ tag: "datetime" }),
   duration: (): SchemaType => schemaType({ tag: "duration" }),
   quantity: (spec: QuantitySpec): SchemaType => schemaType({ tag: "quantity", spec }),
@@ -578,6 +733,7 @@ export const v = {
   }),
   path: (value: string): SchemaValue => ({ tag: "path", value }),
   url: (value: string): SchemaValue => ({ tag: "url", value }),
+  uuid: (value: Uuid): SchemaValue => ({ tag: "uuid", value }),
   datetime: (value: Datetime): SchemaValue => ({ tag: "datetime", value }),
   duration: (nanoseconds: bigint): SchemaValue => ({ tag: "duration", nanoseconds }),
   quantity: (value: QuantityValue): SchemaValue => ({ tag: "quantity", value }),
@@ -634,6 +790,8 @@ export function cloneSchemaValue(value: SchemaValue): SchemaValue {
       }
     case "binary":
       return { ...value, bytes: value.bytes.slice() }
+    case "uuid":
+      return { ...value, value: { ...value.value } }
     case "datetime":
       return { ...value, value: { ...value.value } }
     case "quantity":
@@ -672,11 +830,11 @@ export function deepEqual(
   // Capability handles are affine, not structural data: equality is identity
   // only. Without this, distinct handles would compare equal because they
   // expose no enumerable state.
-  if (a instanceof GuestSecretHandle || b instanceof GuestSecretHandle) return false
+  if (isGuestSecretHandle(a) || isGuestSecretHandle(b)) return false
   if (a instanceof GuestQuotaTokenHandle || b instanceof GuestQuotaTokenHandle) return false
   if (a instanceof GuestSchemaValueStreamHandle || b instanceof GuestSchemaValueStreamHandle)
     return false
-  if (a instanceof GuestPermissionCardHandle || b instanceof GuestPermissionCardHandle) {
+  if (isGuestPermissionCardHandle(a) || isGuestPermissionCardHandle(b)) {
     return false
   }
 

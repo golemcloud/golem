@@ -36,6 +36,9 @@ const resourceDrops = {
   "permission-card": 0,
   "schema-value-stream": 0,
   "future-invoke-result": 0,
+  "future-invoke-result-cancel": 0,
+  "tool-output-readable": 0,
+  "tool-output-cancel-read": 0,
 }
 
 const rootImports = new Proxy(
@@ -107,6 +110,23 @@ const importObject = {
     },
     finish_read_string() {},
   },
+  "wasi:cli/environment@0.3.0": {
+    "get-environment"(resultPtr) {
+      const memory = new DataView(instance.exports.memory.buffer)
+      memory.setUint32(resultPtr, 0, true)
+      memory.setUint32(resultPtr + 4, 0, true)
+    },
+  },
+  "golem:agent/host@2.0.0": {
+    "parse-agent-id"() {
+      throw new Error("parse-agent-id is not supplied by the SDK unit-test host")
+    },
+  },
+  "wasi:logging/logging": {
+    log() {
+      throw new Error("unexpected guest log in SDK unit-test host")
+    },
+  },
   "$root": rootImports,
   "[export]$root": rootImports,
   "golem:test": {
@@ -127,6 +147,12 @@ const importObject = {
           return resourceDrops["schema-value-stream"]
         case 4:
           return resourceDrops["future-invoke-result"]
+        case 5:
+          return resourceDrops["future-invoke-result-cancel"]
+        case 6:
+          return resourceDrops["tool-output-readable"]
+        case 7:
+          return resourceDrops["tool-output-cancel-read"]
         default:
           throw new Error(`unknown resource kind requested by test: ${kind}`)
       }
@@ -272,7 +298,8 @@ for (const imported of WebAssembly.Module.imports(module)) {
     ((imported.module === "wasi:clocks/monotonic-clock@0.3.0" &&
         imported.name === "[async-lower]wait-for") ||
       (imported.module === "golem:core/types@2.0.0" &&
-        imported.name === "uuid-to-string") ||
+        (imported.name === "parse-uuid" ||
+          imported.name === "uuid-to-string")) ||
       (imported.module === "golem:api/host@1.5.0" &&
         imported.name === "generate-idempotency-key"))
   ) {
@@ -315,8 +342,25 @@ for (const imported of WebAssembly.Module.imports(module)) {
         }
         case "[resource-drop]tool-rpc":
           return
+        case "create-output": {
+          const resultPtr = args[0]
+          memory.setInt32(resultPtr, 3001, true)
+          memory.setInt32(resultPtr + 4, 3002, true)
+          return
+        }
+        case "[async-lower][stream-read-0]create-output":
+          return toolHostMode === 3 ? -1 : 1
+        case "[stream-cancel-read-0]create-output":
+          resourceDrops["tool-output-cancel-read"]++
+          return 2
+        case "[stream-drop-readable-0]create-output":
+          resourceDrops["tool-output-readable"]++
+          return
         case "[method]tool-rpc.async-invoke-and-await":
           return 2001
+        case "[method]future-invoke-result.cancel":
+          resourceDrops["future-invoke-result-cancel"]++
+          return
         case "[async-lower][method]future-invoke-result.get": {
           const resultPtr = args[1]
           if (toolHostMode === 1) {
@@ -326,6 +370,7 @@ for (const imported of WebAssembly.Module.imports(module)) {
             memory.setUint8(resultPtr, 0)
             memory.setUint8(resultPtr + 4, 0)
             memory.setUint8(resultPtr + 40, 0)
+            memory.setUint8(resultPtr + 48, 0)
           }
           return 2
         }

@@ -112,6 +112,7 @@ impl TypeName for TypeScriptTypeName {
             | SchemaType::Binary { .. }
             | SchemaType::Path { .. }
             | SchemaType::Url { .. }
+            | SchemaType::Uuid { .. }
             | SchemaType::Datetime { .. }
             | SchemaType::Duration { .. }
             | SchemaType::Quantity { .. }

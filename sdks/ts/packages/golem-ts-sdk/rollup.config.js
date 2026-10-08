@@ -9,12 +9,13 @@ import * as fs from 'node:fs';
 import path from 'path';
 
 // All `golem:*` and `wasi:*` specifiers are host-provided WIT imports (resolved by
-// the wasm runtime), plus generated guest worlds and `node:sqlite`. Externalize them
+// the wasm runtime), plus generated guest worlds, `node:sqlite` and `node:fs`. Externalize them
 // all so the SDK host surfaces (keyvalue/blobstore/websocket/rdbms) aren't bundled.
 const external = (id) =>
+  id === 'user' ||
   id === 'agent-guest' ||
-  id === 'tool-middleware-guest' ||
   id === 'node:sqlite' ||
+  id === 'node:fs' ||
   id.startsWith('golem:') ||
   id.startsWith('wasi:');
 
@@ -23,35 +24,7 @@ function onwarn(warning, warn) {
   warn(warning);
 }
 
-function assertHostNeutralBundle() {
-  return {
-    name: 'assert-host-neutral-bundle',
-    generateBundle(_options, bundle) {
-      for (const output of Object.values(bundle)) {
-        if (output.type !== 'chunk') continue;
-        const forbiddenImports = [...output.imports, ...output.dynamicImports].filter((id) =>
-          id.startsWith('golem:tool/host'),
-        );
-        const forbiddenModules = Object.keys(output.modules).filter((id) => {
-          const normalized = id.replaceAll('\\', '/');
-          return (
-            normalized.endsWith('/src/bridge/tool.ts') || normalized.endsWith('/src/toolClient.ts')
-          );
-        });
-        if (forbiddenImports.length > 0 || forbiddenModules.length > 0) {
-          this.error(
-            `Host-neutral middleware bundle reached the ambient tool host:\n${[
-              ...forbiddenImports,
-              ...forbiddenModules,
-            ].join('\n')}`,
-          );
-        }
-      }
-    },
-  };
-}
-
-function javascript(input, output, { hostNeutral = false } = {}) {
+function javascript(input, output, isExternal = external) {
   return {
     input,
     output: {
@@ -59,7 +32,7 @@ function javascript(input, output, { hostNeutral = false } = {}) {
       format: 'esm',
       sourcemap: true,
     },
-    external,
+    external: isExternal,
     onwarn,
     plugins: [
       resolve({
@@ -68,12 +41,15 @@ function javascript(input, output, { hostNeutral = false } = {}) {
       commonjs(),
       typescript({
         tsconfig: './tsconfig.json',
-        include: ['src/**/*', 'types'],
+        include: [
+          'ts/packages/golem-ts-sdk/src/**/*',
+          'ts/packages/golem-ts-sdk/types',
+          '**/http-contract/index.ts',
+        ],
         tsconfigOverride: {
-          compilerOptions: { declaration: false },
+          compilerOptions: { declaration: false, rootDir: '../../..' },
         },
       }),
-      ...(hostNeutral ? [assertHostNeutralBundle()] : []),
       terser(),
     ],
   };
@@ -102,18 +78,56 @@ function declarations(input, output) {
     },
     external,
     onwarn,
-    plugins: [dts(), prependVirtualTypes(output)],
+    plugins: [dts({ includeExternal: ['@golemcloud/http-contract'] }), prependVirtualTypes(output)],
   };
 }
 
-export default defineConfig([
-  javascript('src/index.ts', 'dist/index.mjs'),
-  javascript('src/schema/public.ts', 'dist/schema.mjs'),
-  javascript('src/reflection.ts', 'dist/reflection.mjs'),
-  javascript('src/middleware.ts', 'dist/middleware.mjs', { hostNeutral: true }),
-  javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs', { hostNeutral: true }),
-  declarations('src/index.ts', 'dist/index.d.mts'),
-  declarations('src/schema/public.ts', 'dist/schema.d.mts'),
-  declarations('src/reflection.ts', 'dist/reflection.d.mts'),
-  declarations('src/middleware.ts', 'dist/middleware.d.mts'),
-]);
+export default (args) =>
+  defineConfig(
+    [
+      {
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        external: (id) => external(id) || id.startsWith('@noble/hashes'),
+        input: {
+          index: 'src/index.ts',
+          emptyGuest: 'src/emptyGuest.ts',
+          middleware: 'src/middleware.ts',
+          'schema/public': 'src/schema/public.ts',
+          reflection: 'src/reflection.ts',
+          'http-router': 'src/httpRouterContract.ts',
+          toolClient: 'src/toolClient.ts',
+        },
+        output: {
+          dir: 'dist/runtime',
+          format: 'esm',
+          preserveModules: true,
+          preserveModulesRoot: 'src',
+          entryFileNames: '[name].mjs',
+        },
+        plugins: javascript('src/index.ts', 'dist/index.mjs').plugins.slice(0, -1),
+      },
+      {
+        ...javascript('src/index.ts', 'dist/index.mjs'),
+        plugins: [
+          ...javascript('src/index.ts', 'dist/index.mjs').plugins,
+          {
+            name: 'component-build',
+            writeBundle() {
+              fs.copyFileSync('scripts/component.mjs', 'dist/component.mjs');
+            },
+          },
+        ],
+      },
+      javascript('src/httpRouterContract.ts', 'dist/http-router.mjs'),
+      javascript('src/wrapper.ts', 'dist/wrapper.mjs'),
+      javascript('src/schema/public.ts', 'dist/schema.mjs'),
+      javascript('src/reflection.ts', 'dist/reflection.mjs'),
+      javascript('src/middleware.ts', 'dist/middleware.mjs'),
+      javascript('src/middlewareRuntime.ts', 'dist/middleware-runtime.mjs'),
+      declarations('src/index.ts', 'dist/index.d.mts'),
+      declarations('src/httpRouterContract.ts', 'dist/http-router.d.mts'),
+      declarations('src/schema/public.ts', 'dist/schema.d.mts'),
+      declarations('src/reflection.ts', 'dist/reflection.d.mts'),
+      declarations('src/middleware.ts', 'dist/middleware.d.mts'),
+    ].filter((config) => !args.configHttpRouter || config.input === 'src/httpRouterContract.ts'),
+  );

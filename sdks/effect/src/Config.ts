@@ -1,11 +1,13 @@
-import { Context, Effect, Redacted, Schema, SchemaAST } from "effect"
+import { Context, Effect, type Redacted, Schema, SchemaAST } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import type { Secret } from "./Capability.js"
 import { ConfigClient } from "./host/ConfigClient.js"
 import { SecretsClient } from "./host/SecretsClient.js"
 import { t, type SchemaGraph } from "./internal/schema-model/model.js"
 import { schemaGraphToWit } from "./internal/schema-model/wit.js"
 import { compile, UnsupportedSchemaError, type CompiledWitCodec } from "./WitCodec.js"
+import { compiledConfigRuntime, type WireConfigLeaf } from "./internal/compiledConfig.js"
 
 export class ConfigError {
   readonly _tag = "ConfigError"
@@ -29,7 +31,7 @@ type ConfigShapeField<S extends Schema.Top, Optional extends boolean = false> =
     : S extends Schema.Redacted<infer Inner>
       ? {
           /** Fresh opaque capability without revealing its value. @since 1.6.0 @category secrets */
-          readonly borrow: Effect.Effect<CoreTypes.Secret, ConfigError>
+          readonly borrow: Effect.Effect<Secret, ConfigError>
           readonly get: Effect.Effect<
             Redacted.Redacted<OptionalValue<Inner["Type"], Optional>>,
             ConfigError
@@ -73,6 +75,7 @@ export type NonSecretOverride<F extends ConfigFields> = [OverrideKey<F>] extends
 export interface ConfigLeaf {
   readonly source: AgentCommon.AgentConfigSource
   readonly path: ReadonlyArray<string>
+  readonly schema: Schema.Top
   readonly codec: CompiledWitCodec<Schema.Top>
   readonly declarationGraph: SchemaGraph
   readonly required: boolean
@@ -94,9 +97,9 @@ export interface CompiledConfig {
 const redactedInner = (schema: Schema.Top): Schema.Top | undefined => {
   const ast = schema.ast
   if (ast._tag !== "Declaration") return undefined
-  const tag = (ast.annotations as { typeConstructor?: { _tag?: string } } | undefined)
-    ?.typeConstructor?._tag
-  return tag === "effect/Redacted" && ast.typeParameters[0] !== undefined
+  const id = (ast.annotations as { representation?: { id?: string } } | undefined)?.representation
+    ?.id
+  return id === "effect/schema/Redacted" && ast.typeParameters[0] !== undefined
     ? (Schema.make(ast.typeParameters[0]) as Schema.Top)
     : undefined
 }
@@ -132,7 +135,14 @@ export const compileConfig = (
           const valueSchema = underOptional ? Schema.UndefinedOr(inner) : inner
           const codec = (yield* compile(valueSchema)) as CompiledWitCodec<Schema.Top>
           const declarationGraph = { defs: codec.graph.defs, root: t.secret(codec.graph.root) }
-          leaves.push({ source: "secret", path, codec, declarationGraph, required: true })
+          leaves.push({
+            source: "secret",
+            path,
+            schema: valueSchema,
+            codec,
+            declarationGraph,
+            required: true,
+          })
           return
         }
         const object = objectAst(schema.ast)
@@ -155,13 +165,16 @@ export const compileConfig = (
           return
         }
         let codec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        let valueSchema = schema
         if (underOptional && codec.graph.root.body.tag !== "option") {
           const optionalSchema = Schema.UndefinedOr(schema)
+          valueSchema = optionalSchema
           codec = (yield* compile(optionalSchema)) as unknown as CompiledWitCodec<Schema.Top>
         }
         leaves.push({
           source: "local",
           path,
+          schema: valueSchema,
           codec,
           declarationGraph: codec.graph,
           required,
@@ -169,13 +182,6 @@ export const compileConfig = (
       })
     for (const [name, schema] of Object.entries(fields)) yield* visit(schema, [name], false, true)
     const leavesByPath = new Map(leaves.map((leaf) => [leaf.path.join("/"), leaf]))
-    const ensure = (root: Record<string, unknown>, path: ReadonlyArray<string>) => {
-      let cursor = root
-      for (const segment of path) {
-        cursor = (cursor[segment] ??= {}) as Record<string, unknown>
-      }
-      return cursor
-    }
     return {
       graphs: leaves.map((leaf) => leaf.declarationGraph),
       leaves,
@@ -190,72 +196,13 @@ export const compileConfig = (
           valueType: indices[i]!,
         }))
       },
-      buildShape: () =>
-        Effect.gen(function* () {
-          const config = yield* ConfigClient
-          const secrets = leaves.some((leaf) => leaf.source === "secret")
-            ? yield* SecretsClient
-            : undefined
-          const root: Record<string, unknown> = {}
-          for (const branch of branches) ensure(root, branch.split("/"))
-          for (const leaf of leaves) {
-            const read = Effect.gen(function* () {
-              const tree = yield* Effect.try({
-                try: () =>
-                  config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
-                catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
-              })
-              if (leaf.source === "secret") {
-                const value = yield* Effect.mapError(
-                  leaf.codec.decode(tree),
-                  (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
-                )
-                return Redacted.make(value)
-              }
-              return yield* Effect.mapError(
-                leaf.codec.decode(tree),
-                (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
-              )
-            })
-            const borrow = Effect.gen(function* () {
-              const tree = yield* Effect.try({
-                try: () =>
-                  config.getConfigValue(leaf.path, schemaGraphToWit(leaf.declarationGraph)),
-                catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
-              })
-              const node = tree.valueNodes[tree.root]
-              if (node?.tag !== "secret-value") {
-                return yield* Effect.fail(
-                  new ConfigError(leaf.path, {
-                    _tag: "Unsupported",
-                    reason: "expected secret handle",
-                  }),
-                )
-              }
-              return node.val
-            })
-            const value =
-              leaf.source === "secret"
-                ? {
-                    borrow,
-                    get: Effect.gen(function* () {
-                      const raw = yield* borrow
-                      const revealed = yield* Effect.try({
-                        try: () => secrets!.reveal(raw, leaf.codec.schemaGraph),
-                        catch: (cause) => new ConfigError(leaf.path, { _tag: "HostTrap", cause }),
-                      })
-                      const decoded = yield* Effect.mapError(
-                        leaf.codec.decode(revealed),
-                        (cause) => new ConfigError(leaf.path, { _tag: "DecodeFailure", cause }),
-                      )
-                      return Redacted.make(decoded)
-                    }),
-                  }
-                : yield* Effect.cached(read)
-            ensure(root, leaf.path.slice(0, -1))[leaf.path.at(-1)!] = value
-          }
-          return root
-        }),
+      buildShape: compiledConfigRuntime(
+        leaves.map((leaf) => ({
+          ...leaf,
+          declarationSchema: schemaGraphToWit(leaf.declarationGraph),
+        })),
+        branches,
+      ).buildShape,
     }
   })
 
@@ -295,7 +242,10 @@ export const defineConfig = <const F extends ConfigFields>(
 }
 
 export const encodeOverrides = (
-  compiled: CompiledConfig,
+  compiled: {
+    readonly branches: ReadonlySet<string>
+    readonly leavesByPath: ReadonlyMap<string, Pick<WireConfigLeaf, "path" | "source" | "codec">>
+  },
   overrides: Record<string, unknown>,
 ): Effect.Effect<AgentCommon.TypedAgentConfigValue[], ConfigError | Schema.SchemaError> =>
   Effect.gen(function* () {

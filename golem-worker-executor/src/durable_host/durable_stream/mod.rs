@@ -54,9 +54,10 @@ use crate::durable_host::stream_bus::{
 };
 use crate::services::activity::{ActivityGate, spawn_with_activity};
 use crate::services::oplog::{
-    CommitLevel, DurableStreamOplogRecord, Oplog, OplogOps, OplogService, OplogServiceOps,
+    CommitLevel, DurableStreamOplogRecord, Oplog, OplogError, OplogFence, OplogOps, OplogService,
+    OplogServiceOps,
 };
-use crate::services::rpc::{DurableStreamReadError, Rpc};
+use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use async_trait::async_trait;
@@ -71,26 +72,28 @@ use golem_common::base_model::durable_stream::{
     STREAM_ATTACHMENT_LEASE_TTL_MILLIS, SessionStreamRole, StreamAttachmentActivatedRecord,
     StreamAttachmentControlOperation, StreamAttachmentControlRequest,
     StreamAttachmentFinalizationReason, StreamAttachmentFinalizedRecord, StreamAttachmentKey,
-    StreamAttachmentPreparedRecord, StreamAttachmentRenewedRecord, StreamBindingRecord,
-    StreamCancelReason, StreamCancelRecord, StreamCancelRole, StreamCascadeDependentResult,
-    StreamCascadeOutboxRecord, StreamEndRecord, StreamEndResult, StreamExternalProducerStateRecord,
-    StreamId, StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset,
-    StreamProducerDeletingRecord, StreamRecordReference, StreamRegisteredRecord,
-    StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRegistrationRecordCoordinate,
-    StreamSessionAttachedRecord, StreamSessionFinishedRecord, StreamSessionInputHighWaterRecord,
-    StreamSessionKey, StreamSessionMapping, StreamSessionMappingRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
+    StreamAttachmentPreparedRecord, StreamBindingRecord, StreamCancelReason, StreamCancelRecord,
+    StreamCancelRole, StreamCascadeDependentResult, StreamCascadeOutboxRecord, StreamEndRecord,
+    StreamEndResult, StreamExternalProducerStateRecord, StreamId, StreamInvocationId,
+    StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamProducerDeletingRecord,
+    StreamRecordReference, StreamRegisteredRecord, StreamRegistrationCoordinate,
+    StreamRegistrationInvocation, StreamRegistrationRecordCoordinate, StreamSessionAttachedRecord,
+    StreamSessionExpiryRefreshedRecord, StreamSessionFinishedRecord,
+    StreamSessionInputHighWaterRecord, StreamSessionKey, StreamSessionMapping,
+    StreamSessionMappingRecord, StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind,
     StreamSourceUnavailableRecord, StreamTerminalAuthor, StreamTopologyPreparedRecord,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::oplog::OplogEntry;
 use golem_common::base_model::{AgentFingerprint, AgentId, OplogIndex};
 use golem_common::model::OwnedAgentId;
+use golem_common::model::ShardEpoch;
 use golem_common::model::agent::{AgentError, AgentMode};
-use golem_common::model::oplog::payload::OplogPayload;
+use golem_common::model::oplog::{DurableStreamEventSummary, payload::OplogPayload};
 use golem_schema::schema::{
     SchemaFingerprintV1, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
@@ -282,6 +285,7 @@ pub enum NestedStreamWrite {
 pub enum ProducerOutputSource {
     New(ProducerRegistrationRequest),
     Existing(DurableStreamHandle),
+    Registered(DurableStreamHandle, StreamRecordReference),
 }
 
 /// Associates a transport output slot with its durable producer source.
@@ -289,6 +293,7 @@ pub struct ProducerOutputRegistration {
     pub transport_stream_id: u64,
     pub source: ProducerOutputSource,
     pub cancellation_epoch: Option<u64>,
+    pub role: SessionStreamRole,
 }
 
 /// A cancellation whose oplog record is durable but whose postcommit publication is pending.
@@ -415,15 +420,29 @@ pub enum StreamStoreError {
     StaleEpoch { current: u64, actual: u64 },
     InvalidEpoch { current: u64, actual: u64 },
     InvalidAttachmentState,
-    LeaseExpired,
     ProducerDeleting,
     ConsumerDeleting,
     ConsumerJournalAdvanced,
     DeletionBlocked(Vec<StreamAttachmentKey>),
     CorruptHistory(String),
+    Fenced(OplogFence),
     Oplog(String),
     RecoveryRequired,
     LiveBus(DurableLiveStreamBusError),
+}
+
+/// A refused write keeps its type as `Fenced` instead of joining `Oplog` as text, so the
+/// boundaries can report it as `OplogFenced` - a caller reroutes on that - rather than as a
+/// failure of the request.
+impl From<OplogError> for StreamStoreError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Oplog(error.to_string())
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for StreamStoreError {
@@ -434,13 +453,132 @@ impl std::fmt::Display for StreamStoreError {
 
 impl std::error::Error for StreamStoreError {}
 
-impl From<StreamStoreError> for String {
-    fn from(error: StreamStoreError) -> Self {
-        error.to_string()
+/// Why a durable stream session operation failed. A refused oplog write keeps its type as
+/// `Fenced`, so whoever acts on it reroutes to the shard's new owner; every other failure is the
+/// text the session has always reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionError {
+    Fenced(OplogFence),
+    Failed(String),
+}
+
+impl SessionError {
+    /// Whether this is an ordinary failure whose text starts with `prefix`.
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        matches!(self, Self::Failed(text) if text.starts_with(prefix))
+    }
+
+    /// Whether this is an ordinary failure whose text contains `needle`.
+    pub fn contains(&self, needle: &str) -> bool {
+        matches!(self, Self::Failed(text) if text.contains(needle))
+    }
+
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
+    /// other failure is rendered through `otherwise`, which says how that boundary classifies it.
+    pub(crate) fn into_worker_executor_error(
+        self,
+        otherwise: impl FnOnce(String) -> WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match self {
+            Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            Self::Failed(text) => otherwise(text),
+        }
+    }
+
+    /// Converts for a host function: a fence traps as the lost shard it is, and every other
+    /// failure traps with its text.
+    pub(crate) fn into_trap(self) -> anyhow::Error {
+        match self {
+            Self::Fenced(fence) => {
+                anyhow::Error::from(WorkerExecutorError::from(OplogError::Fenced(fence)))
+            }
+            Self::Failed(text) => anyhow::Error::msg(text),
+        }
     }
 }
 
+impl From<SessionError> for StreamStoreError {
+    fn from(error: SessionError) -> Self {
+        match error {
+            SessionError::Fenced(fence) => Self::Fenced(fence),
+            SessionError::Failed(text) => Self::Oplog(text),
+        }
+    }
+}
+
+impl From<StreamStoreError> for SessionError {
+    fn from(error: StreamStoreError) -> Self {
+        match error {
+            StreamStoreError::Fenced(fence) => Self::Fenced(fence),
+            error => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+impl From<OplogError> for SessionError {
+    fn from(error: OplogError) -> Self {
+        match error {
+            OplogError::Fenced(fence) => Self::Fenced(fence),
+            error @ (OplogError::Payload(_) | OplogError::Maintenance(_)) => {
+                Self::Failed(error.to_string())
+            }
+        }
+    }
+}
+
+impl From<WorkerExecutorError> for SessionError {
+    fn from(error: WorkerExecutorError) -> Self {
+        match error {
+            WorkerExecutorError::OplogFenced {
+                agent_id,
+                expected_epoch,
+                actual_epoch,
+            } => Self::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: ShardEpoch(expected_epoch),
+                actual_epoch: actual_epoch.map(ShardEpoch),
+            }),
+            error => Self::Failed(error.to_string()),
+        }
+    }
+}
+
+impl From<String> for SessionError {
+    fn from(text: String) -> Self {
+        Self::Failed(text)
+    }
+}
+
+impl From<&str> for SessionError {
+    fn from(text: &str) -> Self {
+        Self::Failed(text.to_string())
+    }
+}
+
+impl std::fmt::Display for SessionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fenced(fence) => write!(formatter, "{}", OplogError::Fenced(fence.clone())),
+            Self::Failed(text) => formatter.write_str(text),
+        }
+    }
+}
+
+impl std::error::Error for SessionError {}
+
 impl StreamStoreError {
+    /// Converts at a boundary that reports `WorkerExecutorError`: a fence keeps its type, and every
+    /// other error is rendered through `otherwise`, which says how that boundary classifies it.
+    pub(crate) fn into_worker_executor_error(
+        self,
+        otherwise: impl FnOnce(String) -> WorkerExecutorError,
+    ) -> WorkerExecutorError {
+        match self {
+            Self::Fenced(fence) => WorkerExecutorError::from(OplogError::Fenced(fence)),
+            error => otherwise(error.to_string()),
+        }
+    }
+
     /// Formats the dependent attachment identities that currently block deletion.
     pub fn deletion_blocked_evidence(&self) -> Option<String> {
         let Self::DeletionBlocked(dependents) = self else {
@@ -548,7 +686,6 @@ enum IndexedStreamAttachmentState {
     },
     Active {
         activated_at_millis: u64,
-        lease_expires_at_millis: u64,
     },
     Finalized {
         finalized_at_millis: u64,
@@ -572,7 +709,7 @@ pub enum StreamAttachmentState {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-/// Current attachment phase and, while resumable, its lease deadline.
+/// Current attachment phase and its preparation deadline, if still prepared.
 pub struct StreamAttachmentView {
     pub key: StreamAttachmentKey,
     pub state: StreamAttachmentState,
@@ -614,8 +751,14 @@ pub struct IndexedExternalProducer {
 }
 
 /// Commits appended stream records and optionally acknowledges durable completion.
+/// Commits the agent's oplog. The receipt, when given, is answered as soon as the commit lands or is
+/// refused, ahead of whatever the commit does after that.
 pub(crate) type DurableStreamCommit = Arc<
-    dyn Fn(Option<oneshot::Sender<()>>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync,
+    dyn Fn(
+            Option<oneshot::Sender<Result<(), OplogFence>>>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send>>
+        + Send
+        + Sync,
 >;
 
 /// Owns one agent's persisted stream journal, indexes, and disposable live publication state.
@@ -627,16 +770,21 @@ pub struct DurableStreamStore {
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
     commit: DurableStreamCommit,
     worker_tasks: std::sync::OnceLock<crate::worker::tasks::WorkerTasks>,
-    control_metadata_provider: std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode)>,
+    control_metadata_provider:
+        std::sync::OnceLock<(Arc<dyn WorkerService>, AgentMode, AgentFingerprint)>,
     environment_id: EnvironmentId,
     producer: AgentId,
     producer_fingerprint: AgentFingerprint,
     producer_generation: OplogIndex,
     index: Mutex<ProducerStreamIndex>,
     poisoned: AtomicBool,
+    /// The refusal that poisoned the store, when a refusal did: later work reports it rather than
+    /// asking for a recovery this executor can no longer perform.
+    refused_by: std::sync::OnceLock<OplogFence>,
     retirement: CancellationToken,
     durable_activity: Arc<ActivityGate>,
     mutations: mutation::MutationQueue,
+    publication_gate: Arc<Mutex<()>>,
     owned_operations: Arc<Semaphore>,
     owned_operation_bytes: Arc<Semaphore>,
     lifecycle_operations: Arc<Semaphore>,
@@ -648,6 +796,7 @@ pub struct DurableStreamStore {
     source_cancellations: RwLock<HashMap<StreamId, (u64, CancellationToken)>>,
     next_source_cancellation_id: AtomicU64,
     reconciliation_cursor: AtomicUsize,
+    reconcilable_attachment_count: AtomicU64,
     open_stream_count: AtomicUsize,
     live_join_capacity: usize,
     session_records_changed: Notify,
@@ -706,9 +855,13 @@ impl DurableStreamStore {
         let commit: DurableStreamCommit = Arc::new(move |committed| {
             let oplog = commit_oplog.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                let result = match oplog.commit(CommitLevel::Always).await {
+                    Ok(_) => Ok(()),
+                    Err(OplogError::Fenced(fence)) => Err(fence),
+                    Err(error) => panic!("oplog write: {error}"),
+                };
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(result);
                 }
             })
         });
@@ -994,6 +1147,21 @@ impl DurableStreamStore {
         }
 
         let open_stream_count = index.open_streams;
+        let reconcilable_attachment_count =
+            if index.loaded_metadata.contains(&ProducerMetadataKey::Global) {
+                index.active_attachment_count
+            } else {
+                index
+                    .attachments
+                    .values()
+                    .filter(|attachment| {
+                        !matches!(
+                            attachment.state,
+                            IndexedStreamAttachmentState::Finalized { .. }
+                        )
+                    })
+                    .count() as u64
+            };
         crate::metrics::durable_stream::add_open_streams(open_stream_count);
         if !index.streams.is_empty() {
             tracing::debug!(
@@ -1025,9 +1193,11 @@ impl DurableStreamStore {
             producer_generation,
             index: Mutex::new(index),
             poisoned: AtomicBool::new(false),
+            refused_by: std::sync::OnceLock::new(),
             retirement: CancellationToken::new(),
             durable_activity: ActivityGate::new(),
             mutations: mutation::MutationQueue::new(),
+            publication_gate: Arc::new(Mutex::new(())),
             owned_operations: Arc::new(Semaphore::new(16)),
             owned_operation_bytes: Arc::new(Semaphore::new(256 * 1024 * 1024)),
             lifecycle_operations: Arc::new(Semaphore::new(16)),
@@ -1039,6 +1209,7 @@ impl DurableStreamStore {
             source_cancellations: RwLock::new(HashMap::new()),
             next_source_cancellation_id: AtomicU64::new(1),
             reconciliation_cursor: AtomicUsize::new(0),
+            reconcilable_attachment_count: AtomicU64::new(reconcilable_attachment_count),
             open_stream_count: AtomicUsize::new(open_stream_count),
             live_join_capacity,
             session_records_changed: Notify::new(),
@@ -1104,7 +1275,7 @@ pub trait StreamSegmentSource: Send + Sync {
 }
 
 #[async_trait]
-/// Reads producer history while validating and renewing a durable attachment.
+/// Reads producer history while validating a durable attachment.
 pub trait AttachedStreamSegmentSource: Send + Sync {
     /// Counts committed producer events not yet represented in the consumer journal.
     async fn journal_lag_events(
@@ -1143,7 +1314,7 @@ pub trait StreamAttachmentControl: Send + Sync {
         now_millis: u64,
     ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
-    /// Makes a prepared attachment active and renews its lease.
+    /// Makes a prepared attachment active until it is explicitly finalized or superseded.
     async fn activate_attachment(
         &self,
         key: StreamAttachmentKey,
@@ -1155,13 +1326,6 @@ pub trait StreamAttachmentControl: Send + Sync {
         &self,
         key: &StreamAttachmentKey,
     ) -> Result<StreamAttachmentView, StreamStoreError>;
-
-    /// Extends the lease of the same attachment epoch.
-    async fn renew_attachment(
-        &self,
-        key: StreamAttachmentKey,
-        now_millis: u64,
-    ) -> Result<ProducerWriteOutcome<StreamAttachmentView>, StreamStoreError>;
 
     /// Durably removes the consumer's remaining dependency on producer history.
     async fn finalize_attachment(

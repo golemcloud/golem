@@ -49,5 +49,9 @@ pub fn get_http_mount_details(
         phantom_agent,
         cors_options: cors_options.clone(),
         webhook_suffix: web_suffix,
+        static_bindings: vec![],
+        filesystem_bindings: vec![],
+        file_response_headers: vec![],
+        openapi_provider_method: None,
     })
 }

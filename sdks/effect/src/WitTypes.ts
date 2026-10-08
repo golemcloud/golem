@@ -14,9 +14,13 @@ import type {
   TextRestrictions,
   UrlRestrictions,
 } from "golem:core/types@2.0.0"
-import { GuestPermissionCardHandle } from "./internal/schema-model/permissionCardHandle.js"
-import { GuestQuotaTokenHandle } from "./internal/schema-model/quotaTokenHandle.js"
-import { GuestSecretHandle } from "./internal/schema-model/secretHandle.js"
+import { quotaTokenSchema } from "./Quota.js"
+import { WIT_QUOTA_TOKEN_ANNOTATION_KEY } from "./internal/schema-model/annotations.js"
+import {
+  type GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
+} from "./internal/schema-model/permissionCardHandle.js"
+import { GuestSecretHandle, isGuestSecretHandle } from "./internal/schema-model/secretHandle.js"
 
 /**
  * Annotation key used by the codec to override the default WIT primitive
@@ -305,7 +309,7 @@ export type WitTypedArrayKind =
  * @since 1.5.0
  * @category utils
  */
-export const witQuotaTokenAnnotationKey = "effect-golem/witQuotaToken"
+export const witQuotaTokenAnnotationKey = WIT_QUOTA_TOKEN_ANNOTATION_KEY
 
 /**
  * Annotation key marking a schema as a `principal` value carried as ordinary
@@ -334,6 +338,7 @@ export type WitSchemaNode =
   | { readonly tag: "binary"; readonly restrictions: BinaryRestrictions }
   | { readonly tag: "path"; readonly spec: PathSpec }
   | { readonly tag: "url"; readonly restrictions: UrlRestrictions }
+  | { readonly tag: "uuid" }
   | { readonly tag: "datetime" }
   | { readonly tag: "duration" }
   | { readonly tag: "quantity"; readonly spec: QuantitySpec }
@@ -424,14 +429,14 @@ export const Secret = <S extends Schema.Top>(
   Schema.declareConstructor<GuestSecretHandle>()(
     [inner],
     () => (u, ast) =>
-      u instanceof GuestSecretHandle
+      isGuestSecretHandle(u)
         ? Effect.succeed(u)
         : Effect.fail(new SchemaIssue.InvalidType(ast, Option.some(u))),
   ).pipe(Schema.annotate({ [witSchemaNodeAnnotationKey]: { tag: "secret", ...options } }))
 
 /** Opaque permission-card capability schema. @since 1.6.0 @category schemas */
 export const PermissionCard = (spec: PermissionCardSpec) =>
-  native((u): u is GuestPermissionCardHandle => u instanceof GuestPermissionCardHandle, {
+  native((u): u is GuestPermissionCardHandle => isGuestPermissionCardHandle(u), {
     tag: "permission-card",
     spec,
   })
@@ -459,10 +464,7 @@ export const FixedList = <S extends Schema.Top>(element: S, length: number) =>
 
 /** Opaque quota-token capability schema. @since 1.6.0 @category schemas */
 export const QuotaToken = (options: { readonly resourceName?: string } = {}) =>
-  native((u): u is GuestQuotaTokenHandle => u instanceof GuestQuotaTokenHandle, {
-    tag: "quota-token",
-    ...options,
-  })
+  quotaTokenSchema(options)
 
 /** Native schema-model map backed by a JavaScript Map. @since 1.6.0 @category schemas */
 export const Map = <K extends Schema.Top, V extends Schema.Top>(key: K, value: V) =>

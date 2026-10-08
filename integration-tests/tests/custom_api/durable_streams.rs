@@ -17,7 +17,7 @@ use reqwest::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::time::{Duration, Instant};
-use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, tag, test, test_dep, timeout};
 use uuid::Uuid;
 
 #[path = "durable_streams_client.rs"]
@@ -81,6 +81,27 @@ fn stream_path(method: &str, session: &str, slot: &str, delay_ms: u64) -> String
     format!(
         "/durable-stream-agents/ds3-{session}/{method}/invocations/{session}/streams/{slot}?delay_ms={delay_ms}"
     )
+}
+
+fn native_string(value: impl Into<String>) -> Value {
+    serde_json::json!({"kind": "string", "value": value.into()})
+}
+
+fn native_constructor_id(value: impl Into<String>) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [native_string(value)]}
+    })
+}
+
+fn native_input_stream(provisional_ref: Uuid) -> Value {
+    serde_json::json!({
+        "kind": "record",
+        "value": {"fields": [{
+            "kind": "stream",
+            "value": {"provisionalRef": provisional_ref}
+        }]}
+    })
 }
 
 fn header(response: &reqwest::Response, name: &str) -> String {
@@ -183,6 +204,527 @@ async fn append_json(
         request = request.header("stream-closed", "true");
     }
     Ok(request.send().await?)
+}
+
+async fn append_bytes(
+    agent: &HttpTestContext,
+    path: &str,
+    content_type: &str,
+    value: impl Into<reqwest::Body>,
+    close: bool,
+) -> anyhow::Result<reqwest::Response> {
+    Ok(agent
+        .client
+        .post(agent.base_url.join(path)?)
+        .header(CONTENT_TYPE, content_type)
+        .header("stream-closed", close.to_string())
+        .body(value)
+        .send()
+        .await?)
+}
+
+#[test]
+#[tag(gol_102)]
+#[timeout("120s")]
+async fn string_stream_rejects_text_content_type_at_deployment(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let error = make_test_context(
+        deps,
+        vec![(
+            AgentTypeName("InvalidDurableStreamAgent".to_string()),
+            HttpApiDeploymentAgentOptions::default(),
+        )],
+        "golem_it_agent_sdk_rust_release",
+        "golem-it:agent-sdk-rust",
+    )
+    .await
+    .expect_err("text/plain on stream<string> must fail deployment");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("Durable Streams JSON slot 'input' must use application/json"),
+        "unexpected error: {message}"
+    );
+    Ok(())
+}
+
+#[test]
+#[tag(gol_102)]
+#[timeout("180s")]
+async fn customized_json_routes_apply_aliases_policy_and_route_local_load_limits(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let base = format!("/durable-stream-agents/ds3-{session}/custom-echo/invocations/{session}");
+    let input = format!("{base}/streams/messages");
+    let output = format!("{base}/streams/responses");
+    let secondary_base =
+        format!("/durable-stream-agents/ds3-{session}/custom-echo-secondary/invocations/{session}");
+    let secondary_input = format!("{secondary_base}/streams/secondary-messages");
+
+    assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
+    assert_eq!(
+        agent
+            .client
+            .head(agent.base_url.join(&input)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    let first = append_json(agent, &input, serde_json::json!("héllo 🌍"), false).await?;
+    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        append_json(agent, &input, serde_json::json!("rate-limited"), false)
+            .await?
+            .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    for value in ["secondary-1", "secondary-2"] {
+        assert_eq!(
+            append_json(agent, &secondary_input, serde_json::json!(value), false)
+                .await?
+                .status(),
+            StatusCode::NO_CONTENT,
+            "a second route to the same canonical stream has its own append budget"
+        );
+    }
+    assert_eq!(
+        append_json(
+            agent,
+            &secondary_input,
+            serde_json::json!("secondary-rate-limited"),
+            false,
+        )
+        .await?
+        .status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    let secondary_live_url = agent
+        .base_url
+        .join(&format!("{secondary_input}?offset=now&live=sse"))?;
+    let secondary_reader = agent.client.get(secondary_live_url).send().await?;
+    assert_eq!(secondary_reader.status(), StatusCode::OK);
+    let live_url = agent
+        .base_url
+        .join(&format!("{input}?offset=now&live=sse"))?;
+    let first_reader = agent.client.get(live_url.clone()).send().await?;
+    assert_eq!(first_reader.status(), StatusCode::OK);
+    let rejected_reader = agent.client.get(live_url).send().await?;
+    assert_eq!(rejected_reader.status(), StatusCode::TOO_MANY_REQUESTS);
+    drop((first_reader, secondary_reader));
+
+    for canonical in ["input", "$result"] {
+        assert_eq!(
+            agent
+                .client
+                .get(
+                    agent
+                        .base_url
+                        .join(&format!("{base}/streams/{canonical}"))?
+                )
+                .send()
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    let manifest = agent
+        .client
+        .get(agent.base_url.join(&base)?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert_eq!(
+        manifest["streams"],
+        serde_json::json!([
+            {
+                "name": "messages",
+                "contentType": "application/json",
+                "nextOffset": manifest["streams"][0]["nextOffset"],
+                "closed": false,
+                "cancelled": false,
+                "deleted": false
+            },
+            {
+                "name": "responses",
+                "contentType": "application/json",
+                "nextOffset": manifest["streams"][1]["nextOffset"],
+                "closed": false,
+                "cancelled": false,
+                "deleted": false
+            }
+        ])
+    );
+    let denied_stream_delete = agent
+        .client
+        .delete(agent.base_url.join(&input)?)
+        .send()
+        .await?;
+    assert_eq!(
+        denied_stream_delete.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        header(&denied_stream_delete, ALLOW.as_str()),
+        "PUT, HEAD, GET, POST"
+    );
+    assert_eq!(
+        agent
+            .client
+            .head(agent.base_url.join(&input)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK,
+        "denied stream deletion must not tombstone the stream"
+    );
+    let denied_invocation_delete = agent
+        .client
+        .delete(agent.base_url.join(&base)?)
+        .send()
+        .await?;
+    assert_eq!(
+        denied_invocation_delete.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        header(&denied_invocation_delete, ALLOW.as_str()),
+        "PUT, HEAD, GET"
+    );
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&base)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK,
+        "denied invocation deletion must not cancel the session"
+    );
+    let after_delete_manifest = agent
+        .client
+        .get(agent.base_url.join(&base)?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    assert!(
+        after_delete_manifest["streams"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|stream| stream["closed"] == false && stream["cancelled"] == false)
+    );
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        append_json(
+            agent,
+            &input,
+            serde_json::json!("after-denied-delete"),
+            false,
+        )
+        .await?
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        agent
+            .client
+            .post(agent.base_url.join(&input)?)
+            .header("stream-closed", "true")
+            .send()
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    wait_for_closed(agent, &output).await?;
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&output)?)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?,
+        serde_json::json!([
+            "héllo 🌍",
+            "secondary-1",
+            "secondary-2",
+            "after-denied-delete"
+        ])
+    );
+
+    let openapi = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    let paths = &openapi["paths"];
+    assert!(
+        paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}/streams/input"]
+            .is_null()
+    );
+    let input_path =
+        &paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}/streams/messages"];
+    assert!(input_path["post"].is_object());
+    assert!(input_path["delete"].is_null());
+    assert!(input_path["get"]["responses"]["429"].is_object());
+    assert!(input_path["get"]["responses"]["503"].is_object());
+    assert_eq!(
+        input_path["get"]["responses"]["200"]["content"]["application/json"]["schema"]["type"],
+        "array"
+    );
+    assert_eq!(
+        input_path["get"]["responses"]["200"]["content"]["application/json"]["schema"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        input_path["x-golem-stream-slot"]["content-type"],
+        "application/json"
+    );
+    assert!(
+        paths["/durable-stream-agents/{id}/custom-echo/invocations/{session}"]["delete"].is_null()
+    );
+    Ok(())
+}
+
+#[test]
+#[tag(gol_102)]
+#[timeout("180s")]
+async fn customized_byte_routes_preserve_mime_sse_and_byte_exact_forks(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    const MIME: &str = "application/vnd.golem.events";
+    let session = Uuid::new_v4().to_string();
+    let route = format!("/durable-stream-agents/ds3-{session}/custom-bytes");
+    let base = format!("{route}/invocations/{session}");
+    let input = format!("{base}/streams/uploads");
+    let output = format!("{base}/streams/events");
+
+    let first = append_bytes(agent, &input, MIME, &b"A"[..], false).await?;
+    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    let fork_offset = header(&first, "stream-next-offset");
+    assert_eq!(
+        append_bytes(agent, &input, MIME, &b"\xe2\x82\xacZ"[..], true)
+            .await?
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    wait_for_closed(agent, &output).await?;
+    let read = agent
+        .client
+        .get(agent.base_url.join(&output)?)
+        .send()
+        .await?;
+    assert_eq!(read.status(), StatusCode::OK);
+    assert_eq!(header(&read, CONTENT_TYPE.as_str()), MIME);
+    assert_eq!(read.bytes().await?.as_ref(), b"A\xe2\x82\xacZ");
+
+    let manifest = agent
+        .client
+        .get(agent.base_url.join(&base)?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    let slots = manifest["streams"].as_array().expect("stream manifest");
+    assert_eq!(slots.len(), 2);
+    for name in ["uploads", "events"] {
+        let slot = slots
+            .iter()
+            .find(|slot| slot["name"] == name)
+            .unwrap_or_else(|| panic!("missing public slot {name}"));
+        assert_eq!(slot["contentType"], MIME);
+    }
+
+    let sse = agent
+        .client
+        .get(agent.base_url.join(&format!("{output}?live=sse"))?)
+        .send()
+        .await?;
+    assert_eq!(header(&sse, CONTENT_TYPE.as_str()), "text/event-stream");
+    assert_eq!(header(&sse, "stream-sse-data-encoding"), "base64");
+    let sse_body = sse.text().await?;
+    let mut decoded = Vec::new();
+    for encoded in sse_data_events(&sse_body) {
+        decoded.extend(base64::engine::general_purpose::STANDARD.decode(encoded)?);
+    }
+    assert_eq!(decoded, b"A\xe2\x82\xacZ");
+
+    let fork = format!("{route}/forks/inside-utf8/invocations/{session}/streams/uploads");
+    let created = agent
+        .client
+        .put(agent.base_url.join(&fork)?)
+        .header("stream-forked-from", &input)
+        .header("stream-fork-offset", fork_offset)
+        .header("stream-fork-sub-offset", "2")
+        .header("stream-closed", "true")
+        .header(CONTENT_TYPE, MIME)
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let fork_read = agent.client.get(agent.base_url.join(&fork)?).send().await?;
+    assert_eq!(header(&fork_read, CONTENT_TYPE.as_str()), MIME);
+    assert_eq!(fork_read.bytes().await?.as_ref(), b"A\xe2\x82");
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&format!("{base}/streams/input"))?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&format!("{base}/streams/$result"))?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let openapi = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    let paths = &openapi["paths"];
+    for name in ["uploads", "events"] {
+        let item = &paths[format!(
+            "/durable-stream-agents/{{id}}/custom-bytes/invocations/{{session}}/streams/{name}"
+        )];
+        assert_eq!(item["x-golem-stream-slot"]["name"], name);
+        assert_eq!(item["x-golem-stream-slot"]["content-type"], MIME);
+        assert_eq!(item["x-golem-stream-slot"]["representation"], "bytes");
+        assert!(item["delete"].is_null());
+        assert_eq!(
+            item["get"]["responses"]["200"]["content"][MIME]["schema"]["format"],
+            "binary"
+        );
+    }
+    assert!(
+        paths["/durable-stream-agents/{id}/custom-bytes/invocations/{session}"]["delete"].is_null()
+    );
+    Ok(())
+}
+
+#[test]
+#[tag(gol_102)]
+#[timeout("120s")]
+async fn disabled_external_writes_allow_only_empty_open_forks(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let session = Uuid::new_v4().to_string();
+    let route = format!("/durable-stream-agents/ds3-{session}/locked-echo");
+    let base = format!("{route}/invocations/{session}");
+    let input = format!("{base}/streams/locked-messages");
+    assert_eq!(create(agent, &input).await?.status(), StatusCode::CREATED);
+    let before = agent
+        .client
+        .head(agent.base_url.join(&input)?)
+        .send()
+        .await?;
+    let before_offset = header(&before, "stream-next-offset");
+    let denied = append_json(agent, &input, serde_json::json!("forbidden"), false).await?;
+    assert_eq!(denied.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(header(&denied, ALLOW.as_str()), "PUT, HEAD, GET, DELETE");
+    let after = agent
+        .client
+        .head(agent.base_url.join(&input)?)
+        .send()
+        .await?;
+    assert_eq!(header(&after, "stream-next-offset"), before_offset);
+
+    let fork_path =
+        |name: &str| format!("{route}/forks/{name}/invocations/{session}/streams/locked-messages");
+    let empty = fork_path("empty");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&empty)?)
+            .header("stream-forked-from", &input)
+            .send()
+            .await?
+            .status(),
+        StatusCode::CREATED
+    );
+    let empty_head = agent
+        .client
+        .head(agent.base_url.join(&empty)?)
+        .send()
+        .await?;
+    assert_eq!(empty_head.status(), StatusCode::OK);
+    assert_eq!(header(&empty_head, "stream-closed"), "false");
+    assert_eq!(
+        agent
+            .client
+            .get(agent.base_url.join(&empty)?)
+            .send()
+            .await?
+            .json::<Value>()
+            .await?,
+        serde_json::json!([])
+    );
+    let with_content = fork_path("with-content");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&with_content)?)
+            .header("stream-forked-from", &input)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&serde_json::json!("forbidden"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let closed = fork_path("closed");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&closed)?)
+            .header("stream-forked-from", &input)
+            .header("stream-closed", "true")
+            .send()
+            .await?
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for rejected in [with_content, closed] {
+        assert_eq!(
+            agent
+                .client
+                .head(agent.base_url.join(&rejected)?)
+                .send()
+                .await?
+                .status(),
+            StatusCode::NOT_FOUND,
+            "a rejected fork must not create state"
+        );
+    }
+    let openapi = agent
+        .client
+        .get(agent.base_url.join("/openapi.json")?)
+        .send()
+        .await?
+        .json::<Value>()
+        .await?;
+    let locked_input = &openapi["paths"]["/durable-stream-agents/{id}/locked-echo/invocations/{session}/streams/locked-messages"];
+    assert!(locked_input["get"].is_object());
+    assert!(locked_input["post"].is_null());
+    Ok(())
 }
 
 #[test]
@@ -1394,6 +1936,119 @@ async fn generated_session_location_and_manifest(
 
 #[test]
 #[timeout("120s")]
+async fn expiry_headers_are_validated_and_reported(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let zero_session = Uuid::new_v4().to_string();
+    let zero_path = stream_path("echo", &zero_session, "input", 0);
+    let zero = agent
+        .client
+        .put(agent.base_url.join(&zero_path)?)
+        .header("stream-ttl", "0")
+        .send()
+        .await?;
+    assert_eq!(zero.status(), StatusCode::CREATED);
+    assert_eq!(header(&zero, "stream-ttl"), "0");
+    let expired = agent
+        .client
+        .head(agent.base_url.join(&zero_path)?)
+        .send()
+        .await?;
+    assert_eq!(expired.status(), StatusCode::NOT_FOUND);
+    assert_eq!(header(&expired, CACHE_CONTROL.as_str()), "no-store");
+
+    let session = Uuid::new_v4().to_string();
+    let path = stream_path("echo", &session, "input", 0);
+    let created = agent
+        .client
+        .put(agent.base_url.join(&path)?)
+        .header("stream-ttl", "2")
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(header(&created, "stream-ttl"), "2");
+    assert_eq!(header(&created, CACHE_CONTROL.as_str()), "no-store");
+
+    let head = agent
+        .client
+        .head(agent.base_url.join(&path)?)
+        .send()
+        .await?;
+    assert_eq!(head.status(), StatusCode::OK);
+    assert_eq!(header(&head, "stream-ttl"), "2");
+    assert_eq!(header(&head, CACHE_CONTROL.as_str()), "no-store");
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-ttl", "2")
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .send()
+            .await?
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    for invalid in ["01", "-1", "+1", "1 0"] {
+        let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+        assert_eq!(
+            agent
+                .client
+                .put(agent.base_url.join(&path)?)
+                .header("stream-ttl", invalid)
+                .send()
+                .await?
+                .status(),
+            StatusCode::BAD_REQUEST,
+            "{invalid:?}"
+        );
+    }
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-ttl", "1")
+            .header("stream-expires-at", "2099-01-01T00:00:00Z")
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let absolute = "2099-01-01T00:00:00Z";
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    let created = agent
+        .client
+        .put(agent.base_url.join(&path)?)
+        .header("stream-expires-at", "2099-01-01T01:00:00+01:00")
+        .send()
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(header(&created, "stream-expires-at"), absolute);
+    let path = stream_path("echo", &Uuid::new_v4().to_string(), "input", 0);
+    assert_eq!(
+        agent
+            .client
+            .put(agent.base_url.join(&path)?)
+            .header("stream-expires-at", "2000-01-01T00:00:00Z")
+            .send()
+            .await?
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn scalar_argument_does_not_hide_named_output(
     #[dimension(db)] agent: &HttpTestContext,
 ) -> anyhow::Result<()> {
@@ -1640,13 +2295,11 @@ async fn websocket_input_is_readable_through_http(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": format!("ds3-{session}")}),
+                constructor_parameters: native_constructor_id(format!("ds3-{session}")),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -1671,7 +2324,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("ws-first"),
+            value: native_string("ws-first"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -1705,7 +2358,7 @@ async fn websocket_input_is_readable_through_http(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(1),
-            value: serde_json::json!("ws-last"),
+            value: native_string("ws-last"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -1732,8 +2385,13 @@ async fn websocket_input_is_readable_through_http(
             _ => {}
         }
     }
+    let public_values = serde_json::json!([
+        native_string("ws-first"),
+        native_string("post-middle"),
+        native_string("ws-last")
+    ]);
+    assert_eq!(serde_json::json!(output), public_values);
     let values = serde_json::json!(["ws-first", "post-middle", "ws-last"]);
-    assert_eq!(serde_json::json!(output), values);
     for slot in ["input", "output"] {
         let path = stream_path("echo", &session, slot, 0);
         wait_for_closed(agent, &path).await?;
@@ -1873,13 +2531,11 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
             attempt_id: Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: session.clone(),
-            method_parameters: serde_json::json!({
-                "input": { "$stream": { "provisionalRef": input_reference } }
-            }),
+            method_parameters: native_input_stream(input_reference),
             selector: Box::new(InvocationSelector {
                 agent_type: "DurableStreamAgent".into(),
                 application: agent.application_name.clone(),
-                constructor_parameters: serde_json::json!({"id": id}),
+                constructor_parameters: native_constructor_id(id.clone()),
                 environment: agent.environment_name.clone(),
                 method: "echo".into(),
                 phantom_id: None,
@@ -1903,7 +2559,7 @@ async fn input_slot_delete_is_guest_observable_and_tombstoned(
         &PublicClientMessage::InputStreamItem {
             channel: input_channel,
             sequence: DecimalU64(0),
-            value: serde_json::json!("kept"),
+            value: native_string("kept"),
             version: INVOCATION_SESSION_VERSION,
         },
     )
@@ -2042,6 +2698,7 @@ async fn output_slot_delete_is_guest_observable_and_tombstoned(
 }
 
 #[test]
+#[tag(gol_102)]
 #[timeout("120s")]
 async fn live_reader_limit_and_disconnect_release(
     #[dimension(db)] agent: &HttpTestContext,
@@ -2079,7 +2736,7 @@ async fn live_reader_limit_and_disconnect_release(
     }
     assert!(initial.starts_with(b"HTTP/1.1 200"));
     let rejected = agent.client.get(url.clone()).send().await?;
-    assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(header(&rejected, "retry-after"), "1");
     socket.shutdown().await?;
     drop(socket);
@@ -2090,14 +2747,14 @@ async fn live_reader_limit_and_disconnect_release(
                 readers.push(response);
                 break;
             }
-            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         Ok::<_, anyhow::Error>(())
     })
     .await??;
     let rejected = agent.client.get(url).send().await?;
-    assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(header(&rejected, "retry-after"), "1");
     Ok(())
 }

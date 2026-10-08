@@ -32,20 +32,22 @@ use crate::service::component::ComponentService;
 use crate::service::limit::LimitService;
 use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
+use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::invocation_request;
 use golem_api_grpc::proto::golem::worker::{
     ExternalToolInvocation, InvocationContext, InvocationRequest, InvocationStart, ResumeAttach,
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest, ExportStreamControlResult,
-    ReadStreamSlotRequest, ReadStreamSlotSuccess,
+    CreateStreamSessionRequest, CreateStreamSessionSuccess, DurableStreamAttachmentControlRequest,
+    ExportStreamControlResult, ReadStreamSlotRequest, ReadStreamSlotSuccess,
 };
 use golem_common::base_model::json::NormalizedJsonValue;
 use golem_common::model::AgentInvocationOutput;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{
-    AgentMode, AgentTypeName, GolemUserPrincipal, InvocationFreshnessDisposition, OwnerKind,
-    ParsedAgentId, Principal, ephemeral_invocation_phantom_id,
+    AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal,
+    InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal,
+    ephemeral_invocation_phantom_id,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -60,8 +62,12 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+use golem_common::model::filesystem::{
+    FileByteSelection, FileReadError, FileReadHead, validate_file_read_path,
+};
 use golem_common::model::invocation_session_public::{
-    InvocationSelector, PublicConfigEntry, PublicNativeToolTarget, PublicTypedValue,
+    InvocationSelector, PublicConfigEntry, PublicErrorCode, PublicNativeToolTarget,
+    PublicTypedValue,
 };
 use golem_common::model::oplog::OplogCursor;
 use golem_common::model::oplog::OplogIndex;
@@ -70,6 +76,7 @@ use golem_common::model::worker::AgentConfigEntryDto;
 use golem_common::model::worker::AgentUpdateMode;
 use golem_common::model::worker::{AgentMetadataDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::{AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, ScanCursor};
+use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::json_input_schema_value_to_typed_schema_value;
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
@@ -84,7 +91,7 @@ use golem_common::schema::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -143,6 +150,61 @@ fn public_input_graph(graph: &SchemaGraph, input_schema: &InputSchema) -> Schema
     }
 }
 
+fn decode_public_agent_config(
+    graph: &SchemaGraph,
+    declarations: &[AgentConfigDeclarationSchema],
+    entries: Vec<PublicConfigEntry>,
+) -> Result<Vec<AgentConfigEntryDto>, PublicSchemaValueError> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let declaration = declarations
+                .iter()
+                .find(|declaration| {
+                    declaration.source == AgentConfigSource::Local && declaration.path == entry.path
+                })
+                .ok_or_else(|| {
+                    PublicSchemaValueError::new(
+                        PublicErrorCode::ValidationError,
+                        format!(
+                            "agent type does not declare local config {}",
+                            entry.path.join(".")
+                        ),
+                    )
+                })?;
+            let value = golem_common::schema::render::from_json_value(
+                graph,
+                &declaration.value_type,
+                &entry.value,
+            )
+            .map_err(|error| {
+                PublicSchemaValueError::new(
+                    PublicErrorCode::ValidationError,
+                    format!(
+                        "config value for path {} does not match its schema: {error}",
+                        entry.path.join(".")
+                    ),
+                )
+            })?;
+            let value =
+                golem_schema::schema::render::to_json_value(graph, &declaration.value_type, &value)
+                    .map_err(|error| {
+                        PublicSchemaValueError::new(
+                            PublicErrorCode::ValidationError,
+                            format!(
+                                "config value for path {} cannot be encoded canonically: {error}",
+                                entry.path.join(".")
+                            ),
+                        )
+                    })?;
+            Ok(AgentConfigEntryDto {
+                path: entry.path,
+                value: NormalizedJsonValue::new(value),
+            })
+        })
+        .collect()
+}
+
 fn public_invocation_graph(
     graph: &SchemaGraph,
     input_schema: &InputSchema,
@@ -161,11 +223,24 @@ fn public_invocation_graph(
     }
 }
 
+/// Checks a trusted resume request built from a public session against the invocation session
+/// protocol before it is dispatched, so a malformed request produced by the public adapter
+/// fails here with its protocol error instead of reaching the executor.
+fn validate_trusted_resume_request(request: &InvocationRequest) -> Result<(), WorkerServiceError> {
+    InvocationSessionState::default()
+        .validate_trusted_request(request)
+        .map_err(|error| {
+            WorkerServiceError::Internal(format!(
+                "public resume produced an invalid trusted request: {error}"
+            ))
+        })
+}
+
 fn validate_one_shot_invocation_is_stream_free(
     component: &Component,
     agent_id: &AgentId,
     method_name: &str,
-    method_parameters: &golem_api_grpc::proto::golem::schema::SchemaValue,
+    method_parameters: &golem_schema::proto::golem::schema::SchemaValue,
 ) -> WorkerResult<()> {
     let parsed_agent_id = ParsedAgentId::parse(&agent_id.agent_id, &component.metadata)
         .map_err(WorkerServiceError::TypeChecker)?;
@@ -253,16 +328,16 @@ fn invocation_method_uses_streams(
 }
 
 pub(crate) fn decode_public_session_schema_value(
-    value: golem_api_grpc::proto::golem::schema::SchemaValue,
+    value: golem_schema::proto::golem::schema::SchemaValue,
 ) -> Result<SchemaValue, String> {
     decode_public_schema_value(value, true)
 }
 
 fn decode_public_schema_value(
-    value: golem_api_grpc::proto::golem::schema::SchemaValue,
+    value: golem_schema::proto::golem::schema::SchemaValue,
     allow_stream_references: bool,
 ) -> Result<SchemaValue, String> {
-    use golem_api_grpc::proto::golem::schema::{result_value, schema_value};
+    use golem_schema::proto::golem::schema::{result_value, schema_value};
 
     let value = value
         .value
@@ -377,9 +452,7 @@ fn decode_public_schema_value(
             "stream reference {} is not valid in constructor parameters",
             reference.stream_id
         )),
-        value => {
-            golem_api_grpc::proto::golem::schema::SchemaValue { value: Some(value) }.try_into()
-        }
+        value => golem_schema::proto::golem::schema::SchemaValue { value: Some(value) }.try_into(),
     }
 }
 
@@ -578,6 +651,7 @@ pub struct PublicToolSessionStart {
     pub input: PublicTypedValue,
     pub stdin: bool,
     pub stdout: bool,
+    pub stderr: bool,
     pub idempotency_key: String,
     pub attempt_id: uuid::Uuid,
     pub expected_deployment_revision: Option<DeploymentRevision>,
@@ -648,7 +722,7 @@ impl WorkerService {
         auth_ctx: AuthCtx,
         invocation_context: Option<InvocationContext>,
         principal: Option<golem_api_grpc::proto::golem::component::Principal>,
-        expected: Option<golem_api_grpc::proto::golem::common::Uuid>,
+        expected: Option<golem_schema::proto::golem::common::Uuid>,
     ) -> WorkerResult<AgentFingerprint> {
         if let Some(expected) = expected {
             let expected = uuid::Uuid::from(expected);
@@ -1072,7 +1146,7 @@ impl WorkerService {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
         auth_ctx: AuthCtx,
-    ) -> WorkerResult<()> {
+    ) -> WorkerResult<OplogIndex> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1095,9 +1169,7 @@ impl WorkerService {
                 component.environment_id,
                 auth_ctx,
             )
-            .await?;
-
-        Ok(())
+            .await
     }
 
     pub async fn get_oplog(
@@ -1238,6 +1310,30 @@ impl WorkerService {
             .await
     }
 
+    /// Reads a path selected by an authorized HTTP filesystem mount using its trusted owner.
+    pub(crate) async fn read_mounted_file(
+        &self,
+        agent_id: &AgentId,
+        path: &str,
+        selection: FileByteSelection,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+    ) -> WorkerResult<FileReadResponse> {
+        validate_file_read_path(path)?;
+        let path =
+            CanonicalFilePath::from_abs_str(path).map_err(|_| FileReadError::InvalidTarget)?;
+        self.worker_client
+            .get_file_contents(
+                agent_id,
+                path,
+                selection,
+                environment_id,
+                account_id,
+                AuthCtx::System,
+            )
+            .await
+    }
+
     pub async fn get_file_contents(
         &self,
         agent_id: &AgentId,
@@ -1261,14 +1357,27 @@ impl WorkerService {
             .worker_client
             .get_file_contents(
                 agent_id,
-                path,
+                path.clone(),
+                FileByteSelection::Full,
                 component.environment_id,
                 component.account_id,
                 auth_ctx,
             )
             .await?;
-
-        Ok(contents_stream)
+        match contents_stream.head {
+            FileReadHead::File(_) => Ok(Box::pin(
+                contents_stream
+                    .body
+                    .map(|item| item.map_err(WorkerServiceError::FileRead)),
+            )),
+            FileReadHead::Absent => Err(WorkerServiceError::FileNotFound(path)),
+            FileReadHead::NotRegular | FileReadHead::Symlink => {
+                Err(WorkerServiceError::BadFileType(path))
+            }
+            FileReadHead::PermissionDenied => {
+                Err(WorkerExecutorError::permission_denied("filesystem read denied").into())
+            }
+        }
     }
 
     async fn resolve_agent_plugin_name(
@@ -1683,7 +1792,7 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -1858,9 +1967,12 @@ impl WorkerService {
     pub async fn create_stream_session(
         &self,
         agent_id: &AgentId,
-        request: InvocationStart,
+        request: CreateStreamSessionRequest,
     ) -> WorkerResult<CreateStreamSessionSuccess> {
         let auth_ctx: AuthCtx = request
+            .invocation
+            .as_ref()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?
             .auth_ctx
             .clone()
             .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -1935,9 +2047,8 @@ impl WorkerService {
         &self,
         agent_id: &AgentId,
         request: golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotRequest,
-    ) -> WorkerResult<
-        golem_api_grpc::proto::golem::workerexecutor::v1::append_to_stream_slot_response::Result,
-    > {
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::AppendToStreamSlotResponse>
+    {
         let auth_ctx: AuthCtx = request
             .auth_ctx
             .clone()
@@ -1969,15 +2080,6 @@ impl WorkerService {
         let agent_type_name = AgentTypeName(start.selector.agent_type);
         let method_name = start.selector.method;
         let idempotency_key = IdempotencyKey::new(start.idempotency_key);
-        let config = start
-            .config
-            .into_iter()
-            .map(|entry| AgentConfigEntryDto {
-                path: entry.path,
-                value: NormalizedJsonValue::new(entry.value),
-            })
-            .collect::<Vec<_>>();
-
         let resolved = self
             .agent_resolution_cache
             .resolve(&app_name, &env_name, &agent_type_name, None, &auth)
@@ -1987,6 +2089,8 @@ impl WorkerService {
         let environment_id = resolved.environment_id;
         let component_id = registered_agent_type.implemented_by.component_id;
         let agent_type = &registered_agent_type.agent_type;
+        let config =
+            decode_public_agent_config(&agent_type.schema, &agent_type.config, start.config)?;
         let constructor_graph =
             public_input_graph(&agent_type.schema, &agent_type.constructor.input_schema);
         let constructor_parameters = decode_public_json_schema_value(
@@ -2301,6 +2405,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
@@ -2405,7 +2510,7 @@ impl WorkerService {
             }
             Some(metadata.fingerprint.0.into())
         };
-        let input_schema = start.input.schema;
+        let input_schema = start.input.graph;
         let input = decode_public_json_schema_value(
             &input_schema,
             &input_schema.root,
@@ -2413,7 +2518,7 @@ impl WorkerService {
             PublicStreamReferencePolicy::None,
             |_, _| unreachable!("stream references are rejected by the public value codec"),
         )?;
-        let input = golem_api_grpc::proto::golem::schema::TypedSchemaValue {
+        let input = golem_schema::proto::golem::schema::TypedSchemaValue {
             graph: Some(input_schema.clone().into()),
             value: Some(input.try_into().map_err(WorkerServiceError::TypeChecker)?),
         };
@@ -2456,6 +2561,7 @@ impl WorkerService {
                 input: Some(input),
                 stdin: start.stdin,
                 stdout: start.stdout,
+                stderr: start.stderr,
                 fresh_owner,
                 expected_deployment_revision: start
                     .expected_deployment_revision
@@ -2552,6 +2658,7 @@ impl WorkerService {
         let initial_request = InvocationRequest {
             request: Some(invocation_request::Request::ResumeAttach(trusted_resume)),
         };
+        validate_trusted_resume_request(&initial_request)?;
         let request = stream::once(std::future::ready(initial_request.clone())).chain(tail);
         let responses = self
             .worker_client
@@ -2628,7 +2735,7 @@ impl WorkerService {
         component: &Component,
         agent_id: &AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
@@ -2734,7 +2841,7 @@ impl WorkerService {
         validation_component: Option<&Component>,
         agent_id: AgentId,
         method_name: Option<String>,
-        method_parameters: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+        method_parameters: Option<golem_schema::proto::golem::schema::SchemaValue>,
         mode: i32,
         schedule_at: Option<::prost_types::Timestamp>,
         idempotency_key: IdempotencyKey,
@@ -3031,6 +3138,7 @@ impl WorkerService {
                 input,
                 stdin: false,
                 stdout: false,
+                stderr: false,
                 fresh_owner,
                 expected_deployment_revision: None,
             }),
@@ -3377,7 +3485,7 @@ impl WorkerService {
         .into_parts()
         .1;
 
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             method_parameters.try_into().map_err(|error| {
                 WorkerServiceError::TypeChecker(format!(
                     "Agent method parameters cannot cross the worker boundary: {error}"
@@ -3483,7 +3591,8 @@ mod tests {
     use super::{
         PublicAgentSessionStart, PublicAgentSessionStartError, WorkerService,
         agent_verb_for_invocation_mode, build_public_agent_id, build_public_invocation_agent_id,
-        decode_public_schema_value, normalize_agent_invocation_identity,
+        decode_public_agent_config, decode_public_schema_value,
+        normalize_agent_invocation_identity,
     };
     use crate::api::agents::{
         AgentInvocationMode, AgentInvocationRequest, CreateAgentRequest, NativeToolDescribeRequest,
@@ -3495,9 +3604,8 @@ mod tests {
     use crate::service::limit::{LimitService, LimitServiceError};
     use crate::service::worker::{WorkerClient, WorkerResult, WorkerServiceError, WorkerStream};
     use async_trait::async_trait;
-    use bytes::Bytes;
     use chrono::Utc;
-    use futures::{Stream, StreamExt, stream};
+    use futures::{StreamExt, stream};
     use golem_api_grpc::proto::golem::worker::{
         InvocationContext, InvocationStart, LogEvent, ResumeAttach, ResumeOperation,
         invocation_request,
@@ -3509,7 +3617,7 @@ mod tests {
     use golem_common::model::Empty;
     use golem_common::model::account::{AccountEmail, AccountId};
     use golem_common::model::agent::{
-        AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
+        AgentConfigSource, AgentMode, AgentTypeName, GolemUserPrincipal, HttpEndpointDetails,
         InvocationFreshnessDisposition, OwnerKind, ParsedAgentId, Principal, RegisteredAgentType,
         RegisteredAgentTypeImplementer, ResolvedAgentType, Snapshotting,
         ephemeral_invocation_phantom_id,
@@ -3531,7 +3639,8 @@ mod tests {
     use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
     use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-    use golem_common::model::invocation_session_public::InvocationSelector;
+    use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+    use golem_common::model::invocation_session_public::{InvocationSelector, PublicConfigEntry};
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::model::oplog::{OplogCursor, OplogIndex};
     use golem_common::model::tool::{ToolBindingOwner, ToolName};
@@ -3542,6 +3651,7 @@ mod tests {
     use golem_common::model::{
         AgentFilter, AgentFingerprint, AgentId, AgentStatus, IdempotencyKey, ScanCursor, Timestamp,
     };
+    use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use golem_common::schema::public_json::PublicStreamReference;
     use golem_common::schema::stream::SchemaValueStream;
     use golem_common::schema::{
@@ -3565,6 +3675,77 @@ mod tests {
             SchemaGraph::anonymous(golem_common::schema::SchemaType::record(vec![])),
             golem_common::schema::SchemaValue::Record { fields: vec![] },
         )
+    }
+
+    #[test]
+    fn public_agent_config_is_transcoded_to_canonical_json() {
+        let graph = SchemaGraph::anonymous(SchemaType::string());
+        let declarations = vec![
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["optional".to_string()],
+                value_type: SchemaType::option(SchemaType::string()),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["result".to_string()],
+                value_type: SchemaType::result(golem_common::schema::ResultSpec {
+                    ok: Some(Box::new(SchemaType::string())),
+                    err: None,
+                }),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["variant".to_string()],
+                value_type: SchemaType::variant(vec![golem_common::schema::VariantCaseType {
+                    name: "payload".to_string(),
+                    payload: Some(SchemaType::string()),
+                    metadata: Default::default(),
+                }]),
+            },
+            AgentConfigDeclarationSchema {
+                source: AgentConfigSource::Local,
+                path: vec!["union".to_string()],
+                value_type: SchemaType::union(golem_common::schema::UnionSpec {
+                    branches: vec![golem_common::schema::UnionBranch {
+                        tag: "command".to_string(),
+                        body: SchemaType::string(),
+                        discriminator: golem_common::schema::DiscriminatorRule::Prefix {
+                            prefix: "cmd:".to_string(),
+                        },
+                        metadata: Default::default(),
+                    }],
+                }),
+            },
+        ];
+        let config = decode_public_agent_config(
+            &graph,
+            &declarations,
+            vec![
+                PublicConfigEntry {
+                    path: vec!["optional".to_string()],
+                    value: serde_json::json!("west"),
+                },
+                PublicConfigEntry {
+                    path: vec!["result".to_string()],
+                    value: serde_json::json!({"ok": "ready"}),
+                },
+                PublicConfigEntry {
+                    path: vec!["variant".to_string()],
+                    value: serde_json::json!({"payload": "value"}),
+                },
+                PublicConfigEntry {
+                    path: vec!["union".to_string()],
+                    value: serde_json::json!("cmd:run"),
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(config[0].value.0, serde_json::json!("west"));
+        assert_eq!(config[1].value.0, serde_json::json!({"ok": "ready"}));
+        assert_eq!(config[2].value.0, serde_json::json!({"payload": "value"}));
+        assert_eq!(config[3].value.0, serde_json::json!("cmd:run"));
     }
 
     struct TestAgentTypeResolver(AgentMode);
@@ -3778,6 +3959,31 @@ mod tests {
 
     #[async_trait]
     impl RegistryService for TestRegistryService {
+        async fn resolve_mcp_import(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: bool,
+        ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+        {
+            panic!("unexpected MCP discovery")
+        }
+        async fn get_mcp_runtime_credential(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+        ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+        {
+            panic!("unexpected MCP credential request")
+        }
+        async fn report_mcp_resource_unauthorized(
+            &self,
+            _: &golem_common::model::mcp_import::McpImportSource,
+            _: &AuthCtx,
+            _: Option<uuid::Uuid>,
+        ) -> Result<(), RegistryServiceError> {
+            panic!("unexpected MCP feedback")
+        }
         async fn authenticate_token(
             &self,
             _: &golem_common::model::auth::TokenSecret,
@@ -4308,9 +4514,9 @@ mod tests {
             _: bool,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> WorkerResult<()> {
+        ) -> WorkerResult<OplogIndex> {
             self.effects.lock().unwrap().push("update");
-            Ok(())
+            Ok(OplogIndex::INITIAL)
         }
 
         async fn get_oplog(
@@ -4375,13 +4581,23 @@ mod tests {
             &self,
             _: &AgentId,
             _: CanonicalFilePath,
+            _: FileByteSelection,
             _: EnvironmentId,
             _: AccountId,
             _: AuthCtx,
-        ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>
-        {
+        ) -> WorkerResult<golem_service_base::model::FileReadResponse> {
             self.effects.lock().unwrap().push("file-contents");
-            Ok(Box::pin(futures::stream::empty()))
+            Ok(golem_service_base::model::FileReadResponse {
+                head: FileReadHead::File(golem_common::model::filesystem::FileReadMetadata {
+                    total_size: 0,
+                    selection: golem_common::model::filesystem::FileReadExtent::Selected {
+                        offset: 0,
+                        length: 0,
+                    },
+                    modified_at: None,
+                }),
+                body: Box::pin(futures::stream::empty()),
+            })
         }
 
         async fn activate_plugin(
@@ -4460,7 +4676,7 @@ mod tests {
             &self,
             agent_id: &AgentId,
             _: Option<String>,
-            _: Option<golem_api_grpc::proto::golem::schema::SchemaValue>,
+            _: Option<golem_schema::proto::golem::schema::SchemaValue>,
             mode: i32,
             schedule_at: Option<::prost_types::Timestamp>,
             idempotency_key: IdempotencyKey,
@@ -4809,12 +5025,18 @@ mod tests {
                     application: "weather-app".to_string(),
                     environment: "prod".to_string(),
                     agent_type: self.agent_type_name.0.clone(),
-                    constructor_parameters: serde_json::json!({}),
+                    constructor_parameters: serde_json::json!({
+                        "kind": "record",
+                        "value": {"fields": []}
+                    }),
                     method: "run".to_string(),
                     phantom_id: None,
                 },
                 config: vec![],
-                method_parameters: serde_json::json!({}),
+                method_parameters: serde_json::json!({
+                    "kind": "record",
+                    "value": {"fields": []}
+                }),
                 idempotency_key: idempotency_key.value,
                 attempt_id: Uuid::new_v4(),
             }
@@ -4847,6 +5069,7 @@ mod tests {
 
     fn test_agent_type(agent_type_name: AgentTypeName, mode: AgentMode) -> AgentTypeSchema {
         AgentTypeSchema {
+            kind: golem_common::schema::agent::AgentTypeKind::Regular,
             type_name: agent_type_name,
             description: String::new(),
             source_language: String::new(),
@@ -4872,6 +5095,7 @@ mod tests {
                     cors_options: golem_common::model::agent::CorsOptions {
                         allowed_patterns: vec![],
                     },
+                    durable_streams: None,
                 }],
                 read_only: None,
             }],
@@ -5662,7 +5886,7 @@ mod tests {
 
     #[test]
     async fn public_invocation_session_validates_and_preserves_live_stream_references() {
-        use golem_api_grpc::proto::golem::schema::{
+        use golem_schema::proto::golem::schema::{
             RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, schema_value,
         };
 
@@ -5685,7 +5909,11 @@ mod tests {
         let mut start = harness.public_invocation_start(IdempotencyKey::fresh());
         let provisional_ref = Uuid::new_v4();
         start.method_parameters = serde_json::json!({
-            "input": {"$stream": {"provisionalRef": provisional_ref}}
+            "kind": "record",
+            "value": {"fields": [{
+                "kind": "stream",
+                "value": {"provisionalRef": provisional_ref}
+            }]}
         });
 
         let _responses = harness
@@ -5874,7 +6102,7 @@ mod tests {
 
     #[test]
     fn public_invocation_values_reject_capabilities_and_constructor_streams_recursively() {
-        use golem_api_grpc::proto::golem::schema::{
+        use golem_schema::proto::golem::schema::{
             RecordValue, SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, SecretValue,
             schema_value,
         };
@@ -6517,6 +6745,7 @@ mod tests {
         let tool_name = ToolName::try_from("weather").unwrap();
         let definition = Tool {
             version: "1.0.0".into(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
@@ -6549,8 +6778,10 @@ mod tests {
             deployment_revision: DeploymentRevision::INITIAL,
             registered_tools: BTreeMap::from([(tool_name.clone(), registered.clone())]),
             tool_bindings: BTreeMap::new(),
+            mcp_imports: Vec::new(),
             registered_tool_middlewares: BTreeMap::new(),
             tool_middleware_chains: BTreeMap::new(),
+            tool_middleware_configuration: Default::default(),
         };
         for (owner, summary) in [
             (

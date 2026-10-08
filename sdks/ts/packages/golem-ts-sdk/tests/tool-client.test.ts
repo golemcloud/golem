@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
-import { createStdin, createStdout, ToolRpc } from 'golem:tool/host@0.1.0';
+import { createStdin, createOutput, ToolRpc } from 'golem:tool/host@0.1.0';
 import { type as arkType } from 'arktype';
 import { describe, expect, it, vi } from 'vitest';
 import * as z3 from 'zod3';
@@ -35,6 +35,11 @@ import {
   v,
 } from '../src/internal/schema-model';
 import { Bytes, s } from '../src/schema/markers';
+import {
+  GuestPermissionCardHandle,
+  peekGuestPermissionCardHandle,
+} from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 
 interface RecordedInvocation {
   readonly commandPath: readonly string[];
@@ -45,6 +50,7 @@ interface RecordedInvocation {
 interface FakeResponse {
   readonly result?: ReturnType<typeof wireValue>;
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
 }
 
 class FakeTransport implements ToolClientTransport {
@@ -57,6 +63,7 @@ class FakeTransport implements ToolClientTransport {
     input: Parameters<ToolClientTransport['start']>[1],
     stdin: ReadableStream<Uint8Array> | undefined,
     withStdout: boolean,
+    withStderr: boolean,
   ): ToolClientInvocationResult {
     const invocation = { commandPath: [...commandPath], input, stdin };
     this.invocations.push(invocation);
@@ -75,6 +82,7 @@ class FakeTransport implements ToolClientTransport {
         value: { result: response.result },
       }),
       stdout: withStdout ? (response.stdout ?? streamItems(bytes())) : undefined,
+      stderr: withStderr ? (response.stderr ?? streamItems(bytes())) : undefined,
       cancel: vi.fn(),
     };
   }
@@ -401,21 +409,56 @@ describe('tool runtime client', () => {
       })
         ['structured-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array([4, 5, 6]) });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
     await expect(
       client(unitStdout, {
         transport: new FakeTransport(() => ({ stdout: streamItems(bytes(4, 5, 6)) })),
       })
         ['unit-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: undefined, stdout: new Uint8Array([4, 5, 6]) });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: undefined },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
     await expect(
       client(optionalStdout, {
         transport: new FakeTransport(() => ({ result: wireValue(z.string(), 'value') })),
       })
         ['optional-stdout']({})
         .collect(),
-    ).resolves.toEqual({ result: 'value', stdout: new Uint8Array() });
+    ).resolves.toEqual({
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: new Uint8Array() },
+      stderr: { status: 'fulfilled', value: undefined },
+    });
+  });
+
+  it('returns a started invocation synchronously for a stderr-only command', async () => {
+    const definition = toolDefinition('stderr-only').body((body) =>
+      body.stderr({ required: true }).returns(z.string()),
+    );
+    const invocation = client(definition, {
+      transport: new FakeTransport(() => ({
+        result: wireValue(z.string(), 'value'),
+        stderr: streamItems(bytes(7, 8, 9)),
+      })),
+    })['stderr-only']({});
+
+    expect(invocation).toMatchObject({
+      stderr: expect.any(ReadableStream),
+      result: expect.any(Promise),
+      collect: expect.any(Function),
+    });
+    await expect(invocation.collect()).resolves.toEqual({
+      result: { status: 'fulfilled', value: 'value' },
+      stdout: { status: 'fulfilled', value: undefined },
+      stderr: { status: 'fulfilled', value: new Uint8Array([7, 8, 9]) },
+    });
   });
 
   it('combines stdin with structured results and stdout through the transport seam', async () => {
@@ -431,8 +474,9 @@ describe('tool runtime client', () => {
 
     await expect(client(definition, { transport }).transform({ stdin }).collect()).resolves.toEqual(
       {
-        result: 'transformed',
-        stdout: new Uint8Array([4, 5, 6]),
+        result: { status: 'fulfilled', value: 'transformed' },
+        stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+        stderr: { status: 'fulfilled', value: undefined },
       },
     );
     expect(transport.invocations[0].stdin).toBe(stdin);
@@ -777,25 +821,113 @@ describe('tool runtime client', () => {
     ).resolves.toBe(raw);
   });
 
-  it('decodes an owned permission-card result exactly once', async () => {
+  it('keeps a returned imported permission-card resource live until its next transfer', async () => {
     const schema = s.permissionCard({ polymorphic: false });
     const codec = compileSchema(schema);
     const definition = toolDefinition('permission-card-result').body((body) =>
       body.returns(schema),
     );
-    const raw = { [Symbol.dispose]: vi.fn() } as never;
+    class ImportedPermissionCard {
+      private live = true;
+      borrow() {
+        if (!this.live) throw new Error('unknown handle index 4294967295');
+        return 'card-id';
+      }
+      consume() {
+        this.live = false;
+      }
+    }
+    const raw = new ImportedPermissionCard() as never;
 
-    await expect(
-      client(definition, {
+    const card = await client(definition, {
+      transport: new FakeTransport(() => ({
+        result: typedSchemaValueToWit({
+          graph: codec.graph,
+          value: codec.toValue(raw),
+        }),
+      })),
+    })['permission-card-result']({});
+
+    expect(card).toBeInstanceOf(GuestPermissionCardHandle);
+    const imported = peekGuestPermissionCardHandle(
+      PERMISSION_CARD_INTERNAL,
+      card as GuestPermissionCardHandle,
+    ) as unknown as ImportedPermissionCard;
+    expect(imported).toBe(raw);
+    expect(imported.borrow()).toBe('card-id');
+
+    const exchange = toolDefinition('permission-card-exchange').body((body) =>
+      body.positional('card', schema).returns(z.void()),
+    );
+    await client(exchange, {
+      transport: new FakeTransport((invocation) => {
+        const node = invocation.input.value.valueNodes.find(
+          (node) => node.tag === 'permission-card-handle',
+        ) as { val: ImportedPermissionCard };
+        expect(node.val).toBe(raw);
+        node.val.consume();
+        return {};
+      }),
+    })['permission-card-exchange']({ card });
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    'validates a named foreign result by its value semantics (polymorphic=%s)',
+    async (polymorphic) => {
+      const localSchema = z.object({
+        card: s.permissionCard({ polymorphic: false }),
+        issuer: z.string(),
+      });
+      const remoteCodec = compileSchema(
+        z.object({ card: s.permissionCard({ polymorphic }), issuer: z.string() }),
+      );
+      const dispose = vi.fn();
+      const raw = { [Symbol.dispose]: dispose } as never;
+      const definition = toolDefinition('named-issuer').body((body) => body.returns(localSchema));
+      const result = client(definition, {
         transport: new FakeTransport(() => ({
           result: typedSchemaValueToWit({
-            graph: codec.graph,
-            value: codec.toValue(raw),
+            graph: {
+              root: t.ref('rust::PermissionIssue'),
+              defs: new Map([
+                [
+                  'rust::PermissionIssue',
+                  {
+                    name: 'PermissionIssue',
+                    body: {
+                      ...remoteCodec.graph.root,
+                      metadata: {
+                        ...remoteCodec.graph.root.metadata,
+                        aliases: ['rust-issuer-output'],
+                      },
+                    },
+                  },
+                ],
+              ]),
+            },
+            value: remoteCodec.toValue({ card: raw, issuer: 'rust' }),
           }),
         })),
-      })['permission-card-result']({}),
-    ).resolves.toBe(raw);
-  });
+      })['named-issuer']({});
+      if (polymorphic) {
+        await expect(result).rejects.toMatchObject({
+          cause: { tag: 'rpc', error: { tag: 'protocol-error' } },
+        });
+        expect(dispose).toHaveBeenCalledOnce();
+      } else {
+        const output = await result;
+        expect(output.issuer).toBe('rust');
+        expect(
+          peekGuestPermissionCardHandle(
+            PERMISSION_CARD_INTERNAL,
+            output.card as GuestPermissionCardHandle,
+          ),
+        ).toBe(raw);
+        expect(dispose).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it('accepts allowed MIME metadata when projecting a binary result to Uint8Array', async () => {
     const schema = Bytes({ mimeTypes: ['application/octet-stream'] });
@@ -836,7 +968,7 @@ describe('tool runtime client', () => {
     expect(invalidResult).toMatchObject({
       cause: {
         tag: 'rpc',
-        error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+        error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
       },
     });
   });
@@ -865,7 +997,7 @@ describe('tool runtime client', () => {
     });
   });
 
-  it('rejects output-only record reorder and width before positional decoding', async () => {
+  it('rejects output-only record reorder and width through concrete decoding', async () => {
     const definition = toolDefinition('adapted-result').body((body) =>
       body.returns(z.object({ first: z.string(), second: z.number() })),
     );
@@ -884,7 +1016,7 @@ describe('tool runtime client', () => {
       expect(failure).toMatchObject({
         cause: {
           tag: 'rpc',
-          error: { tag: 'protocol-error', val: expect.stringContaining('schema') },
+          error: { tag: 'protocol-error', val: expect.stringContaining('local definition') },
         },
       });
     }
@@ -985,7 +1117,7 @@ describe('tool runtime client', () => {
 
   it('keeps a rejected host result handled until a started invocation result is accessed', async () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
-    vi.mocked(createStdout).mockReturnValueOnce([{}, streamItems(bytes())] as never);
+    vi.mocked(createOutput).mockReturnValueOnce([{}, streamItems(bytes())] as never);
     vi.mocked(ToolRpc).mockImplementationOnce(
       () =>
         ({
@@ -1019,7 +1151,7 @@ describe('tool runtime client', () => {
   it('handles a rejected host result when stdout validation throws synchronously', async () => {
     const rpcError = { tag: 'denied', val: 'not allowed' } satisfies RpcError;
     const cancel = vi.fn();
-    vi.mocked(createStdout).mockReturnValueOnce([{}, undefined] as never);
+    vi.mocked(createOutput).mockReturnValueOnce([{}, undefined] as never);
     vi.mocked(ToolRpc).mockImplementationOnce(
       () =>
         ({
@@ -1076,7 +1208,7 @@ describe('tool runtime client', () => {
     const stdinClosed = { wait: vi.fn(() => new Promise(() => undefined)) };
     const stdoutCapability = {};
     vi.mocked(createStdin).mockReturnValue([stdinWriter, stdinCapability, stdinClosed] as never);
-    vi.mocked(createStdout).mockReturnValue([stdoutCapability, stdout] as never);
+    vi.mocked(createOutput).mockReturnValue([stdoutCapability, stdout] as never);
     const asyncInvokeAndAwait = vi.fn(() => ({
       get: () => Promise.resolve({}),
       cancel: vi.fn(),
@@ -1089,8 +1221,9 @@ describe('tool runtime client', () => {
     );
 
     await expect(client(definition)['streams-host']({ stdin }).collect()).resolves.toEqual({
-      result: undefined,
-      stdout: new Uint8Array([4, 5, 6]),
+      result: { status: 'fulfilled', value: undefined },
+      stdout: { status: 'fulfilled', value: new Uint8Array([4, 5, 6]) },
+      stderr: { status: 'fulfilled', value: undefined },
     });
 
     expect(ToolRpc).toHaveBeenCalledWith('streams-host');
@@ -1100,6 +1233,7 @@ describe('tool runtime client', () => {
       expect.anything(),
       stdinCapability,
       stdoutCapability,
+      undefined,
     );
     await vi.waitFor(() =>
       expect(stdinWriter.write).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])),

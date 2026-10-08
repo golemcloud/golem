@@ -15,7 +15,10 @@
 use crate::base_model::Empty;
 use crate::base_model::account::AccountId;
 use crate::base_model::agent::{
-    AgentMode, AgentTypeName, RegisteredAgentTypeImplementer, Snapshotting,
+    AgentMode, AgentTypeName, CorsOptions, DurableStreamInputSlotSource,
+    DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
+    DurableStreamSlotOptions, DurableStreamSlotSource, HttpEndpointDetails, HttpMethod,
+    RegisteredAgentTypeImplementer, Snapshotting,
 };
 use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::model::account::AccountEmail;
@@ -45,7 +48,7 @@ proptest! {
     /// discriminator types.
     #[test]
     fn schema_graph_proto_round_trip(graph in schema_graph_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         prop_assert_eq!(graph, back);
     }
@@ -57,7 +60,7 @@ proptest! {
     /// quantity / secret / quota-token).
     #[test]
     fn schema_value_proto_round_trip(value in schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto: golem_schema::proto::golem::schema::SchemaValue =
             value.clone().try_into().expect("encode");
         let back: SchemaValue = proto.try_into().expect("decode");
         prop_assert!(
@@ -69,7 +72,7 @@ proptest! {
     /// The typed pair (graph + value) round-trips through its protobuf mirror.
     #[test]
     fn typed_schema_value_proto_round_trip(typed in typed_schema_value_strategy()) {
-        let proto: golem_api_grpc::proto::golem::schema::TypedSchemaValue =
+        let proto: golem_schema::proto::golem::schema::TypedSchemaValue =
             typed.clone().try_into().expect("encode");
         let back: TypedSchemaValue = proto.try_into().expect("decode");
         prop_assert_eq!(typed.graph(), back.graph());
@@ -83,6 +86,7 @@ proptest! {
 fn sample_agent_type_schema() -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName("weather-agent".to_string()),
+        kind: crate::schema::agent::AgentTypeKind::Regular,
         description: "A weather agent".to_string(),
         source_language: "rust".to_string(),
         schema: SchemaGraph {
@@ -120,7 +124,43 @@ fn sample_agent_type_schema() -> AgentTypeSchema {
                     ..Default::default()
                 },
             ))),
-            http_endpoint: vec![],
+            http_endpoint: vec![HttpEndpointDetails {
+                http_method: HttpMethod::Post(Empty {}),
+                path_suffix: vec![],
+                header_vars: vec![],
+                query_vars: vec![],
+                auth_details: None,
+                cors_options: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+                durable_streams: Some(DurableStreamRouteOptions {
+                    slots: vec![
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Input(DurableStreamInputSlotSource {
+                                name: "events".to_string(),
+                            }),
+                            name: Some("messages".to_string()),
+                            content_type: None,
+                        },
+                        DurableStreamSlotOptions {
+                            source: DurableStreamSlotSource::Output(
+                                DurableStreamOutputSlotSource {
+                                    name: "$result".to_string(),
+                                },
+                            ),
+                            name: None,
+                            content_type: Some("application/vnd.golem.events".to_string()),
+                        },
+                    ],
+                    allow_external_writes: Some(false),
+                    allow_stream_delete: None,
+                    allow_invocation_delete: Some(false),
+                    load: Some(DurableStreamRouteLoadOptions {
+                        max_concurrent_readers_per_stream: Some(8),
+                        max_append_requests_per_second_per_stream: None,
+                    }),
+                }),
+            }],
             read_only: None,
         }],
         dependencies: vec![AgentDependencySchema {
@@ -196,7 +236,7 @@ fn permission_card_type_and_value_proto_round_trip() {
     let graph = SchemaGraph::anonymous(SchemaType::permission_card(PermissionCardSpec {
         polymorphic: true,
     }));
-    let graph_proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+    let graph_proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
     let graph_back: SchemaGraph = graph_proto.try_into().expect("decode permission-card type");
     assert_eq!(graph, graph_back);
 
@@ -206,7 +246,7 @@ fn permission_card_type_and_value_proto_round_trip() {
         expires_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap()),
         polymorphic: true,
     });
-    let value_proto: golem_api_grpc::proto::golem::schema::SchemaValue = value
+    let value_proto: golem_schema::proto::golem::schema::SchemaValue = value
         .clone()
         .try_into()
         .expect("encode permission-card value");
@@ -222,7 +262,7 @@ fn permission_card_type_and_value_proto_round_trip() {
 fn numeric_restrictions_proto_golden_round_trip() {
     for (label, ty) in crate::schema::tests::golden_numeric_schema_types() {
         let graph = SchemaGraph::anonymous(ty);
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.clone().into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.clone().into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         assert_eq!(graph, back, "proto numeric golden mismatch: {label}");
     }
@@ -247,7 +287,7 @@ fn numeric_empty_restrictions_normalize_to_none_proto() {
             restrictions: Some(empty),
             metadata: MetadataEnvelope::default(),
         });
-        let proto: golem_api_grpc::proto::golem::schema::SchemaGraph = graph.into();
+        let proto: golem_schema::proto::golem::schema::SchemaGraph = graph.into();
         let back: SchemaGraph = proto.try_into().expect("decode");
         assert_eq!(back.root.numeric_restrictions(), None);
     }

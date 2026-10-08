@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::model::cli_output::StructuredOutput;
+use crate::model::create_action::CreateAction;
 use crate::model::masking::Masked;
 use crate::model::text_format::*;
 
@@ -20,20 +21,29 @@ use golem_client::model::SecuritySchemeDto;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HttpSecuritySchemeCreateView(pub SecuritySchemeDto);
+pub struct HttpSecuritySchemeCreateView {
+    pub action: CreateAction,
+    #[serde(flatten)]
+    pub security_scheme: SecuritySchemeDto,
+}
 
 impl Masked for HttpSecuritySchemeCreateView {}
 
 impl MessageWithFields for HttpSecuritySchemeCreateView {
     fn message(&self) -> String {
-        format!(
-            "Created new HTTP API Security scheme {}",
-            format_message_highlight(&self.0.name),
-        )
+        let name = format_message_highlight(&self.security_scheme.name);
+        match self.action {
+            CreateAction::Created | CreateAction::Replaced => {
+                format!("Created new HTTP API Security scheme {name}")
+            }
+            CreateAction::Updated => {
+                format!("Updated existing HTTP API Security scheme {name}")
+            }
+        }
     }
 
     fn fields(&self) -> Vec<(String, String)> {
-        security_scheme_view_fields(&self.0)
+        security_scheme_view_fields(&self.security_scheme)
     }
 }
 
@@ -144,6 +154,7 @@ impl StructuredOutput for HttpSecuritySchemeListView {
 
 fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)> {
     let mut fields = FieldsBuilder::new();
+    let login = serde_json::to_string_pretty(&view.login).expect("login configuration serializes");
 
     fields
         .fmt_field("Name", &view.name.0, format_main_id)
@@ -152,7 +163,8 @@ fn security_scheme_view_fields(view: &SecuritySchemeDto) -> Vec<(String, String)
         .field("Provider", &view.provider_type)
         .field("Client ID", &view.client_id)
         .field("Redirect URL", &view.redirect_url)
-        .field("Scopes", &view.scopes.join("\n"));
+        .field("Scopes", &view.scopes.join("\n"))
+        .field("Login", &login);
 
     fields.build()
 }
@@ -167,6 +179,7 @@ impl TextOutput for HttpSecuritySchemeListView {
             Column::new("Client ID").fixed(),
             Column::new("Redirect URL"),
             Column::new("Scopes"),
+            Column::new("Login"),
         ]);
         for scheme in &self.security_schemes {
             table.add_row(vec![
@@ -177,6 +190,14 @@ impl TextOutput for HttpSecuritySchemeListView {
                 scheme.client_id.clone(),
                 scheme.redirect_url.clone(),
                 scheme.scopes.join("\n"),
+                match &scheme.login {
+                    golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(_) => {
+                        "Cookie".to_string()
+                    }
+                    golem_common::model::security_scheme::SecuritySchemeLogin::AuthorizationCodePkce(_) => {
+                        "AuthorizationCodePkce".to_string()
+                    }
+                },
             ]);
         }
         log_table(table);

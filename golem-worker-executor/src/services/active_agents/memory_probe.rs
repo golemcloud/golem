@@ -383,6 +383,12 @@ mod tests {
         }
     }
 
+    /// These tests wait for a refresh that runs on `spawn_blocking`, so what they are really
+    /// bounded by is a blocking-pool slot becoming free, not the refresh being quick. Under the
+    /// full parallel lib suite that can take seconds. The deadline exists to fail rather than
+    /// hang; no assertion depends on its value.
+    const REFRESH_COMPLETION_TIMEOUT: Duration = Duration::from_secs(30);
+
     #[derive(Debug)]
     struct PanickingProbe {
         reads: Arc<AtomicU64>,
@@ -420,7 +426,8 @@ mod tests {
         let limit_bytes = Arc::new(AtomicU64::new(100));
         let current_bytes = Arc::new(AtomicU64::new(1));
         let refresh_gate = Arc::new((Mutex::new(false), Condvar::new()));
-        let probe = stale_cached_probe(
+        let refresh_interval = Duration::from_secs(60 * 60);
+        let probe = CachedMemoryProbe::with_snapshot(
             Arc::new(CountingProbe {
                 reads: reads.clone(),
                 limit_bytes: limit_bytes.clone(),
@@ -431,13 +438,15 @@ mod tests {
                 limit_bytes: 100,
                 current_bytes: 1,
             },
+            refresh_interval,
+            Instant::now() - refresh_interval - Duration::from_secs(1),
         );
 
         limit_bytes.store(50, Ordering::Relaxed);
         current_bytes.store(42, Ordering::Relaxed);
         assert_eq!(probe.snapshot().current_bytes, 1);
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(REFRESH_COMPLETION_TIMEOUT, async {
             while reads.load(Ordering::Acquire) != 2 {
                 tokio::task::yield_now().await;
             }
@@ -455,7 +464,7 @@ mod tests {
         *refresh_gate.0.lock().unwrap() = true;
         refresh_gate.1.notify_one();
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(REFRESH_COMPLETION_TIMEOUT, async {
             while probe.snapshot().limit_bytes != 50 || probe.snapshot().current_bytes != 42 {
                 tokio::task::yield_now().await;
             }
@@ -485,7 +494,7 @@ mod tests {
 
         tokio::time::sleep(refresh_interval).await;
         assert_eq!(probe.snapshot().current_bytes, 1);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(REFRESH_COMPLETION_TIMEOUT, async {
             while reads.load(Ordering::Acquire) != 2 {
                 tokio::task::yield_now().await;
             }
@@ -494,7 +503,7 @@ mod tests {
         .unwrap();
 
         tokio::time::sleep(refresh_interval).await;
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(REFRESH_COMPLETION_TIMEOUT, async {
             while probe.snapshot().current_bytes != 42 {
                 tokio::task::yield_now().await;
             }
@@ -519,7 +528,7 @@ mod tests {
         );
 
         assert_eq!(probe.snapshot().current_bytes, 1);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(REFRESH_COMPLETION_TIMEOUT, async {
             while probe.inner.refresh_in_progress.load(Ordering::Acquire) {
                 tokio::task::yield_now().await;
             }

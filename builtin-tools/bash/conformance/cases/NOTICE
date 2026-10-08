@@ -1,0 +1,81 @@
+Third-party material in the real-world conformance corpus (sweep_realworld_*.py)
+===============================================================================
+
+1. tldr-pages
+-------------
+
+The `real tldr ...` cases in sweep_realworld_text.py, sweep_realworld_files.py,
+sweep_realworld_misc.py and sweep_realworld_builtins.py are adapted from the tldr-pages
+project:
+
+    tldr-pages, https://github.com/tldr-pages/tldr
+    Copyright (c) 2014-present the tldr-pages team and contributors
+    Licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0),
+    https://creativecommons.org/licenses/by/4.0/
+    Revision used: 8cf22035e60b167ebf224c1c527b27e0b5dca24d (pages/common and pages/linux)
+
+What was changed:
+
+- Only the example commands were used, for the commands and builtins this shell provides.
+  The descriptions of the examples were shortened into case names; no page text is copied.
+- Every {{placeholder}} was bound to a concrete value or to a fixture file that the case's
+  script creates first (for example `{{path/to/file}}` became `input.txt` holding generated
+  text). Alternatives such as `{{[-n|--lines]}}` became one case per spelling.
+- Examples were adapted so that they run without a terminal and deterministically: dates are
+  pinned with `-d` and `TZ=UTC`, sleeps are shortened, random output is sorted or checked only
+  for its shape, output whose order is the filesystem's is sorted, `/etc/passwd` became a
+  fixture file, long listings (`ls -l`, plain `stat`) were dropped, and commands the shell does
+  not have (gzip, du, tar, sudo) were replaced by ones it has.
+- Each example was multiplied over input shapes (empty input, no final newline, CRLF line
+  ends, multibyte UTF-8, blank lines, an embedded NUL, a missing file, a directory operand) and
+  invocation forms (file operand, `-` on a pipe, redirected stdin).
+- Examples that need the network, a real home directory, other users, permissions, awk, a
+  terminal or interactive programs were left out.
+
+2. Coding-agent trajectories
+----------------------------
+
+The `real traj: ...` cases in sweep_realworld_agents.py replay the shapes of shell commands
+found in two public datasets of coding-agent trajectories:
+
+    SWE-bench/SWE-smith-trajectories, https://huggingface.co/datasets/SWE-bench/SWE-smith-trajectories
+    Licensed under the MIT License (dataset card: `license: mit`)
+    Revision used: 08e109b4a59eaeebf80e4675cd125d42e7ac99a4, split `tool`,
+    rows 0-99, 3000-3099, 6000-6099, 9000-9099, 12000-12099, 15000-15099, 18000-18099, 21000-21099
+
+    SWE-Gym/OpenHands-SFT-Trajectories, https://huggingface.co/datasets/SWE-Gym/OpenHands-SFT-Trajectories
+    Licensed under the MIT License (dataset card: `license: mit`)
+    Revision used: 4aaa5a4a4b5861f4799d2336908760c190ac3b17, split `train.success.oss`, all rows
+
+What was changed:
+
+- About 4,500 shell commands were extracted from the trajectories' tool calls and grouped by
+  shape: the commands, their options and the pipeline structure, with paths, patterns and
+  numbers abstracted. Shapes that need tools this shell does not have (python, pip, git, ps,
+  chmod, awk) were dropped.
+- Each remaining shape was rewritten against an invented Python project that the case creates
+  under /testbed. Repository names, file paths, identifiers, search patterns and file contents
+  from the trajectories were all replaced; no code, data, prompts or other text from the
+  datasets is included, and nothing private (secrets, host names, e-mail addresses, personal
+  paths) was carried over.
+
+Both dataset cards declare the MIT License and name no copyright holder. The copyright belongs
+to the datasets' authors (the SWE-smith team, whose code repository
+https://github.com/SWE-bench/SWE-smith states "Copyright (c) 2025 John Yang", and the SWE-Gym
+team, https://github.com/SWE-Gym/SWE-Gym). The MIT License's terms:
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy of this
+    software and associated documentation files (the "Software"), to deal in the Software
+    without restriction, including without limitation the rights to use, copy, modify, merge,
+    publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons
+    to whom the Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all copies or
+    substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+    INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+    PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE
+    FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+    OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Regenerate the WIT bindings for the Golem MoonBit SDK and apply the required
-# post-processing fixes. Regeneration requires the pinned Golem wit-bindgen fork
+# post-processing fixes. Regeneration requires the Golem wit-bindgen fork branch
 # documented in ../AGENTS.md; stock wit-bindgen does not support this SDK's P3
 # async WIT surface.
 #
@@ -9,11 +9,8 @@
 #   bash scripts/regen-bindings.sh
 #
 # Steps:
-#   1. Generate ordinary, pure-middleware, and combined worlds into isolated
-#      roots. The combined world owns the shared interface/async runtime, while
-#      each world retains isolated export glue.
-#   2. Verify shared public bindings agree, preserve hand-maintained stubs and
-#      package descriptors, and assemble the role-specific roots.
+#   1. Generate the default agent/tool/middleware world.
+#   2. Preserve hand-maintained stubs and package descriptors.
 #   3. Split the oversized generated middleware argument lift whose unsplit
 #      shape currently triggers a MoonBit compiler ICE.
 #   4. Stabilize generated FFI helper and export-wrapper ordering, which the
@@ -25,25 +22,22 @@
 #      subtraction (the signed load alone already yields the correct value).
 #   6. Remove an emitted `moon.pkg.json` only where a sibling hand-maintained
 #      `moon.pkg` owns package metadata (the export stubs and gen link package).
-#   7. Regenerate package interfaces and assert normalization, the s8/s16 fix,
-#      and the pure-middleware host-neutral dependency closure.
+#   7. Regenerate package interfaces and assert normalization and the s8/s16 fix.
 #
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-readonly WIT_BINDGEN_COMMIT="36866deb07e878430f61d02a28c52fac0fab5355"
-readonly WIT_BINDGEN_SHORT_COMMIT="${WIT_BINDGEN_COMMIT:0:9}"
-
 wit_bindgen_version="$(wit-bindgen --version)"
-if [[ "$wit_bindgen_version" != *"$WIT_BINDGEN_SHORT_COMMIT"* ]]; then
+expected_wit_bindgen_version="$(cat .wit-bindgen-version 2>/dev/null || true)"
+if [[ ! "$wit_bindgen_version" =~ 0\.59\.0\ \([0-9a-f]{9,40}\ [0-9]{4}-[0-9]{2}-[0-9]{2}\) ]] ||
+  [[ "$wit_bindgen_version" != "$expected_wit_bindgen_version" ]]; then
   cat >&2 <<EOF
-ERROR: bindings must be regenerated with Golem's pinned wit-bindgen fork at
-$WIT_BINDGEN_COMMIT, but found: $wit_bindgen_version
+ERROR: bindings must be regenerated with the Golem wit-bindgen build installed
+from the wit-bindgen-golem-1.6 branch, but found: $wit_bindgen_version
 
-Install the pinned generator with:
-  cargo install --locked --git https://github.com/golemcloud/wit-bindgen \\
-    --rev $WIT_BINDGEN_COMMIT wit-bindgen-cli
+Install the generator with:
+  scripts/install-wit-bindgen.sh
 EOF
   exit 1
 fi
@@ -53,8 +47,6 @@ readonly GENERATED_ROOTS=(
   async-core
   world
   gen
-  gen-tool-middleware
-  gen-agent-tool-middleware
 )
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/golem-moonbit-bindings.XXXXXX")"
@@ -91,51 +83,16 @@ generate_world() {
     --out-dir "$output_dir"
 }
 
-generate_world ordinary agent-guest gen
-generate_world middleware tool-middleware-guest gen-tool-middleware
-generate_world combined agent-tool-middleware-guest gen-agent-tool-middleware
+generate_world default agent-guest gen
 
-verify_public_subset() {
-  local subset="$1"
-  local superset="$2"
-  find "$subset/interface" -type f \
-    \( -name 'top.mbt' -o -name 'moon.pkg.json' \) -print0 |
-    while IFS= read -r -d '' file; do
-      relative="${file#"$subset/interface/"}"
-      candidate="$superset/interface/$relative"
-      if [[ ! -f "$candidate" ]] || ! cmp -s "$file" "$candidate"; then
-        echo "ERROR: incompatible shared generated binding: $relative" >&2
-        exit 1
-      fi
-    done
-}
-
-echo "==> Verifying compatible shared generated bindings"
-verify_public_subset "$tmp_root/ordinary" "$tmp_root/combined"
-verify_public_subset "$tmp_root/middleware" "$tmp_root/combined"
-if ! diff -qr "$tmp_root/ordinary/async-core" "$tmp_root/combined/async-core" ||
-   ! diff -qr "$tmp_root/middleware/async-core" "$tmp_root/combined/async-core"; then
-  echo "ERROR: generated async-core roots are incompatible" >&2
-  exit 1
-fi
-
-echo "==> Validating middleware argument lifts"
-python3 scripts/split-middleware-lift.py \
-  "$tmp_root/middleware/gen-tool-middleware/interface/golem/tool/tool-middleware-guest/ffi.mbt"
-python3 scripts/split-middleware-lift.py \
-  "$tmp_root/combined/gen-agent-tool-middleware/interface/golem/tool/tool-middleware-guest/ffi.mbt"
-
-echo "==> Assembling shared and role-specific generated roots"
-rm -rf "${GENERATED_ROOTS[@]}"
-cp -R "$tmp_root/combined/interface" interface
-cp -R "$tmp_root/combined/async-core" async-core
+echo "==> Assembling generated roots"
+rm -rf "${GENERATED_ROOTS[@]}" gen-tool-middleware gen-agent-tool-middleware \
+  world/tool-middleware-guest world/agent-tool-middleware-guest
+cp -R "$tmp_root/default/interface" interface
+cp -R "$tmp_root/default/async-core" async-core
 mkdir -p world
-cp -R "$tmp_root/ordinary/world/agent-guest" world/
-cp -R "$tmp_root/middleware/world/tool-middleware-guest" world/
-cp -R "$tmp_root/combined/world/agent-tool-middleware-guest" world/
-cp -R "$tmp_root/ordinary/gen" gen
-cp -R "$tmp_root/middleware/gen-tool-middleware" gen-tool-middleware
-cp -R "$tmp_root/combined/gen-agent-tool-middleware" gen-agent-tool-middleware
+cp -R "$tmp_root/default/world/agent-guest" world/
+cp -R "$tmp_root/default/gen" gen
 
 if [[ -d "$preserved_root" ]]; then
   find "$preserved_root" -type f -print0 |
@@ -145,6 +102,8 @@ if [[ -d "$preserved_root" ]]; then
       cp "$file" "$relative"
     done
 fi
+
+rm -rf world/tool-middleware-guest world/agent-tool-middleware-guest
 
 echo "==> Stabilizing generated FFI declaration order"
 python3 scripts/normalize-generated-ffi.py "${GENERATED_ROOTS[@]}"
@@ -189,8 +148,5 @@ if rg -n -g '*.mbt' -e ' - 0x100\b' -e ' - 0x10000\b' \
     "${GENERATED_ROOTS[@]}" >&2
   exit 1
 fi
-
-echo "==> Verifying pure middleware dependency closure"
-python3 scripts/check-middleware-host-neutral.py
 
 echo "==> Bindings regenerated and post-processed successfully"

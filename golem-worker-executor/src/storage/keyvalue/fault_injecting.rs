@@ -26,6 +26,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::Notify;
 
 /// The control handle for a [`FaultInjectingKeyValueStorage`]. Clone it: one clone goes to the
@@ -71,6 +72,7 @@ struct ArmedFault {
     remaining: usize,
     error: Option<KeyValueStorageError>,
     gate: Option<Arc<GateState>>,
+    pass_after_gate: bool,
 }
 
 #[derive(Default)]
@@ -119,26 +121,61 @@ impl KeyValueStorageFaults {
         failures: usize,
         error: KeyValueStorageError,
     ) {
-        self.arm(Selector::Label(api_name), skip, failures, error, None);
+        self.arm(
+            Selector::Label(api_name),
+            skip,
+            failures,
+            error,
+            None,
+            false,
+        );
     }
 
     /// Fails the next `failures` operations, whatever their label, with `error`. Pass
     /// `usize::MAX` for a storage that never answers again.
     pub fn fail_all(&self, failures: usize, error: KeyValueStorageError) {
-        self.arm(Selector::Any, 0, failures, error, None);
+        self.arm(Selector::Any, 0, failures, error, None, false);
     }
 
     /// Fails every operation from now on with `error`, except those labelled with one of
     /// `labels` - the shape of a store where one read still answers while the rest do not.
     pub fn fail_all_except(&self, labels: &'static [&'static str], error: KeyValueStorageError) {
-        self.arm(Selector::AllExcept(labels), 0, usize::MAX, error, None);
+        self.arm(
+            Selector::AllExcept(labels),
+            0,
+            usize::MAX,
+            error,
+            None,
+            false,
+        );
     }
 
     /// Pauses the next operation labelled `api_name` until the returned gate is released, then
     /// fails it with `error`.
     pub fn gate_next(&self, api_name: &'static str, error: KeyValueStorageError) -> Gate {
         let state = Arc::new(GateState::default());
-        self.arm(Selector::Label(api_name), 0, 1, error, Some(state.clone()));
+        self.arm(
+            Selector::Label(api_name),
+            0,
+            1,
+            error,
+            Some(state.clone()),
+            false,
+        );
+        Gate { state }
+    }
+
+    /// Pauses the next operation labelled `api_name`, then lets it reach the inner storage.
+    pub fn gate_next_pass(&self, api_name: &'static str) -> Gate {
+        let state = Arc::new(GateState::default());
+        self.arm(
+            Selector::Label(api_name),
+            0,
+            1,
+            KeyValueStorageError::other("unused passing gate error"),
+            Some(state.clone()),
+            true,
+        );
         Gate { state }
     }
 
@@ -151,6 +188,7 @@ impl KeyValueStorageFaults {
             remaining: 1,
             error: None,
             gate: Some(state.clone()),
+            pass_after_gate: true,
         });
         Gate { state }
     }
@@ -189,6 +227,7 @@ impl KeyValueStorageFaults {
         remaining: usize,
         error: KeyValueStorageError,
         gate: Option<Arc<GateState>>,
+        pass_after_gate: bool,
     ) {
         if remaining == 0 {
             return;
@@ -199,6 +238,7 @@ impl KeyValueStorageFaults {
             remaining,
             error: Some(error),
             gate,
+            pass_after_gate,
         });
     }
 
@@ -223,15 +263,20 @@ impl KeyValueStorageFaults {
         fault.remaining = fault.remaining.saturating_sub(1);
         let error = fault.error.clone();
         let gate = fault.gate.clone();
+        let pass_after_gate = fault.pass_after_gate;
         if fault.remaining == 0 {
             state.armed.remove(index);
         }
         let apply_first = state.apply_before_failing;
         (
-            error.map_or(Decision::Pass, |error| Decision::Fail {
-                error,
-                apply_first,
-            }),
+            if pass_after_gate {
+                Decision::Pass
+            } else {
+                error.map_or(Decision::Pass, |error| Decision::Fail {
+                    error,
+                    apply_first,
+                })
+            },
             gate,
         )
     }
@@ -309,6 +354,31 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
         .await
     }
 
+    async fn set_with_expiry(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        value: &[u8],
+        expiry: Duration,
+    ) -> Result<(), KeyValueStorageError> {
+        self.run(
+            api_name,
+            self.inner.set_with_expiry(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                value,
+                expiry,
+            ),
+        )
+        .await
+    }
+
     async fn set_many(
         &self,
         svc_name: &'static str,
@@ -347,6 +417,35 @@ impl KeyValueStorage for FaultInjectingKeyValueStorage {
                 expected,
                 deletes,
                 pairs,
+            ),
+        )
+        .await
+    }
+
+    async fn compare_and_mutate_many(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        entity_name: &'static str,
+        namespace: KeyValueStorageNamespace,
+        key: &str,
+        expected: Option<&[u8]>,
+        sets: &[(&str, &[u8])],
+        deletions: &[&str],
+        expiry: Duration,
+    ) -> Result<bool, KeyValueStorageError> {
+        self.run(
+            api_name,
+            self.inner.compare_and_mutate_many(
+                svc_name,
+                api_name,
+                entity_name,
+                namespace,
+                key,
+                expected,
+                sets,
+                deletions,
+                expiry,
             ),
         )
         .await

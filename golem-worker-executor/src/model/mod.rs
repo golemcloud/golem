@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::worker::filesystem_snapshots::ReplayBaseline;
 use crate::workerctx::WorkerCtx;
-use bytes::Bytes;
-use futures::Stream;
 use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{
     AgentError, AgentTerminatedByQuotaError, EphemeralCannotSuspendError, ReadOnlyViolationError,
+    UpdateDescription,
 };
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
-    AgentId, AgentInvocationOutput, OplogIndex, ShardAssignment, ShardId, Timestamp,
+    AgentId, AgentInvocationOutput, OplogIndex, PendingUpdateRef, ShardAssignment, ShardId,
+    Timestamp,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -68,6 +70,32 @@ impl ShardAssignmentCheck for ShardAssignment {
 pub enum SnapshotSource {
     Automatic,
     ManualUpdate,
+    SnapshotAssistedAutomatic,
+}
+
+/// What the replay of a start is for. A replay with any purpose but `None` is speculative: a
+/// failure of a recorded invocation during it writes no invocation error, and the start decides
+/// what the failure means.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SnapshotReplayPurpose {
+    None,
+    /// The replay after a periodic record.
+    PeriodicRecovery,
+    /// The replay after the record that a pending snapshot-assisted update selected.
+    AssistedUpdate,
+    /// The replay of the history for a pending automatic update without a selected record, from
+    /// the authoritative baseline or from the start.
+    AutomaticUpdate,
+}
+
+/// The pending update at the head of the queue of an agent, with its description read from its
+/// `PendingUpdate` entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HydratedUpdate {
+    /// The queue element, which pairs the update with its admission.
+    pub reference: PendingUpdateRef,
+    /// The description of the `PendingUpdate` entry at `reference.oplog_index`.
+    pub description: UpdateDescription,
 }
 
 /// Worker-specific configuration. These values are used to initialize the worker, and they can
@@ -80,23 +108,24 @@ pub struct AgentConfig {
     pub created_by: AccountId,
     pub created_by_email: AccountEmail,
     pub initial_agent_config: Vec<TypedAgentConfigEntry>,
-    pub last_snapshot_index: Option<OplogIndex>,
-    pub last_snapshot_source: Option<SnapshotSource>,
+    /// The replay inputs of the baseline of the start.
+    pub(crate) replay: ReplayBaseline,
     pub agent_effective_surface: EffectiveSurface,
+    pub authority_wallet: Option<Vec<StoredCard>>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
 impl AgentConfig {
-    pub fn new(
+    pub(crate) fn new(
         skipped_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_revision_for_replay: ComponentRevision,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
-        last_snapshot_index: Option<OplogIndex>,
-        last_snapshot_source: Option<SnapshotSource>,
+        replay: ReplayBaseline,
         agent_effective_surface: EffectiveSurface,
+        authority_wallet: Option<Vec<StoredCard>>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -106,9 +135,9 @@ impl AgentConfig {
             created_by,
             created_by_email,
             initial_agent_config,
-            last_snapshot_index,
-            last_snapshot_source,
+            replay,
             agent_effective_surface,
+            authority_wallet,
             owner_component_metadata,
         }
     }
@@ -459,6 +488,9 @@ impl TrapType {
                             host_function: host_function.clone(),
                         })),
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
+                            Some(WorkerExecutorError::Interrupted { kind }) => {
+                                TrapType::Interrupt(*kind)
+                            }
                             // The generic read-only check inside `begin_durable_function` reports
                             // violations as `WorkerExecutorError::ReadOnlyViolation` so the
                             // trap survives `WorkerExecutorError -> wasmtime::Error -> ...`
@@ -481,6 +513,13 @@ impl TrapType {
                             Some(WorkerExecutorError::PermissionDenied { details }) => {
                                 make_error(AgentError::PermissionDenied(details.clone()))
                             }
+                            // Not a failure of the invocation: the storage refused the write
+                            // because the shard has a new owner. Classified as an interrupt so
+                            // the loop stops the agent without appending an `Error` entry to an
+                            // oplog that is no longer this executor's to write.
+                            Some(WorkerExecutorError::OplogFenced { .. }) => {
+                                TrapType::Interrupt(InterruptKind::ShardLost)
+                            }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
                                 make_error(AgentError::InvalidRequest(details.clone()))
                             }
@@ -499,17 +538,27 @@ impl TrapType {
                             //
                             // `WorkerExecutorError::Runtime` is intentionally NOT
                             // mapped here: it is also used as a generic transient
-                            // error wrapper (e.g. for `Oplog::fallible_add`
-                            // failures) and must remain retriable via the default
-                            // policy path (`AgentError::Unknown`).
+                            // error wrapper and must remain retriable via the
+                            // default policy path (`AgentError::Unknown`).
                             Some(WorkerExecutorError::UnexpectedOplogEntry { expected, got }) => {
                                 make_error(AgentError::InternalError(format!(
                                     "Unexpected oplog entry during replay: expected {expected}, got {got}"
                                 )))
                             }
                             _ => {
-                                // Search the full error chain for ClassifiedHostError
-                                if let Some(classified) = error
+                                // A bare `?` on an oplog write inside an anyhow host function
+                                // carries the `OplogError` itself, not its `WorkerExecutorError`
+                                // form, so the fence is looked for along the chain as well. A
+                                // payload error stays a retriable `Unknown`. After that, search
+                                // the full error chain for ClassifiedHostError.
+                                if error.chain().any(|cause| {
+                                    matches!(
+                                        cause.downcast_ref::<crate::services::oplog::OplogError>(),
+                                        Some(crate::services::oplog::OplogError::Fenced(_))
+                                    )
+                                }) {
+                                    TrapType::Interrupt(InterruptKind::ShardLost)
+                                } else if let Some(classified) = error
                                     .chain()
                                     .find_map(|e| e.downcast_ref::<ClassifiedHostError>())
                                 {
@@ -537,6 +586,10 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt(_)) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
+            // What a caller can act on: refresh the routing table and retry on the owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => {
+                Some(WorkerExecutorError::ShardingNotReady)
+            }
             TrapType::Error { error, .. } => match error {
                 AgentError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
@@ -591,15 +644,10 @@ pub enum LookupResult {
     Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
 }
 
-pub enum ReadFileResult {
-    Ok(Pin<Box<dyn Stream<Item = Result<Bytes, WorkerExecutorError>> + Send + 'static>>),
-    NotFound,
-    NotAFile,
-}
-
 pub struct InvocationContext {
     pub trace_id: TraceId,
     pub spans: HashMap<SpanId, Arc<InvocationContextSpan>>,
+    span_traces: HashMap<SpanId, (TraceId, Vec<String>)>,
     pub root: Arc<InvocationContextSpan>,
     pub trace_states: Vec<String>,
 }
@@ -610,9 +658,11 @@ impl InvocationContext {
         let root = InvocationContextSpan::local().build();
         let mut spans = HashMap::new();
         spans.insert(root.span_id().clone(), root.clone());
+        let span_traces = HashMap::from([(root.span_id().clone(), (trace_id.clone(), Vec::new()))]);
         Self {
             trace_id,
             spans,
+            span_traces,
             root,
             trace_states: Vec::new(),
         }
@@ -627,9 +677,20 @@ impl InvocationContext {
             spans.insert(span.span_id().clone(), span);
         }
 
+        let span_traces = spans
+            .keys()
+            .cloned()
+            .map(|span_id| {
+                (
+                    span_id,
+                    (value.trace_id.clone(), value.trace_states.clone()),
+                )
+            })
+            .collect();
         let result = Self {
             trace_id: value.trace_id,
             spans,
+            span_traces,
             root,
             trace_states: value.trace_states,
         };
@@ -641,6 +702,9 @@ impl InvocationContext {
     pub fn switch_to(&mut self, new_invocation_context: InvocationContext) {
         self.trace_id = new_invocation_context.trace_id;
         self.trace_states = new_invocation_context.trace_states;
+        for (span_id, origin) in new_invocation_context.span_traces {
+            self.span_traces.entry(span_id).or_insert(origin);
+        }
 
         let root_span_id = new_invocation_context.root.span_id();
         let mut reassigned = HashSet::new();
@@ -722,11 +786,34 @@ impl InvocationContext {
         let current_span = self.span(current_span_id)?;
         let span = current_span.start_span(new_span_id);
         self.add_span(span.clone());
+        self.span_traces.insert(
+            span.span_id().clone(),
+            (self.trace_id.clone(), self.trace_states.clone()),
+        );
         Ok(span)
     }
 
     pub fn add_span(&mut self, span: Arc<InvocationContextSpan>) {
+        self.span_traces
+            .entry(span.span_id().clone())
+            .or_insert_with(|| (self.trace_id.clone(), self.trace_states.clone()));
         self.spans.insert(span.span_id().clone(), span);
+    }
+
+    pub fn add_span_with_origin(
+        &mut self,
+        span: Arc<InvocationContextSpan>,
+        trace_id: TraceId,
+        trace_states: Vec<String>,
+    ) {
+        self.span_traces
+            .entry(span.span_id().clone())
+            .or_insert((trace_id, trace_states));
+        self.spans.insert(span.span_id().clone(), span);
+    }
+
+    pub fn span_origin(&self, span_id: &SpanId) -> Option<(TraceId, Vec<String>)> {
+        self.span_traces.get(span_id).cloned()
     }
 
     pub fn finish_span(&mut self, span_id: &SpanId) -> Result<Option<SpanId>, String> {
@@ -736,6 +823,7 @@ impl InvocationContext {
             .as_ref()
             .map(|parent| parent.span_id().clone());
         self.spans.remove(span_id);
+        self.span_traces.remove(span_id);
         Ok(parent_id)
     }
 
@@ -894,6 +982,22 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
+    fn wrapped_replay_jump_remains_an_interrupt() {
+        let error = anyhow::Error::new(WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Jump,
+        })
+        .context("durable call recovery");
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &error,
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+        assert!(matches!(trap, TrapType::Interrupt(InterruptKind::Jump)));
+    }
+
+    #[test]
     fn monthly_http_budget_suspends_durable_agents() {
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::anyhow!(
@@ -909,6 +1013,113 @@ mod tests {
             trap,
             TrapType::Interrupt(InterruptKind::Suspend(_))
         ));
+    }
+
+    /// The contract every fenced host-call site depends on: a fence that escapes a host function
+    /// as an `anyhow` error must classify as `ShardLost`, so the loop gives the agent up instead
+    /// of appending an `Error` entry to the very oplog that refused the write.
+    #[test]
+    fn a_fenced_oplog_write_escaping_a_host_call_classifies_as_shard_lost() {
+        let fence = crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "fenced-host-call".to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+        };
+
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Fenced(fence)
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a fenced write must be an interrupt, got {trap:?}"
+        );
+    }
+
+    /// The deliberate other half: an entry whose payload could not be built is not a fence.
+    /// Classifying it as `ShardLost` would hand an agent to another executor over a failure that
+    /// has nothing to do with who owns it.
+    #[test]
+    fn an_oplog_payload_failure_does_not_give_up_the_agent() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::anyhow!(WorkerExecutorError::from(
+                crate::services::oplog::OplogError::Payload("payload too large".to_string())
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a payload failure must not be treated as a lost shard, got {trap:?}"
+        );
+    }
+
+    fn fence_for(agent_id: &str) -> crate::services::oplog::OplogFence {
+        crate::services::oplog::OplogFence {
+            agent_id: golem_common::model::AgentId {
+                component_id: ComponentId::new(),
+                agent_id: agent_id.to_string(),
+            },
+            expected_epoch: golem_common::model::ShardEpoch(7),
+            actual_epoch: Some(golem_common::model::ShardEpoch(8)),
+        }
+    }
+
+    /// The same contract for a host function that puts a bare `?` on an oplog write: the error is
+    /// the `OplogError` itself, possibly under context, and still has to read as a lost shard.
+    #[test]
+    fn a_bare_fenced_oplog_error_escaping_a_host_call_classifies_as_shard_lost() {
+        let bare = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(fence_for(
+            "bare-fenced-host-call",
+        )));
+        let with_context = anyhow::Error::from(crate::services::oplog::OplogError::Fenced(
+            fence_for("bare-fenced-host-call"),
+        ))
+        .context("ending atomic region");
+
+        for error in [bare, with_context] {
+            let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+                &error,
+                OplogIndex::INITIAL,
+                false,
+                false,
+                AgentMode::Durable,
+            );
+            assert!(
+                matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+                "a bare fenced oplog error must be an interrupt, got {trap:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_oplog_payload_error_is_not_shard_lost() {
+        let trap = TrapType::from_error::<crate::workerctx::default::Context>(
+            &anyhow::Error::from(crate::services::oplog::OplogError::Payload(
+                "payload too large".to_string(),
+            )),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        assert!(
+            !matches!(trap, TrapType::Interrupt(InterruptKind::ShardLost)),
+            "a bare payload failure must stay an ordinary failure, got {trap:?}"
+        );
     }
 
     #[test]
@@ -989,6 +1200,44 @@ mod tests {
     }
 
     #[test]
+    fn a_fenced_oplog_write_is_a_lost_shard_and_is_never_retried() {
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "fenced".to_string(),
+        };
+        let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
+            golem_service_base::error::worker_executor::WorkerExecutorError::oplog_fenced(
+                agent_id,
+                3,
+                Some(4),
+            ),
+            OplogIndex::INITIAL,
+            false,
+            false,
+            AgentMode::Durable,
+        );
+
+        // An interrupt, not an error: no `Error` entry may be appended to an oplog that belongs
+        // to another executor now.
+        assert!(matches!(
+            trap,
+            TrapType::Interrupt(InterruptKind::ShardLost)
+        ));
+
+        // Callers are told what they can act on, which is the same thing as for a lapsed lease.
+        assert!(matches!(
+            trap.as_golem_error(""),
+            Some(WorkerExecutorError::ShardingNotReady)
+        ));
+
+        // And it is never retried in place - that would reopen the oplog at the stale epoch.
+        let decision = crate::durable_host::DurableWorkerCtx::<
+            crate::workerctx::default::Context,
+        >::fixed_decision_for_trap_type(&trap);
+        assert_eq!(decision, Some(RetryDecision::None));
+    }
+
+    #[test]
     fn permission_denied_is_a_non_retriable_invocation_rejection() {
         let trap = TrapType::from_worker_executor_error::<crate::workerctx::default::Context>(
             golem_service_base::error::worker_executor::WorkerExecutorError::permission_denied(
@@ -1022,11 +1271,46 @@ mod tests {
     }
 
     #[test]
+    fn a_speculative_replay_keeps_only_the_retry_of_a_trap_that_every_invocation_retries() {
+        let error = |error: AgentError| TrapType::Error {
+            error,
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+        let retry = |trap: &TrapType| {
+            crate::durable_host::DurableWorkerCtx::<crate::workerctx::default::Context>::speculative_retry(trap)
+        };
+
+        assert_eq!(
+            [
+                retry(&error(AgentError::OutOfMemory)),
+                retry(&error(AgentError::InternalError("diverged".to_string()))),
+                retry(&error(AgentError::Unknown("transient".to_string()))),
+                retry(&error(AgentError::TransientError("transient".to_string()))),
+                retry(&error(AgentError::StackOverflow)),
+                retry(&TrapType::Interrupt(InterruptKind::Restart)),
+                retry(&TrapType::Exit),
+            ],
+            [
+                Some(RetryDecision::ReacquirePermits),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ]
+        );
+    }
+
+    #[test]
     fn runtime_error_falls_back_to_unknown_and_is_policy_retriable() {
-        // `WorkerExecutorError::Runtime` is a generic transient-error wrapper
-        // (used e.g. for `Oplog::fallible_add` failures). It must not be
-        // classified as `InternalError` (non-retriable); it must fall through
-        // to `AgentError::Unknown` so the configured retry policy applies.
+        // `WorkerExecutorError::Runtime` is a generic transient-error wrapper.
+        // It must not be classified as `InternalError` (non-retriable); it
+        // must fall through to `AgentError::Unknown` so the configured retry
+        // policy applies.
         let trap = TrapType::from_error::<crate::workerctx::default::Context>(
             &anyhow::Error::from(
                 golem_service_base::error::worker_executor::WorkerExecutorError::runtime(
@@ -1380,6 +1664,8 @@ mod tests {
     fn switch_to() {
         let stack1 = example_stack_1();
         let (mut ctx, _current_id) = InvocationContext::from_stack(stack1.clone()).unwrap();
+        let retained_span_id = stack1.spans.last().span_id().clone();
+        let retained_origin = ctx.span_origin(&retained_span_id).unwrap();
 
         let mut stack2 = InvocationContextStack::new(
             example_trace_id_2(),
@@ -1399,6 +1685,7 @@ mod tests {
         assert_eq!(ctx.trace_id, example_trace_id_2());
         assert_eq!(ctx.trace_states, vec!["state3=z".to_string()]);
         assert_eq!(ctx.root.span_id(), &example_span_id_1());
+        assert_eq!(ctx.span_origin(&retained_span_id), Some(retained_origin));
 
         let x = ctx.get_attribute_chain(&current_id2, "x").unwrap();
         let y = ctx.get_attribute_chain(&current_id2, "y").unwrap();

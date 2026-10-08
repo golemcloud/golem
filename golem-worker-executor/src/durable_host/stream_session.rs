@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_api_grpc::proto::golem::common::Empty;
-use golem_api_grpc::proto::golem::schema::{
-    FixedListValue, ListValue, MapEntry, MapValue, OptionValue, RecordValue, ResultValue,
-    SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, TupleValue, UnionValue,
-    VariantValue, result_value as proto_result_value, schema_value as proto_schema_value,
-};
 use golem_common::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
     MAX_STREAM_VALUE_TRAVERSAL_DEPTH, StreamMapSide, StreamValuePathStep,
+};
+use golem_schema::proto::golem::common::Empty;
+use golem_schema::proto::golem::schema::{
+    FixedListValue, ListValue, MapEntry, MapValue, OptionValue, RecordValue, ResultValue,
+    SchemaValue as ProtoSchemaValue, SchemaValueStreamReference, TupleValue, UnionValue,
+    VariantValue, result_value as proto_result_value, schema_value as proto_schema_value,
 };
 use golem_schema::schema::{SchemaGraph, SchemaType, SchemaValue, SchemaValueStream};
 use prost::Message;

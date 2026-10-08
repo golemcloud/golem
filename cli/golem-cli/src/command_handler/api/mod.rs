@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 pub mod deployment;
 pub mod domain;
+pub mod mcp_import;
 pub mod security_scheme;
 
 pub struct ApiCommandHandler {
@@ -49,6 +50,9 @@ impl ApiCommandHandler {
                     .api_domain_handler()
                     .handle_command(subcommand)
                     .await
+            }
+            ApiSubcommand::McpImport { subcommand } => {
+                mcp_import::handle(&self.ctx, subcommand).await
             }
         }
     }

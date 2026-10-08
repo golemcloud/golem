@@ -12,18 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 use super::wire;
 use crate::TypedSchemaValue;
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 use crate::decode_typed_schema_value_owned;
 #[cfg(test)]
 use crate::encode_typed_schema_value_owned;
@@ -34,33 +26,19 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
-/// Readable byte stream used for tool stdin and stdout.
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
+/// Readable byte stream used for tool stdin and tool outputs.
+#[cfg(not(feature = "export_golem_agentic"))]
 pub type InputStream = wit_bindgen::StreamReader<
     Result<Vec<u8>, crate::bindings::golem::tool::streams::ByteStreamFailure>,
 >;
 
-/// Writable byte stream supplied to middleware for tool stdout.
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+/// Writable byte stream supplied to middleware for a tool output.
+#[cfg(feature = "export_golem_agentic")]
 pub type OutputStream = crate::agentic::OutputStream;
-#[cfg(not(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
+#[cfg(not(feature = "export_golem_agentic"))]
 #[doc(hidden)]
 pub struct OutputStream;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 pub type InputStream = wit_bindgen::StreamReader<
     Result<Vec<u8>, crate::golem_agentic::golem::tool::streams::ByteStreamFailure>,
 >;
@@ -69,6 +47,7 @@ pub type InputStream = wit_bindgen::StreamReader<
 pub struct InvocationResult {
     pub result: Option<TypedSchemaValue>,
     pub stdout: Option<InputStream>,
+    pub stderr: Option<InputStream>,
 }
 
 #[doc(hidden)]
@@ -79,11 +58,70 @@ pub type ToolMiddlewareInvokeFutureFor<'a> = Pin<
 #[doc(hidden)]
 pub type ToolMiddlewareInvokeFuture = ToolMiddlewareInvokeFutureFor<'static>;
 
-/// A custom tool error whose name is not declared by the typed client.
-#[derive(Clone, Debug, PartialEq)]
+/// A custom tool error whose payload is decoded only on explicit inspection.
+#[derive(Clone)]
 pub struct RawCustomToolError {
     pub name: String,
-    pub payload: TypedSchemaValue,
+    payload: Rc<RawCustomToolPayload>,
+}
+
+struct RawCustomToolPayload {
+    wire: std::cell::RefCell<Option<crate::schema::wit::wire::TypedSchemaValue>>,
+    decoded: std::cell::OnceCell<Result<TypedSchemaValue, String>>,
+}
+
+impl RawCustomToolError {
+    pub fn from_payload(name: String, payload: TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(None),
+                decoded: std::cell::OnceCell::from(Ok(payload)),
+            }),
+        }
+    }
+
+    pub fn from_wire(name: String, payload: crate::schema::wit::wire::TypedSchemaValue) -> Self {
+        Self {
+            name,
+            payload: Rc::new(RawCustomToolPayload {
+                wire: std::cell::RefCell::new(Some(payload)),
+                decoded: std::cell::OnceCell::new(),
+            }),
+        }
+    }
+
+    /// Materializes the dynamic schema model for an undeclared error.
+    pub fn payload(&self) -> Result<&TypedSchemaValue, String> {
+        self.payload
+            .decoded
+            .get_or_init(|| {
+                crate::decode_typed_schema_value_owned(
+                    self.payload
+                        .wire
+                        .borrow_mut()
+                        .take()
+                        .expect("undecoded payload"),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+
+impl std::fmt::Debug for RawCustomToolError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawCustomToolError")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for RawCustomToolError {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.payload() == other.payload()
+    }
 }
 
 /// Exact error channel shared by middleware guest dispatch and its underlying layer.
@@ -170,14 +208,7 @@ impl<E: Error + 'static> Error for ToolInvokeError<E> {
 /// The runtime is the only producer of this handle. It is intentionally not
 /// cloneable. Shared invocation permits a middleware to overlap calls to the
 /// same runtime-minted capability.
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    )),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingTool {
     inner: UnderlyingToolInner,
 }
@@ -186,64 +217,50 @@ pub struct UnderlyingTool {
 ///
 /// Dropping this value only stops observing the invocation. Use [`Self::cancel`]
 /// to explicitly request cancellation of this child.
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    )),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct UnderlyingInvocation {
     result: Rc<UnderlyingInvocationResult>,
-    #[cfg(any(
-        test,
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ))]
+    #[cfg(any(test, feature = "export_golem_agentic"))]
     terminal: Rc<
         super::invocation_result::InvocationResultDriver<
             Result<Option<TypedSchemaValue>, ToolInvokeError<std::convert::Infallible>>,
         >,
     >,
     pub stdout: Option<InputStream>,
+    pub stderr: Option<InputStream>,
 }
 
 /// Typed view of a started underlying invocation generated for a tool command.
-#[cfg_attr(
-    not(any(
-        test,
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    )),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(test, feature = "export_golem_agentic")), allow(dead_code))]
 pub struct TypedUnderlyingInvocation<T, E> {
     invocation: UnderlyingInvocation,
     pub stdout: Option<InputStream>,
+    pub stderr: Option<InputStream>,
     decode: fn(InvocationResult) -> Result<T, ToolInvokeError<E>>,
     decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl<T, E> TypedUnderlyingInvocation<T, E> {
     #[doc(hidden)]
     pub fn new(
         mut invocation: UnderlyingInvocation,
+        expect_stdout: bool,
+        expect_stderr: bool,
         decode: fn(InvocationResult) -> Result<T, ToolInvokeError<E>>,
         decode_error: fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
-    ) -> Self {
+    ) -> Result<Self, ToolInvokeError<E>> {
+        validate_output_presence("stdout", expect_stdout, invocation.stdout.is_some())?;
+        validate_output_presence("stderr", expect_stderr, invocation.stderr.is_some())?;
         let stdout = invocation.stdout.take();
-        Self {
+        let stderr = invocation.stderr.take();
+        Ok(Self {
             invocation,
             stdout,
+            stderr,
             decode,
             decode_error,
-        }
+        })
     }
 
     pub fn cancel(&self) {
@@ -255,41 +272,52 @@ impl<T, E> TypedUnderlyingInvocation<T, E> {
         (self.decode)(InvocationResult {
             result,
             stdout: None,
+            stderr: None,
         })
     }
 
-    /// Waits for the structured result while forwarding the underlying stdout
-    /// to the writer supplied to this middleware invocation.
-    pub async fn get_forwarding_stdout(
+    /// Waits for the structured result while forwarding both underlying outputs
+    /// to the writers supplied to this middleware invocation.
+    pub async fn get_forwarding_outputs(
         mut self,
         stdout: Option<OutputStream>,
+        stderr: Option<OutputStream>,
     ) -> Result<T, ToolInvokeError<E>> {
         let underlying_stdout = self.stdout.take();
-        let forwarded = async move {
-            if underlying_stdout.is_none() {
-                return Err(ToolInvokeError::InvalidResult(
-                    "tool result did not contain declared stdout stream".to_string(),
-                ));
-            }
-            forward_stdout(underlying_stdout, stdout).await
-        };
-        let result = self.get();
-        let (result, forwarded) = join_results(result, forwarded).await;
+        let underlying_stderr = self.stderr.take();
+        let stdout = forward_output("stdout", underlying_stdout, stdout);
+        let stderr = forward_output("stderr", underlying_stderr, stderr);
+        let (result, stdout, stderr) = join_three(self.get(), stdout, stderr).await;
         match result {
             Err(error) => Err(error),
             Ok(result) => {
-                forwarded?;
+                stdout?;
+                stderr?;
                 Ok(result)
             }
         }
     }
 }
 
+#[cfg(any(test, feature = "export_golem_agentic",))]
+fn validate_output_presence<E>(
+    channel: &str,
+    expected: bool,
+    present: bool,
+) -> Result<(), ToolInvokeError<E>> {
+    match (expected, present) {
+        (true, false) => Err(ToolInvokeError::InvalidResult(format!(
+            "tool result did not contain declared {channel} stream"
+        ))),
+        (false, true) => Err(ToolInvokeError::InvalidResult(format!(
+            "tool result unexpectedly contained {channel} stream"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 enum UnderlyingInvocationResult {
-    #[cfg(any(
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ))]
+    #[cfg(feature = "export_golem_agentic")]
     Raw(crate::tool_underlying_bindings::UnderlyingInvokeResult),
     #[cfg(test)]
     Fake(FakeInvocationResult),
@@ -310,23 +338,20 @@ struct FakeInvocationResult {
     cancelled: Rc<std::cell::Cell<bool>>,
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingInvocation {
-    fn new(result: UnderlyingInvocationResult, stdout: Option<InputStream>) -> Self {
+    fn new(
+        result: UnderlyingInvocationResult,
+        stdout: Option<InputStream>,
+        stderr: Option<InputStream>,
+    ) -> Self {
         let result = Rc::new(result);
         let source = Rc::clone(&result);
         let terminal = Rc::new(super::invocation_result::InvocationResultDriver::new(
             move || {
                 Box::pin(async move {
                     let result = match source.as_ref() {
-                        #[cfg(any(
-                            feature = "export_golem_agentic",
-                            feature = "export_golem_tool_middleware"
-                        ))]
+                        #[cfg(feature = "export_golem_agentic")]
                         UnderlyingInvocationResult::Raw(result) => result
                             .get()
                             .await
@@ -354,15 +379,13 @@ impl UnderlyingInvocation {
             result,
             terminal,
             stdout,
+            stderr,
         }
     }
 
     pub fn cancel(&self) {
         match self.result.as_ref() {
-            #[cfg(any(
-                feature = "export_golem_agentic",
-                feature = "export_golem_tool_middleware"
-            ))]
+            #[cfg(feature = "export_golem_agentic")]
             UnderlyingInvocationResult::Raw(result) => result.cancel(),
             #[cfg(test)]
             UnderlyingInvocationResult::Fake(result) => result.cancelled.set(true),
@@ -372,7 +395,7 @@ impl UnderlyingInvocation {
     pub async fn get(
         &self,
     ) -> Result<Option<TypedSchemaValue>, ToolInvokeError<RawCustomToolError>> {
-        self.get_with(|name, payload| Ok(Some(RawCustomToolError { name, payload })))
+        self.get_with(|name, payload| Ok(Some(RawCustomToolError::from_payload(name, payload))))
             .await
     }
 
@@ -386,7 +409,10 @@ impl UnderlyingInvocation {
             .await
             .map_err(|error| match error {
                 ToolInvokeError::UnknownCustomError(raw) => {
-                    match decode_custom_error(raw.name.clone(), raw.payload.clone()) {
+                    match raw
+                        .payload()
+                        .and_then(|payload| decode_custom_error(raw.name.clone(), payload.clone()))
+                    {
                         Ok(Some(value)) => ToolInvokeError::Tool(value),
                         Ok(None) => ToolInvokeError::UnknownCustomError(raw),
                         Err(error) => ToolInvokeError::InvalidResult(error),
@@ -398,10 +424,7 @@ impl UnderlyingInvocation {
 }
 
 enum UnderlyingToolInner {
-    #[cfg(any(
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ))]
+    #[cfg(feature = "export_golem_agentic")]
     Raw(crate::tool_underlying_bindings::UnderlyingTool),
     #[cfg(test)]
     Fake(FakeInvoke),
@@ -434,20 +457,14 @@ pub(crate) type FakeInvoke = Box<
             >,
         >,
         Option<InputStream>,
+        Option<InputStream>,
         Rc<std::cell::Cell<bool>>,
     ),
 >;
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 impl UnderlyingTool {
-    #[cfg(any(
-        feature = "export_golem_agentic",
-        feature = "export_golem_tool_middleware"
-    ))]
+    #[cfg(feature = "export_golem_agentic")]
     #[allow(dead_code)]
     pub(crate) fn from_raw(raw: crate::tool_underlying_bindings::UnderlyingTool) -> Self {
         Self {
@@ -461,14 +478,19 @@ impl UnderlyingTool {
             let result = invoke(path, input, stdin);
             let result = Box::pin(async move {
                 let result = result.await?;
-                if result.stdout.is_some() {
+                if result.stdout.is_some() || result.stderr.is_some() {
                     return Err(wire::ToolError::InvalidResult(
-                        "fake invocation must provide stdout when it is started".to_string(),
+                        "fake invocation must provide outputs when it is started".to_string(),
                     ));
                 }
                 Ok(result.result)
             });
-            (result as _, None, Rc::new(std::cell::Cell::new(false)))
+            (
+                result as _,
+                None,
+                None,
+                Rc::new(std::cell::Cell::new(false)),
+            )
         });
         Self {
             inner: UnderlyingToolInner::Fake(invoke),
@@ -489,31 +511,34 @@ impl UnderlyingTool {
         stdin: Option<InputStream>,
     ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
         self.invoke_with(command_path, input, stdin, |name, payload| {
-            Ok(Some(RawCustomToolError { name, payload }))
+            Ok(Some(RawCustomToolError::from_payload(name, payload)))
         })
         .await
     }
 
-    /// Invokes the next layer while forwarding its stdout to the writer
+    /// Invokes the next layer while forwarding both outputs to the writers
     /// supplied to this middleware invocation.
-    pub async fn invoke_forwarding_stdout(
+    pub async fn invoke_forwarding_outputs(
         &self,
         command_path: Vec<String>,
         input: TypedSchemaValue,
         stdin: Option<InputStream>,
         stdout: Option<OutputStream>,
+        stderr: Option<OutputStream>,
     ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
         let mut invocation = self.start(command_path, input, stdin).await?;
-        let forwarded = forward_stdout(invocation.stdout.take(), stdout);
-        let result = invocation.get();
-        let (result, forwarded) = join_results(result, forwarded).await;
+        let stdout = forward_output("stdout", invocation.stdout.take(), stdout);
+        let stderr = forward_output("stderr", invocation.stderr.take(), stderr);
+        let (result, stdout, stderr) = join_three(invocation.get(), stdout, stderr).await;
         match result {
             Err(error) => Err(error),
             Ok(result) => {
-                forwarded?;
+                stdout?;
+                stderr?;
                 Ok(InvocationResult {
                     result,
                     stdout: None,
+                    stderr: None,
                 })
             }
         }
@@ -541,26 +566,25 @@ impl UnderlyingTool {
             .await
             .map_err(|error| ToolInvokeError::InvalidInput(error.to_string()))?;
         match &self.inner {
-            #[cfg(any(
-                feature = "export_golem_agentic",
-                feature = "export_golem_tool_middleware"
-            ))]
+            #[cfg(feature = "export_golem_agentic")]
             UnderlyingToolInner::Raw(raw) => {
-                let (result, stdout) = raw.invoke(command_path, input, stdin).await;
+                let (result, stdout, stderr) = raw.invoke(command_path, input, stdin).await;
                 Ok(UnderlyingInvocation::new(
                     UnderlyingInvocationResult::Raw(result),
                     stdout,
+                    stderr,
                 ))
             }
             #[cfg(test)]
             UnderlyingToolInner::Fake(invoke) => {
-                let (result, stdout, cancelled) = invoke(command_path, input, stdin);
+                let (result, stdout, stderr, cancelled) = invoke(command_path, input, stdin);
                 Ok(UnderlyingInvocation::new(
                     UnderlyingInvocationResult::Fake(FakeInvocationResult {
                         result: std::cell::RefCell::new(Some(result)),
                         cancelled,
                     }),
                     stdout,
+                    stderr,
                 ))
             }
         }
@@ -579,30 +603,28 @@ impl UnderlyingTool {
         Ok(InvocationResult {
             result,
             stdout: invocation.stdout.take(),
+            stderr: invocation.stderr.take(),
         })
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
-async fn forward_stdout<E>(
-    stdout: Option<InputStream>,
+#[cfg(feature = "export_golem_agentic")]
+async fn forward_output<E>(
+    channel: &str,
+    stream: Option<InputStream>,
     mut output: Option<OutputStream>,
 ) -> Result<(), ToolInvokeError<E>> {
-    let Some(mut stdout) = stdout else {
+    let Some(mut stream) = stream else {
         return match output {
-            Some(output) => classify_stream_write_result(output.finish().await).map(drop),
+            Some(output) => classify_stream_write_result(channel, output.finish().await).map(drop),
             None => Ok(()),
         };
     };
-    while let Some(item) = stdout.next().await {
+    while let Some(item) = stream.next().await {
         match item {
             Ok(bytes) => {
                 if let Some(output) = &mut output
-                    && classify_stream_write_result(output.write(bytes).await)?
+                    && classify_stream_write_result(channel, output.write(bytes).await)?
                 {
                     return Ok(());
                 }
@@ -610,7 +632,7 @@ async fn forward_stdout<E>(
             Err(reason) => {
                 return match output {
                     Some(output) => {
-                        classify_stream_write_result(output.fail(reason).await).map(drop)
+                        classify_stream_write_result(channel, output.fail(reason).await).map(drop)
                     }
                     None => Ok(()),
                 };
@@ -618,34 +640,29 @@ async fn forward_stdout<E>(
         }
     }
     match output {
-        Some(output) => classify_stream_write_result(output.finish().await).map(drop),
+        Some(output) => classify_stream_write_result(channel, output.finish().await).map(drop),
         None => Ok(()),
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 fn classify_stream_write_result<E>(
-    result: Result<(), crate::golem_agentic::golem::tool::streams::StreamWriteError>,
+    channel: &str,
+    result: Result<(), StreamWriteError>,
 ) -> Result<bool, ToolInvokeError<E>> {
-    use crate::golem_agentic::golem::tool::streams::{ByteStreamCloseCause, StreamWriteError};
     match result {
         Ok(()) => Ok(false),
         Err(StreamWriteError::Closed(ByteStreamCloseCause::ConsumerCancelled)) => Ok(true),
         Err(error) => Err(ToolInvokeError::InvalidResult(format!(
-            "failed to forward underlying stdout: {error:?}"
+            "failed to forward underlying {channel}: {error:?}"
         ))),
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
+use crate::golem_agentic::golem::tool::streams::{ByteStreamCloseCause, StreamWriteError};
+
+#[cfg(any(test, feature = "export_golem_agentic"))]
 async fn join_results<A, B>(a: A, b: B) -> (A::Output, B::Output)
 where
     A: Future,
@@ -678,10 +695,18 @@ where
     .await
 }
 
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic",))]
+async fn join_three<A, B, C>(a: A, b: B, c: C) -> (A::Output, B::Output, C::Output)
+where
+    A: Future,
+    B: Future,
+    C: Future,
+{
+    let (a, (b, c)) = join_results(a, async { join_results(b, c).await }).await;
+    (a, b, c)
+}
+
+#[cfg(feature = "export_golem_agentic")]
 fn decode_underlying_error<E>(
     error: crate::tool_underlying_bindings::UnderlyingError,
     decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
@@ -697,11 +722,7 @@ fn decode_underlying_error<E>(
     }
 }
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 fn decode_wire_error<E>(
     error: wire::ToolError,
     decode_custom_error: impl Fn(String, TypedSchemaValue) -> Result<Option<E>, String>,
@@ -721,10 +742,9 @@ fn decode_wire_error<E>(
             };
             match decode_custom_error(error.name.clone(), value.clone()) {
                 Ok(Some(error)) => ToolInvokeError::Tool(error),
-                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError {
-                    name: error.name,
-                    payload: value,
-                }),
+                Ok(None) => ToolInvokeError::UnknownCustomError(RawCustomToolError::from_payload(
+                    error.name, value,
+                )),
                 Err(error) => ToolInvokeError::InvalidResult(error),
             }
         }
@@ -735,14 +755,34 @@ pub fn decode_result_with_stdout<T: FromSchema + IntoSchema, E>(
     result: InvocationResult,
 ) -> Result<(T, InputStream), ToolInvokeError<E>> {
     let stdout = expect_stdout(result.stdout)?;
+    expect_no_stderr(result.stderr)?;
     let value = decode_expected_value(result.result)?;
     Ok((value, stdout))
+}
+
+pub fn decode_result_with_stderr<T: FromSchema + IntoSchema, E>(
+    result: InvocationResult,
+) -> Result<(T, InputStream), ToolInvokeError<E>> {
+    expect_no_stdout(result.stdout)?;
+    let stderr = expect_stderr(result.stderr)?;
+    let value = decode_expected_value(result.result)?;
+    Ok((value, stderr))
+}
+
+pub fn decode_result_with_outputs<T: FromSchema + IntoSchema, E>(
+    result: InvocationResult,
+) -> Result<(T, InputStream, InputStream), ToolInvokeError<E>> {
+    let stdout = expect_stdout(result.stdout)?;
+    let stderr = expect_stderr(result.stderr)?;
+    let value = decode_expected_value(result.result)?;
+    Ok((value, stdout, stderr))
 }
 
 pub fn decode_result_value<T: FromSchema + IntoSchema, E>(
     result: InvocationResult,
 ) -> Result<T, ToolInvokeError<E>> {
     expect_no_stdout(result.stdout)?;
+    expect_no_stderr(result.stderr)?;
     decode_expected_value(result.result)
 }
 
@@ -750,12 +790,32 @@ pub fn decode_result_stdout_only<E>(
     result: InvocationResult,
 ) -> Result<InputStream, ToolInvokeError<E>> {
     let stdout = expect_stdout(result.stdout)?;
+    expect_no_stderr(result.stderr)?;
     expect_no_value(result.result)?;
     Ok(stdout)
 }
 
+pub fn decode_result_stderr_only<E>(
+    result: InvocationResult,
+) -> Result<InputStream, ToolInvokeError<E>> {
+    expect_no_stdout(result.stdout)?;
+    let stderr = expect_stderr(result.stderr)?;
+    expect_no_value(result.result)?;
+    Ok(stderr)
+}
+
+pub fn decode_result_outputs_only<E>(
+    result: InvocationResult,
+) -> Result<(InputStream, InputStream), ToolInvokeError<E>> {
+    let stdout = expect_stdout(result.stdout)?;
+    let stderr = expect_stderr(result.stderr)?;
+    expect_no_value(result.result)?;
+    Ok((stdout, stderr))
+}
+
 pub fn decode_result_empty<E>(result: InvocationResult) -> Result<(), ToolInvokeError<E>> {
     expect_no_stdout(result.stdout)?;
+    expect_no_stderr(result.stderr)?;
     expect_no_value(result.result)
 }
 
@@ -792,6 +852,23 @@ fn expect_no_stdout<E>(stdout: Option<InputStream>) -> Result<(), ToolInvokeErro
     Ok(())
 }
 
+fn expect_stderr<E>(stderr: Option<InputStream>) -> Result<InputStream, ToolInvokeError<E>> {
+    stderr.ok_or_else(|| {
+        ToolInvokeError::InvalidResult(
+            "tool result did not contain declared stderr stream".to_string(),
+        )
+    })
+}
+
+fn expect_no_stderr<E>(stderr: Option<InputStream>) -> Result<(), ToolInvokeError<E>> {
+    if stderr.is_some() {
+        return Err(ToolInvokeError::InvalidResult(
+            "tool result unexpectedly contained stderr stream".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn expect_no_value<E>(value: Option<TypedSchemaValue>) -> Result<(), ToolInvokeError<E>> {
     if value.is_some() {
         return Err(ToolInvokeError::InvalidResult(
@@ -809,17 +886,25 @@ mod tests {
     use std::rc::Rc;
     use test_r::test;
 
+    #[cfg(feature = "export_golem_agentic")]
     #[test]
     fn stdout_write_result_classification_only_accepts_consumer_cancellation() {
-        use crate::golem_agentic::golem::tool::streams::{
-            ByteStreamCloseCause, ByteStreamFailure, StreamWriteError,
-        };
+        #[cfg(not(feature = "export_golem_agentic"))]
+        use crate::bindings::golem::tool::streams::ByteStreamFailure;
+        #[cfg(feature = "export_golem_agentic")]
+        use crate::golem_agentic::golem::tool::streams::ByteStreamFailure;
 
-        assert_eq!(classify_stream_write_result::<()>(Ok(())), Ok(false));
         assert_eq!(
-            classify_stream_write_result::<()>(Err(StreamWriteError::Closed(
-                ByteStreamCloseCause::ConsumerCancelled
-            ))),
+            classify_stream_write_result::<()>("stdout", Ok(())),
+            Ok(false)
+        );
+        assert_eq!(
+            classify_stream_write_result::<()>(
+                "stdout",
+                Err(StreamWriteError::Closed(
+                    ByteStreamCloseCause::ConsumerCancelled
+                ))
+            ),
             Ok(true)
         );
         for error in [
@@ -828,7 +913,7 @@ mod tests {
             StreamWriteError::ConcurrentOperation,
         ] {
             assert!(matches!(
-                classify_stream_write_result::<()>(Err(error)),
+                classify_stream_write_result::<()>("stdout", Err(error)),
                 Err(ToolInvokeError::InvalidResult(_))
             ));
         }
@@ -934,6 +1019,7 @@ mod tests {
                 Ok(wire::InvocationResult {
                     result: Some(input),
                     stdout: None,
+                    stderr: None,
                 })
             })
         }));
@@ -986,6 +1072,7 @@ mod tests {
                             .unwrap(),
                     ),
                     stdout: None,
+                    stderr: None,
                 })
             })
         }));
@@ -1054,7 +1141,7 @@ mod tests {
                         std::task::Poll::Ready(Ok(value.take()))
                     }
                 }));
-                (future as _, None, Rc::new(Cell::new(false)))
+                (future as _, None, None, Rc::new(Cell::new(false)))
             }
         }));
         let expected = "shared terminal"
@@ -1088,7 +1175,7 @@ mod tests {
                     std::task::Poll::Pending
                 }
             }));
-            (result as _, None, cancelled)
+            (result as _, None, None, cancelled)
         }));
         let invocation = underlying
             .start(
@@ -1121,12 +1208,14 @@ mod tests {
         let missing = decode_result_value::<String, ()>(InvocationResult {
             result: None,
             stdout: None,
+            stderr: None,
         });
         assert!(matches!(missing, Err(ToolInvokeError::InvalidResult(_))));
 
         let unexpected = decode_result_empty::<()>(InvocationResult {
             result: Some("value".to_string().into_typed_schema_value().unwrap()),
             stdout: None,
+            stderr: None,
         });
         assert!(matches!(unexpected, Err(ToolInvokeError::InvalidResult(_))));
     }
@@ -1136,6 +1225,7 @@ mod tests {
         let missing = decode_result_stdout_only::<()>(InvocationResult {
             result: None,
             stdout: None,
+            stderr: None,
         });
         assert!(matches!(missing, Err(ToolInvokeError::InvalidResult(_))));
     }

@@ -1,6 +1,6 @@
-use golem_rust::{FromSchema, IntoSchema, agent_definition};
+use golem_rust::{FromSchema, IntoSchema, IntoWire, WireSchema, agent_definition};
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, WireSchema)]
 struct AgentStream {
     value: String,
 }

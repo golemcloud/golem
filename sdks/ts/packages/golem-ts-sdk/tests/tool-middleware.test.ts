@@ -14,8 +14,10 @@
 
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { SchemaValueStream } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
 import { compileSchema } from '../src/schema/adapter';
+import { s } from '../src/schema/markers';
 import { sdkPrincipalFromHost } from '../src/principal';
 import {
   command,
@@ -30,7 +32,12 @@ import {
   invokeMonomorphicToolMiddleware,
   type MonomorphicToolMiddlewareInvocation,
 } from '../src/internal/tool/middlewareRuntime';
-import { typedSchemaValueFromWit, typedSchemaValueToWit, v } from '../src/internal/schema-model';
+import {
+  schemaGraphToWit,
+  typedSchemaValueFromWit,
+  typedSchemaValueToWit,
+  v,
+} from '../src/internal/schema-model';
 import {
   adaptLegacyRawUnderlying,
   type LegacyRawUnderlyingTool,
@@ -396,7 +403,7 @@ describe('monomorphic tool middleware dispatch', () => {
     if (custom.cause.tag !== 'unknown-error') throw new Error('custom error was not encoded');
     const presentedBody = getExtendedToolDefinition(presented).root.body!;
     expect(
-      decodeDeclaredToolError(
+      await decodeDeclaredToolError(
         presentedBody,
         { name: custom.cause.name, payload: custom.cause.payload },
         'convert',
@@ -554,7 +561,10 @@ describe('monomorphic tool middleware dispatch', () => {
     definition.middleware({
       name: 'stream-policy',
       implementation: {
-        streaming: async (_args, { underlying, stdin }) => underlying.streaming({ stdin }),
+        streaming: async (_args, { underlying, stdin }) => {
+          const started = await underlying.streaming.start({ stdin });
+          return { result: await started.result, stdout: started.stdout };
+        },
       },
     });
     const stdin = controllableStream(1, 2, 3);
@@ -627,7 +637,7 @@ describe('monomorphic tool middleware dispatch', () => {
     expect(unexpected.close).toHaveBeenCalledOnce();
 
     const undeclaredStdout = controllableStream(2);
-    absentResult = undeclaredStdout.stream;
+    absentResult = { stdout: undeclaredStdout.stream };
     await expect(
       invoke(
         'absent-policy',
@@ -737,5 +747,78 @@ describe('monomorphic tool middleware dispatch', () => {
       run(wireValue(z.object({ policy: z.string() }), { policy: 'audit' })),
     ).rejects.toMatchObject({ cause: { tag: 'invalid-input' } });
     expect(observed).toHaveLength(2);
+  });
+
+  it.each(['result', 'custom-error'])('closes rejected underlying %s streams', async (mode) => {
+    const close = vi.fn(async () => ({ done: true as const, value: undefined }));
+    const next = vi.fn();
+    const raw = await SchemaValueStream.wrap({
+      [Symbol.asyncIterator]: () => ({ next, return: close }),
+    });
+    const schema = z.object({ stream: s.stream(s.u32()), count: s.u32() });
+    const definition = toolDefinition('probe').body((body) =>
+      body.returns(schema).error('failed', { kind: 'runtime', exitCode: 1, payload: schema }),
+    );
+    definition.middleware({
+      name: 'stream-cleanup',
+      implementation: { probe: async (_args, { underlying }) => underlying.probe({}) },
+    });
+    const payload = {
+      graph: schemaGraphToWit(compileSchema(schema).graph),
+      value: {
+        root: 2,
+        valueNodes: [
+          { tag: 'stream-value' as const, val: raw },
+          { tag: 'bool-value' as const, val: true },
+          { tag: 'record-value' as const, val: [0, 1] },
+        ],
+      },
+    };
+    await expect(
+      invoke(
+        'stream-cleanup',
+        {
+          commandPath: [],
+          input: commandInput(definition, [], {}),
+          stdin: undefined,
+          principal: anonymous,
+        },
+        {
+          invoke: async () => {
+            if (mode === 'custom-error')
+              throw { tag: 'custom-error', val: { name: 'failed', payload } };
+            return { result: payload };
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ cause: { tag: 'invalid-result' } });
+    expect(close).toHaveBeenCalledOnce();
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  it('disposes an unexpected owned result from an underlying unit command', async () => {
+    const dispose = vi.fn();
+    const definition = toolDefinition('probe').body((body) => body);
+    definition.middleware({
+      name: 'unit-cleanup',
+      implementation: { probe: async (_args, { underlying }) => underlying.probe({}) },
+    });
+    const result = wireValue(s.secret(z.string()), { [Symbol.dispose]: dispose });
+    await expect(
+      invoke(
+        'unit-cleanup',
+        {
+          commandPath: [],
+          input: commandInput(definition, [], {}),
+          stdin: undefined,
+          principal: anonymous,
+        },
+        { invoke: async () => ({ result }) },
+      ),
+    ).rejects.toMatchObject({
+      cause: { tag: 'invalid-result', val: expect.stringContaining('unexpected result') },
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(result.value.valueNodes[0].val).toBeUndefined();
   });
 });

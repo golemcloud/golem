@@ -64,27 +64,19 @@ async fn test_scala_tool_middleware_component_roles() {
 }
 
 fn assert_role_contracts(ctx: &TestContext) {
-    assert_component_contract(
-        &final_component(ctx, "ordinary"),
-        &[AGENT_GUEST, LOAD_SNAPSHOT, SAVE_SNAPSHOT, TOOL_GUEST],
-        true,
-    );
-    assert_component_contract(
-        &final_component(ctx, "middleware"),
-        &[TOOL_MIDDLEWARE_GUEST],
-        false,
-    );
-    assert_component_contract(
-        &final_component(ctx, "combined"),
-        &[
-            AGENT_GUEST,
-            LOAD_SNAPSHOT,
-            SAVE_SNAPSHOT,
-            TOOL_GUEST,
-            TOOL_MIDDLEWARE_GUEST,
-        ],
-        true,
-    );
+    for role in ["ordinary", "middleware", "combined"] {
+        assert_component_contract(
+            &final_component(ctx, role),
+            &[
+                AGENT_GUEST,
+                LOAD_SNAPSHOT,
+                SAVE_SNAPSHOT,
+                TOOL_GUEST,
+                TOOL_MIDDLEWARE_GUEST,
+            ],
+            true,
+        );
+    }
 }
 
 fn assert_component_contract(component: &Path, expected_exports: &[&str], expects_tool_host: bool) {

@@ -14,15 +14,17 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestGolemToolInvocationRejected,
-    HostRequestNoInput, HostRequestPollCount, HostResponseMonotonicClockTimestamp,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
+    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
+    HostRequestGolemToolInvocationRejected, HostRequestNoInput, HostRequestPollCount,
+    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogErrorKind, OplogPayload,
+    PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, AgentInvocationPayload, IdempotencyKey, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
+use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
@@ -62,39 +64,42 @@ impl InMemoryOplog {
 
 #[async_trait]
 impl Oplog for InMemoryOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
-        OplogIndex::from_u64(entries.len() as u64)
+        Ok(OplogIndex::from_u64(entries.len() as u64))
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(entry);
         let index = OplogIndex::from_u64(entries.len() as u64);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
+    ) -> crate::services::oplog::OplogAddPairReceipt {
         let mut entries = self.entries.lock().unwrap();
         entries.push(start);
         let first_idx = OplogIndex::from_u64(entries.len() as u64);
         entries.push(make_second(first_idx));
         let second_idx = OplogIndex::from_u64(entries.len() as u64);
-        (first_idx, second_idx)
+        Box::pin(async move { Ok((first_idx, second_idx)) })
     }
 
     async fn add_start_with_reserved_raw_payload(
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -105,7 +110,7 @@ impl Oplog for InMemoryOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut entries = self.entries.lock().unwrap();
         let index = OplogIndex::from_u64(entries.len() as u64 + 1);
         let (serialized_request, build_start) = build_request(index)?;
@@ -122,8 +127,11 @@ impl Oplog for InMemoryOplog {
         0
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
-        BTreeMap::new()
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
+        Ok(BTreeMap::new())
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -134,8 +142,12 @@ impl Oplog for InMemoryOplog {
         None
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read_exact(
@@ -252,6 +264,7 @@ fn start_now() -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     }
 }
 
@@ -261,6 +274,110 @@ fn start_now_with_request_payload(payload: OplogPayload<HostRequest>) -> OplogEn
         unreachable!();
     };
     *request = Some(payload);
+    entry
+}
+
+fn start_resolution() -> OplogEntry {
+    start_named(HostFunctionName::MonotonicClockResolution)
+}
+
+#[test]
+async fn http_body_byte_count_excludes_deleted_reads() {
+    use crate::durable_host::http::inline_retry::count_incoming_body_bytes;
+    use golem_common::model::oplog::HostResponseStreamChunk;
+
+    for (deleted_start, deleted_end) in [(2, 4), (2, 2), (3, 3)] {
+        for external_payload in [false, true] {
+            let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
+            let scope = oplog.add(noop()).await.unwrap();
+            let read = |blocking, batched| OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: Some(scope),
+                function_name: if blocking {
+                    HostFunctionName::HttpTypesIncomingBodyStreamBlockingRead
+                } else {
+                    HostFunctionName::HttpTypesIncomingBodyStreamRead
+                },
+                invocation_id: None,
+                observational_owner: None,
+                request: None,
+                durable_function_type: if batched {
+                    DurableFunctionType::WriteRemoteBatched(Some(scope))
+                } else {
+                    DurableFunctionType::ReadRemote
+                },
+                span_started: None,
+            };
+            let end = |start_index, response| OplogEntry::End {
+                timestamp: Timestamp::now_utc(),
+                start_index,
+                response: Some(response),
+                forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
+            };
+            let chunk = |bytes: &[u8]| {
+                OplogPayload::Inline(Box::new(HostResponse::StreamChunk(
+                    HostResponseStreamChunk {
+                        result: Ok(bytes.to_vec()),
+                    },
+                )))
+            };
+            let old_read = oplog.add(read(false, true)).await.unwrap();
+            let old_payload = if external_payload {
+                // There is deliberately no backing payload: skipped history must not fetch it.
+                OplogPayload::External {
+                    payload_id: PayloadId::new(),
+                    md5_hash: vec![],
+                    cached: None,
+                }
+            } else {
+                chunk(b"olddata")
+            };
+            oplog.add(end(old_read, old_payload)).await.unwrap();
+            let region = OplogRegion {
+                start: OplogIndex::from_u64(deleted_start),
+                end: OplogIndex::from_u64(deleted_end),
+            };
+            oplog
+                .add(OplogEntry::jump(None, region.clone()))
+                .await
+                .unwrap();
+            let replay = test_replay_state(
+                test_agent_id(),
+                oplog.clone(),
+                DeletedRegions::default(),
+                None,
+            )
+            .await
+            .unwrap();
+            replay.register_replay_jump(vec![region]).await.unwrap();
+            let skipped_regions = replay.skipped_regions().await.unwrap();
+
+            // These reads are beyond replay_target and must still contribute to the live count.
+            let replacement = oplog.add(read(true, false)).await.unwrap();
+            oplog.add(end(replacement, chunk(b"new"))).await.unwrap();
+            let next_read = oplog.add(read(false, false)).await.unwrap();
+            oplog.add(end(next_read, chunk(b"xy"))).await.unwrap();
+            assert_eq!(
+                count_incoming_body_bytes(&oplog, scope, &skipped_regions)
+                    .await
+                    .unwrap(),
+                5,
+                "deleted region {deleted_start}..={deleted_end}, external={external_payload}"
+            );
+        }
+    }
+}
+
+/// A `ReadLocal` `Start` of `name` with a no-input request; the recorded kind is what matters
+/// to the tests using it, not the durable function type the real host call would record.
+fn start_named(name: HostFunctionName) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start { function_name, .. } = &mut entry else {
+        unreachable!();
+    };
+    *function_name = name;
     entry
 }
 
@@ -278,6 +395,7 @@ fn rejected_tool_reconstruction_start(
             input_decode_failure: None,
             has_stdin: false,
             has_stdout: false,
+            has_stderr: false,
             call_mode: EntityCallMode::Synchronous,
         },
     };
@@ -290,6 +408,7 @@ fn rejected_tool_reconstruction_start(
             input_decode_failure: None,
             has_stdin: false,
             has_stdout: false,
+            has_stderr: false,
             call_mode: EntityCallMode::Synchronous,
             error: SerializableToolRpcError::Denied("recorded rejection".to_string()),
         });
@@ -302,6 +421,7 @@ fn rejected_tool_reconstruction_start(
             observational_owner: None,
             request: Some(OplogPayload::Inline(Box::new(request))),
             durable_function_type: DurableFunctionType::WriteLocal,
+            span_started: None,
         },
         identity,
     )
@@ -324,8 +444,42 @@ async fn claim_rejected_tool_reconstruction(
         .unwrap()
     {
         ReplayStartClaimOutcome::Claimed { handle, .. } => handle,
-        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+        ReplayStartClaimOutcome::ReplayEnded
+        | ReplayStartClaimOutcome::DeletedRegion
+        | ReplayStartClaimOutcome::StoreAlreadyLive => {
             panic!("expected rejected tool reconstruction Start")
+        }
+    }
+}
+
+/// Strict custom-root claim on behalf of a replaying Store, through the production
+/// [`ReplayState::claim_custom_start_for_store`]: the tests here never expect a replay-end or
+/// live-Store continuation, so those outcomes are failures.
+async fn claim_custom_start(
+    rs: &ReplayState,
+    expected_function_name: &HostFunctionName,
+    expected_function_type: &DurableFunctionType,
+    expected_parent_start_index: Option<OplogIndex>,
+    expected_invocation_id: uuid::Uuid,
+    expected_request: &HostRequest,
+) -> Result<ClaimedConcurrentStart, WorkerExecutorError> {
+    match rs
+        .claim_custom_start_for_store(
+            expected_function_name,
+            expected_function_type,
+            expected_parent_start_index,
+            expected_invocation_id,
+            expected_request,
+            false,
+        )
+        .await?
+    {
+        CustomStartClaimOutcome::Claimed(claimed) => Ok(claimed),
+        CustomStartClaimOutcome::ReplayEnded => {
+            panic!("strict custom claim {expected_invocation_id} reached the replay end")
+        }
+        CustomStartClaimOutcome::StoreAlreadyLive => {
+            panic!("strict custom claim {expected_invocation_id} was issued for a live Store")
         }
     }
 }
@@ -352,6 +506,7 @@ fn custom_start_with_request(
         observational_owner: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
+        span_started: None,
     }
 }
 
@@ -376,6 +531,8 @@ fn custom_end(start_index: u64, value: i32) -> OplogEntry {
             value.into_typed_schema_value().unwrap(),
         )))),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -426,16 +583,16 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     match rs.await_resolution_outcome(claimed.handle).await.unwrap() {
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
             assert_eq!(end_idx, OplogIndex::from_u64(5));
@@ -455,16 +612,16 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
     assert!(matches!(
         rs.await_resolution_outcome(claimed.handle).await.unwrap(),
@@ -529,16 +686,16 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     let sibling = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -574,16 +731,16 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -606,16 +763,16 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
     ])
     .await;
 
-    let outer = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let outer = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(outer.handle).await.unwrap(),
@@ -634,16 +791,16 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -664,16 +821,16 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -694,16 +851,16 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
@@ -728,16 +885,16 @@ async fn custom_replay_skips_observational_cancellation() {
     ])
     .await;
 
-    let custom = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("outer".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
@@ -759,26 +916,26 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
     ])
     .await;
     let name = HostFunctionName::Custom("generator".to_string());
-    let second = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &no_input,
-        )
-        .await
-        .unwrap();
-    let first = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &no_input,
-        )
-        .await
-        .unwrap();
+    let second = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &no_input,
+    )
+    .await
+    .unwrap();
+    let first = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &no_input,
+    )
+    .await
+    .unwrap();
     assert_eq!(first.handle.start_idx(), OplogIndex::from_u64(2));
     assert_eq!(second.handle.start_idx(), OplogIndex::from_u64(3));
     assert!(matches!(
@@ -802,30 +959,30 @@ async fn custom_claim_rejects_changed_request_for_same_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(2),
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(2),
+    )
+    .await;
     let Err(err) = result else {
         panic!("a replayed custom request must match its recorded payload");
     };
     assert!(format!("{err}").contains("recorded request payload differs"));
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await
-        .expect("failed validation must not leave claim state behind");
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await
+    .expect("failed validation must not leave claim state behind");
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
@@ -840,15 +997,15 @@ async fn custom_claim_rejects_reused_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &custom_request(1),
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &custom_request(1),
+    )
+    .await;
     let Err(err) = result else {
         panic!("custom invocation IDs are single-use");
     };
@@ -865,15 +1022,15 @@ async fn custom_claim_rejects_start_without_invocation_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("generator".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(1),
-            &no_input,
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("generator".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(1),
+        &no_input,
+    )
+    .await;
     let Err(err) = result else {
         panic!("custom replay must require a deterministic invocation ID");
     };
@@ -901,16 +1058,16 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(4));
 }
@@ -927,16 +1084,16 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(3));
 }
 
@@ -949,15 +1106,15 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
     ])
     .await;
 
-    let result = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            uuid::Uuid::from_u128(2),
-            &request,
-        )
-        .await;
+    let result = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        uuid::Uuid::from_u128(2),
+        &request,
+    )
+    .await;
     let Err(err) = result else {
         panic!("an exact invocation ID with divergent metadata must be rejected");
     };
@@ -975,16 +1132,16 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     let name = HostFunctionName::Custom("operation".to_string());
     let invocation_id = uuid::Uuid::from_u128(1);
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            invocation_id,
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        invocation_id,
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         rs.await_resolution_outcome(claimed.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
@@ -992,16 +1149,16 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
 
     drop(rs);
     let rs = replay_state_over(entries).await;
-    let claimed_again = rs
-        .claim_custom_start_matching_invocation_id(
-            &name,
-            &DurableFunctionType::ReadRemote,
-            None,
-            invocation_id,
-            &custom_request(1),
-        )
-        .await
-        .unwrap();
+    let claimed_again = claim_custom_start(
+        &rs,
+        &name,
+        &DurableFunctionType::ReadRemote,
+        None,
+        invocation_id,
+        &custom_request(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(2));
 }
 
@@ -1038,6 +1195,8 @@ fn end_for(start_index: u64, nanos: u64) -> OplogEntry {
             HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos }),
         ))),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -1055,13 +1214,14 @@ fn fork_start() -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: None,
     }
 }
 
 async fn replay_state_over(entries: Vec<OplogEntry>) -> ReplayState {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in entries {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -1093,9 +1253,9 @@ async fn held_completed_reconstruction() -> (
     let parent = OplogIndex::from_u64(1);
     let (start, identity) = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
-    oplog.add(start).await;
-    oplog.add(end_for(2, 1)).await;
+    oplog.add(noop()).await.unwrap();
+    oplog.add(start).await.unwrap();
+    oplog.add(end_for(2, 1)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1119,7 +1279,7 @@ async fn held_completed_reconstruction() -> (
 #[test]
 async fn growing_replay_target_revokes_published_live_state() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1130,7 +1290,7 @@ async fn growing_replay_target_revokes_published_live_state() {
     .expect("failed to build replay state");
     assert!(replay.is_live_published());
 
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1166,7 +1326,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
     .await
     .expect("primary transition did not enter settling");
 
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1276,10 +1436,10 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
     let (first_start, identity) = rejected_tool_reconstruction_start(parent);
     let (second_start, _) = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
-    oplog.add(first_start).await;
-    oplog.add(second_start).await;
-    oplog.add(end_for(3, 2)).await;
+    oplog.add(noop()).await.unwrap();
+    oplog.add(first_start).await.unwrap();
+    oplog.add(second_start).await.unwrap();
+    oplog.add(end_for(3, 2)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1325,7 +1485,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
         "the incomplete candidate bypassed the completed reconstruction fence"
     );
 
-    let new_target = oplog.add(end_for(2, 1)).await;
+    let new_target = oplog.add(end_for(2, 1)).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1400,7 +1560,7 @@ async fn concurrent_same_target_transitions_are_idempotent() {
 async fn old_settler_cannot_publish_a_grown_target() {
     let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
     let old_target = replay.switch_cursor_to_live().await.unwrap();
-    let new_target = oplog.add(noop()).await;
+    let new_target = oplog.add(noop()).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -1450,7 +1610,7 @@ async fn old_settler_cannot_publish_a_grown_target() {
 #[test]
 async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
     let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
     let replay = ReplayState::new_for_owner(
         test_agent_id(),
@@ -1474,6 +1634,40 @@ async fn owner_failure_wins_when_reconstruction_barrier_is_already_empty() {
         .await
         .expect_err("biased barrier must prefer a ready owner failure");
     assert!(error.to_string().contains("ready owner failure"));
+}
+
+#[test]
+async fn owner_lifecycle_change_during_reconstruction_remains_an_interrupt() {
+    let oplog = Arc::new(InMemoryOplog::new());
+    oplog.add(noop()).await.unwrap();
+    let owner_operations = crate::durable_host::tool::operation::OwnerToolOperations::new();
+    let replay = ReplayState::new_for_owner(
+        test_agent_id(),
+        oplog,
+        DeletedRegions::default(),
+        None,
+        owner_operations.clone(),
+    )
+    .await
+    .expect("failed to build replay state");
+    owner_operations
+        .select_owner_failure(
+            crate::durable_host::tool::operation::OwnerFailureWinner::Lifecycle(
+                InterruptKind::Restart,
+            ),
+        )
+        .await;
+
+    let error = replay
+        .test_wait_for_reconstruction_fences()
+        .await
+        .expect_err("owner lifecycle change must interrupt reconstruction");
+    assert_eq!(
+        error,
+        WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart
+        }
+    );
 }
 
 #[test]
@@ -1549,7 +1743,7 @@ async fn permission_events_replay_after_invocation_wallet_pin() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let replay_state = test_replay_state(owned_agent_id, oplog, DeletedRegions::default(), None)
@@ -1607,16 +1801,16 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
     ])
     .await;
 
-    let claimed = rs
-        .claim_custom_start_matching_invocation_id(
-            &HostFunctionName::Custom("durable-operation".to_string()),
-            &DurableFunctionType::ReadRemote,
-            None,
-            Uuid::from_u128(1),
-            &custom_request(41),
-        )
-        .await
-        .expect("recorded durable operation must be claimable");
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("durable-operation".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        Uuid::from_u128(1),
+        &custom_request(41),
+    )
+    .await
+    .expect("recorded durable operation must be claimable");
     match rs
         .await_resolution_outcome(claimed.handle)
         .await
@@ -1676,7 +1870,7 @@ async fn permission_events_are_recovered_from_skipped_regions() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1712,7 +1906,7 @@ async fn snapshot_prefix_suppresses_replayed_permission_events() {
         },
         start_now(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1735,6 +1929,7 @@ fn stdout_log(message: &str) -> OplogEntry {
         level: LogLevel::Stdout,
         context: "stdout".to_string(),
         message: message.to_string(),
+        trace_context: None,
     }
 }
 
@@ -1773,6 +1968,56 @@ async fn seen_log_tracks_multiplicity_of_identical_entries() {
     assert!(rs.seen_log(LogLevel::Stdout, "stdout", "Y").await);
     rs.remove_seen_log(LogLevel::Stdout, "stdout", "Y").await;
     assert!(!rs.seen_log(LogLevel::Stdout, "stdout", "Y").await);
+}
+
+#[test]
+async fn resolution_readiness_preserves_positional_entries_and_retained_tails() {
+    for with_positional_entry in [false, true] {
+        for completed in [false, true] {
+            let mut entries = vec![noop(), start_now()];
+            if with_positional_entry {
+                entries.push(noop());
+            }
+            if completed {
+                entries.push(end_for(2, 37));
+                entries.push(noop()); // Ready terminal need not be the replay tail.
+            }
+            let rs = replay_state_over(entries).await;
+            let handle = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                rs.resolution_ready(&handle).await.unwrap(),
+                !with_positional_entry
+            );
+            if with_positional_entry {
+                assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+                assert!(!rs.resolution_ready(&handle).await.unwrap());
+                let (index, entry) = rs.get_oplog_entry(None).await.unwrap();
+                assert_eq!(index, OplogIndex::from_u64(3));
+                assert!(matches!(entry, OplogEntry::NoOp { .. }));
+                assert!(rs.resolution_ready(&handle).await.unwrap());
+            }
+            let outcome = rs.await_resolution_outcome(handle).await.unwrap();
+            match outcome {
+                ResolutionOutcome::Incomplete => assert!(!completed),
+                ResolutionOutcome::Resolved(Resolution::Completed { response, .. }) => {
+                    assert!(completed);
+                    assert!(matches!(response, Some(OplogPayload::Inline(payload))
+                        if matches!(*payload, HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos: 37 }))));
+                    assert!(matches!(
+                        rs.get_oplog_entry(None).await.unwrap().1,
+                        OplogEntry::NoOp { .. }
+                    ));
+                }
+                other => panic!("unexpected resolution: {other:?}"),
+            }
+        }
+    }
 }
 
 #[test]
@@ -1815,6 +2060,34 @@ async fn start_claim_reports_replay_ended_when_cursor_is_live() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn accepted_start_notification_survives_cancelled_claim_waiter() {
+    let entry = start_now();
+    let rs = replay_state_over(vec![noop(), entry.clone(), end_for(2, 42)]).await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let lock = rs.cursor.state.lock().await;
+    let mut claim = Box::pin(rs.claim_start_for_store_observed(
+        StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+        false,
+        move |index, entry| {
+            tx.send((index, entry.clone())).unwrap();
+        },
+    ));
+    assert!(futures::poll!(claim.as_mut()).is_pending());
+    drop(claim);
+    assert!(rx.try_recv().is_err());
+    drop(lock);
+    let (index, recorded) = rx.recv().await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(2));
+    assert_eq!(recorded, entry);
+    rs.fence_owned_cursor_ops().await.unwrap();
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 async fn missing_start_claim_remains_divergence_while_replaying() {
     let rs = replay_state_over(vec![noop(), start_now()]).await;
 
@@ -1839,7 +2112,7 @@ async fn missing_start_claim_remains_divergence_while_replaying() {
 async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), start_with_parent(1)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1869,7 +2142,7 @@ async fn assert_request_payload_failure_is_not_reclassified_as_deleted_region(
         start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
         start_now_with_request_payload(failing_payload),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1932,7 +2205,7 @@ async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
         start_now_with_request_payload(OplogPayload::Inline(Box::new(expected_request.clone()))),
         start_now_with_request_payload(OplogPayload::Inline(Box::new(different_request))),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=2)]);
@@ -1955,7 +2228,7 @@ async fn genuine_request_mismatch_still_reports_matching_deleted_region() {
 #[test]
 async fn request_matching_downloads_uncached_external_payloads() {
     let oplog = Arc::new(InMemoryOplog::new());
-    oplog.add(noop()).await;
+    oplog.add(noop()).await.unwrap();
 
     let first_request: HostRequest = HostRequestPollCount { count: 1 }.into();
     let second_request: HostRequest = HostRequestPollCount { count: 2 }.into();
@@ -1972,8 +2245,10 @@ async fn request_matching_downloads_uncached_external_payloads() {
                 observational_owner: None,
                 request: Some(payload),
                 durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: None,
             })
-            .await;
+            .await
+            .unwrap();
     }
 
     let oplog: Arc<dyn Oplog> = oplog;
@@ -2068,10 +2343,12 @@ async fn typed_claim_mismatch_does_not_leak_pending() {
 }
 
 #[test]
-async fn speculative_rollback_leaves_cursor_and_pending_unchanged() {
+async fn predicate_probe_retains_unclaimed_start_and_drains_awaited_terminals() {
     // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5)] — after claiming A, the cursor head
-    // is the still-unclaimed, non-terminal Start(B). A speculative read whose predicate fails
-    // must roll the cursor back fully (it must not steal Start(B)) and must not resolve A.
+    // is the still-unclaimed, non-terminal Start(B). A read whose predicate fails must not steal
+    // Start(B) (only B's owner may claim it) and must not park on it either (B's owner may need
+    // the Store the reader holds): it retains B, keeps draining, routes End(A) to A's awaiter and
+    // keeps End(B) with the retained Start for B's later claim.
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
@@ -2093,22 +2370,41 @@ async fn speculative_rollback_leaves_cursor_and_pending_unchanged() {
     assert!(speculative.is_none());
     assert_eq!(
         rs.last_replayed_index(),
-        OplogIndex::from_u64(2),
-        "speculative rollback must not advance the cursor past Start(B)"
+        OplogIndex::from_u64(5),
+        "the probe must drain past the retained Start(B) and both terminals"
     );
+    assert!(rs.has_unclaimed_retained_starts());
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal.concurrent_resolver.is_pending(start_idx),
-            "speculative rollback must not resolve the handle"
+            !internal.concurrent_resolver.is_pending(start_idx),
+            "End(A) drained by the probe must resolve A's awaiter"
         );
         assert!(
             !internal
                 .concurrent_resolver
                 .is_pending(OplogIndex::from_u64(3)),
-            "speculative rollback must not claim Start(B)"
+            "the probe must not claim Start(B) on behalf of its owner"
         );
     }
+    match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]
@@ -2166,6 +2462,35 @@ async fn error_hint_between_start_and_end_resolves() {
         .unwrap();
 
     match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn snapshot_confirmed_hint_between_start_and_end_resolves() {
+    // [NoOp, Start, SnapshotConfirmed, End] — SnapshotConfirmed is a hint, skipped transparently.
+    // A non-hint entry in that position would park the resolution, so the wait is bounded.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::snapshot_confirmed(FilesystemSnapshotName::periodic()).rounded(),
+        end_for(2, 42),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    let resolution = tokio::time::timeout(Duration::from_secs(5), rs.await_resolution(handle))
+        .await
+        .expect("resolution must not block on a SnapshotConfirmed hint entry")
+        .unwrap();
+    match resolution {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
@@ -2271,6 +2596,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
                 HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
         }
     }
 
@@ -2455,6 +2781,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     }
 }
 
@@ -2800,6 +3127,8 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
                 },
             )))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         invocation_finished(),
     ])
@@ -2853,6 +3182,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 HostRequestNoInput {},
             )))),
             durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+            span_started: None,
         },
         OplogEntry::Start {
             timestamp: Timestamp::now_utc(),
@@ -2866,6 +3196,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(
                 OplogIndex::from_u64(2),
             )),
+            span_started: None,
         },
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
@@ -2878,6 +3209,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 ),
             ))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         discarded_for(3),
         OplogEntry::End {
@@ -2891,6 +3224,8 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
                 ),
             ))),
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         },
         invocation_finished(),
     ])
@@ -2981,7 +3316,7 @@ async fn marked_completion_is_prefetched_without_advancing_past_intervening_entr
         "prefetching the End must not advance the positional cursor"
     );
 
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(3));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
@@ -3027,7 +3362,10 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
         }
         other => panic!("expected A to complete for host-side continuation, got {other:?}"),
     }
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    // A's awaiter drained past B's still-unclaimed Start (retained for B's owner together with
+    // its End) and parked at A's delivery marker.
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    assert!(rs.has_unclaimed_retained_starts());
 
     let handle_b = rs
         .claim_concurrent_start(
@@ -3040,7 +3378,7 @@ async fn replay_delivery_marker_holds_cursor_until_guest_boundary() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
         other => panic!("expected B to complete, got {other:?}"),
     }
-    let next = rs.get_oplog_entry();
+    let next = rs.get_oplog_entry(None);
     tokio::pin!(next);
     assert!(
         futures::poll!(next.as_mut()).is_pending(),
@@ -3246,6 +3584,65 @@ async fn request_matching_claim_does_not_scan_past_delivery_marker() {
 }
 
 #[test]
+#[test_r::timeout("10s")]
+async fn request_matching_claim_adopts_retained_start_behind_its_own_delivery_marker() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5), Delivered(B=3) at 6,
+    // Delivered(A=2) at 7]. Draining A's terminal retains B together with its End and parks the
+    // cursor at B's delivery marker. B's request-matching claim must adopt the retained Start
+    // instead of reporting itself blocked by the marker that only B's own delivery can release.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+        delivered_for(3),
+        delivered_for(2),
+    ])
+    .await;
+    let request = HostRequest::NoInput(HostRequestNoInput {});
+    let handle_a = rs
+        .claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &request,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b = tokio::time::timeout(
+        Duration::from_millis(500),
+        rs.claim_concurrent_start_matching_request(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            &request,
+        ),
+    )
+    .await
+    .expect("the retained Start must be claimable while its own delivery marker heads the cursor")
+    .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    assert!(!rs.has_unclaimed_retained_starts());
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(5));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
 async fn markerless_completed_end_resolves_without_delivery_marker() {
     // The recorded run crashed after the `End` became durable but before the completion crossed
     // to the guest, so no `CompletionDelivered` marker follows. The resolution must expose that
@@ -3328,7 +3725,7 @@ async fn await_natural_tail_end_waits_for_positionally_owned_entry() {
         "the tail-gated waiter must park while a positionally-owned entry remains"
     );
 
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
@@ -3398,7 +3795,7 @@ async fn await_natural_tail_end_parks_only_after_owned_cursor_work() {
     );
     assert_eq!(tracker.active_count(), 0);
 
-    let (_, entry) = rs.get_oplog_entry().await.unwrap();
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
     waiter.await.unwrap();
     assert_eq!(
@@ -3489,7 +3886,7 @@ async fn replay_delivery_barriers_preserve_adjacent_callback_order() {
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
     barrier_b.acknowledge();
     assert_eq!(
-        rs.get_oplog_entry().await.unwrap().0,
+        rs.get_oplog_entry(None).await.unwrap().0,
         OplogIndex::from_u64(8)
     );
 }
@@ -3519,7 +3916,7 @@ async fn dropped_replay_delivery_barrier_fails_later_cursor_work() {
     drop(barrier);
 
     let error = rs
-        .get_oplog_entry()
+        .get_oplog_entry(None)
         .await
         .expect_err("an unacknowledged recorded delivery must fail replay");
     assert!(
@@ -3536,7 +3933,7 @@ async fn marker_in_deleted_region_delivers_end_normally() {
     // the still-visible End must be delivered normally.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 42), discarded_for(2)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped =
@@ -3574,7 +3971,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
             for grow_target in [false, true] {
                 let oplog: Arc<dyn Oplog> = Arc::new(InMemoryOplog::new());
                 for entry in [noop(), start_now(), end_for(2, 42)] {
-                    oplog.add(entry).await;
+                    oplog.add(entry).await.unwrap();
                 }
                 let dropped_region = OplogRegion {
                     start: OplogIndex::from_u64(4),
@@ -3591,7 +3988,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                 ];
                 if !grow_target {
                     for entry in &suffix {
-                        oplog.add(entry.clone()).await;
+                        oplog.add(entry.clone()).await.unwrap();
                     }
                 }
                 let rs = test_replay_state(
@@ -3604,7 +4001,7 @@ async fn reverted_completion_marker_can_be_replaced_and_reconstructed() {
                 .expect("a deleted marker must not conflict with its replacement");
                 if grow_target {
                     for entry in suffix {
-                        oplog.add(entry).await;
+                        oplog.add(entry).await.unwrap();
                     }
                     rs.set_replay_target(OplogIndex::from_u64(6))
                         .await
@@ -3656,7 +4053,7 @@ async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
         delivered_for(2),
         noop(),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped =
@@ -3669,7 +4066,7 @@ async fn delivered_marker_with_deleted_start_is_skipped_as_orphan() {
         .await
         .expect("failed to build replay state");
 
-    let (index, entry) = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry())
+    let (index, entry) = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry(None))
         .await
         .expect("an orphan CompletionDelivered marker must not block replay")
         .expect("the next kept entry must remain readable");
@@ -3688,7 +4085,7 @@ async fn duplicate_completion_discarded_markers_fail_construction() {
         discarded_for(2),
         discarded_for(2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -3710,7 +4107,7 @@ async fn conflicting_completion_markers_fail_construction() {
         delivered_for(2),
         discarded_for(2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let err = test_replay_state(test_agent_id(), oplog, DeletedRegions::default(), None)
@@ -3732,7 +4129,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     // already-recorded marker must be idempotent, not a duplicate-marker error.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 42)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let rs = test_replay_state(
@@ -3743,7 +4140,7 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
     )
     .await
     .expect("failed to build replay state");
-    let marker_idx = oplog.add(discarded_for(2)).await;
+    let marker_idx = oplog.add(discarded_for(2)).await.unwrap();
     rs.record_discarded_completion(OplogIndex::from_u64(2), marker_idx);
     rs.set_replay_target(marker_idx)
         .await
@@ -3772,11 +4169,12 @@ async fn marker_recorded_at_runtime_is_visible_to_replay() {
 }
 
 #[test]
-async fn drain_parks_on_unclaimed_start() {
+async fn drain_retains_unclaimed_start_for_its_owner() {
     // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5)] — draining the awaited terminals
-    // while only A is claimed must stop on the still-unclaimed Start(B): A stays pending and the
-    // cursor does not advance past A's own Start. The cursor never steals a non-terminal entry a
-    // positional consumer / sibling claim owns.
+    // while only A is claimed must step over the still-unclaimed Start(B) *without* consuming it
+    // as its own: B is retained (with its End attached once reached) for the owner that claims it
+    // later, and A's End is drained to A. The drain never parks on B, because B's owner may need
+    // the Store the draining task holds.
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
@@ -3793,24 +4191,37 @@ async fn drain_parks_on_unclaimed_start() {
         .await
         .unwrap();
     assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+    assert!(!rs.has_unclaimed_retained_starts());
 
     rs.drain_awaited_terminals().await.unwrap();
     {
         let internal = rs.cursor.state.lock().await;
         assert!(
-            internal
+            !internal
                 .concurrent_resolver
                 .is_pending(OplogIndex::from_u64(2)),
-            "drain must not resolve A across the unclaimed Start(B)"
+            "drain must resolve A across the unclaimed Start(B)"
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(3)),
+            "Start(B) must be retained for its owner"
         );
     }
-    assert_eq!(
-        rs.last_replayed_index(),
-        OplogIndex::from_u64(2),
-        "drain must not advance past the unclaimed Start(B)"
+    assert!(rs.has_unclaimed_retained_starts());
+    assert!(
+        rs.last_replayed_index() >= OplogIndex::from_u64(4),
+        "drain must advance past the retained Start(B) to A's End"
     );
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
 
-    // Once B is claimed (guest re-execution reaches its call), awaiting drains both Ends.
+    // B's owner arrives later (guest re-execution reaches its call): the claim adopts the
+    // retained Start instead of erroring or claiming something else, and resolves with the End
+    // attached while it was retained.
     let handle_b = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -3819,15 +4230,1070 @@ async fn drain_parks_on_unclaimed_start() {
         .await
         .unwrap();
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
-
-    match rs.await_resolution(handle_a).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
+    assert!(!rs.has_unclaimed_retained_starts());
     match rs.await_resolution(handle_b).await.unwrap() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
         other => panic!("expected Completed, got {other:?}"),
     }
+}
+
+#[test]
+async fn hints_behind_a_retained_start_are_published_when_its_owner_claims_it() {
+    // [NoOp, Start(A=2), End(A=2→3), Start(B=4), End(B=4→5), CardDerived(6), Start(C=7)] — A's
+    // drain steps over B (retained, End attached) and the CardDerived hint that B's owner
+    // recorded right after its End. The hint's replay event is a side effect of B's durable
+    // call: publishing it while B is merely retained would let the guest's later authority
+    // boundary apply the card before B's owner re-claims the Start and reads the derivation,
+    // so it stays deferred on the retained Start until the owner claims it.
+    let derived_card = stored_test_card(CardId::new());
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        start_now(),
+        end_for(4, 43),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived_card.clone()),
+            wallet_generation: 0,
+        },
+        start_now(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
+
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained_b = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(4))
+            .expect("Start(B) must be retained for its owner");
+        assert_eq!(
+            retained_b
+                .terminal
+                .as_ref()
+                .map(|(terminal_idx, _)| *terminal_idx),
+            Some(OplogIndex::from_u64(5))
+        );
+        assert_eq!(
+            retained_b
+                .deferred_events
+                .iter()
+                .map(|(idx, _)| *idx)
+                .collect::<Vec<_>>(),
+            vec![OplogIndex::from_u64(6)],
+            "the CardDerived hint behind B's End is deferred on the retained Start"
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(7)),
+            "the drain retains Start(C) after skipping the hint"
+        );
+    }
+    assert!(
+        rs.last_replayed_index() >= OplogIndex::from_u64(6),
+        "the drain must have committed past the hint"
+    );
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None,
+        "a retained Start's hint must not be observable before its owner claims it"
+    );
+    assert!(rs.take_new_replay_events().is_empty());
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(3)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        Some((derived_card.clone(), 0)),
+        "claiming B publishes the deferred hint for its owner"
+    );
+    assert_eq!(
+        rs.take_new_replay_events(),
+        vec![ReplayEvent::CardDerived {
+            card: derived_card,
+            wallet_generation: 0,
+        }]
+    );
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn hints_behind_a_released_retained_start_are_published_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(B=3→4), CardDerived(5), End(A=2→6)] — B and the hint
+    // behind its End are retained by A's await and B is never claimed. Releasing the closed
+    // retained Start at the live invocation end must still publish the deferred hint: the card
+    // derivation is recorded history and the next authority boundary has to observe it.
+    let derived_card = stored_test_card(CardId::new());
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(3, 43),
+        OplogEntry::CardDerived {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            card: Box::new(derived_card.clone()),
+            wallet_generation: 0,
+        },
+        end_for(2, 42),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None
+    );
+    rs.switch_cursor_to_live().await.unwrap();
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        None,
+        "switch_to_live keeps retained Starts and their deferred hints"
+    );
+
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.pending_card_derivation(derived_card.card_id()).await,
+        Some((derived_card, 0)),
+        "releasing the retained Start publishes its deferred hint"
+    );
+}
+
+#[test]
+async fn retained_start_claim_rejects_mismatched_identity() {
+    // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5), Start(C=6 resolution)] —
+    // after A's
+    // drain retained B, a claim with a *different* identity must not adopt the retained Start:
+    // ownership is validated at claim time, so the mismatched claim falls through to the cursor
+    // head (C) exactly as if B had never been retained.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+        start_resolution(),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_c = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        handle_c.start_idx(),
+        OplogIndex::from_u64(6),
+        "a mismatched identity must not adopt the retained Start(B)"
+    );
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn retained_start_counts_are_published_per_quota_class() {
+    // [NoOp, Start(A=2 now), Start(B=3 p3 http send), Start(C=4 rpc invoke),
+    //  Start(D=5 resolution), End(A=2→6), End(B=3→7), End(C=4→8), End(D=5→9)] — resolving A
+    // commits past B, C and D, retaining all three. Only a call charged to the same quota as a
+    // retained Start may still be its late owner: B keeps HTTP-charged calls unfresh, C keeps
+    // RPC-charged calls unfresh, and D (charged to no quota) suppresses neither. Adopting a
+    // retained Start clears its class again while the others stay published.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_named(HostFunctionName::P3HttpClientSend),
+        start_named(HostFunctionName::GolemRpcWasmRpcInvoke),
+        start_resolution(),
+        end_for(2, 42),
+        end_for(3, 43),
+        end_for(4, 44),
+        end_for(5, 45),
+    ])
+    .await;
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
+
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Http));
+    assert!(rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::P3HttpClientSend,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    assert!(
+        !rs.retains_unclaimed_start_charged_to(QuotaClass::Http),
+        "adopting the only HTTP-charged retained Start makes HTTP calls fresh again"
+    );
+    assert!(
+        rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc),
+        "a retained RPC-charged Start is unaffected by an HTTP adoption"
+    );
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_c = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemRpcWasmRpcInvoke,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_c.start_idx(), OplogIndex::from_u64(4));
+    assert!(!rs.retains_unclaimed_start_charged_to(QuotaClass::Rpc));
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the retained Start charged to no quota still keeps admission on the claim path"
+    );
+
+    let handle_d = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockResolution,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_d.start_idx(), OplogIndex::from_u64(5));
+    assert!(!rs.has_unclaimed_retained_starts());
+    for (handle, end) in [(handle_b, 7), (handle_c, 8), (handle_d, 9)] {
+        match rs.await_resolution(handle).await.unwrap() {
+            Resolution::Completed { end_idx, .. } => {
+                assert_eq!(end_idx, OplogIndex::from_u64(end))
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+async fn retained_start_without_terminal_resolves_incomplete_at_live_switch() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4)] — B's End was never recorded. Draining A's End
+    // retains B; when B's owner claims it, the claim registers an ordinary awaiter that reaches
+    // the replay tail and resolves as Incomplete instead of hanging or fabricating a result.
+    let rs = replay_state_over(vec![noop(), start_now(), start_now(), end_for(2, 42)]).await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    assert!(!rs.has_unclaimed_retained_starts());
+    match rs.await_resolution_outcome(handle_b).await.unwrap() {
+        ResolutionOutcome::Incomplete => {}
+        other => panic!("expected Incomplete, got {other:?}"),
+    }
+}
+
+#[test]
+async fn positional_marker_read_retains_unclaimed_start_instead_of_consuming_it() {
+    // [NoOp, Start(B=2), BeginAtomicRegion(3), End(B=2→4)] — a positional reader looking for the
+    // atomic-region marker reaches the unclaimed durable-call Start(B) first. It must neither be
+    // handed that Start (kind/ownership mismatch) nor park on it: the Start is retained for its
+    // owner and the reader receives the marker at index 3.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        begin_atomic_region(),
+        end_for(2, 42),
+    ])
+    .await;
+
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(2));
+    match rs.await_resolution(handle_b).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn positional_marker_read_still_rejects_wrong_kind_at_head() {
+    // [NoOp, BeginAtomicRegion(2), EndAtomicRegion(3)] — retention only applies to durable-call
+    // Starts. A conditional positional reader expecting the *end* marker while the *begin* marker
+    // is at the head must still see the mismatch (no entry, cursor untouched), never skip the
+    // marker; the unconditional reader then receives the begin marker itself.
+    let rs = replay_state_over(vec![noop(), begin_atomic_region(), end_atomic_region(2)]).await;
+    let probe = rs
+        .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::EndAtomicRegion { .. }))
+        .await
+        .unwrap();
+    assert!(
+        probe.is_none(),
+        "a non-Start kind mismatch must not be skipped"
+    );
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(2));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+}
+
+#[test]
+async fn store_live_claim_adopts_retained_start_or_reports_store_already_live() {
+    // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5), NoOp(6),
+    // Start(C=7 resolution), End(C=7→8)] — A's awaiter retained B (and attached B's End) and
+    // stopped at the positional NoOp(6), so the shared cursor is still short of the target. A
+    // Store that already continued live locally still takes the replay admission path while
+    // unclaimed retained Starts exist: its claim for B's identity adopts the retained Start
+    // (never appending a duplicate), whereas a claim for an identity nobody retained is reported
+    // as `StoreAlreadyLive` — a new live call of that Store — instead of strict divergence, and
+    // must not steal the unclaimed Start(C) behind the marker.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+        noop(),
+        start_resolution(),
+        end_for(7, 47),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+
+    match rs
+        .claim_start_for_store(
+            StartClaim::unowned(
+                &HostFunctionName::WallClockNow,
+                &DurableFunctionType::ReadLocal,
+            ),
+            true,
+        )
+        .await
+        .unwrap()
+    {
+        ReplayStartClaimOutcome::StoreAlreadyLive => {}
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            panic!(
+                "a live Store must not claim an unrelated Start at {}",
+                handle.start_idx()
+            )
+        }
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+            panic!("expected StoreAlreadyLive")
+        }
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    match rs
+        .claim_start_for_store(
+            StartClaim::unowned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            ),
+            true,
+        )
+        .await
+        .unwrap()
+    {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            assert_eq!(handle.start_idx(), OplogIndex::from_u64(3));
+            match rs.await_resolution(handle).await.unwrap() {
+                Resolution::Completed { end_idx, .. } => {
+                    assert_eq!(end_idx, OplogIndex::from_u64(5))
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+        _ => panic!("a live Store must adopt its retained Start"),
+    }
+    assert!(!rs.has_unclaimed_retained_starts());
+
+    // Start(C) is not retained (the awaiter stopped at the marker before it), so a live Store's
+    // claim for C's identity finds it by scan-ahead behind the unconsumed positional NoOp(6)
+    // rather than reporting a new live call.
+    match rs
+        .claim_start_for_store(
+            StartClaim::unowned(
+                &HostFunctionName::MonotonicClockResolution,
+                &DurableFunctionType::ReadLocal,
+            ),
+            true,
+        )
+        .await
+        .unwrap()
+    {
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            assert_eq!(
+                handle.start_idx(),
+                OplogIndex::from_u64(7),
+                "an unclaimed matching Start behind a positional marker is claimed by scan-ahead"
+            );
+        }
+        ReplayStartClaimOutcome::StoreAlreadyLive => {
+            panic!("a matching unclaimed Start ahead of the cursor must be claimed, not skipped")
+        }
+        ReplayStartClaimOutcome::ReplayEnded | ReplayStartClaimOutcome::DeletedRegion => {
+            panic!("expected Claimed")
+        }
+    }
+}
+
+#[test]
+async fn store_already_live_claim_reports_replay_ended_once_the_cursor_reaches_the_target() {
+    // [NoOp, Start(A=2 now), Start(B=3 now), End(A=2→4), End(B=3→5), Start(C=6 resolution),
+    // End(C=6→7)] — nothing positional stands between A's End and the target, so A's awaiter
+    // drains to the target, retaining B and C with their Ends attached. The shared cursor is then
+    // exhausted while retained Starts are still unclaimed: a live Store's claim for an identity
+    // nobody retained reports `ReplayEnded` (the consumer's replay-to-live is idempotent for a
+    // Store that already continued live), and the retained Starts stay for their owners' claims.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+        start_resolution(),
+        end_for(6, 46),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.is_live());
+    assert!(rs.has_unclaimed_retained_starts());
+
+    match rs
+        .claim_start_for_store(
+            StartClaim::unowned(
+                &HostFunctionName::WallClockNow,
+                &DurableFunctionType::ReadLocal,
+            ),
+            true,
+        )
+        .await
+        .unwrap()
+    {
+        ReplayStartClaimOutcome::ReplayEnded => {}
+        ReplayStartClaimOutcome::Claimed { handle, .. } => {
+            panic!(
+                "a live Store must not claim an unrelated Start at {}",
+                handle.start_idx()
+            )
+        }
+        ReplayStartClaimOutcome::StoreAlreadyLive | ReplayStartClaimOutcome::DeletedRegion => {
+            panic!("expected ReplayEnded")
+        }
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    for (name, start, end) in [
+        (HostFunctionName::MonotonicClockNow, 3, 5),
+        (HostFunctionName::MonotonicClockResolution, 6, 7),
+    ] {
+        match rs
+            .claim_start_for_store(
+                StartClaim::unowned(&name, &DurableFunctionType::ReadLocal),
+                true,
+            )
+            .await
+            .unwrap()
+        {
+            ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                assert_eq!(handle.start_idx(), OplogIndex::from_u64(start));
+                match rs.await_resolution(handle).await.unwrap() {
+                    Resolution::Completed { end_idx, .. } => {
+                        assert_eq!(end_idx, OplogIndex::from_u64(end))
+                    }
+                    other => panic!("expected Completed, got {other:?}"),
+                }
+            }
+            _ => panic!("a live Store must adopt its retained Start at {start}"),
+        }
+    }
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn unclaimed_retained_descendant_reports_only_settled_subtrees() {
+    // [NoOp, Start(root=2), Start(child=3 ← 2), Start(grandchild=4 ← 3), End(2→5), End(3→6),
+    // End(4→7)] — root and child are claimed; awaiting root retains the grandchild. While the
+    // child's body is still active, the grandchild is that body's own pending call and is not
+    // reported; once no body is active it is the earliest unclaimed descendant of the root.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        owned_start_now(2),
+        owned_start_now(3),
+        end_for(2, 42),
+        end_for(3, 43),
+        end_for(4, 44),
+    ])
+    .await;
+    let root = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(root.start_idx(), OplogIndex::from_u64(2));
+    let child = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(child.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None
+    );
+
+    match rs.await_resolution(root).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.unclaimed_retained_descendant(
+            OplogIndex::from_u64(2),
+            HashSet::from([OplogIndex::from_u64(3)])
+        )
+        .await
+        .unwrap(),
+        None,
+        "a retained Start owned by a still active body is not the root's divergence"
+    );
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4))
+    );
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(3), HashSet::new())
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4)),
+        "the grandchild is also a descendant of the child"
+    );
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(4), HashSet::new())
+            .await
+            .unwrap(),
+        None
+    );
+
+    let grandchild = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        )
+        .await
+        .unwrap();
+    assert_eq!(grandchild.start_idx(), OplogIndex::from_u64(4));
+    match rs.await_resolution(child).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    match rs.await_resolution(grandchild).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn closed_retained_starts_are_released_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(B=3→4), End(A=2→5)] — A's await commits past B's Start
+    // (retained) and End (attached to it) before resolving at 5, and B is never claimed before
+    // the invocation finishes live. B is closed history, so releasing at the live invocation end
+    // clears the retained set (later durable calls take the plain live path) and a late claim now
+    // sees the replay tail rather than a stale retained Start.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(3, 43),
+        end_for(2, 42),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "switch_to_live keeps retained Starts"
+    );
+
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    let err = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("end of replay"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+async fn unclosed_retained_starts_are_rejected_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4)] — B is retained by A's await, never claimed,
+    // and has no terminal in history. Finishing the live invocation would append
+    // `AgentInvocationFinished` after an unclosed Start, which the next reconstruction's
+    // boundary read rejects; the release must therefore fail now instead of warning, and must
+    // leave the retained Start in place.
+    let rs = replay_state_over(vec![noop(), start_now(), start_now(), end_for(2, 42)]).await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let err = rs
+        .release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("unclosed unclaimed retained Start(s) at 3"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "a rejected release must not drop the retained Start"
+    );
+}
+
+#[test]
+async fn retained_terminals_the_cursor_clamped_past_are_found_at_live_invocation_end() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4), NoOp=5, End(B=3→6)]: A's resolution stops the
+    // drain at 4 because the NoOp at 5 is neither an awaited terminal nor a retainable Start.
+    // Switching to live then clamps the head to 6 without committing past B's End, so it is not
+    // attached to the retained Start. The release must still recognise B as closed history by
+    // reading the recorded prefix rather than rejecting it as unclosed.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        noop(),
+        end_for(3, 43),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    rs.switch_cursor_to_live().await.unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(6));
+    assert!(rs.has_unclaimed_retained_starts());
+
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn shrinking_replay_target_prunes_hidden_retained_starts() {
+    // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5)] — after B (idx 3) is retained with
+    // its End (idx 5) attached, shrinking the target to 4 must detach the now hidden End while
+    // keeping the visible Start; shrinking to 2 must drop the hidden Start altogether.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        start_now(),
+        end_for(2, 42),
+        end_for(3, 43),
+    ])
+    .await;
+    let handle_a = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(3))
+            .expect("Start(B) retained");
+        assert_eq!(
+            retained.terminal.as_ref().map(|(idx, _)| *idx),
+            Some(OplogIndex::from_u64(5))
+        );
+    }
+
+    rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(3))
+            .expect("Start(B) still visible");
+        assert!(retained.terminal.is_none(), "hidden End must be detached");
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    rs.set_replay_target(OplogIndex::from_u64(2)).await.unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn retained_start_publishes_the_non_hint_position_only_when_claimed() {
+    // [NoOp, Start(E=2), Start(B=3 ← 2), End(B=3→4)] — after E is claimed the drain retains the
+    // body's unscoped call B together with its End. Physically the cursor is at 4, but the body
+    // has not consumed B yet: its `begin_function` must still observe 2, the oplog tip the live
+    // run saw before appending Start(B), so that a key derived from that position is stable
+    // across the restart. Claiming B publishes the withheld position.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        owned_start_now(2),
+        end_for(3, 43),
+    ])
+    .await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        let retained = internal
+            .retained_starts
+            .get(&OplogIndex::from_u64(3))
+            .expect("Start(B) retained");
+        assert_eq!(
+            retained.terminal.as_ref().map(|(idx, _)| *idx),
+            Some(OplogIndex::from_u64(4))
+        );
+    }
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(4));
+    assert_eq!(
+        rs.last_replayed_non_hint_index(),
+        OplogIndex::from_u64(2),
+        "a retained Start and its attached End must not publish the non-hint position"
+    );
+
+    let body_call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_call.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(
+        rs.last_replayed_non_hint_index(),
+        OplogIndex::from_u64(4),
+        "claiming the retained Start publishes it together with its attached End"
+    );
+    match rs.await_resolution(body_call).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected B to complete, got {other:?}"),
+    }
+    let _ = entity;
+}
+
+#[test]
+async fn retained_incomplete_start_publishes_its_own_index_when_claimed() {
+    // [NoOp, Start(E=2), Start(B=3 ← 2)] — the incomplete tail variant: retaining B keeps the
+    // position at 2; the owner's claim publishes 3 and then finds the call incomplete.
+    let rs = replay_state_over(vec![noop(), start_now(), owned_start_now(2)]).await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.drain_awaited_terminals().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(2));
+
+    let body_call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body_call.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(rs.last_replayed_non_hint_index(), OplogIndex::from_u64(3));
+    assert!(matches!(
+        rs.await_resolution_outcome(body_call).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    let _ = entity;
+}
+
+#[test]
+async fn replay_jump_prunes_retained_starts_of_the_abandoned_attempt() {
+    // [NoOp, Start(E=2), Start(A=3 ← 2), End(A=3→4), Start(scope=5 ← 2), Start(C=6 ← 5)] — the
+    // entity body E replays its direct call A, and the drain after End(A) retains the incomplete
+    // batched scope 5 and its child 6. The body then re-issues the scope, adopts retained 5,
+    // finds it incomplete and recovers by switching live and appending a Jump over 6..=7 (the
+    // Jump's own index). Registering that Jump must drop retained 6: it belongs to the abandoned
+    // first attempt and no live re-execution may claim it or be blamed for leaving it behind.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        owned_start_now(2),
+        end_for(3, 42),
+        nested_batched_scope_start(2),
+        batched_child_start(5),
+    ])
+    .await;
+    let entity = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(2));
+    let direct = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct.start_idx(), OplogIndex::from_u64(3));
+    match rs.await_resolution(direct).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    rs.drain_awaited_terminals().await.unwrap();
+    {
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(5))
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(6))
+        );
+    }
+
+    let scope_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    let (scope_idx, scope_handle) = rs
+        .claim_scope_start(
+            &scope_name,
+            &DurableFunctionType::WriteRemoteBatched(None),
+            Some(OplogIndex::from_u64(2)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_idx, OplogIndex::from_u64(5));
+    assert!(matches!(
+        rs.await_resolution_outcome(scope_handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "switching live alone keeps the abandoned child retained"
+    );
+    rs.register_replay_jump(vec![OplogRegion::from_range(6..=7)])
+        .await
+        .unwrap();
+
+    assert!(
+        rs.is_in_skipped_region(OplogIndex::from_u64(6))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the child of the abandoned attempt must not force later calls onto the claim path"
+    );
+    assert_eq!(
+        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
+            .await
+            .unwrap(),
+        None,
+        "the body must not be blamed for a descendant hidden by its own recovery Jump"
+    );
+    let _ = entity;
 }
 
 #[test]
@@ -3861,7 +5327,7 @@ async fn drain_parks_on_positional_marker() {
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
 
     // The positional reader consumes the marker, after which awaiting A drains its End.
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(3));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
@@ -3902,7 +5368,7 @@ async fn drain_parks_on_unawaited_end() {
     );
 
     // The positional scope reader consumes its own End, after which A's End resolves.
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(3));
     assert!(matches!(entry, OplogEntry::End { .. }));
 
@@ -3953,11 +5419,12 @@ async fn interleaved_calls_resolve_out_of_order() {
 }
 
 #[test]
-async fn await_suspends_until_sibling_claim() {
+async fn await_resolves_across_unclaimed_sibling_start() {
     // [NoOp, Start(A=2), Start(B=3), End(A=2→4), End(B=3→5)] — A is claimed and awaited *before*
-    // B is claimed. With real overlap the awaiter must SUSPEND on the still-unclaimed Start(B)
-    // at the cursor head (neither erroring nor resolving), and then resume once a sibling claims
-    // B and advances the cursor — at which point A's End becomes a drainable awaited terminal.
+    // B is claimed. The awaiter must not suspend on the still-unclaimed Start(B): B's owner may be
+    // a task that needs the Store the awaiter holds, so parking would deadlock. Instead the
+    // awaiter retains B for its owner, drains its own End and resolves without any other task
+    // touching the cursor.
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
@@ -3975,21 +5442,17 @@ async fn await_suspends_until_sibling_claim() {
         .unwrap();
     assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
 
-    // Awaiting A parks: its End sits behind the unclaimed Start(B), so the first poll is Pending.
-    let a_fut = rs.await_resolution(handle_a);
-    tokio::pin!(a_fut);
-    assert!(
-        futures::poll!(a_fut.as_mut()).is_pending(),
-        "awaiting A must suspend while Start(B) is unclaimed"
-    );
-    assert_eq!(
-        rs.last_replayed_index(),
-        OplogIndex::from_u64(2),
-        "a parked awaiter must not advance the cursor past the unclaimed Start(B)"
-    );
+    match tokio::time::timeout(Duration::from_secs(5), rs.await_resolution(handle_a))
+        .await
+        .expect("awaiting A must resolve across the unclaimed Start(B) instead of parking on it")
+        .unwrap()
+    {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert!(rs.has_unclaimed_retained_starts());
 
-    // A sibling claims B (guest re-execution reaches B's call): this advances the cursor and
-    // signals progress, waking A so its End at index 4 can be drained on the next poll.
+    // B's owner claims later and receives the End attached while B was retained.
     let handle_b = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -3998,25 +5461,21 @@ async fn await_suspends_until_sibling_claim() {
         .await
         .unwrap();
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
-
-    match a_fut.await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
     match rs.await_resolution(handle_b).await.unwrap() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
         other => panic!("expected Completed, got {other:?}"),
     }
+    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]
 async fn speculative_read_does_not_publish_live_cursor() {
-    // [NoOp, Start(A=2)] — replay_target = 2. A speculative read of the last entry must NOT make
-    // the cursor observably reach the replay target while the read is still rollbackable: the
-    // predicate (run after the read) must still see `is_live() == false`. This is the regression
-    // guard for "publish only committed cursor state" — a transient live cursor would let a
-    // concurrent awaiter falsely conclude end-of-replay.
-    let rs = replay_state_over(vec![noop(), start_now()]).await;
+    // [NoOp, BeginAtomicRegion(2)] — replay_target = 2. A speculative read of the last entry must
+    // NOT make the cursor observably reach the replay target while the read is still
+    // rollbackable: the predicate (run after the read) must still see `is_live() == false`. This
+    // is the regression guard for "publish only committed cursor state" — a transient live cursor
+    // would let a concurrent awaiter falsely conclude end-of-replay.
+    let rs = replay_state_over(vec![noop(), begin_atomic_region()]).await;
     assert!(!rs.is_live());
 
     let observed_live = std::cell::Cell::new(None);
@@ -4040,6 +5499,45 @@ async fn speculative_read_does_not_publish_live_cursor() {
         "a rolled-back probe must leave the committed cursor unchanged"
     );
     assert!(!rs.is_live());
+}
+
+#[test]
+async fn probe_past_lone_unclaimed_start_retains_it_and_reaches_the_tail() {
+    // [NoOp, Start(A=2)] — replay_target = 2. A predicate probe that reaches an unclaimed `Start`
+    // evaluates its predicate against the not-yet-advanced cursor, then commits past the `Start`
+    // and retains it: the cursor is live for positional purposes, but the retained `Start` keeps
+    // the durable-call view of the Store in replay until its owner claims it (and finds it
+    // incomplete at the tail).
+    let rs = replay_state_over(vec![noop(), start_now()]).await;
+
+    let observed_live = std::cell::Cell::new(None);
+    let probe = rs
+        .try_get_oplog_entry(|_entry| {
+            observed_live.set(Some(rs.is_live()));
+            false
+        })
+        .await
+        .unwrap();
+
+    assert!(probe.is_none());
+    assert_eq!(observed_live.get(), Some(false));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+    assert!(rs.is_live());
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
 }
 
 #[test]
@@ -4074,7 +5572,7 @@ async fn positional_reader_drains_awaited_terminal_before_marker() {
     assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
     assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
 
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(5));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
@@ -4092,18 +5590,18 @@ async fn positional_reader_drains_awaited_terminal_before_marker() {
 async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
     // The headline overlap layout:
     //   [NoOp, Start(A=2), Start(scope S=3), Start(B=4), End(B=4→5), End(scope S=3→6), End(A=2→7)]
-    // A is claimed and awaited first, but its End sits last; in between are a positional scope
-    // (S, consumed by a positional reader) and a fully overlapping sibling call B. This proves:
-    // A suspends through the scope Start and B's Start; B's End is auto-drained to B; the scope's
-    // End (nobody awaits it) is left for the positional reader; A resolves only once everything
-    // ahead of its End has been consumed.
+    // A is claimed and awaited first, but its End sits last; in between are a durable scope (S,
+    // claimed by its scope owner) and a fully overlapping sibling call B. This proves: A's awaiter
+    // retains the scope Start and B's Start (never consuming or parking on them), attaches their
+    // Ends, and resolves; the scope owner and B then adopt their retained Starts with the attached
+    // terminals, in any order.
     let rs = replay_state_over(vec![
         noop(),
         start_now(),
-        start_now(),
+        batched_scope_start(),
         start_now(),
         end_for(4, 44),
-        end_for(3, 43),
+        batched_scope_end(3),
         end_for(2, 42),
     ])
     .await;
@@ -4116,24 +5614,40 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
         .unwrap();
     assert_eq!(handle_a.start_idx(), OplogIndex::from_u64(2));
 
-    // A awaits first; it parks on the scope Start (idx 3).
-    let a_fut = rs.await_resolution(handle_a);
-    tokio::pin!(a_fut);
-    assert!(
-        futures::poll!(a_fut.as_mut()).is_pending(),
-        "A must park on the unclaimed scope Start"
-    );
+    match rs.await_resolution(handle_a).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    {
+        let internal = rs.cursor.state.lock().await;
+        for idx in [3, 4] {
+            let retained = internal
+                .retained_starts
+                .get(&OplogIndex::from_u64(idx))
+                .unwrap_or_else(|| panic!("Start at {idx} must be retained"));
+            assert!(
+                retained.terminal.is_some(),
+                "the End of retained Start {idx} must be attached"
+            );
+        }
+    }
 
-    // The positional scope reader consumes the scope Start (idx 3); A now parks on Start(B).
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(3));
-    assert!(matches!(entry, OplogEntry::Start { .. }));
-    assert!(
-        futures::poll!(a_fut.as_mut()).is_pending(),
-        "A must park on the unclaimed Start(B)"
-    );
+    // The scope owner claims S through the scope claim (retained-first), in oplog order before B
+    // although B's End was recorded first.
+    let (scope_idx, scope_handle) = rs
+        .claim_scope_start(
+            &HostFunctionName::Custom("<scope:batched-write>".to_string()),
+            &DurableFunctionType::WriteRemoteBatched(None),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope_idx, OplogIndex::from_u64(3));
+    match rs.await_resolution(scope_handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
 
-    // The sibling call B is claimed and resolved; its End (idx 5) is auto-drained to B.
     let handle_b = rs
         .claim_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
@@ -4146,25 +5660,15 @@ async fn overlap_layout_with_scope_end_behind_awaited_sibling() {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
         other => panic!("expected Completed, got {other:?}"),
     }
-
-    // The scope End (idx 6) has no awaiter, so it is left for the positional scope reader.
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(6));
-    assert!(matches!(entry, OplogEntry::End { .. }));
-
-    // Only now is A's End (idx 7) at the head; A resolves.
-    match a_fut.await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
+    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]
-async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
-    // [NoOp, Start(A=2), Start(B=3)] — A is claimed and awaited but B is never claimed, so
-    // awaiting A parks on the unclaimed Start(B). switch_to_live (end of replay) must wake the
-    // parked awaiter as Incomplete instead of leaving it asleep forever, and must drop its
-    // registration.
+async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
+    // [NoOp, Start(A=2), Start(B=3)] — A is claimed and awaited but B is never claimed. The
+    // awaiter retains B and reaches the replay tail without A's End: it resolves Incomplete
+    // (rather than sleeping on the unclaimed Start(B) until switch_to_live) and drops its
+    // registration; B stays retained for a late owner.
     let rs = replay_state_over(vec![noop(), start_now(), start_now()]).await;
     let handle_a = rs
         .claim_concurrent_start(
@@ -4175,24 +5679,41 @@ async fn switch_to_live_wakes_parked_awaiter_as_incomplete() {
         .unwrap();
     let start_idx = handle_a.start_idx();
 
-    let a_fut = rs.await_resolution_outcome(handle_a);
-    tokio::pin!(a_fut);
-    assert!(
-        futures::poll!(a_fut.as_mut()).is_pending(),
-        "A must park on the unclaimed Start(B)"
-    );
-
-    rs.switch_cursor_to_live().await.unwrap();
-
-    match a_fut.await.unwrap() {
+    match rs.await_resolution_outcome(handle_a).await.unwrap() {
         ResolutionOutcome::Incomplete => {}
         other => panic!("expected Incomplete, got {other:?}"),
     }
-    let internal = rs.cursor.state.lock().await;
-    assert!(
-        !internal.concurrent_resolver.is_pending(start_idx),
-        "switch_to_live must unregister the parked awaiter"
-    );
+    {
+        let internal = rs.cursor.state.lock().await;
+        assert!(
+            !internal.concurrent_resolver.is_pending(start_idx),
+            "an Incomplete resolution must unregister the awaiter"
+        );
+        assert!(
+            internal
+                .retained_starts
+                .contains_key(&OplogIndex::from_u64(3))
+        );
+    }
+    assert!(rs.has_unclaimed_retained_starts());
+
+    // switch_to_live keeps the retained Start: the late owner still adopts it and, lacking a
+    // terminal, is Incomplete as well.
+    rs.switch_cursor_to_live().await.unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    let handle_b = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle_b.start_idx(), OplogIndex::from_u64(3));
+    assert!(!rs.has_unclaimed_retained_starts());
+    match rs.await_resolution_outcome(handle_b).await.unwrap() {
+        ResolutionOutcome::Incomplete => {}
+        other => panic!("expected Incomplete, got {other:?}"),
+    }
 }
 
 #[test]
@@ -4447,7 +5968,7 @@ async fn deferred_anchored_error_is_not_structural_divergence() {
         .await
         .unwrap();
     rs.await_resolution(root).await.unwrap();
-    let (begin_idx, begin) = rs.get_oplog_entry().await.unwrap();
+    let (begin_idx, begin) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(begin_idx, OplogIndex::from_u64(3));
     assert!(matches!(begin, OplogEntry::BeginAtomicRegion { .. }));
     rs.drain_awaited_terminals().await.unwrap();
@@ -4565,7 +6086,7 @@ async fn completed_entity_body_waits_for_active_owner_of_retried_transaction_beg
         .await
         .unwrap();
 
-    let (index, _) = rs.get_oplog_entry().await.unwrap();
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(index, OplogIndex::from_u64(4));
     assert_eq!(
         rs.unconsumed_scope_head(
@@ -4663,7 +6184,161 @@ async fn visible_scope_descendant_distinguishes_owned_work_from_siblings() {
 }
 
 #[test]
-async fn entity_atomic_rollback_projects_only_owned_interleaved_regions() {
+async fn atomic_suffix_rollback_closes_crossing_regions() {
+    let oplog = InMemoryOplog::new();
+    let end = |begin| OplogEntry::EndAtomicRegion {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: None,
+        begin_index: OplogIndex::from_u64(begin),
+    };
+    for entry in [
+        noop(),
+        begin_atomic_region(), // 2: crosses region 3, but not region 5
+        begin_atomic_region(), // 3: crosses the unfinished region 5
+        end(2),
+        begin_atomic_region(), // 5: unfinished
+        end(3),
+        start_now(), // 7: foreign work must be removed too
+        end_for(7, 42),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let horizon = OplogIndex::from_u64(8);
+    let region =
+        super::rollback::atomic_rollback_region(&oplog, &DeletedRegions::default(), horizon).await;
+    assert_eq!(region, Some(OplogRegion::from_range(3..=8)));
+
+    oplog
+        .add(OplogEntry::jump(None, region.clone().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(
+        super::rollback::atomic_rollback_region(
+            &oplog,
+            &DeletedRegions::from_regions([region.unwrap()]),
+            OplogIndex::from_u64(9),
+        )
+        .await,
+        None,
+        "a crash after the Jump must not append another Jump"
+    );
+}
+
+#[test]
+async fn runtime_suffix_rollback_closes_completed_crossing_regions() {
+    let oplog = InMemoryOplog::new();
+    for entry in [
+        noop(),
+        begin_atomic_region(),
+        begin_atomic_region(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(2),
+        },
+        start_now(),
+        noop(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(3),
+        },
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    assert_eq!(
+        super::rollback::folded_suffix_rollback_region(
+            &oplog,
+            &DeletedRegions::default(),
+            OplogIndex::from_u64(7),
+            Some(OplogIndex::from_u64(6)),
+        )
+        .await,
+        Some(OplogRegion::from_range(3..=7)),
+    );
+}
+
+#[test]
+async fn attempt_suffix_counts_foreign_work_but_not_abandoned_history() {
+    let rs = replay_state_over(vec![noop(), start_now(), noop()]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    rs.register_replay_jump(vec![OplogRegion::from_range(3..=3)])
+        .await
+        .unwrap();
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![noop(), start_now(), end_for(2, 41)]).await;
+    assert!(rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::jump(None, OplogRegion::from_range(3..=3)),
+    ])
+    .await;
+    assert!(!rs.has_attempt_suffix(OplogIndex::from_u64(2)).await);
+}
+
+#[test]
+async fn atomic_suffix_rollback_distinguishes_delivery_from_lifecycle_hints() {
+    let oplog = InMemoryOplog::new();
+    for entry in [start_now(), begin_atomic_region(), delivered_for(1)] {
+        oplog.add(entry).await.unwrap();
+    }
+    let region = super::rollback::atomic_rollback_region(
+        &oplog,
+        &DeletedRegions::default(),
+        OplogIndex::from_u64(3),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(3..=3));
+    oplog
+        .add(OplogEntry::jump(None, region.clone()))
+        .await
+        .unwrap();
+    oplog.add(OplogEntry::suspend()).await.unwrap();
+    let skipped = DeletedRegions::from_regions([region]);
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(5)).await,
+        None
+    );
+    oplog.add(delivered_for(1)).await.unwrap();
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(6)).await,
+        Some(OplogRegion::from_range(3..=6))
+    );
+}
+
+#[test]
+async fn atomic_suffix_rollback_respects_horizon_and_skipped_prefix() {
+    let oplog = InMemoryOplog::new();
+    for entry in [
+        noop(),
+        begin_atomic_region(), // 2: hidden by the snapshot/revert prefix
+        noop(),
+        begin_atomic_region(), // 4
+        noop(),
+        OplogEntry::EndAtomicRegion {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            begin_index: OplogIndex::from_u64(4),
+        },
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]);
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(5)).await,
+        Some(OplogRegion::from_range(5..=5)),
+        "a terminal beyond the fixed horizon cannot complete the retained region"
+    );
+    assert_eq!(
+        super::rollback::atomic_rollback_region(&oplog, &skipped, OplogIndex::from_u64(6)).await,
+        None
+    );
+}
+
+#[test]
+async fn atomic_suffix_rollback_includes_foreign_calls_and_entity_terminal() {
     let mut begin = begin_atomic_region();
     let OplogEntry::BeginAtomicRegion {
         entity_parent_start_index,
@@ -4688,29 +6363,20 @@ async fn entity_atomic_rollback_projects_only_owned_interleaved_regions() {
         delivered_for(8),     // 11: sibling observation boundary
         end_for(7, 70),       // 12: atomic entity child terminal
         delivered_for(7),     // 13: atomic entity observation boundary
-        end_for(2, 20),       // 14: entity invocation terminal, retained
+        end_for(2, 20),       // 14: entity invocation terminal
     ])
     .await;
 
-    let regions = replay_state
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-
+    let region = atomic_rollback_region(
+        replay_state.cursor.oplog.as_ref(),
+        &DeletedRegions::default(),
+        replay_state.replay_target(),
+    )
+    .await;
     assert_eq!(
-        regions,
-        vec![
-            OplogRegion::from_range(7..=7),
-            OplogRegion::from_range(10..=10),
-            OplogRegion::from_range(12..=13),
-        ]
-    );
-    assert!(
-        regions
-            .iter()
-            .all(|region| !region.contains(OplogIndex::from_u64(9))
-                && !region.contains(OplogIndex::from_u64(11))
-                && !region.contains(OplogIndex::from_u64(14))),
-        "sibling completion gates and the entity invocation terminal must survive"
+        region,
+        Some(OplogRegion::from_range(7..=14)),
+        "the cut includes every completion and positional record in the suffix"
     );
 }
 
@@ -4720,15 +6386,15 @@ async fn entity_atomic_rollback_skips_newly_deleted_cursor_head() {
         let rs = replay_state_over(vec![noop(), noop(), start_now(), noop()]).await;
         if consumed == 2 {
             assert_eq!(
-                rs.get_oplog_entry().await.unwrap().0,
+                rs.get_oplog_entry(None).await.unwrap().0,
                 OplogIndex::from_u64(2)
             );
         }
-        rs.register_entity_atomic_rollback(vec![OplogRegion::from_range(2..=3)])
+        rs.register_replay_jump(vec![OplogRegion::from_range(2..=3)])
             .await
             .unwrap();
         assert_eq!(
-            rs.get_oplog_entry().await.unwrap().0,
+            rs.get_oplog_entry(None).await.unwrap().0,
             OplogIndex::from_u64(4),
             "registration must skip a deleted region starting at or containing the next cursor position"
         );
@@ -4736,7 +6402,7 @@ async fn entity_atomic_rollback_skips_newly_deleted_cursor_head() {
 }
 
 #[test]
-async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit() {
+async fn atomic_suffix_rollback_includes_surviving_work_after_prior_jump() {
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [
         noop(),      // 1
@@ -4756,7 +6422,7 @@ async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit()
             OplogRegion::from_range(4..=4),
         ),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let rs = test_replay_state(
         test_agent_id(),
@@ -4766,30 +6432,22 @@ async fn entity_atomic_rollback_recovers_descendants_after_partial_jump_commit()
     )
     .await
     .unwrap();
-    let regions = rs
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-    assert!(
-        regions
-            .iter()
-            .any(|region| region.contains(OplogIndex::from_u64(6)))
-    );
-    assert!(
-        regions
-            .iter()
-            .any(|region| region.contains(OplogIndex::from_u64(8)))
-    );
-    assert!(
-        regions
-            .iter()
-            .all(|region| !region.contains(OplogIndex::from_u64(9)))
-    );
-    assert_eq!(regions, vec![OplogRegion::from_range(6..=8)]);
-    rs.register_entity_atomic_rollback(regions).await.unwrap();
-    assert!(
-        rs.entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-            .await
-            .is_empty(),
+    let region = atomic_rollback_region(
+        rs.cursor.oplog.as_ref(),
+        &DeletedRegions::from_regions([OplogRegion::from_range(4..=4)]),
+        rs.replay_target(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(4..=10));
+    assert_eq!(
+        atomic_rollback_region(
+            rs.cursor.oplog.as_ref(),
+            &DeletedRegions::from_regions([region]),
+            rs.replay_target(),
+        )
+        .await,
+        None,
         "a subsequent restart must not roll back the prior Jump"
     );
 }
@@ -4810,19 +6468,30 @@ async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
         }
         entries.extend([delivered_for(3), noop()]);
         let rs = replay_state_over(entries).await;
-        let regions = rs
-            .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-            .await;
+        let regions = atomic_rollback_region(
+            rs.cursor.oplog.as_ref(),
+            &DeletedRegions::default(),
+            rs.replay_target(),
+        )
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
         assert_eq!(
             regions,
             vec![OplogRegion::from_range(if end_before_begin {
-                6..=6
+                6..=7
             } else {
-                5..=6
+                5..=7
             })]
         );
-        rs.register_entity_atomic_rollback(regions).await.unwrap();
-        rs.get_oplog_entry().await.unwrap(); // entity Start
+        rs.register_replay_jump(regions).await.unwrap();
+        let _entity = rs
+            .claim_start_or_replay_end(StartClaim::unowned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            ))
+            .await
+            .unwrap(); // entity Start
         let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
             .claim_start_or_replay_end(StartClaim::owned(
                 &HostFunctionName::MonotonicClockNow,
@@ -4850,10 +6519,12 @@ async fn entity_atomic_rollback_masks_pre_begin_completions_before_claiming() {
                     .is_err()
             );
             assert!(matches!(
-                rs.get_oplog_entry().await.unwrap().1,
+                rs.get_oplog_entry(Some(OplogIndex::from_u64(2)))
+                    .await
+                    .unwrap()
+                    .1,
                 OplogEntry::BeginAtomicRegion { .. }
             ));
-            rs.get_oplog_entry().await.unwrap(); // surviving foreign tail
             assert!(matches!(
                 resolution.await.unwrap(),
                 ResolutionOutcome::Incomplete
@@ -4876,11 +6547,22 @@ async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
         noop(),
     ])
     .await;
-    let regions = rs
-        .entity_atomic_rollback_regions(OplogIndex::from_u64(2))
-        .await;
-    rs.register_entity_atomic_rollback(regions).await.unwrap();
-    rs.get_oplog_entry().await.unwrap(); // entity Start
+    let region = atomic_rollback_region(
+        rs.cursor.oplog.as_ref(),
+        &DeletedRegions::default(),
+        rs.replay_target(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(region, OplogRegion::from_range(4..=5));
+    rs.register_replay_jump(vec![region]).await.unwrap();
+    let _entity = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap(); // entity Start
     let mut claim = Box::pin(rs.claim_start_or_replay_end(StartClaim::owned(
         &HostFunctionName::MonotonicClockNow,
         &DurableFunctionType::ReadLocal,
@@ -4893,17 +6575,16 @@ async fn entity_atomic_rollback_deleted_claim_waits_for_retained_begin() {
         "autonomous host subtasks must not flip entity liveness before Begin"
     );
     assert!(matches!(
-        rs.get_oplog_entry().await.unwrap().1,
+        rs.get_oplog_entry(Some(OplogIndex::from_u64(2)))
+            .await
+            .unwrap()
+            .1,
         OplogEntry::BeginAtomicRegion { .. }
     ));
     assert!(matches!(
         claim.await.unwrap(),
-        ReplayStartClaimOutcome::DeletedRegion
+        ReplayStartClaimOutcome::ReplayEnded
     ));
-    assert_eq!(
-        rs.get_oplog_entry().await.unwrap().0,
-        OplogIndex::from_u64(5)
-    );
 }
 
 #[test]
@@ -4921,13 +6602,19 @@ async fn entity_atomic_rollback_deleted_claim_uses_latest_matching_start() {
         noop(),
     ])
     .await;
-    rs.register_entity_atomic_rollback(vec![
+    rs.register_replay_jump(vec![
         OplogRegion::from_range(3..=3),
         OplogRegion::from_range(5..=5),
     ])
     .await
     .unwrap();
-    rs.get_oplog_entry().await.unwrap(); // entity Start
+    let _entity = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap(); // entity Start
     let mut claim = Box::pin(rs.claim_start_or_replay_end(StartClaim::owned(
         &HostFunctionName::MonotonicClockNow,
         &DurableFunctionType::ReadLocal,
@@ -4940,7 +6627,10 @@ async fn entity_atomic_rollback_deleted_claim_uses_latest_matching_start() {
         "the deleted Start behind the cursor must not hide the matching Start after Begin"
     );
     assert!(matches!(
-        rs.get_oplog_entry().await.unwrap().1,
+        rs.get_oplog_entry(Some(OplogIndex::from_u64(2)))
+            .await
+            .unwrap()
+            .1,
         OplogEntry::BeginAtomicRegion { .. }
     ));
     assert!(matches!(
@@ -4948,7 +6638,7 @@ async fn entity_atomic_rollback_deleted_claim_uses_latest_matching_start() {
         ReplayStartClaimOutcome::DeletedRegion
     ));
     assert_eq!(
-        rs.get_oplog_entry().await.unwrap().0,
+        rs.get_oplog_entry(None).await.unwrap().0,
         OplogIndex::from_u64(6)
     );
 }
@@ -4960,6 +6650,7 @@ fn log_entry() -> OplogEntry {
         level: LogLevel::Info,
         context: "ctx".to_string(),
         message: "msg".to_string(),
+        trace_context: None,
     }
 }
 
@@ -4972,7 +6663,7 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
     // jumps the cursor over the deleted tail straight to the target (4).
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), log_entry(), log_entry()] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -4984,8 +6675,17 @@ async fn replay_finished_emitted_when_skipped_region_reaches_target() {
         .expect("failed to build replay state");
 
     assert!(!rs.is_live(), "Start at 2 is not yet consumed");
-    let (idx, _) = rs.get_oplog_entry().await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(2));
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("Start at 2 must be claimable");
+    };
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
 
     assert!(
         rs.is_live(),
@@ -5061,6 +6761,7 @@ fn cancelled_for(start_index: u64) -> OplogEntry {
         timestamp: Timestamp::now_utc(),
         start_index: OplogIndex::from_u64(start_index),
         partial: None,
+        span_finished: None,
     }
 }
 
@@ -5071,6 +6772,7 @@ fn cancelled_with_partial_for(start_index: u64, nanos: u64) -> OplogEntry {
         partial: Some(OplogPayload::Inline(Box::new(
             HostResponse::MonotonicClockTimestamp(HostResponseMonotonicClockTimestamp { nanos }),
         ))),
+        span_finished: None,
     }
 }
 
@@ -5113,8 +6815,9 @@ fn random_positional_marker(rng: &mut rand::rngs::StdRng) -> OplogEntry {
 }
 
 /// A generated item in a fabricated overlap layout: either a concurrent call (claimed +
-/// awaited) or a positional scope (a `Start`/`End` pair consumed by positional reads, standing
-/// in for a durable scope / rdbms transaction span).
+/// awaited) or a durable scope (a request-less `<scope:batched-write>` `Start`/`End` pair claimed
+/// by its scope owner through the scope claim and awaited like a call, standing in for a durable
+/// scope / rdbms transaction span).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ItemKind {
     Call(CallKind),
@@ -5128,7 +6831,7 @@ enum Role {
     Placeholder,
     CallStart(usize),
     CallTerminal(usize),
-    ScopeStart,
+    ScopeStart(usize),
     ScopeEnd,
     Marker,
     Hint,
@@ -5289,25 +6992,26 @@ async fn concurrent_replay_call_permutation_fuzz() {
 }
 
 /// Seam 1, full layout space: a randomized generator over fabricated overlap layouts that mix
-/// concurrent calls (completed / cancelled / incomplete) with **positional** scopes (`Start`/`End`
-/// pairs consumed by positional reads) and non-hint positional **markers** (atomic-region
-/// boundaries and rdbms-transaction internal markers), all freely
-/// interleaved with `Log` hints, so that a sibling's scope `End` or a marker can land between
-/// another call's `Start` and `End` — the headline overlap layout generalized.
+/// concurrent calls (completed / cancelled / incomplete) with durable **scopes** (request-less
+/// `Start`/`End` pairs claimed by their scope owner and awaited like calls) and non-hint
+/// positional **markers** (atomic-region boundaries and rdbms-transaction internal markers), all
+/// freely interleaved with `Log` hints, so that a sibling's scope `End` or a marker can land
+/// between another call's `Start` and `End` — the headline overlap layout generalized.
 ///
-/// Each call's resolution is awaited on its **own concurrently-suspended task** (`tokio::spawn`),
-/// mirroring the production model where the worker drives the replay cursor (claims + positional
-/// reads) while several call futures are suspended; this is what exercises the genuine
-/// suspend/resume path (`await_resolution_outcome` parking on a positional blocker and resuming on
-/// cursor progress), not just the auto-drain-at-head path. A single driver walks the oplog
-/// left-to-right, claiming call `Start`s, positionally reading scope `Start`/`End`s and markers,
-/// and leaving call terminals to be auto-drained. It asserts that:
+/// Each call's and scope's resolution is awaited on its **own concurrently-suspended task**
+/// (`tokio::spawn`), mirroring the production model where the worker drives the replay cursor
+/// (claims + positional reads) while several call futures are suspended; this is what exercises
+/// the genuine suspend/resume path (`await_resolution_outcome` parking on a positional blocker
+/// and resuming on cursor progress), not just the auto-drain-at-head path. A single driver walks
+/// the oplog left-to-right, claiming call and scope `Start`s, positionally reading markers, and
+/// leaving terminals to be auto-drained. It asserts that:
 ///
-/// - each positional claim / read returns exactly the entry at the expected oplog index,
+/// - each claim / positional read returns exactly the entry at the expected oplog index,
 ///   independent of how the suspended awaiter tasks are scheduled (auto-drains only ever consume
-///   awaited call terminals, never a positional entry a reader owns);
-/// - every call resolves to exactly its recorded terminal (`End`/`Cancelled` by index) or, for a
-///   committed `Start` with no terminal, `Incomplete`;
+///   awaited terminals, never a positional entry a reader owns; an awaiter that walks past a
+///   sibling's not-yet-claimed `Start` retains it for that sibling's later claim);
+/// - every call and scope resolves to exactly its recorded terminal (`End`/`Cancelled` by
+///   index) or, for a committed `Start` with no terminal, `Incomplete`;
 /// - replay ends live with no awaiter left registered.
 ///
 /// Only final per-call outcomes and positional indices are asserted, both of which are
@@ -5381,13 +7085,14 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
             match cats[rng.random_range(0..cats.len())] {
                 Cat::Open => {
                     let item = can_open[rng.random_range(0..can_open.len())];
-                    entries.push(start_now());
+                    let (entry, role) = match items[item] {
+                        ItemKind::Call(_) => (start_now(), Role::CallStart(item)),
+                        ItemKind::Scope => (batched_scope_start(), Role::ScopeStart(item)),
+                    };
+                    entries.push(entry);
                     start_idx[item] = entries.len() as u64;
                     opened[item] = true;
-                    roles.push(match items[item] {
-                        ItemKind::Call(_) => Role::CallStart(item),
-                        ItemKind::Scope => Role::ScopeStart,
-                    });
+                    roles.push(role);
                 }
                 Cat::Close => {
                     let item = can_close[rng.random_range(0..can_close.len())];
@@ -5400,10 +7105,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
                         ItemKind::Call(CallKind::Cancelled) => {
                             (cancelled_for(si), Role::CallTerminal(item))
                         }
-                        ItemKind::Scope => {
-                            nanos += 1;
-                            (end_for(si, nanos), Role::ScopeEnd)
-                        }
+                        ItemKind::Scope => (batched_scope_end(si), Role::ScopeEnd),
                         ItemKind::Call(CallKind::Incomplete) => {
                             unreachable!("incomplete calls are never closed")
                         }
@@ -5455,8 +7157,30 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
                         tokio::spawn(async move { rs2.await_resolution_outcome(handle).await }),
                     ));
                 }
-                Role::ScopeStart | Role::ScopeEnd | Role::Marker => {
-                    let (got, _) = rs.get_oplog_entry().await.unwrap_or_else(|e| {
+                Role::ScopeStart(item) => {
+                    let (got, handle) = rs
+                        .claim_scope_start(
+                            &HostFunctionName::Custom("<scope:batched-write>".to_string()),
+                            &DurableFunctionType::WriteRemoteBatched(None),
+                            None,
+                        )
+                        .await
+                        .unwrap_or_else(|e| {
+                            panic!("seed {seed}: scope claim of item {item} at {idx} failed: {e}")
+                        });
+                    assert_eq!(
+                        got,
+                        OplogIndex::from_u64(idx),
+                        "seed {seed}: scope claim of item {item} returned the wrong Start"
+                    );
+                    let rs2 = rs.clone();
+                    tasks.push((
+                        item,
+                        tokio::spawn(async move { rs2.await_resolution_outcome(handle).await }),
+                    ));
+                }
+                Role::Marker => {
+                    let (got, _) = rs.get_oplog_entry(None).await.unwrap_or_else(|e| {
                         panic!("seed {seed}: positional read at {idx} ({role:?}) failed: {e}")
                     });
                     assert_eq!(
@@ -5465,14 +7189,15 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
                         "seed {seed}: positional read ({role:?}) returned the wrong index"
                     );
                 }
-                // Call terminals are auto-drained to their awaiter; hints are skipped by the
-                // preceding consume's skip_forward. Neither is walked explicitly.
-                Role::CallTerminal(_) | Role::Hint => {}
+                // Call and scope terminals are auto-drained to their awaiter; hints are skipped
+                // by the preceding consume's skip_forward. Neither is walked explicitly.
+                Role::CallTerminal(_) | Role::ScopeEnd | Role::Hint => {}
                 Role::Placeholder => unreachable!("placeholder is skipped"),
             }
         }
 
-        // Join the suspended awaiter tasks and check each call resolved to its recorded terminal.
+        // Join the suspended awaiter tasks and check each call and scope resolved to its
+        // recorded terminal.
         for (item, task) in tasks {
             let outcome = task
                 .await
@@ -5480,7 +7205,7 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
                 .unwrap_or_else(|e| panic!("seed {seed}: await of item {item} failed: {e}"));
             let kind = match items[item] {
                 ItemKind::Call(kind) => kind,
-                ItemKind::Scope => unreachable!("scopes are not awaited"),
+                ItemKind::Scope => CallKind::Completed,
             };
             match (kind, outcome) {
                 (
@@ -5510,16 +7235,18 @@ async fn concurrent_replay_overlap_with_scopes_and_markers_fuzz() {
             rs.is_live(),
             "seed {seed}: replay did not reach live after the full walk"
         );
+        assert!(
+            !rs.has_unclaimed_retained_starts(),
+            "seed {seed}: the full walk left an unclaimed retained Start"
+        );
         let internal = rs.cursor.state.lock().await;
         for (i, &si) in start_idx.iter().enumerate() {
-            if matches!(items[i], ItemKind::Call(_)) {
-                assert!(
-                    !internal
-                        .concurrent_resolver
-                        .is_pending(OplogIndex::from_u64(si)),
-                    "seed {seed}: item {i} left a registered awaiter"
-                );
-            }
+            assert!(
+                !internal
+                    .concurrent_resolver
+                    .is_pending(OplogIndex::from_u64(si)),
+                "seed {seed}: item {i} left a registered awaiter"
+            );
         }
     }
 }
@@ -5539,7 +7266,7 @@ async fn orphan_end_with_deleted_start_is_skipped() {
         start_now(),
         end_for(4, 2),
     ] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -5578,7 +7305,7 @@ async fn orphan_cancelled_with_deleted_start_is_skipped() {
     // [NoOp(1), Start(2), Cancelled(2→3)] with deleted region [2, 2].
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), cancelled_for(2)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -5605,7 +7332,7 @@ async fn positional_reader_skips_orphan_terminal() {
     // must consume the orphan End at 3 and return the NoOp at 4.
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 1), noop()] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -5616,7 +7343,7 @@ async fn positional_reader_skips_orphan_terminal() {
         .await
         .expect("failed to build replay state");
 
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(entry, OplogEntry::NoOp { .. }));
     assert!(rs.is_live());
@@ -5629,7 +7356,7 @@ async fn deleted_terminal_reports_incomplete() {
     // [NoOp(1), Start(2), End(2→3)] with deleted region [3, 3].
     let oplog = Arc::new(InMemoryOplog::new());
     for entry in [noop(), start_now(), end_for(2, 1)] {
-        oplog.add(entry).await;
+        oplog.add(entry).await.unwrap();
     }
     let oplog: Arc<dyn Oplog> = oplog;
     let skipped = DeletedRegions::from_regions([OplogRegion {
@@ -5758,7 +7485,7 @@ async fn replay_skips_deleted_regions_fuzz() {
 
         let oplog = Arc::new(InMemoryOplog::new());
         for entry in entries {
-            oplog.add(entry).await;
+            oplog.add(entry).await.unwrap();
         }
         let oplog: Arc<dyn Oplog> = oplog;
         let skipped = DeletedRegions::from_regions(regions.iter().map(|&(s, e)| OplogRegion {
@@ -5871,7 +7598,24 @@ fn batched_scope_start() -> OplogEntry {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     }
+}
+
+/// A discriminated batched-write scope `Start` recorded by an entity body at `parent`.
+fn nested_batched_scope_start(parent: u64) -> OplogEntry {
+    let mut entry = batched_scope_start();
+    let OplogEntry::Start {
+        parent_start_index,
+        function_name,
+        ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(parent));
+    *function_name = HostFunctionName::Custom("<scope:batched-write:req>".to_string());
+    entry
 }
 
 /// A batched-write scope `End` exactly as `end_function` records it: response-less,
@@ -5882,6 +7626,8 @@ fn batched_scope_end(start_index: u64) -> OplogEntry {
         start_index: OplogIndex::from_u64(start_index),
         response: None,
         forced_commit: true,
+        span_finished: None,
+        span_attributes: None,
     }
 }
 
@@ -5901,6 +7647,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         durable_function_type: DurableFunctionType::WriteRemoteBatched(Some(OplogIndex::from_u64(
             parent,
         ))),
+        span_started: None,
     }
 }
 
@@ -5990,7 +7737,7 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
     }
 
     // Atomic region markers are positional; call C replays inside the region.
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(7));
     assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
 
@@ -6007,7 +7754,7 @@ async fn pre_migration_adjacent_pair_oplog_replays_through_concurrent_resolver()
         other => panic!("expected Completed for C, got {other:?}"),
     }
 
-    let (idx, entry) = rs.get_oplog_entry().await.unwrap();
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
     assert_eq!(idx, OplogIndex::from_u64(10));
     assert!(
         matches!(entry, OplogEntry::EndAtomicRegion { begin_index, .. } if begin_index == OplogIndex::from_u64(7))
@@ -6124,6 +7871,7 @@ async fn plain_scope_claim_never_matches_discriminated_scope_start() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), discriminated_start, batched_scope_end(2)]).await;
 
@@ -6202,6 +7950,7 @@ async fn missing_scope_presence_check_does_not_switch_live() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_start]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
@@ -6230,6 +7979,7 @@ async fn existing_scope_claim_does_not_wait_for_missing_scope_recovery_readiness
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
 
@@ -6270,6 +8020,7 @@ async fn missing_scope_recovery_rejects_foreign_remote_write() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), foreign_write]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write:consume-body:7>".to_string());
@@ -6301,6 +8052,7 @@ async fn missing_scope_recovery_rejects_discriminator_collision() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), conflicting_start]).await;
 
@@ -6331,6 +8083,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         observational_owner: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
     let rs = replay_state_over(vec![noop(), scope_start, batched_scope_end(2)]).await;
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
@@ -6370,6 +8123,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         observational_owner: Some(owner),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemoteBatched(None),
+        span_started: None,
     };
 
     assert!(
@@ -6401,6 +8155,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
             HostRequestNoInput {},
         )))),
         durable_function_type: DurableFunctionType::ReadLocal,
+        span_started: None,
     };
     assert!(
         StartClaim::unowned(
@@ -6476,5 +8231,356 @@ fn start_claim_expected_descriptions_are_stable() {
         format!(
             "Start {{ {name}, ReadRemote, request: Some(<matching payload>), parent_start_index: Some(7) }}"
         )
+    );
+}
+
+fn entity_begin_atomic_region(entity: u64) -> OplogEntry {
+    OplogEntry::BeginAtomicRegion {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: Some(OplogIndex::from_u64(entity)),
+    }
+}
+
+fn entity_end_atomic_region(entity: u64, begin_index: u64) -> OplogEntry {
+    OplogEntry::EndAtomicRegion {
+        timestamp: Timestamp::now_utc(),
+        entity_parent_start_index: Some(OplogIndex::from_u64(entity)),
+        begin_index: OplogIndex::from_u64(begin_index),
+    }
+}
+
+async fn assert_pending<T: std::fmt::Debug>(
+    future: &mut std::pin::Pin<Box<impl Future<Output = T>>>,
+    what: &str,
+) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), future.as_mut())
+            .await
+            .is_err(),
+        "{what} must stay parked"
+    );
+}
+
+#[test]
+async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store() {
+    // An entity body (root Start 2) and its owner both open and close an atomic region while
+    // sharing the cursor:
+    //   [NoOp(1), Start(entity=2), BeginAtomicRegion(3, entity 2), Start(4, parent 2), End(4→5),
+    //    CompletionDelivered(4→6), BeginAtomicRegion(7), EndAtomicRegion(8, entity 2, begin 3),
+    //    EndAtomicRegion(9, begin 7), End(2→10)]
+    // The owner asks for its `BeginAtomicRegion` first. It must not take the entity's marker at 3
+    // (which would leave the entity reader to retain its own Start(4) and park forever at that
+    // call's delivery marker): it parks until the entity consumed 3, retains 4 for the entity,
+    // parks at 6 until the entity delivers 4, and only then receives 7. The same holds in the
+    // other direction for the entity's `EndAtomicRegion` read behind the owner's marker at 7.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        entity_start,
+        entity_begin_atomic_region(2),
+        start_with_parent(2),
+        end_for(4, 44),
+        delivered_for(4),
+        begin_atomic_region(),
+        entity_end_atomic_region(2, 3),
+        end_atomic_region(7),
+        end_for(2, 1),
+    ])
+    .await;
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = entity_handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+
+    let mut owner_begin = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(&mut owner_begin, "the owner's BeginAtomicRegion read").await;
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(2),
+        "a parked positional reader must not advance past the other Store's marker"
+    );
+
+    let (idx, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(2)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert!(matches!(entry, OplogEntry::BeginAtomicRegion { .. }));
+
+    assert_pending(&mut owner_begin, "the owner's BeginAtomicRegion read").await;
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(5),
+        "the owner's reader retains the entity's Start(4), attaches End(5) and parks at the marker"
+    );
+    assert!(rs.has_unclaimed_retained_starts());
+
+    let call = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    match rs.await_resolution(call).await.unwrap() {
+        Resolution::Completed {
+            end_idx,
+            delivery_marker,
+            ..
+        } => {
+            assert_eq!(end_idx, OplogIndex::from_u64(5));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+        }
+        other => panic!("expected the entity call to complete, got {other:?}"),
+    }
+    rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6))
+        .await
+        .unwrap()
+        .acknowledge();
+
+    let mut entity_end = Box::pin(rs.get_oplog_entry(Some(OplogIndex::from_u64(2))));
+    assert_pending(&mut entity_end, "the entity's EndAtomicRegion read").await;
+
+    let (idx, entry) = owner_begin.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(7));
+    assert!(matches!(
+        entry,
+        OplogEntry::BeginAtomicRegion {
+            entity_parent_start_index: None,
+            ..
+        }
+    ));
+
+    let (idx, entry) = entity_end.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(8));
+    assert!(matches!(
+        entry,
+        OplogEntry::EndAtomicRegion { begin_index, .. } if begin_index == OplogIndex::from_u64(3)
+    ));
+
+    let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(9));
+    assert!(matches!(
+        entry,
+        OplogEntry::EndAtomicRegion { begin_index, .. } if begin_index == OplogIndex::from_u64(7)
+    ));
+
+    assert!(matches!(
+        rs.await_resolution_outcome(entity_handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(10)
+    ));
+    reconstruction.body_settled();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+#[test]
+async fn positional_reader_rejects_marker_of_an_entity_body_nobody_reconstructs() {
+    // [NoOp(1), Start(2), End(2→3), BeginAtomicRegion(4, entity 2), NoOp(5)] — the entry at 4
+    // claims to belong to an entity body rooted at 2, but 2 was claimed and resolved as an
+    // ordinary call: no reconstruction will ever consume 4. Parking would hang replay, so the
+    // owner's positional reader reports the divergence instead.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        end_for(2, 42),
+        entity_begin_atomic_region(2),
+        noop(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        rs.await_resolution(handle).await.unwrap(),
+        Resolution::Completed { .. }
+    ));
+
+    let error = rs
+        .get_oplog_entry(None)
+        .await
+        .expect_err("a marker of an unreconstructed entity body must be fatal");
+    assert!(
+        error
+            .to_string()
+            .contains("neither retained, claimed nor replaying"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
+    // [NoOp(1), Start(2), Start(entity=3), NoOp(4, entity 3), End(2→5), End(3→6), NoOp(7)] —
+    // call 2's awaiter drained past the unclaimed entity Start(3) and retained it. The owner's
+    // next positional read reaches the body entry at 4 while 3 is still unclaimed: the owner is
+    // going to claim 3, so the reader waits rather than failing, and receives 7 once the entity
+    // body consumed 4.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        entity_start,
+        anchored_noop(3),
+        end_for(2, 42),
+        end_for(3, 1),
+        noop(),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    let mut resolution = Box::pin(rs.await_resolution(handle));
+    assert_pending(&mut resolution, "call 2's awaiter").await;
+    assert!(rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+
+    let mut owner_read = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(&mut owner_read, "the owner's positional read").await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
+
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = entity_handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let (idx, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+
+    let (idx, entry) = owner_read.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(7));
+    assert!(matches!(
+        entry,
+        OplogEntry::NoOp {
+            entity_parent_start_index: None,
+            ..
+        }
+    ));
+    assert!(matches!(
+        resolution.await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(matches!(
+        rs.await_resolution_outcome(entity_handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(6)
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
+    // The entity body reserved Start(3), then appended its NoOp(2) before the asynchronous Start
+    // write completed. The owner's reader must leave 2 for the body while its reconstruction
+    // claim scans ahead to 3, rather than rejecting the forward attribution as orphaned history.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        entity_start,
+        end_for(3, 1),
+        noop(),
+    ])
+    .await;
+
+    let mut owner_read = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(&mut owner_read, "the owner's positional read").await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = entity_handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let (idx, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(2));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+
+    assert!(matches!(
+        rs.await_resolution_outcome(entity_handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(4)
+    ));
+    reconstruction.body_settled();
+    let (idx, entry) = owner_read.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+}
+
+#[test]
+async fn positional_reader_rejects_forward_body_owner_that_is_not_an_entity_start() {
+    // The future Start at 3 is an ordinary monotonic-clock call, so no entity body can ever claim
+    // it and consume the NoOp attributed to it at 2. Treating every retainable future Start as an
+    // entity owner would park this read forever instead of rejecting the orphaned attribution.
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        start_now(),
+        end_for(3, 42),
+        noop(),
+    ])
+    .await;
+
+    let result = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry(None)).await;
+    let error = result
+        .expect("an ordinary future Start must not leave the positional reader parked")
+        .expect_err("an entry attributed to a non-entity Start must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("neither retained, claimed nor replaying"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
+    // [NoOp(1), Start(entity=2), End(2→3), BeginAtomicRegion(4, entity 2),
+    //  AgentInvocationFinished(5)] — the entity body settled without consuming its own marker at
+    // 4. Every entity body of the invocation has terminated by the time the boundary reader runs,
+    // so nobody can consume 4 anymore: the walk must fail instead of parking at it.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        entity_start,
+        end_for(2, 1),
+        entity_begin_atomic_region(2),
+        invocation_finished(),
+    ])
+    .await;
+    let mut handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    reconstruction.body_settled();
+
+    let error = read_invocation_finished(&rs)
+        .await
+        .expect_err("an unconsumed entity body entry at the boundary must be fatal");
+    assert!(
+        error.to_string().contains("without reconstructing"),
+        "unexpected error: {error}"
     );
 }

@@ -61,7 +61,7 @@ fn direct_stream_type(ty: &Type) -> Option<StreamKind> {
     };
     match path.path.segments.last()?.ident.to_string().as_str() {
         "InputStream" | "NativeToolStdin" => Some(StreamKind::Input),
-        "OutputStream" | "NativeToolStdout" => Some(StreamKind::Output),
+        "OutputStream" | "NativeToolOutput" => Some(StreamKind::Output),
         _ => None,
     }
 }

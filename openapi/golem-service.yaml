@@ -1995,7 +1995,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       operationId: invoke_tool
       parameters:
@@ -10468,6 +10468,912 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/authorize:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: authorize_declared_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportAuthorization'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/complete:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: complete_declared_mcp_import_authorization
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/CompleteDeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/status:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: get_declared_mcp_import_authorization_status
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/oauth/disconnect:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: disconnect_declared_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/DeclaredMcpImportOAuthRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeclaredMcpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/authorize:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: authorize_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportAuthorization'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth/complete:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: complete_mcp_import_authorization
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpImportOAuthCallback'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/oauth:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: get_mcp_import_authorization_status
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      operationId: disconnect_mcp_import
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportOAuthStatus'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/mcp-imports/resolve:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      operationId: resolve_mcp_imports
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/McpImportResolutionRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportResolution'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/tools:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: |-
+        Inspect projected tools from an import in a specific deployment.
+        Cache misses fetch upstream metadata on demand.
+        This is the individual import's projection, before native and earlier-import precedence.
+        Requires environment/deployment visibility and ViewTools; network requests use the owner's quota.
+      operationId: get_mcp_import_tools
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportTools'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/envs/{environment_id}/deployments/{deployment_revision}/mcp-imports/{import_index}/refresh:
+    post:
+      tags:
+      - RegistryService
+      - Environment
+      - Deployment
+      summary: |-
+        Refresh and inspect projected tools from an import in a specific deployment.
+        Uses the same permissions and owner quota as inspection, bypassing cached success.
+        Upstream failure is returned explicitly rather than serving stale metadata.
+      operationId: refresh_mcp_import_tools
+      parameters:
+      - in: path
+        name: environment_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: deployment_revision
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: simple
+      - in: path
+        name: import_index
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint32
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/McpImportTools'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/accounts/{account_id}/permission-shares:
     get:
       tags:
@@ -15269,6 +16175,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -15681,6 +16592,39 @@ components:
       required:
       - key
       - description
+    ExternalBinaryValuePayload:
+      type: object
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+      required:
+      - bytes
+    ExternalDurationValuePayload:
+      type: object
+      properties:
+        nanoseconds:
+          type: string
+      required:
+      - nanoseconds
+    ExternalQuantityValue:
+      type: object
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
+      required:
+      - mantissa
+      - scale
+      - unit
     ExternalResultValuePayload:
       type: object
       oneOf:
@@ -15691,12 +16635,15 @@ components:
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
       - type: object
         properties:
           tag:
@@ -15704,12 +16651,15 @@ components:
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
             - nullable: true
+              type: object
+              enum:
+              - null
         required:
         - tag
+        - value
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -15767,8 +16717,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
         required:
         - kind
         - value
@@ -15815,8 +16764,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
         required:
         - kind
         - value
@@ -15827,8 +16775,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -15839,8 +16797,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
+              required:
+              - $float
         required:
         - kind
         - value
@@ -15863,6 +16831,18 @@ components:
             - string
           value:
             type: string
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
         required:
         - kind
         - value
@@ -16016,10 +16996,14 @@ components:
             type: object
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
                 - nullable: true
+                  type: object
+                  enum:
+                  - null
+            required:
+            - inner
         required:
         - kind
         - value
@@ -16041,7 +17025,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
         required:
         - kind
         - value
@@ -16052,7 +17036,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
         required:
         - kind
         - value
@@ -16112,7 +17096,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
         required:
         - kind
         - value
@@ -16123,7 +17107,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
         required:
         - kind
         - value
@@ -16138,6 +17122,15 @@ components:
         required:
         - kind
         - value
+    ExternalTextValuePayload:
+      type: object
+      properties:
+        text:
+          type: string
+        language:
+          type: string
+      required:
+      - text
     ExternalToolInvocationParameters:
       title: ExternalToolInvocationParameters
       type: object
@@ -16207,10 +17200,7 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
       required:
       - case
     FailedUpdate:
@@ -16225,9 +17215,17 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     FallibleResultParameters:
       title: FallibleResultParameters
       type: object
@@ -16454,6 +17452,17 @@ components:
       - Warn
       - Error
       - Critical
+    LogTraceContext:
+      title: LogTraceContext
+      type: object
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+      required:
+      - traceId
+      - spanId
     ManualUpdateParameters:
       title: ManualUpdateParameters
       type: object
@@ -16931,9 +17940,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     PermissionCardSpec:
       type: object
       properties:
@@ -17487,6 +18504,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -17583,9 +18621,6 @@ components:
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
           CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-          StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -17613,6 +18648,7 @@ components:
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -17644,9 +18680,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -17674,6 +18707,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
     PublicOplogEntryAttribution:
       discriminator:
         propertyName: type
@@ -18071,18 +19105,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#FailedUpdateParams'
-    PublicOplogEntry_r#FinishSpanParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: FinishSpan
-            type: string
-            enum:
-            - FinishSpan
-        required:
-        - type
-      - $ref: '#/components/schemas/r#FinishSpanParams'
     PublicOplogEntry_r#GrowMemoryParams:
       allOf:
       - type: object
@@ -18299,18 +19321,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
-    PublicOplogEntry_r#SetSpanAttributeParams:
+    PublicOplogEntry_r#SnapshotConfirmedParams:
       allOf:
       - type: object
         properties:
           type:
-            example: SetSpanAttribute
+            example: SnapshotConfirmed
             type: string
             enum:
-            - SetSpanAttribute
+            - SnapshotConfirmed
         required:
         - type
-      - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -18335,18 +19357,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StartSpanParams:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: StartSpan
-            type: string
-            enum:
-            - StartSpan
-        required:
-        - type
-      - $ref: '#/components/schemas/r#StartSpanParams'
     PublicOplogEntry_r#StreamCancelParams:
       allOf:
       - type: object
@@ -18710,6 +19720,27 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      title: PublicSnapshotAssistedUpdateDetails
+      type: object
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
     PublicSnapshotData:
       discriminator:
         propertyName: type
@@ -18758,6 +19789,19 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/RawSnapshotData'
+    PublicSpanAttributes:
+      title: PublicSpanAttributes
+      type: object
+      properties:
+        spanId:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+      required:
+      - spanId
+      - attributes
     PublicSpanData:
       discriminator:
         propertyName: type
@@ -18792,6 +19836,86 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicSpanFinished:
+      title: PublicSpanFinished
+      type: object
+      properties:
+        spanId:
+          type: string
+        finishedAt:
+          type: string
+          format: date-time
+        outcome:
+          $ref: '#/components/schemas/PublicSpanOutcome'
+      required:
+      - spanId
+      - finishedAt
+      - outcome
+    PublicSpanKind:
+      type: string
+      enum:
+      - internal
+      - client
+      - server
+    PublicSpanLink:
+      title: PublicSpanLink
+      type: object
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+      required:
+      - traceId
+      - spanId
+      - traceStates
+    PublicSpanOutcome:
+      type: string
+      enum:
+      - completed
+      - failed
+      - cancelled
+      - abandoned
+      - denied
+    PublicSpanStarted:
+      title: PublicSpanStarted
+      type: object
+      properties:
+        spanId:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        parentSpanId:
+          type: string
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSpanLink'
+        startedAt:
+          type: string
+          format: date-time
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+        kind:
+          $ref: '#/components/schemas/PublicSpanKind'
+      required:
+      - spanId
+      - traceId
+      - traceStates
+      - links
+      - startedAt
+      - attributes
+      - kind
     PublicToolInvocationOperation:
       title: PublicToolInvocationOperation
       type: object
@@ -18811,11 +19935,21 @@ components:
         declaresStdout:
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
           type: boolean
+        hasStderr:
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+          type: boolean
+        declaresStderr:
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+          type: boolean
       required:
       - commandPath
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
     PublicTypedAgentConfigEntry:
       title: PublicTypedAgentConfigEntry
       description: |-
@@ -18838,10 +19972,12 @@ components:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -18855,6 +19991,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotAssistedAutomatic
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -19726,6 +20874,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -20273,6 +21435,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+        required:
+        - kind
+        - value
+      - type: object
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -20549,6 +21723,35 @@ components:
         required:
         - type
         - value
+    SnapshotAssistedAutomaticUpdateParameters:
+      title: SnapshotAssistedAutomaticUpdateParameters
+      type: object
+    SnapshotAssistedUpdateMetadata:
+      title: SnapshotAssistedUpdateMetadata
+      type: object
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        filesystemSnapshot:
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
+          type: string
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -20559,6 +21762,8 @@ components:
             type: integer
             format: uint8
         mimeType:
+          type: string
+        filesystemSnapshot:
           type: string
       required:
       - payload
@@ -20638,9 +21843,17 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
       required:
       - timestamp
       - targetRevision
+      - mode
     TailPositional:
       type: object
       properties:
@@ -20708,12 +21921,15 @@ components:
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
           $ref: '#/components/schemas/SchemaGraph'
       required:
       - version
+      - requires_filesystem
       - commands
     ToolResultSpec:
       type: object
@@ -20856,6 +22072,12 @@ components:
     UpdateWorkerResponse:
       title: UpdateWorkerResponse
       type: object
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
+      required:
+      - updateAttemptIndex
     UrlRestrictions:
       type: object
       properties:
@@ -21090,6 +22312,8 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
       required:
       - timestamp
       - startIndex
@@ -21486,6 +22710,10 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         forcedCommit:
           type: boolean
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+        spanAttributes:
+          $ref: '#/components/schemas/PublicSpanAttributes'
       required:
       - timestamp
       - startIndex
@@ -21535,21 +22763,14 @@ components:
           format: uint64
         details:
           type: string
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
-    r#FinishSpanParams:
-      title: r#FinishSpanParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-      required:
-      - timestamp
-      - spanId
     r#GrowMemoryParams:
       title: r#GrowMemoryParams
       type: object
@@ -21616,6 +22837,8 @@ components:
           type: string
         message:
           type: string
+        traceContext:
+          $ref: '#/components/schemas/LogTraceContext'
       required:
       - timestamp
       - level
@@ -21681,10 +22904,14 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
     r#PreCommitRemoteTransactionParams:
       title: r#PreCommitRemoteTransactionParams
       type: object
@@ -21787,24 +23014,18 @@ components:
       required:
       - timestamp
       - policy
-    r#SetSpanAttributeParams:
-      title: r#SetSpanAttributeParams
+    r#SnapshotConfirmedParams:
+      title: r#SnapshotConfirmedParams
       type: object
       properties:
         timestamp:
           type: string
           format: date-time
-        spanId:
+        filesystemSnapshot:
           type: string
-        key:
-          type: string
-        value:
-          $ref: '#/components/schemas/PublicAttributeValue'
       required:
       - timestamp
-      - spanId
-      - key
-      - value
+      - filesystemSnapshot
     r#SnapshotParams:
       title: r#SnapshotParams
       type: object
@@ -21814,6 +23035,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
       required:
       - timestamp
       - data
@@ -21839,31 +23062,12 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
+        spanStarted:
+          $ref: '#/components/schemas/PublicSpanStarted'
       required:
       - timestamp
       - functionName
       - durableFunctionType
-    r#StartSpanParams:
-      title: r#StartSpanParams
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        parentId:
-          type: string
-        linkedContext:
-          type: string
-        attributes:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublicAttribute'
-      required:
-      - timestamp
-      - spanId
-      - attributes
     r#StreamCancelParams:
       title: r#StreamCancelParams
       type: object
@@ -21941,6 +23145,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
       required:
       - timestamp
       - targetRevision
@@ -22375,6 +23581,11 @@ components:
           type: array
           items:
             type: string
+    AgentTypeKind:
+      type: string
+      enum:
+      - regular
+      - http-router
     AgentTypeProvisionConfig:
       title: AgentTypeProvisionConfig
       description: |-
@@ -22477,6 +23688,8 @@ components:
       properties:
         type_name:
           type: string
+        kind:
+          $ref: '#/components/schemas/AgentTypeKind'
         description:
           type: string
         source_language:
@@ -22508,6 +23721,7 @@ components:
             $ref: '#/components/schemas/AgentConfigDeclarationSchema'
       required:
       - type_name
+      - kind
       - description
       - constructor
       - methods
@@ -22568,6 +23782,21 @@ components:
           type: string
       required:
       - currentRevision
+    AuthorizationCodePkceConfig:
+      title: AuthorizationCodePkceConfig
+      type: object
+      properties:
+        redirectUris:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+      required:
+      - redirectUris
+      - origins
     AutoInjectedKind:
       type: string
       enum:
@@ -22617,6 +23846,17 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    CompleteDeclaredMcpImportOAuthRequest:
+      title: CompleteDeclaredMcpImportOAuthRequest
+      type: object
+      properties:
+        import:
+          $ref: '#/components/schemas/McpImportDeployment'
+        callback:
+          $ref: '#/components/schemas/McpImportOAuthCallback'
+      required:
+      - import
+      - callback
     ComponentConfigSchema:
       type: object
       properties:
@@ -23011,6 +24251,37 @@ components:
       required:
       - name
       - issuerUrl
+    DeclaredMcpImportAuthorization:
+      title: DeclaredMcpImportAuthorization
+      type: object
+      properties:
+        authorizationUrl:
+          type: string
+      required:
+      - authorizationUrl
+    DeclaredMcpImportOAuthRequest:
+      title: DeclaredMcpImportOAuthRequest
+      type: object
+      properties:
+        import:
+          $ref: '#/components/schemas/McpImportDeployment'
+      required:
+      - import
+    DeclaredMcpImportOAuthStatus:
+      title: DeclaredMcpImportOAuthStatus
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        securityScheme:
+          type: string
+        status:
+          type: string
+      required:
+      - environmentId
+      - securityScheme
+      - status
     DeployValidationWarning:
       discriminator:
         propertyName: type
@@ -23018,12 +24289,14 @@ components:
           HttpApiReadOnlyMethodBoundToNonGetVerb: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
           HttpApiReadOnlyTtlBelowOneSecond: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
           ToolRevealableSecretKeysDropped: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+          McpImportDiscovery: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
           ToolMiddleware: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
       type: object
       oneOf:
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb'
       - $ref: '#/components/schemas/DeployValidationWarning_HttpApiReadOnlyTtlBelowOneSecond'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolRevealableSecretKeysDropped'
+      - $ref: '#/components/schemas/DeployValidationWarning_McpImportDiscovery'
       - $ref: '#/components/schemas/DeployValidationWarning_ToolMiddlewareWarning'
     DeployValidationWarning_HttpApiReadOnlyMethodBoundToNonGetVerb:
       allOf:
@@ -23049,6 +24322,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/HttpApiReadOnlyTtlBelowOneSecond'
+    DeployValidationWarning_McpImportDiscovery:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: McpImportDiscovery
+            type: string
+            enum:
+            - McpImportDiscovery
+        required:
+        - type
+      - $ref: '#/components/schemas/McpImportDiscovery'
     DeployValidationWarning_ToolMiddlewareWarning:
       allOf:
       - type: object
@@ -23191,6 +24476,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RemoteToolDeployment'
+        mcpImports:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
         publishToolMiddlewares:
           default: []
           type: array
@@ -23206,6 +24496,20 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ToolMiddlewareInstallation'
+        environmentToolMiddlewareBindings:
+          description: Middleware-only bindings retained for tools whose implementation is discovered dynamically.
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ToolBindingInput'
+        agentToolMiddlewareBindings:
+          description: Agent-specific middleware-only bindings retained for dynamically discovered tools.
+          default: {}
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              $ref: '#/components/schemas/ToolBindingInput'
         replaceIncompatibleAgentSecrets:
           default: false
           type: boolean
@@ -23238,6 +24542,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -23285,6 +24593,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - remoteToolMiddlewares
@@ -23396,6 +24705,19 @@ components:
       - revision
       - domain
       - hash
+    DeploymentPlanMcpImportEntry:
+      title: DeploymentPlanMcpImportEntry
+      type: object
+      properties:
+        index:
+          type: integer
+          format: uint32
+        hash:
+          type: string
+          format: hash
+      required:
+      - index
+      - hash
     DeploymentPlanRemoteToolEntry:
       title: DeploymentPlanRemoteToolEntry
       type: object
@@ -23475,6 +24797,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/DeploymentPlanMcpDeploymentEntry'
+        mcpImports:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanMcpImportEntry'
         remoteTools:
           type: array
           items:
@@ -23513,6 +24839,7 @@ components:
       - components
       - httpApiDeployments
       - mcpDeployments
+      - mcpImports
       - remoteTools
       - publishedTools
       - remoteToolMiddlewares
@@ -23545,6 +24872,96 @@ components:
           type: string
       required:
       - domain
+    DurableStreamInputSlotSource:
+      title: DurableStreamInputSlotSource
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    DurableStreamOutputSlotSource:
+      title: DurableStreamOutputSlotSource
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    DurableStreamRouteLoadOptions:
+      title: DurableStreamRouteLoadOptions
+      type: object
+      properties:
+        maxConcurrentReadersPerStream:
+          type: integer
+          format: uint32
+        maxAppendRequestsPerSecondPerStream:
+          type: integer
+          format: uint32
+    DurableStreamRouteOptions:
+      title: DurableStreamRouteOptions
+      type: object
+      properties:
+        slots:
+          type: array
+          items:
+            $ref: '#/components/schemas/DurableStreamSlotOptions'
+        allowExternalWrites:
+          type: boolean
+        allowStreamDelete:
+          type: boolean
+        allowInvocationDelete:
+          type: boolean
+        load:
+          $ref: '#/components/schemas/DurableStreamRouteLoadOptions'
+      required:
+      - slots
+    DurableStreamSlotOptions:
+      title: DurableStreamSlotOptions
+      type: object
+      properties:
+        source:
+          $ref: '#/components/schemas/DurableStreamSlotSource'
+        name:
+          type: string
+        contentType:
+          type: string
+      required:
+      - source
+    DurableStreamSlotSource:
+      discriminator:
+        propertyName: type
+        mapping:
+          input: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+          output: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamInputSlotSource'
+      - $ref: '#/components/schemas/DurableStreamSlotSource_DurableStreamOutputSlotSource'
+    DurableStreamSlotSource_DurableStreamInputSlotSource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: input
+            type: string
+            enum:
+            - input
+        required:
+        - type
+      - $ref: '#/components/schemas/DurableStreamInputSlotSource'
+    DurableStreamSlotSource_DurableStreamOutputSlotSource:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: output
+            type: string
+            enum:
+            - output
+        required:
+        - type
+      - $ref: '#/components/schemas/DurableStreamOutputSlotSource'
     EnforcementAction:
       type: string
       enum:
@@ -24019,6 +25436,19 @@ components:
       - environment
       - application
       - account
+    ExactFileMapping:
+      title: ExactFileMapping
+      type: object
+      properties:
+        publicPath:
+          type: array
+          items:
+            type: string
+        filePath:
+          type: string
+      required:
+      - publicPath
+      - filePath
     FieldSource:
       type: object
       oneOf:
@@ -24041,6 +25471,51 @@ components:
         required:
         - tag
         - value
+    FileMapping:
+      discriminator:
+        propertyName: type
+        mapping:
+          Exact: '#/components/schemas/FileMapping_ExactFileMapping'
+          Subtree: '#/components/schemas/FileMapping_SubtreeFileMapping'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileMapping_ExactFileMapping'
+      - $ref: '#/components/schemas/FileMapping_SubtreeFileMapping'
+    FileMapping_ExactFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Exact
+            type: string
+            enum:
+            - Exact
+        required:
+        - type
+      - $ref: '#/components/schemas/ExactFileMapping'
+    FileMapping_SubtreeFileMapping:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Subtree
+            type: string
+            enum:
+            - Subtree
+        required:
+        - type
+      - $ref: '#/components/schemas/SubtreeFileMapping'
+    FileResponseHeader:
+      title: FileResponseHeader
+      type: object
+      properties:
+        name:
+          type: string
+        value:
+          type: string
+      required:
+      - name
+      - value
     HeaderVariable:
       title: HeaderVariable
       type: object
@@ -24067,6 +25542,8 @@ components:
           format: uuid
         domain:
           type: string
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         hash:
           type: string
           format: hash
@@ -24086,6 +25563,7 @@ components:
       - revision
       - environmentId
       - domain
+      - scheme
       - hash
       - agents
       - webhooksPrefix
@@ -24144,6 +25622,13 @@ components:
       properties:
         domain:
           type: string
+        scheme:
+          description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+          default: https
+          allOf:
+          - $ref: '#/components/schemas/HttpApiDeploymentScheme'
+          - description: Public scheme advertised in OpenAPI. Does not configure the HTTP listener.
+            default: https
         webhooksPrefix:
           type: string
         openapiEndpointPrefix:
@@ -24157,6 +25642,11 @@ components:
       - webhooksPrefix
       - openapiEndpointPrefix
       - agents
+    HttpApiDeploymentScheme:
+      type: string
+      enum:
+      - http
+      - https
     HttpApiDeploymentUpdate:
       title: HttpApiDeploymentUpdate
       type: object
@@ -24164,6 +25654,8 @@ components:
         currentRevision:
           type: integer
           format: uint64
+        scheme:
+          $ref: '#/components/schemas/HttpApiDeploymentScheme'
         webhookPrefix:
           type: string
         openapiEndpointPrefix:
@@ -24236,6 +25728,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
+        durableStreams:
+          $ref: '#/components/schemas/DurableStreamRouteOptions'
       required:
       - httpMethod
       - pathSuffix
@@ -24256,6 +25750,7 @@ components:
           Trace: '#/components/schemas/HttpMethod_Empty'
           Patch: '#/components/schemas/HttpMethod_Empty'
           Custom: '#/components/schemas/HttpMethod_CustomHttpMethod'
+          Any: '#/components/schemas/HttpMethod_Empty'
       type: object
       oneOf:
       - $ref: '#/components/schemas/HttpMethod_Empty'
@@ -24268,6 +25763,7 @@ components:
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_Empty'
       - $ref: '#/components/schemas/HttpMethod_CustomHttpMethod'
+      - $ref: '#/components/schemas/HttpMethod_Empty'
     HttpMethod_CustomHttpMethod:
       allOf:
       - type: object
@@ -24285,10 +25781,10 @@ components:
       - type: object
         properties:
           type:
-            example: Patch
+            example: Any
             type: string
             enum:
-            - Patch
+            - Any
         required:
         - type
       - $ref: '#/components/schemas/Empty'
@@ -24310,11 +25806,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PathSegment'
+        staticBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        filesystemBindings:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileMapping'
+        fileResponseHeaders:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponseHeader'
+        openapiProviderMethod:
+          description: The name of a parameterless router method that returns the OpenAPI document as a string.
+          type: string
       required:
       - pathPrefix
       - phantomAgent
       - corsOptions
       - webhookSuffix
+      - staticBindings
+      - filesystemBindings
+      - fileResponseHeaders
     InitialAgentFile:
       title: InitialAgentFile
       type: object
@@ -24550,6 +26064,238 @@ components:
             $ref: '#/components/schemas/McpDeploymentToolOptions'
       required:
       - currentRevision
+    McpImportAuthInput:
+      title: McpImportAuthInput
+      type: object
+      properties:
+        bearer:
+          type: string
+        basic:
+          $ref: '#/components/schemas/McpImportBasicAuth'
+    McpImportAuthorization:
+      title: McpImportAuthorization
+      type: object
+      properties:
+        authorizationUrl:
+          type: string
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+      required:
+      - authorizationUrl
+      - deploymentRevision
+      - importIndex
+    McpImportBasicAuth:
+      title: McpImportBasicAuth
+      type: object
+      properties:
+        user:
+          type: string
+        password:
+          type: string
+      required:
+      - user
+      - password
+    McpImportDeployment:
+      title: McpImportDeployment
+      type: object
+      properties:
+        url:
+          type: string
+        auth:
+          $ref: '#/components/schemas/McpImportAuthInput'
+        securityScheme:
+          type: string
+        prefix:
+          type: string
+        include:
+          type: array
+          items:
+            type: string
+        exclude:
+          type: array
+          items:
+            type: string
+        version:
+          type: string
+      required:
+      - url
+    McpImportDiagnostic:
+      title: McpImportDiagnostic
+      type: object
+      properties:
+        upstreamName:
+          type: string
+        reason:
+          type: string
+      required:
+      - upstreamName
+      - reason
+    McpImportDiscovery:
+      title: McpImportDiscovery
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamToolName:
+          type: string
+        reason:
+          type: string
+      required:
+      - reason
+    McpImportOAuthCallback:
+      title: McpImportOAuthCallback
+      type: object
+      properties:
+        state:
+          type: string
+        issuer:
+          type: string
+        code:
+          type: string
+        error:
+          type: string
+      required:
+      - state
+    McpImportOAuthStatus:
+      title: McpImportOAuthStatus
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+        securityScheme:
+          type: string
+        status:
+          type: string
+      required:
+      - environmentId
+      - deploymentRevision
+      - importIndex
+      - securityScheme
+      - status
+    McpImportResolution:
+      title: McpImportResolution
+      type: object
+      properties:
+        protocolVersions:
+          type: array
+          items:
+            type: string
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpResolvedTool'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpResolvedDiagnostic'
+      required:
+      - protocolVersions
+      - tools
+      - diagnostics
+    McpImportResolutionRequest:
+      title: McpImportResolutionRequest
+      type: object
+      properties:
+        imports:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDeployment'
+        nativeToolNames:
+          type: array
+          items:
+            type: string
+      required:
+      - imports
+      - nativeToolNames
+    McpImportTools:
+      title: McpImportTools
+      type: object
+      properties:
+        environmentId:
+          type: string
+          format: uuid
+        deploymentRevision:
+          type: integer
+          format: uint64
+        importIndex:
+          type: integer
+          format: uint32
+        protocolVersion:
+          type: string
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportedTool'
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/McpImportDiagnostic'
+      required:
+      - environmentId
+      - deploymentRevision
+      - importIndex
+      - protocolVersion
+      - tools
+      - diagnostics
+    McpImportedTool:
+      title: McpImportedTool
+      type: object
+      properties:
+        upstreamName:
+          type: string
+        digest:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+      required:
+      - upstreamName
+      - digest
+      - definition
+    McpResolvedDiagnostic:
+      title: McpResolvedDiagnostic
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamName:
+          type: string
+        reason:
+          type: string
+      required:
+      - importIndex
+      - upstreamName
+      - reason
+    McpResolvedTool:
+      title: McpResolvedTool
+      type: object
+      properties:
+        importIndex:
+          type: integer
+          format: uint32
+        upstreamName:
+          type: string
+        digest:
+          type: string
+        definition:
+          $ref: '#/components/schemas/Tool'
+      required:
+      - importIndex
+      - upstreamName
+      - digest
+      - definition
     MemoryLimit:
       title: MemoryLimit
       type: object
@@ -25185,6 +26931,9 @@ components:
         storageLimit:
           type: integer
           format: uint64
+        blobStorageLimit:
+          type: integer
+          format: uint64
         monthlyGasLimit:
           type: integer
           format: uint64
@@ -25244,6 +26993,7 @@ components:
       - componentLimit
       - workerConnectionLimit
       - storageLimit
+      - blobStorageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
       - maxMemoryPerWorker
@@ -25910,6 +27660,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - name
       - providerType
@@ -25917,6 +27669,7 @@ components:
       - clientSecret
       - redirectUrl
       - scopes
+      - login
     SecuritySchemeDto:
       title: SecuritySchemeDto
       type: object
@@ -25942,6 +27695,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - id
       - revision
@@ -25951,6 +27706,41 @@ components:
       - clientId
       - redirectUrl
       - scopes
+      - login
+    SecuritySchemeLogin:
+      discriminator:
+        propertyName: type
+        mapping:
+          Cookie: '#/components/schemas/SecuritySchemeLogin_Empty'
+          AuthorizationCodePkce: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/SecuritySchemeLogin_Empty'
+      - $ref: '#/components/schemas/SecuritySchemeLogin_AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_AuthorizationCodePkceConfig:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: AuthorizationCodePkce
+            type: string
+            enum:
+            - AuthorizationCodePkce
+        required:
+        - type
+      - $ref: '#/components/schemas/AuthorizationCodePkceConfig'
+    SecuritySchemeLogin_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Cookie
+            type: string
+            enum:
+            - Cookie
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     SecuritySchemeUpdate:
       title: SecuritySchemeUpdate
       type: object
@@ -25970,6 +27760,8 @@ components:
           type: array
           items:
             type: string
+        login:
+          $ref: '#/components/schemas/SecuritySchemeLogin'
       required:
       - currentRevision
     SetMemoryLimit:
@@ -26119,6 +27911,19 @@ components:
       - planDefault
       - ceiling
       - userConfigurable
+    SubtreeFileMapping:
+      title: SubtreeFileMapping
+      type: object
+      properties:
+        publicPrefix:
+          type: array
+          items:
+            type: string
+        filesystemRoot:
+          type: string
+      required:
+      - publicPrefix
+      - filesystemRoot
     SystemToolAvailability:
       type: string
       enum:
@@ -26371,6 +28176,10 @@ components:
           $ref: '#/components/schemas/NormalizedJsonValue'
         account:
           type: string
+        secretKeysReadable:
+          $ref: '#/components/schemas/SecretKeyScope'
+        secretKeysRevealable:
+          $ref: '#/components/schemas/SecretKeyScope'
         filesystemAccess:
           default: unset
           allOf:
@@ -26382,9 +28191,9 @@ components:
     ToolMiddlewareMergeMode:
       type: string
       enum:
-      - Prepend
-      - Append
-      - Replace
+      - prepend
+      - append
+      - replace
     ToolMiddlewarePublication:
       title: ToolMiddlewarePublication
       type: object
@@ -26984,7 +28793,6 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants

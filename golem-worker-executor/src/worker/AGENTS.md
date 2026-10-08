@@ -19,11 +19,17 @@ rewinding a cursor.
   remote — before that commit.
 - Dedupe by idempotency key before appending (`lookup_invocation_result` ≠ `LookupResult::New`
   returns the existing invocation). Same key = same invocation, never new work.
-- `AgentInvocationFinished` is committed with `CommitLevel::Always` before waiters are notified
-  (`on_agent_invocation_success`; failures go through `on_invocation_failure`); keep that
-  ordering. No positional durable-call `Start`/`End` may be appended for an invocation after its
-  `Finished` entry (`tail_work.rs` enforces this); hint entries such as streaming-session
+- Successful completion appends `AgentInvocationFinished`, then waits for the state actor's commit
+  receipt before notifying waiters (`on_agent_invocation_success`; failures go through
+  `on_invocation_failure`). Durable agents use `CommitLevel::Always`, so the receipt follows
+  storage. Ephemeral agents use `CommitLevel::Deferred`: the ordered writer handoff and receipt
+  precede notification, without waiting for storage or the queued status fold (bounded writer
+  backpressure may still wait). Do not weaken `Always` elsewhere; `DurableOnly` remains a no-op
+  for ephemeral agents. No positional durable-call `Start`/`End` may be appended for an invocation
+  after its `Finished` entry (`tail_work.rs` enforces this); hint entries such as streaming-session
   completion legitimately follow it.
+- Reads that require the completion's fresh status must use the state actor's FIFO status read; it
+  waits behind the queued fold. The separately persisted status cache remains asynchronous.
 - Status (`status.rs`) is folded from the oplog; caches and checkpoints are baselines, never a
   source of truth. Checkpoint only at clean boundaries.
 

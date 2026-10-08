@@ -25,8 +25,10 @@ import type {
   ToolError as WireToolError,
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import { SchemaValueStream } from 'golem:core/types@2.0.0';
 import {
+  deferredStartedToolInvocation,
   mapSettledToolResult,
   resultFromSettledToolResult,
   startedToolInvocation,
@@ -63,12 +65,11 @@ import {
   validateToolIdentifier,
 } from './internal/tool';
 import {
-  deepEqual,
   preflightWitTypedSchemaValue,
   schemaGraphFromWit,
+  schemaGraphsEquivalent,
   t,
   typedSchemaValueFromWit,
-  typedSchemaValueToWit,
   type TypedSchemaValue,
 } from './internal/schema-model';
 import { ToolRegistry } from './internal/registry/toolRegistry';
@@ -79,7 +80,11 @@ import {
 } from './internal/registry/toolMiddlewareRegistry';
 import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterable';
 import { compileSchema } from './schema/adapter';
-import type { SchemaCodec } from './schema/codec';
+import {
+  directSchemaValueFromWit,
+  relinquishSchemaValueCapabilities,
+  type SchemaCodec,
+} from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 
 export type { ToolInputStream } from './internal/tool/startedToolInvocation';
@@ -267,15 +272,17 @@ export interface ToolBodyModel<
   Errors = never,
   Stdin extends StreamPresence = 'none',
   Stdout extends StreamPresence = 'none',
+  Stderr extends StreamPresence = 'none',
 > {
   readonly args: Args;
   readonly success: Success;
   readonly errors: Errors;
   readonly stdin: Stdin;
   readonly stdout: Stdout;
+  readonly stderr: Stderr;
 }
 
-type AnyToolBodyModel = ToolBodyModel<any, any, any, any, any>;
+type AnyToolBodyModel = ToolBodyModel<any, any, any, any, any, any>;
 
 export interface ToolCommandModel<
   Name extends string = string,
@@ -295,8 +302,15 @@ export interface ToolSubtreeModel<Command = ToolCommandModel> {
 }
 
 type BodyModelOf<Builder> =
-  Builder extends BodyBuilder<infer Args, infer Success, infer Errors, infer Stdin, infer Stdout>
-    ? ToolBodyModel<Args, Success, Errors, Stdin, Stdout>
+  Builder extends BodyBuilder<
+    infer Args,
+    infer Success,
+    infer Errors,
+    infer Stdin,
+    infer Stdout,
+    infer Stderr
+  >
+    ? ToolBodyModel<Args, Success, Errors, Stdin, Stdout, Stderr>
     : never;
 
 export type ToolCommandModelOf<Builder> =
@@ -305,18 +319,36 @@ export type ToolCommandModelOf<Builder> =
     : never;
 
 type BodyArgs<Body> =
-  Body extends ToolBodyModel<infer Args, unknown, unknown, any, any> ? PublicArguments<Args> : {};
+  Body extends ToolBodyModel<infer Args, unknown, unknown, any, any, any>
+    ? PublicArguments<Args>
+    : {};
 type BodySuccess<Body> =
-  Body extends ToolBodyModel<unknown, infer Success, unknown, any, any> ? Success : never;
+  Body extends ToolBodyModel<unknown, infer Success, unknown, any, any, any> ? Success : never;
 type BodyErrors<Body> =
-  Body extends ToolBodyModel<unknown, unknown, infer Errors, any, any> ? Errors : never;
+  Body extends ToolBodyModel<unknown, unknown, infer Errors, any, any, any> ? Errors : never;
 type BodyStdin<Body> =
-  Body extends ToolBodyModel<unknown, unknown, unknown, infer Stdin, any> ? Stdin : 'none';
+  Body extends ToolBodyModel<unknown, unknown, unknown, infer Stdin, any, any> ? Stdin : 'none';
 type BodyStdout<Body> =
-  Body extends ToolBodyModel<unknown, unknown, unknown, any, infer Stdout> ? Stdout : 'none';
+  Body extends ToolBodyModel<unknown, unknown, unknown, any, infer Stdout, any> ? Stdout : 'none';
+type BodyStderr<Body> =
+  Body extends ToolBodyModel<unknown, unknown, unknown, any, any, infer Stderr> ? Stderr : 'none';
 type ReconcileBodyModel<Body, InheritedGlobals> =
-  Body extends ToolBodyModel<infer Args, infer Success, infer Errors, infer Stdin, infer Stdout>
-    ? ToolBodyModel<ReconcileBodyArguments<Args, InheritedGlobals>, Success, Errors, Stdin, Stdout>
+  Body extends ToolBodyModel<
+    infer Args,
+    infer Success,
+    infer Errors,
+    infer Stdin,
+    infer Stdout,
+    infer Stderr
+  >
+    ? ToolBodyModel<
+        ReconcileBodyArguments<Args, InheritedGlobals>,
+        Success,
+        Errors,
+        Stdin,
+        Stdout,
+        Stderr
+      >
     : Body;
 
 type StreamContextField<
@@ -332,13 +364,15 @@ type StreamContextField<
 export type ToolInvocationContext<
   Stdin extends StreamPresence = StreamPresence,
   Stdout extends StreamPresence = StreamPresence,
+  Stderr extends StreamPresence = StreamPresence,
 > = Simplify<
   { readonly principal: Principal } & StreamContextField<
     'stdin',
     Stdin,
     ReadableStream<Uint8Array>
   > &
-    StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>>
+    StreamContextField<'stdout', Stdout, WritableStream<Uint8Array>> &
+    StreamContextField<'stderr', Stderr, WritableStream<Uint8Array>>
 >;
 
 export interface ToolOk<Value> {
@@ -419,7 +453,7 @@ type HandlerFor<Model, Inherited> =
           GlobalArguments<MergeGlobalArguments<Inherited, Globals>> & BodyArgs<Body>,
           BodySuccess<Body>,
           BodyErrors<Body>,
-          ToolInvocationContext<BodyStdin<Body>, BodyStdout<Body>>
+          ToolInvocationContext<BodyStdin<Body>, BodyStdout<Body>, BodyStderr<Body>>
         >
       : never
     : never;
@@ -477,9 +511,11 @@ type ClientStdin<Body> = StreamContextField<'stdin', BodyStdin<Body>, ToolInputS
 type ClientResult<Body> =
   BodyStdout<Body> extends 'required' | 'optional'
     ? StartedToolInvocation<BodySuccess<Body>>
-    : [BodySuccess<Body>] extends [undefined]
-      ? Promise<void>
-      : Promise<BodySuccess<Body>>;
+    : BodyStderr<Body> extends 'required' | 'optional'
+      ? StartedToolInvocation<BodySuccess<Body>>
+      : [BodySuccess<Body>] extends [undefined]
+        ? Promise<void>
+        : Promise<BodySuccess<Body>>;
 
 type ClientMethodFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
@@ -539,26 +575,44 @@ type UnderlyingInvocation<Body> = ToolUnderlyingInvocation<BodySuccess<Body>> &
     ? { readonly stdout: AsyncIterable<number> }
     : BodyStdout<Body> extends 'optional'
       ? { readonly stdout?: AsyncIterable<number> }
-      : { readonly stdout?: never });
+      : { readonly stdout?: never }) &
+  (BodyStderr<Body> extends 'required'
+    ? { readonly stderr: AsyncIterable<number> }
+    : BodyStderr<Body> extends 'optional'
+      ? { readonly stderr?: AsyncIterable<number> }
+      : { readonly stderr?: never });
+
+type UnderlyingOutputField<Name extends 'stdout' | 'stderr', Presence> = Presence extends 'required'
+  ? { readonly [Key in Name]: AsyncIterable<number> }
+  : Presence extends 'optional'
+    ? { readonly [Key in Name]?: AsyncIterable<number> }
+    : {};
 
 type UnderlyingResult<Body> =
-  BodyStdout<Body> extends 'required'
-    ? [BodySuccess<Body>] extends [undefined]
-      ? AsyncIterable<number>
-      : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
-    : BodyStdout<Body> extends 'optional'
+  BodyStderr<Body> extends 'required' | 'optional'
+    ? ([BodySuccess<Body>] extends [undefined] ? {} : { result: BodySuccess<Body> }) &
+        UnderlyingOutputField<'stdout', BodyStdout<Body>> &
+        UnderlyingOutputField<'stderr', BodyStderr<Body>>
+    : BodyStdout<Body> extends 'required'
       ? [BodySuccess<Body>] extends [undefined]
-        ? AsyncIterable<number> | undefined
-        : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
-      : [BodySuccess<Body>] extends [undefined]
-        ? void
-        : BodySuccess<Body>;
+        ? AsyncIterable<number>
+        : { result: BodySuccess<Body>; stdout: AsyncIterable<number> }
+      : BodyStdout<Body> extends 'optional'
+        ? [BodySuccess<Body>] extends [undefined]
+          ? AsyncIterable<number> | undefined
+          : { result: BodySuccess<Body>; stdout?: AsyncIterable<number> }
+        : [BodySuccess<Body>] extends [undefined]
+          ? void
+          : BodySuccess<Body>;
 
-export interface ToolUnderlyingMethod<Args, Body, Errors = never> {
-  (args: Simplify<Args>): Promise<UnderlyingResult<Body>>;
+export type ToolUnderlyingMethod<Args, Body, Errors = never> = {
   start(args: Simplify<Args>): Promise<UnderlyingInvocation<Body>>;
   readonly [TOOL_CLIENT_ERRORS]: Errors;
-}
+} & (BodyStdout<Body> extends 'none'
+  ? BodyStderr<Body> extends 'none'
+    ? (args: Simplify<Args>) => Promise<UnderlyingResult<Body>>
+    : {}
+  : {});
 
 type UnderlyingMethodFor<Model, Inherited> =
   Model extends ToolCommandModel<string, infer Globals, infer Body, object>
@@ -799,7 +853,10 @@ export interface UniversalToolUnderlyingInvoke {
     input: WireTypedSchemaValue,
     stdin: AsyncIterable<number> | undefined,
   ): Promise<
-    ToolUnderlyingInvocation<WireInvocationResult> & { readonly stdout?: AsyncIterable<number> }
+    ToolUnderlyingInvocation<WireInvocationResult> & {
+      readonly stdout?: AsyncIterable<number>;
+      readonly stderr?: AsyncIterable<number>;
+    }
   >;
   readonly [TOOL_CLIENT_ERRORS]: WireTypedSchemaValue;
 }
@@ -810,7 +867,8 @@ export interface UniversalToolMiddlewareInvocation {
   readonly commandPath: readonly string[];
   readonly input: WireTypedSchemaValue;
   readonly stdin?: AsyncIterable<number>;
-  readonly stdout?: ToolStdoutWriter;
+  readonly stdout?: ToolOutputWriter;
+  readonly stderr?: ToolOutputWriter;
   readonly principal: Principal;
 }
 
@@ -838,6 +896,7 @@ export interface UniversalToolMiddlewareOptions<
 
 export interface ToolClientInvocationResult {
   readonly stdout?: AsyncIterable<ByteStreamItem>;
+  readonly stderr?: AsyncIterable<ByteStreamItem>;
   readonly settledResult: Promise<SettledToolResult<{ readonly result?: WireTypedSchemaValue }>>;
   cancel(): void;
 }
@@ -849,6 +908,7 @@ export interface ToolClientTransport {
     input: WireTypedSchemaValue,
     stdin: ToolInputStream | undefined,
     stdout: boolean,
+    stderr: boolean,
   ): ToolClientInvocationResult;
 }
 
@@ -1092,6 +1152,7 @@ export class BodyBuilder<
   Errors = never,
   Stdin extends StreamPresence = 'none',
   Stdout extends StreamPresence = 'none',
+  Stderr extends StreamPresence = 'none',
 > {
   private constructor(private readonly value: ExtendedCommandBody) {}
 
@@ -1118,7 +1179,8 @@ export class BodyBuilder<
     Success,
     Errors,
     Stdin,
-    Stdout
+    Stdout,
+    Stderr
   > {
     const codec = compileSchema(schema);
     const defaultValue = hasOwn(options, 'default')
@@ -1153,7 +1215,8 @@ export class BodyBuilder<
     Success,
     Errors,
     Stdin,
-    Stdout
+    Stdout,
+    Stderr
   > {
     return this.next({
       ...this.value,
@@ -1193,7 +1256,8 @@ export class BodyBuilder<
     Success,
     Errors,
     Stdin,
-    Stdout
+    Stdout,
+    Stderr
   > {
     return this.next({
       ...this.value,
@@ -1209,7 +1273,8 @@ export class BodyBuilder<
     Success,
     Errors,
     Stdin,
-    Stdout
+    Stdout,
+    Stderr
   > {
     return this.next({
       ...this.value,
@@ -1217,7 +1282,9 @@ export class BodyBuilder<
     });
   }
 
-  constraint(constraint: ToolConstraint): BodyBuilder<Args, Success, Errors, Stdin, Stdout> {
+  constraint(
+    constraint: ToolConstraint,
+  ): BodyBuilder<Args, Success, Errors, Stdin, Stdout, Stderr> {
     return this.next({
       ...this.value,
       constraints: [...this.value.constraints, constraint],
@@ -1226,20 +1293,26 @@ export class BodyBuilder<
 
   stdin<const Options extends StreamOptions>(
     options: Options,
-  ): BodyBuilder<Args, Success, Errors, StreamState<Options>, Stdout> {
+  ): BodyBuilder<Args, Success, Errors, StreamState<Options>, Stdout, Stderr> {
     return this.next({ ...this.value, stdin: buildStream(options) });
   }
 
   stdout<const Options extends StreamOptions>(
     options: Options,
-  ): BodyBuilder<Args, Success, Errors, Stdin, StreamState<Options>> {
+  ): BodyBuilder<Args, Success, Errors, Stdin, StreamState<Options>, Stderr> {
     return this.next({ ...this.value, stdout: buildStream(options) });
+  }
+
+  stderr<const Options extends StreamOptions>(
+    options: Options,
+  ): BodyBuilder<Args, Success, Errors, Stdin, Stdout, StreamState<Options>> {
+    return this.next({ ...this.value, stderr: buildStream(options) });
   }
 
   returns<Schema extends StandardSchemaV1>(
     schema: Schema,
     options: ReturnsOptions = {},
-  ): BodyBuilder<Args, SuccessOutput<Schema>, Errors, Stdin, Stdout> {
+  ): BodyBuilder<Args, SuccessOutput<Schema>, Errors, Stdin, Stdout, Stderr> {
     const codec = compileSchema(schema);
     let result: ExtendedResultSpec | undefined;
     if (codec.isUnit) {
@@ -1261,15 +1334,22 @@ export class BodyBuilder<
   error<const Name extends string>(
     name: Name,
     options: ErrorOptions,
-  ): BodyBuilder<Args, Success, Errors | ToolErr<Name>, Stdin, Stdout>;
+  ): BodyBuilder<Args, Success, Errors | ToolErr<Name>, Stdin, Stdout, Stderr>;
   error<const Name extends string, Payload extends StandardSchemaV1>(
     name: Name,
     options: ErrorOptions<Payload> & { readonly payload: Payload },
-  ): BodyBuilder<Args, Success, Errors | ToolErr<Name, SchemaOutput<Payload>>, Stdin, Stdout>;
+  ): BodyBuilder<
+    Args,
+    Success,
+    Errors | ToolErr<Name, SchemaOutput<Payload>>,
+    Stdin,
+    Stdout,
+    Stderr
+  >;
   error(
     name: string,
     options: ErrorOptions<StandardSchemaV1 | undefined>,
-  ): BodyBuilder<Args, Success, Errors | ToolErr<string, unknown>, Stdin, Stdout> {
+  ): BodyBuilder<Args, Success, Errors | ToolErr<string, unknown>, Stdin, Stdout, Stderr> {
     const errorCase: ExtendedErrorCase = {
       name,
       doc: normalizeDoc(options.doc),
@@ -1286,9 +1366,10 @@ export class BodyBuilder<
     NextErrors,
     NextStdin extends StreamPresence,
     NextStdout extends StreamPresence,
+    NextStderr extends StreamPresence,
   >(
     value: ExtendedCommandBody,
-  ): BodyBuilder<NextArgs, NextSuccess, NextErrors, NextStdin, NextStdout> {
+  ): BodyBuilder<NextArgs, NextSuccess, NextErrors, NextStdin, NextStdout, NextStderr> {
     return new BodyBuilder(value);
   }
 
@@ -1327,12 +1408,14 @@ export class CommandBuilder<
     private readonly toolVersion: string,
     private readonly commandAnnotations?: CommandAnnotations,
     private readonly subtreeForwards: readonly SubtreeForward[] = [],
+    private readonly requiresFilesystem = false,
   ) {}
 
   static root<const Name extends string>(
     name: Name,
+    requiresFilesystem = false,
   ): CommandBuilder<Name, {}, undefined, {}, true> {
-    return new CommandBuilder(name, emptyCommand(name), '0.0.0');
+    return new CommandBuilder(name, emptyCommand(name), '0.0.0', undefined, [], requiresFilesystem);
   }
 
   /** Construct the exact typed client owned by this tool definition. */
@@ -1358,6 +1441,7 @@ export class CommandBuilder<
       version,
       this.commandAnnotations,
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1378,6 +1462,7 @@ export class CommandBuilder<
       this.toolVersion,
       normalizeAnnotations(annotations),
       this.subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1647,6 +1732,7 @@ export class CommandBuilder<
       this.toolVersion,
       this.commandAnnotations,
       subtreeForwards,
+      this.requiresFilesystem,
     );
   }
 
@@ -1664,7 +1750,9 @@ export class CommandBuilder<
 
   [BUILD_TOOL](this: CommandBuilder<Name, Globals, Body, Children, true>): ExtendedToolType {
     if (this.compiled) return this.compiled;
-    const tool = normalizeExtendedTool(new ExtendedToolType(this.toolVersion, this.finalizeNode()));
+    const tool = normalizeExtendedTool(
+      new ExtendedToolType(this.toolVersion, this.finalizeNode(), this.requiresFilesystem),
+    );
     validateTypeScriptProjection(tool);
     this.compiled = tool;
     return this.compiled;
@@ -1678,8 +1766,11 @@ export type ToolDefinition<
   Children = {},
 > = CommandBuilder<Name, Globals, Body, Children, true>;
 
-export function toolDefinition<const Name extends string>(name: Name): ToolDefinition<Name> {
-  return CommandBuilder.root(name);
+export function toolDefinition<const Name extends string>(
+  name: Name,
+  options: { requiresFilesystem?: boolean } = {},
+): ToolDefinition<Name> {
+  return CommandBuilder.root(name, options.requiresFilesystem ?? false);
 }
 
 export function universalToolMiddleware<
@@ -1797,56 +1888,128 @@ function createToolClientMethod(
   const callName = [tool.toolName, ...commandPath].join(' ');
 
   return (args: Record<string, unknown>): unknown => {
-    if (!commandBody.stdout) {
-      return Promise.resolve().then(() => startToolClientCall());
+    if (!commandBody.stdout && !commandBody.stderr) {
+      return Promise.resolve()
+        .then(() => prepareInput(true))
+        .then(({ input, stdin }) => startToolClientCall(input, stdin))
+        .catch((error) => {
+          throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+        });
     }
-    return startToolClientCall();
+    const prepared = prepareStartedInput();
+    if (prepared instanceof Promise) {
+      return deferredStartedToolInvocation(
+        prepared.then(({ input, stdin }) => startToolClientCall(input, stdin)) as Promise<
+          StartedToolInvocation<unknown>
+        >,
+        commandBody.stdout !== undefined,
+        commandBody.stderr !== undefined,
+      );
+    }
+    return startToolClientCall(prepared.input, prepared.stdin);
 
-    function startToolClientCall(): unknown {
-      let input: WireTypedSchemaValue;
-      let stdin: ToolInputStream | undefined;
+    function prepareStartedInput():
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
       try {
-        if (!isImplementationObject(args)) {
-          throw new Error('tool client arguments must be an object');
-        }
-        const canonicalInput = Object.fromEntries(
-          inputModel.fields.map((field) => {
-            const projectedName = camelCase(field.name);
-            return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
-          }),
-        );
-        input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
-        stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
-        if (stdin !== undefined && !isReadableStream(stdin)) {
-          throw new Error('stdin must be a readable stream');
-        }
-        if (commandBody.stdin?.required && stdin === undefined) {
-          throw new Error('required stdin stream is missing');
-        }
+        const { canonicalInput, stdin } = canonicalizeInput();
+        const input = inputModel.encodeWireForStartedInvocation(canonicalInput);
+        return input instanceof Promise
+          ? input
+              .then((value) => ({ input: value, stdin }))
+              .catch((error) => {
+                throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+              })
+          : { input, stdin };
       } catch (error) {
         throw mapFailure(error, { phase: 'input', body: commandBody, callName });
       }
+    }
 
+    function prepareInput(
+      asynchronous: true,
+    ): Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }>;
+    function prepareInput(asynchronous: false): {
+      input: WireTypedSchemaValue;
+      stdin?: ToolInputStream;
+    };
+    function prepareInput(
+      asynchronous: boolean,
+    ):
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
+      try {
+        const { canonicalInput, stdin } = canonicalizeInput();
+        return asynchronous
+          ? inputModel.encodeWireAsync(canonicalInput).then((input) => ({ input, stdin }))
+          : { input: inputModel.encodeWire(canonicalInput), stdin };
+      } catch (error) {
+        throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+      }
+    }
+
+    function canonicalizeInput() {
+      if (!isImplementationObject(args)) {
+        throw new Error('tool client arguments must be an object');
+      }
+      const canonicalInput = Object.fromEntries(
+        inputModel.fields.map((field) => {
+          const projectedName = camelCase(field.name);
+          return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+        }),
+      );
+      const stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
+      if (stdin !== undefined && !isReadableStream(stdin)) {
+        throw new Error('stdin must be a readable stream');
+      }
+      if (commandBody.stdin?.required && stdin === undefined) {
+        throw new Error('required stdin stream is missing');
+      }
+      return { canonicalInput, stdin };
+    }
+
+    function startToolClientCall(
+      input: WireTypedSchemaValue,
+      stdin: ToolInputStream | undefined,
+    ): unknown {
       let invocation: ToolClientInvocationResult;
       try {
-        invocation = transport.start(commandPath, input, stdin, commandBody.stdout !== undefined);
+        invocation = transport.start(
+          commandPath,
+          input,
+          stdin,
+          commandBody.stdout !== undefined,
+          commandBody.stderr !== undefined,
+        );
       } catch (error) {
-        throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        const failure = mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        if (failure instanceof Promise) {
+          const settled = failure.then(
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+          );
+          return commandBody.stdout || commandBody.stderr
+            ? startedToolInvocation(undefined, undefined, settled, () => {})
+            : resultFromSettledToolResult(settled);
+        }
+        throw failure;
       }
 
       const settledResult = mapSettledToolResult(
         invocation.settledResult,
-        (terminal) => {
+        async (terminal) => {
           try {
-            return decodeToolClientResult(commandBody, terminal, callName);
+            return await decodeToolClientResult(commandBody, terminal, callName);
           } catch (error) {
-            throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+            throw await mapFailure(error, { phase: 'result', body: commandBody, callName });
           }
         },
         (error) => mapFailure(error, { phase: 'result', body: commandBody, callName }),
       );
-      if (!commandBody.stdout) return resultFromSettledToolResult(settledResult);
-      if (!invocation.stdout) {
+      if (!commandBody.stdout && !commandBody.stderr) {
+        return resultFromSettledToolResult(settledResult);
+      }
+      if (commandBody.stdout && !invocation.stdout) {
         invocation.cancel();
         throw mapFailure(new Error('required stdout stream is missing'), {
           phase: 'result',
@@ -1854,7 +2017,7 @@ function createToolClientMethod(
           callName,
         });
       }
-      if (!isAsyncIterable(invocation.stdout)) {
+      if (invocation.stdout !== undefined && !isAsyncIterable(invocation.stdout)) {
         invocation.cancel();
         throw mapFailure(new Error('stdout must be an async iterable'), {
           phase: 'result',
@@ -1862,7 +2025,25 @@ function createToolClientMethod(
           callName,
         });
       }
-      return startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel());
+      if (commandBody.stderr && !invocation.stderr) {
+        invocation.cancel();
+        throw mapFailure(new Error('required stderr stream is missing'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      if (invocation.stderr !== undefined && !isAsyncIterable(invocation.stderr)) {
+        invocation.cancel();
+        throw mapFailure(new Error('stderr must be an async iterable'), {
+          phase: 'result',
+          body: commandBody,
+          callName,
+        });
+      }
+      return startedToolInvocation(invocation.stdout, invocation.stderr, settledResult, () =>
+        invocation.cancel(),
+      );
     }
   };
 }
@@ -1875,7 +2056,9 @@ function decodeToolClientResult(
   const hasResult = invocation.result !== undefined;
 
   if (!body.result && hasResult) {
-    throw new Error('unit command returned an unexpected result');
+    return withWireValueOwnership(invocation.result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   }
   if (body.result && !hasResult) {
     throw new Error('structured command result is missing');
@@ -1888,6 +2071,7 @@ function decodeToolClientResult(
 interface ToolUnderlyingInvocationResult {
   readonly result: Promise<WireTypedSchemaValue | undefined>;
   readonly stdout?: AsyncIterable<number>;
+  readonly stderr?: AsyncIterable<number>;
   cancel(): void;
 }
 
@@ -1970,7 +2154,7 @@ function createToolUnderlyingMethod(
           return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
         }),
       );
-      input = typedSchemaValueToWit(inputModel.encodeTyped(canonicalInput));
+      input = inputModel.encodeWire(canonicalInput);
       stdin = body.stdin ? (args.stdin as AsyncIterable<number> | undefined) : undefined;
       if (stdin !== undefined && !isAsyncIterable(stdin)) {
         throw new Error('stdin must be an async iterable');
@@ -1986,45 +2170,56 @@ function createToolUnderlyingMethod(
     try {
       invocation = await transport.invoke(commandPath, input, stdin);
     } catch (error) {
-      throw mapFailure(error, { phase: 'invoke', body, callName });
+      throw await mapFailure(error, { phase: 'invoke', body, callName });
     }
 
     try {
-      validateToolUnderlyingStdout(body, invocation);
+      validateToolUnderlyingOutputs(body, invocation);
       let result: Promise<unknown> | undefined;
       return {
         ...(invocation.stdout === undefined ? {} : { stdout: invocation.stdout }),
+        ...(invocation.stderr === undefined ? {} : { stderr: invocation.stderr }),
         cancel: () => invocation.cancel(),
         get result() {
           return (result ??= invocation.result.then(
-            (result) => {
+            async (result) => {
               try {
-                return decodeToolUnderlyingResult(body, result, callName);
+                return await decodeToolUnderlyingResult(body, result, callName);
               } catch (error) {
-                throw mapFailure(error, { phase: 'result', body, callName });
+                throw await mapFailure(error, { phase: 'result', body, callName });
               }
             },
-            (error) => Promise.reject(mapFailure(error, { phase: 'result', body, callName })),
+            async (error) => {
+              throw await mapFailure(error, { phase: 'result', body, callName });
+            },
           ));
         },
       };
     } catch (error) {
-      await closeAsyncIterable(invocation.stdout);
-      throw mapFailure(error, { phase: 'result', body, callName });
+      await Promise.all([
+        closeAsyncIterable(invocation.stdout),
+        closeAsyncIterable(invocation.stderr),
+      ]);
+      throw await mapFailure(error, { phase: 'result', body, callName });
     }
   };
   const invoke = async (args: Record<string, unknown>): Promise<unknown> => {
     const invocation = await start(args);
+    if (body.stdout || body.stderr) {
+      await Promise.all([
+        closeAsyncIterable(invocation.stdout),
+        closeAsyncIterable(invocation.stderr),
+      ]);
+      throw new Error('output-bearing underlying invocations must use the start method');
+    }
     const result = await invocation.result;
-    if (!body.stdout) return result;
-    if (!body.result) return invocation.stdout;
-    return invocation.stdout === undefined ? { result } : { result, stdout: invocation.stdout };
+    return result;
   };
   Object.defineProperty(invoke, 'start', { value: start });
   return invoke;
 }
 
-function validateToolUnderlyingStdout(
+function validateToolUnderlyingOutputs(
   body: ExtendedCommandBody,
   invocation: ToolUnderlyingInvocationResult,
 ): void {
@@ -2039,6 +2234,17 @@ function validateToolUnderlyingStdout(
   if (body.stdout?.required && !hasStdout) {
     throw new Error('required stdout stream is missing');
   }
+
+  const hasStderr = invocation.stderr !== undefined;
+  if (hasStderr && !isAsyncIterable(invocation.stderr)) {
+    throw new Error('stderr must be an async iterable');
+  }
+  if (!body.stderr && hasStderr) {
+    throw new Error('command returned undeclared stderr');
+  }
+  if (body.stderr?.required && !hasStderr) {
+    throw new Error('required stderr stream is missing');
+  }
 }
 
 function decodeToolUnderlyingResult(
@@ -2047,7 +2253,10 @@ function decodeToolUnderlyingResult(
   callName: string,
 ): unknown {
   const hasResult = result !== undefined;
-  if (!body.result && hasResult) throw new Error('unit command returned an unexpected result');
+  if (!body.result && hasResult)
+    return withWireValueOwnership(result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   if (body.result && !hasResult) throw new Error('structured command result is missing');
 
   return body.result
@@ -2068,6 +2277,7 @@ export function decodeDeclaredToolError(
   wireError: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
   callName: string,
 ):
+  | Promise<never>
   | ToolErr<string, unknown>
   | ToolErr<string>
   | {
@@ -2075,30 +2285,33 @@ export function decodeDeclaredToolError(
       readonly name: string;
       readonly payload: WireTypedSchemaValue;
     } {
-  const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
-  if (!errorCase) {
-    preflightWitTypedSchemaValue(wireError.payload);
-    return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
-  }
-
-  validateWireSchema(
-    errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
-    wireError.payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  const payload = typedSchemaValueFromWit(wireError.payload);
-  if (!errorCase.payloadCodec) {
-    if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
-      throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+  return withWireValueOwnership(wireError.payload, (lift) => {
+    if (typeof wireError.name !== 'string') throw new Error('custom error name must be a string');
+    const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
+    if (!errorCase) {
+      preflightWitTypedSchemaValue(wireError.payload);
+      return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
     }
-    return err(errorCase.name);
-  }
-  const decoded = decodeTypedValue(
-    errorCase.payloadCodec,
-    payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  return err(errorCase.name, decoded);
+
+    validateWireSchema(
+      errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
+      wireError.payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    const payload = lift();
+    if (!errorCase.payloadCodec) {
+      if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+        throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+      }
+      return err(errorCase.name);
+    }
+    const decoded = decodeTypedValue(
+      errorCase.payloadCodec,
+      payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    return err(errorCase.name, decoded);
+  });
 }
 
 function decodeWireValue(
@@ -2106,8 +2319,75 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
-  validateWireSchema(codec.graph, wire, position);
-  return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+  return withWireValueOwnership(wire, (lift) => {
+    if (codec.direct) {
+      try {
+        return directSchemaValueFromWit(codec, wire.value);
+      } catch (error) {
+        throw new Error(
+          `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    validateWireSchema(codec.graph, wire, position);
+    return decodeTypedValue(codec, lift(), position);
+  });
+}
+
+/** @internal Own wire endpoints until synchronous validation and conversion succeed. */
+export function withWireValueOwnership<T>(
+  wire: WireTypedSchemaValue,
+  decode: (lift: () => TypedSchemaValue) => T,
+): T | Promise<never> {
+  const resources = new Map<object, Array<{ val: unknown }>>();
+  const streams = new Set<SchemaValueStream>();
+  const nodes = wire?.value?.valueNodes;
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (
+      (node?.tag === 'secret-value' ||
+        node?.tag === 'quota-token-handle' ||
+        node?.tag === 'permission-card-handle' ||
+        node?.tag === 'stream-value') &&
+      node.val !== undefined
+    ) {
+      const aliases = resources.get(node.val) ?? [];
+      aliases.push(node);
+      resources.set(node.val, aliases);
+      if (node.tag === 'stream-value') streams.add(node.val);
+    }
+  }
+  let typed: TypedSchemaValue | undefined;
+  try {
+    return decode(() => (typed = typedSchemaValueFromWit(wire)));
+  } catch (error) {
+    if (typed !== undefined) relinquishSchemaValueCapabilities(typed.value);
+    const dispose = (): never => {
+      for (const [raw, nodes] of resources) {
+        for (const node of nodes) node.val = undefined;
+        try {
+          (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+        } catch {
+          // Preserve the decoding failure while attempting every resource disposal.
+        }
+      }
+      throw error;
+    };
+    if (streams.size === 0) return dispose();
+    return (async () => {
+      // Start every cancellation before joining shared producer finalizers.
+      await Promise.all(
+        [...streams].map(async (stream) => {
+          try {
+            const source = await SchemaValueStream.unwrap(stream);
+            await source[Symbol.asyncIterator]().return?.();
+          } catch {
+            // Preserve the decoding failure while closing every rejected endpoint.
+          }
+        }),
+      );
+      return dispose();
+    })();
+  }
 }
 
 function validateWireSchema(
@@ -2116,15 +2396,12 @@ function validateWireSchema(
   position: string,
 ): void {
   preflightWitTypedSchemaValue(wire);
-  if (!deepEqual(schemaGraphFromWit(wire.graph), expected)) {
+  if (!schemaGraphsEquivalent(schemaGraphFromWit(wire.graph), expected)) {
     throw new Error(`${position} schema does not match the local definition`);
   }
 }
 
 function decodeTypedValue(codec: SchemaCodec, typed: TypedSchemaValue, position: string): unknown {
-  if (!deepEqual(typed.graph, codec.graph)) {
-    throw new Error(`${position} schema does not match the local definition`);
-  }
   if (!schemaValueConforms(codec.graph, codec.graph.root, typed.value)) {
     throw new Error(`${position} does not conform to the local definition`);
   }
@@ -2260,6 +2537,7 @@ function renderToolHelp(tool: ExtendedToolType, projection: ToolHelpProjection):
   if (body) {
     if (body.stdin) appendStreamHelp(lines, 'Stdin', body.stdin);
     if (body.stdout) appendStreamHelp(lines, 'Stdout', body.stdout);
+    if (body.stderr) appendStreamHelp(lines, 'Stderr', body.stderr);
     if (body.result) appendResultHelp(lines, body.result);
     if (body.errors.length > 0) appendErrorHelp(lines, body.errors);
     if (body.annotations) appendAnnotationHelp(lines, body.annotations);

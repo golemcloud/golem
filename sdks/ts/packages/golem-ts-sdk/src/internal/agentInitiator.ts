@@ -16,7 +16,7 @@ import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, Principal } from 'golem:agent/common@2.0.0';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
-import { SchemaValue } from './schema-model';
+import type { SnapshotDatabases } from './databaseSnapshot';
 
 /**
  * Any agent creation in SDK across any boundaries goes through `AgentInitiator`
@@ -33,26 +33,20 @@ export type AgentInitiator = {
   /**
    * Initiates the creation of an agent.
    *
-   * @param constructorParams - Constructor arguments for the agent, encoded as a `SchemaValue` record.
+   * @param constructorParams - Constructor arguments as a flat wire record.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
   initiate(
-    constructorParams: SchemaValue,
-    principal: Principal,
-  ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
-
-  /** Initiates an agent from the raw WIT value tree used by the exported component. */
-  initiateFromWit?(
     constructorParams: SchemaValueTree,
     principal: Principal,
   ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 
   /** Constructs a complete agent directly from snapshot data, without calling the initializer. */
   loadSnapshot(
-    constructorParams: SchemaValue,
+    constructorParams: SchemaValueTree,
     principal: Principal,
     bytes: Uint8Array,
     mimeType: string | undefined,
-    databases: Array<{ name: string; bytes: Uint8Array }>,
+    databases: SnapshotDatabases,
   ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 };

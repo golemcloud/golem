@@ -18,15 +18,16 @@ use crate::base_model::agent::{AgentConfigSource, AgentTypeName, Snapshotting};
 use crate::model::Empty as ModelEmpty;
 use crate::schema::agent::{
     AgentConfigDeclarationSchema, AgentConstructorSchema, AgentDependencySchema, AgentMethodSchema,
-    AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource, InputSchema, NamedField,
-    OutputSchema, RegisteredAgentTypeSchema,
+    AgentTypeKind, AgentTypeSchema, AutoInjectedKind, ComponentConfigSchema, FieldSource,
+    InputSchema, NamedField, OutputSchema, RegisteredAgentTypeSchema,
 };
 use crate::schema::graph::SchemaGraph;
 use crate::schema::metadata::MetadataEnvelope;
-use golem_api_grpc::proto::golem::common::Empty as ProtoEmpty;
 use golem_api_grpc::proto::golem::schema as proto;
+use golem_schema::proto::golem::common::Empty as ProtoEmpty;
+use golem_schema::proto::golem::schema::MetadataEnvelope as ProtoMetadataEnvelope;
 
-fn optional_meta(meta: MetadataEnvelope) -> Option<proto::MetadataEnvelope> {
+fn optional_meta(meta: MetadataEnvelope) -> Option<ProtoMetadataEnvelope> {
     if meta.is_empty() {
         None
     } else {
@@ -34,7 +35,7 @@ fn optional_meta(meta: MetadataEnvelope) -> Option<proto::MetadataEnvelope> {
     }
 }
 
-fn meta_from_proto(meta: Option<proto::MetadataEnvelope>) -> Result<MetadataEnvelope, String> {
+fn meta_from_proto(meta: Option<ProtoMetadataEnvelope>) -> Result<MetadataEnvelope, String> {
     match meta {
         None => Ok(MetadataEnvelope::default()),
         Some(m) => m.try_into(),
@@ -283,6 +284,10 @@ impl From<AgentTypeSchema> for proto::AgentTypeSchema {
     fn from(value: AgentTypeSchema) -> Self {
         Self {
             type_name: value.type_name.0,
+            kind: match value.kind {
+                AgentTypeKind::Regular => proto::AgentTypeKind::Regular as i32,
+                AgentTypeKind::HttpRouter => proto::AgentTypeKind::HttpRouter as i32,
+            },
             description: value.description,
             source_language: value.source_language,
             schema: Some(value.schema.into()),
@@ -302,8 +307,14 @@ impl TryFrom<proto::AgentTypeSchema> for AgentTypeSchema {
 
     fn try_from(value: proto::AgentTypeSchema) -> Result<Self, Self::Error> {
         let mode = value.mode().into();
+        let kind = match proto::AgentTypeKind::try_from(value.kind) {
+            Ok(proto::AgentTypeKind::Regular) => AgentTypeKind::Regular,
+            Ok(proto::AgentTypeKind::HttpRouter) => AgentTypeKind::HttpRouter,
+            _ => return Err("Missing or unknown AgentTypeSchema.kind".to_string()),
+        };
         Ok(Self {
             type_name: AgentTypeName(value.type_name),
+            kind,
             description: value.description,
             source_language: value.source_language,
             schema: value

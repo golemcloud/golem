@@ -32,7 +32,7 @@ permissions:
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
-  WASM_RQUICKJS_VERSION: "0.4.4"
+  WASM_RQUICKJS_VERSION: "0.4.6"
   MOONBIT_INSTALL_VERSION: "0.10.11+6ff76a5f9"
   WASI_SDK_VERSION: "25"
   WASI_SDK_PATH: /opt/wasi-sdk
@@ -61,7 +61,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 20
+        timeout-minutes: 30
       - name: Packaging all binaries with cargo-nextest
         run: |
           mkdir -pv tmp
@@ -113,7 +113,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
@@ -138,8 +138,12 @@ jobs:
         run: cargo make --profile ci check-openapi
       - name: Check how-to-guides docs are in sync with golem-skills/
         run: cargo make --profile ci check-docs-skills
+      - name: Check reflection conformance corpus embeds
+        run: cargo make --profile ci check-reflection-conformance
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
+      - name: Check built-in artifact pins
+        run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests
@@ -150,12 +154,52 @@ jobs:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  builtin-artifacts:
+    runs-on: blacksmith
+    outputs:
+      cache-key: ${{ steps.cache-key.outputs.value }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Compute built-in artifact cache key
+        id: cache-key
+        env:
+          LOCK_HASH: ${{ hashFiles('builtin-artifacts.lock.json') }}
+        run: echo "value=golem-builtin-artifacts-${LOCK_HASH}" >> "$GITHUB_OUTPUT"
+      - name: Restore or prepare built-in artifact cache
+        id: cache
+        uses: actions/cache@v5
+        with:
+          path: tmp/builtin-artifacts
+          key: ${{ steps.cache-key.outputs.value }}
+      - name: Install cargo-make
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-make
+      - name: Fetch released built-in artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo make --profile ci fetch-builtin-artifacts
+      - name: Collect built-in artifacts
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tmp/builtin-artifacts
+          cp builtin-tools/bash.wasm tmp/builtin-artifacts/
+          cp builtin-tools/filesystem-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/git-tool.wasm tmp/builtin-artifacts/
+          cp builtin-tools/javascript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
+          cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
+          cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs:
       - build-and-store
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -166,6 +210,7 @@ jobs:
           - name: group2
           - name: group3
           - name: group4
+          - name: tool-streaming
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - uses: actions/checkout@v5
@@ -186,6 +231,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -201,6 +249,7 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404
     needs:
       - build-and-store
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 45
     steps:
@@ -218,6 +267,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -289,6 +341,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - builtin-artifacts
       - merge-test-components
     strategy:
       fail-fast: false
@@ -349,6 +402,9 @@ jobs:
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -373,6 +429,7 @@ jobs:
       - build-golem-ts
       - build-cli-test-bins
       - build-golem-scala
+      - builtin-artifacts
       - merge-test-components
     timeout-minutes: 30
     strategy:
@@ -395,6 +452,9 @@ jobs:
           use-cache: 'false'
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-binstall: 'true'
+      - name: Install browser WASM target
+        if: matrix.group.shard == 'bridge_gen_rust'
+        run: rustup target add wasm32-unknown-unknown
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.49.0
         with:
@@ -417,7 +477,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -436,47 +496,54 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk_tools
         run: moon update
 
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Sync WIT dependencies
         run: cargo make wit
 
       - name: Restore Scala guest runtime WASMs (built by build-golem-scala)
         uses: actions/download-artifact@v8
         with:
-          name: scala-guest-runtime-wasms-${{ github.run_id }}
-          path: sdks/scala
+          name: agent-guest-wasm
+          path: tmp/sdk-artifacts
+      - name: Extract Scala guest runtime WASMs
+        run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - name: Restore Scala SDK ivy local repo (published by build-golem-scala)
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
+        run: |
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Restore built TS SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
         run: pnpm install --frozen-lockfile
 
       - name: Restore built Effect SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          key: golem-effect-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-effect-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built Effect SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Install Effect SDK dependencies
         working-directory: sdks/effect
@@ -504,6 +571,9 @@ jobs:
         uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -570,6 +640,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - builtin-artifacts
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -585,7 +656,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -610,18 +681,17 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
+      - uses: ./.github/actions/restore-builtin-artifacts
+        with:
+          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Restore built TS SDK
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
 
       - name: Install TS SDK dependencies
         working-directory: sdks/ts
@@ -696,7 +766,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT
         uses: sbt/setup-sbt@v1
@@ -730,6 +800,9 @@ jobs:
         working-directory: sdks/scala
         run: sbt -mem 4096 "++3.8.2; modelJVM/test; modelJS/test; core/test; macros/test; codegen/test"
 
+      - name: Check linked Scala capability fixtures
+        run: cargo make check-sdk-scala-capability-fixtures
+
       - name: Compile sbt plugin
         working-directory: sdks/scala
         run: sbt "++2.12.21!; sbtPlugin/compile"
@@ -741,22 +814,31 @@ jobs:
         run: |
           sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
 
+      - name: Package Scala guest runtime WASMs for it-cli
+        run: |
+          tar -czf "$RUNNER_TEMP/agent-guest-wasm.tar.gz" \
+            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm \
+            sdks/scala/mill/resources/golem/wasm/*.wasm \
+            sdks/scala/wit/dts
       - name: Upload Scala guest runtime WASMs for it-cli
         uses: actions/upload-artifact@v6
         with:
-          name: scala-guest-runtime-wasms-${{ github.run_id }}
-          path: |
-            sdks/scala/sbt/src/main/resources/golem/wasm/*.wasm
-            sdks/scala/mill/resources/golem/wasm/*.wasm
-            sdks/scala/wit/dts
-          retention-days: 1
+          name: agent-guest-wasm
+          path: ${{ runner.temp }}/agent-guest-wasm.tar.gz
+          if-no-files-found: error
           overwrite: true
+          retention-days: 7
 
-      - name: Cache Scala SDK ivy local repo for it-cli
-        uses: actions/cache/save@v5
+      - name: Package Scala SDK ivy local repo for it-cli
+        run: tar -czf "$RUNNER_TEMP/scala-sdk-ivy-local.tar.gz" -C ~/.ivy2 local
+      - name: Upload Scala SDK ivy local repo for it-cli
+        uses: actions/upload-artifact@v6
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
+          name: scala-sdk-ivy-local
+          path: ${{ runner.temp }}/scala-sdk-ivy-local.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   build-golem-moonbit:
     runs-on: blacksmith
@@ -772,6 +854,12 @@ jobs:
       - name: Update MoonBit workspace dependencies
         run: moon update
         working-directory: sdks/moonbit
+      - name: Install Golem MoonBit wit-bindgen
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+      - name: Generate and verify MoonBit WIT bindings
+        run: ./scripts/check-generated-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
       - name: Check SDK
         run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
         working-directory: sdks/moonbit/golem_sdk
@@ -785,10 +873,10 @@ jobs:
         run: moon test cmd lib
         working-directory: sdks/moonbit/golem_sdk_tools
 
-  # The Rust SDK test suite is dominated by three integration test targets that each shell out to
-  # cargo (tool: one `cargo check` per test, tool_middleware_component: a full wasm component
-  # build, ui: trybuild). They run as separate matrix entries; the `check` entry runs lint and every
-  # other test target and fails if a test target is added without being assigned to an entry.
+  # The Rust SDK test suite is dominated by two integration test targets that each shell out to
+  # cargo (tool: one `cargo check` per test, ui: trybuild). They run as separate matrix entries;
+  # the `check` entry runs lint and every other test target, and fails if a test target is added
+  # without being assigned to an entry.
   build-golem-rust:
     name: build-golem-rust (${{ matrix.part.name }})
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -797,11 +885,9 @@ jobs:
       matrix:
         part:
           - name: check
-            test-args: --lib --bins --test agent --test tool_canonical --test schema_reexport --test reflection_recipe_compile
+            test-args: --lib --bins --test agent --test http_router --test rich_tool_conformance --test tool_canonical --test schema_reexport --test reflection_recipe_compile
           - name: tool
             test-args: --test tool
-          - name: tool-middleware-component
-            test-args: --test tool_middleware_component
           - name: ui
             test-args: --test ui
     steps:
@@ -827,11 +913,12 @@ jobs:
         working-directory: sdks/rust
         run: |
           expected='agent
+          http_router
           reflection_recipe_compile
+          rich_tool_conformance
           schema_reexport
           tool
           tool_canonical
-          tool_middleware_component
           ui'
           actual=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[].targets[] | select(.kind | index("test")) | .name' | sort)
@@ -908,21 +995,31 @@ jobs:
         working-directory: sdks/ts
         run: pnpm run build-agent-template
 
+      - name: Check packed SDK HTTP contract
+        working-directory: sdks/ts
+        run: pnpm --filter @golemcloud/golem-ts-sdk run check:package
+
       - name: Run tests
         working-directory: sdks/ts
         run: |
           pnpm run test
 
-      - name: Save built TS SDK for test component builds
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
+      - name: Package built TS SDK for dependent jobs
+        run: |
+          tar -czf "$RUNNER_TEMP/golem-ts-sdk.tar.gz" \
+            sdks/ts/packages/golem-ts-sdk/dist \
+            sdks/ts/packages/golem-ts-sdk/types \
+            sdks/ts/packages/golem-ts-sdk/wasm \
+            sdks/ts/packages/golem-ts-bridge/dist \
             sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
+      - name: Upload built TS SDK for dependent jobs
+        uses: actions/upload-artifact@v6
+        with:
+          name: golem-ts-sdk
+          path: ${{ runner.temp }}/golem-ts-sdk.tar.gz
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   build-golem-effect:
     runs-on: blacksmith
@@ -972,51 +1069,18 @@ jobs:
           npm run check:artifacts
           npm run check:package
 
-      - name: Save built Effect SDK for CLI integration tests
-        uses: actions/cache/save@v5
+      - name: Package built Effect SDK for CLI integration tests
+        run: |
+          tar -czf "$RUNNER_TEMP/golem-effect-sdk.tar.gz" \
+            sdks/effect/dist sdks/effect/wasm sdks/effect/golem-types
+      - name: Upload built Effect SDK for CLI integration tests
+        uses: actions/upload-artifact@v6
         with:
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
-          key: golem-effect-sdk-${{ github.run_id }}
-
-      - name: Upload Effect SDK for Windows package checks
-        uses: actions/upload-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: |
-            sdks/effect/dist
-            sdks/effect/wasm
-            sdks/effect/golem-types
+          name: golem-effect-sdk
+          path: ${{ runner.temp }}/golem-effect-sdk.tar.gz
           if-no-files-found: error
-
-  check-golem-effect-package-windows:
-    runs-on: windows-latest
-    needs: build-golem-effect
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: sdks/effect/package-lock.json
-      - name: Install dependencies
-        working-directory: sdks/effect
-        run: npm ci
-      - name: Download built Effect SDK
-        uses: actions/download-artifact@v4
-        with:
-          name: golem-effect-sdk-windows
-          path: sdks/effect
-      - name: Build package declarations
-        working-directory: sdks/effect
-        run: npm run build
-      - name: Smoke-test cross-platform package tooling
-        working-directory: sdks/effect
-        run: npm run check:package
+          overwrite: true
+          retention-days: 7
 
   list-test-component-groups:
     runs-on: blacksmith
@@ -1042,6 +1106,7 @@ jobs:
     needs:
       - build-cli-test-bins
       - build-golem-ts
+      - build-golem-effect
       - build-golem-scala
       - list-test-component-groups
     strategy:
@@ -1081,22 +1146,39 @@ jobs:
         run: moon update
         working-directory: sdks/moonbit
 
+      - name: Install Golem MoonBit wit-bindgen
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/install-wit-bindgen.sh
+        working-directory: sdks/moonbit/golem_sdk
+
+      - name: Generate MoonBit WIT bindings
+        if: matrix.chunk.needs-moonbit
+        run: ./scripts/regen-bindings.sh
+        working-directory: sdks/moonbit/golem_sdk
+
       - name: Install wasm-tools
         if: matrix.chunk.needs-moonbit
         run: cargo binstall --force --locked wasm-tools@1.248.0
 
       - name: Restore built TS SDK
         if: matrix.chunk.needs-node
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            sdks/ts/packages/golem-ts-sdk/dist
-            sdks/ts/packages/golem-ts-sdk/types
-            sdks/ts/packages/golem-ts-sdk/wasm
-            sdks/ts/packages/golem-ts-bridge/dist
-            sdks/ts/packages/golem-ts-repl/dist
-          key: golem-ts-sdk-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-ts-sdk
+          path: tmp/sdk-artifacts
+      - name: Extract built TS SDK
+        if: matrix.chunk.needs-node
+        run: tar -xzf tmp/sdk-artifacts/golem-ts-sdk.tar.gz
+
+      - name: Restore built Effect SDK
+        if: matrix.chunk.needs-effect
+        uses: actions/download-artifact@v8
+        with:
+          name: golem-effect-sdk
+          path: tmp/effect-sdk-artifacts
+      - name: Extract built Effect SDK
+        if: matrix.chunk.needs-effect
+        run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
@@ -1119,7 +1201,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
       - name: Setup SBT for Scala components
         if: matrix.chunk.needs-scala
@@ -1131,11 +1213,15 @@ jobs:
 
       - name: Restore Scala SDK ivy local repo
         if: matrix.chunk.needs-scala
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: ~/.ivy2/local
-          key: scala-sdk-ivy-local-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
+        if: matrix.chunk.needs-scala
+        run: |
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Update MoonBit fixture dependencies
         if: matrix.chunk.needs-moonbit
@@ -1325,11 +1411,6 @@ jobs:
         with:
           image-name: golemservices/golem-worker-executor
           dockerfile: ./golem-worker-executor/docker/Dockerfile
-          platforms: ${{ env.PLATFORMS }}
-      - uses: ./.github/actions/docker-build-push-service
-        with:
-          image-name: golemservices/golem-debugging-service
-          dockerfile: ./golem-debugging-service/docker/Dockerfile
           platforms: ${{ env.PLATFORMS }}
       - uses: ./.github/actions/docker-build-push-service
         with:

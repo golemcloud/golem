@@ -14,7 +14,7 @@
 
 mod invocation;
 mod invocation_session;
-mod stream_slots;
+pub(crate) mod stream_slots;
 
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
 pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
@@ -24,20 +24,23 @@ use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
     find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::model::{LastError, LookupResult, ReadFileResult};
+use crate::model::{LastError, LookupResult};
 use crate::services::events::Event;
-use crate::services::rpc::DurableStreamReadError;
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::services::shard_manager::{RecoveryOutcome, ShardAssignmentChangedHook};
 use crate::services::worker_activator::{
     DefaultWorkerActivator, LazyWorkerActivator, WorkerActivator,
 };
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveAgents, HasAll, HasComponentService, HasConfig, HasEvents, HasOplog,
+    HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService,
+    HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{ExportStreamControlResult as DomainExportResult, Worker, WorkerUpdateMode};
+use crate::worker::{
+    ExportStreamControlResult as DomainExportResult, RetirementReason, Worker, WorkerUpdateMode,
+    retired_by_assignment,
+};
 pub use crate::worker::{
     PERMISSION_CARD_INSTALL_RECIPIENT_MISMATCH, PERMISSION_CARD_TRANSFER_PAYLOAD_CONFLICT,
 };
@@ -77,6 +80,7 @@ use golem_common::model::agent::{
 use golem_common::model::card::{CardId, StoredCard, card_matches_agent_recipient};
 use golem_common::model::component::{CanonicalFilePath, ComponentId, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{FileByteSelection, FileReadError, validate_file_read_path};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::types::AgentMetadataForGuests;
 use golem_common::model::oplog::{OplogErrorKind, OplogIndex};
@@ -95,6 +99,7 @@ use golem_service_base::error::worker_executor::*;
 use golem_service_base::grpc::{
     proto_agent_id_string, proto_idempotency_key_string, proto_promise_id_string,
 };
+use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
 use prost::Message;
@@ -199,12 +204,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         info!(assignment = %shard_assignment, "Received initial shard assignment");
 
-        worker_executor.shard_service().register(
-            shard_assignment.number_of_shards,
-            &shard_assignment.shard_epochs,
-            shard_assignment.expires_at,
-            shard_assignment.revision,
-        );
+        match shard_assignment.revision {
+            Some(revision) => worker_executor.shard_service().register(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+                shard_assignment.expires_at,
+                revision,
+            ),
+            // The single-shard executor: no shard manager delivered this assignment, so there is
+            // nothing to order it against.
+            None => worker_executor.shard_service().install_unexpiring(
+                shard_assignment.number_of_shards,
+                &shard_assignment.shard_epochs,
+            ),
+        };
 
         // Deliberately fatal to startup, unlike the same failure on a running executor.
         //
@@ -495,7 +508,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn control_durable_stream_attachment_internal(
         &self,
         request: DurableStreamAttachmentControlRequest,
-    ) -> Result<durable_stream_attachment_control_response::Result, WorkerExecutorError> {
+    ) -> Result<
+        durable_stream_attachment_control_response::Result,
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -510,7 +526,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if !matches!(auth_ctx, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment control requires an authenticated internal caller",
-            ));
+            )
+            .into());
         }
         if let Some(control) = request.export_control {
             if !matches!(auth_ctx, AuthCtx::System)
@@ -521,11 +538,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 return Err(WorkerExecutorError::invalid_request(
                     "export stream control requires a system caller and no attachment fields",
-                ));
+                )
+                .into());
             }
             let result =
                 match Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id).await? {
-                    Some(worker) => worker.control_export_stream(control.into()).await?,
+                    Some((worker, _response_lease)) => {
+                        worker.control_export_stream(control.into()).await?
+                    }
                     None => DomainExportResult::NotFound,
                 };
             let result = golem::workerexecutor::v1::ExportStreamControlResult::from(result);
@@ -571,26 +591,38 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             return Err(WorkerExecutorError::invalid_request(
                 "durable stream attachment target does not match the routed worker",
-            ));
+            )
+            .into());
         }
-        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let (worker, _response_lease) =
+            Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
+                .await?
+                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        // A producer that is being deleted is unavailable rather than failed: the caller retries
+        // until the deletion either finishes (the producer is then not found, which completes a
+        // consumer-side finalization) or fails and leaves the producer resident again. A consumer
+        // that is being deleted no longer accepts overlays; its own deletion settles its topology.
+        let targets_consumer = control.operation.targets_consumer();
+        let deleting = |message: &str| {
+            if targets_consumer {
+                DurableStreamRemoteError::Other(WorkerExecutorError::invalid_request(message))
+            } else {
+                DurableStreamRemoteError::Unavailable
+            }
+        };
         let scope = crate::worker::tasks::TaskScope::default();
-        scope
-            .bind(&worker.tasks)
-            .map_err(WorkerExecutorError::invalid_request)?;
+        scope.bind(&worker.tasks).map_err(deleting)?;
         scope
             .run(worker.control_durable_stream_attachment(control))
             .await
-            .ok_or_else(|| WorkerExecutorError::invalid_request("Worker is being deleted"))?
+            .ok_or_else(|| deleting("Worker is being deleted"))?
             .map(durable_stream_attachment_control_response::Result::Replayed)
     }
 
     async fn read_durable_stream_segment_internal(
         &self,
         request: DurableStreamSegmentReadRequest,
-    ) -> Result<Vec<u8>, DurableStreamReadError<WorkerExecutorError>> {
+    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerExecutorError>> {
         let owned_agent_id = extract_owned_agent_id(
             &request,
             |request| &request.producer_agent_id,
@@ -672,9 +704,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }
             }
         }
-        let worker = Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
-            .await?
-            .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let (worker, _response_lease) =
+            Worker::<Ctx>::find_durable_stream_worker(self, &owned_agent_id)
+                .await?
+                .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
         match read {
             DurableStreamReadRequest::AttachedConsumer(read) => {
                 let events = worker.read_durable_stream_segment(*read).await?;
@@ -692,7 +725,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         owned_agent_id: &OwnedAgentId,
         auth_ctx: Option<golem::auth::AuthCtx>,
-    ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
+    ) -> Result<
+        (
+            Arc<Worker<Ctx>>,
+            Option<Arc<crate::worker::EphemeralResponseLease>>,
+        ),
+        DurableStreamRemoteError<WorkerExecutorError>,
+    > {
         self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
         let auth_ctx: AuthCtx = auth_ctx
             .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
@@ -704,12 +743,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Worker::<Ctx>::find_durable_stream_worker(self, owned_agent_id)
             .await?
             .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))
+            .map_err(Into::into)
     }
 
     async fn create_stream_session_internal(
         &self,
-        request: golem::worker::InvocationStart,
+        request: golem::workerexecutor::v1::CreateStreamSessionRequest,
     ) -> Result<golem::workerexecutor::v1::CreateStreamSessionSuccess, WorkerExecutorError> {
+        let public_session_id = request.public_session_id;
+        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
+            &public_session_id,
+        )
+        .map_err(WorkerExecutorError::invalid_request)?;
+        let expiry_policy = stream_slots::expiry_policy_from_proto(request.expiry_policy)?;
+        let creation_intent = stream_slots::creation_intent_from_proto(request.creation_intent)?;
+        let mut request = request
+            .invocation
+            .ok_or_else(|| WorkerExecutorError::invalid_request("invocation not found"))?;
         let auth: AuthCtx = request
             .auth_ctx
             .clone()
@@ -718,15 +768,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map_err(WorkerExecutorError::invalid_request)?;
         auth.authorize_system_only("create authorized Durable Streams session")
             .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-        let key: IdempotencyKey = request
-            .idempotency_key
-            .clone()
-            .ok_or_else(|| WorkerExecutorError::invalid_request("session id not found"))?
-            .into();
-        golem_common::model::invocation_session_public::validate_durable_stream_session_id(
-            &key.value,
-        )
-        .map_err(WorkerExecutorError::invalid_request)?;
         let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&id)?;
         let (worker, _response_lease) =
@@ -740,6 +781,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?
                 }
             };
+        let admission = worker
+            .begin_stream_session_creation(public_session_id, expiry_policy, creation_intent)
+            .await?;
+        let key = admission.invocation_key().clone();
+        request.idempotency_key = Some(key.clone().into());
         let revision = worker.stream_session_revision(&key).await?;
         let component = worker
             .component_service()
@@ -768,7 +814,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 "Durable Streams requires a streaming method",
             ));
         }
-        let mut request = request;
         request.attempt_id = Some(uuid::Uuid::new_v4().into());
         request.expected_callee_fingerprint =
             Some(worker.get_initial_worker_metadata().fingerprint.0.into());
@@ -801,7 +846,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .live_stream_event_broadcast_capacity
                 .get(),
         )?;
-        let result = worker.create_stream_session(domain_request).await?;
+        let result = worker
+            .create_stream_session(domain_request, admission)
+            .await?;
         Ok(result.into())
     }
 
@@ -866,7 +913,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(ForkWorkerResponse {
             result: Some(
                 golem::workerexecutor::v1::fork_worker_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 ),
             ),
         })
@@ -1224,35 +1271,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let proto_shard_ids = request.shard_ids;
 
         let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision(request.revision);
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
+            })?;
 
-        if let ShardDeliveryOutcome::Stale { delivered, applied } =
-            self.shard_service().revoke_shards(&shard_ids, revision)?
-        {
-            // A newer delivery has already been applied and its set is the
-            // authority; taking shards out of it would be acting on stale news.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring a RevokeShards older than the last delivery applied"
-            );
-            return Ok(());
-        }
-
-        for (agent_id, worker_details) in self.active_agents().snapshot().await {
-            if self.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
+        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // A newer delivery has already been applied and its set is the
+                // authority; taking shards out of it would be acting on stale news.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring a RevokeShards older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("RevokeShards", delivered, applied);
+                return Ok(());
             }
         }
+
+        // Given up, not restarted: a restart in place would reopen each agent's oplog with the
+        // epoch this executor no longer holds. They are dropped from here and recovered by the
+        // shards' new owners.
+        let shard_service = self.shard_service();
+        self.active_agents()
+            .give_up_matching(
+                |agent_id| shard_service.check_worker(agent_id).is_err(),
+                RetirementReason::ShardRevoked,
+            )
+            .await;
 
         Ok(())
     }
 
     /// Full replace: the request carries this executor's complete shard set
     /// with epochs and the cluster's shard count. Anything absent from the
-    /// set is dropped, and any agent whose shard went away is restarted.
+    /// set is dropped, and any agent whose shard went away is given up.
     async fn assign_shards_internal(
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
@@ -1273,28 +1331,58 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ));
         }
 
-        let revision = ShardLeaseRevision(request.revision);
-        if let ShardDeliveryOutcome::Stale { delivered, applied } = self
+        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+            .map_err(|error| {
+                WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
+            })?;
+        match self
             .shard_service()
             .assign_shards(number_of_shards, &shard_epochs, revision)?
         {
-            // Crossed on the network with a newer delivery, which has already
-            // been applied; applying this one would put the older set back.
-            tracing::warn!(
-                %delivered,
-                %applied,
-                "Ignoring an AssignShards push older than the last delivery applied"
-            );
-            return Ok(());
+            ShardDeliveryOutcome::Applied { .. } => {}
+            ShardDeliveryOutcome::Stale { delivered, applied } => {
+                // Crossed on the network with a newer delivery, which has already
+                // been applied; applying this one would put the older set back.
+                tracing::warn!(
+                    %delivered,
+                    %applied,
+                    "Ignoring an AssignShards push older than the last delivery applied"
+                );
+                return Ok(());
+            }
+            ShardDeliveryOutcome::FromAnotherManager { delivered, applied } => {
+                self.renew_after_a_push_from_another_manager("AssignShards", delivered, applied);
+                return Ok(());
+            }
         }
 
         Self::apply_shard_assignment_effects(self).await?;
         Ok(())
     }
 
+    /// A push from a shard manager process this executor does not follow is either a deposed
+    /// manager still sending, or a new one this executor has not heard a reply from yet. The
+    /// push cannot say which, so it is ignored either way and the renewal asks: its answer names
+    /// the process in charge and carries that process's set.
+    fn renew_after_a_push_from_another_manager(
+        &self,
+        push: &'static str,
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    ) {
+        tracing::warn!(
+            push,
+            %delivered,
+            %applied,
+            "Ignoring a push from a shard manager process other than the one followed; renewing the lease to hear from the one in charge"
+        );
+        self.shard_manager_service().renew_now();
+    }
+
     /// The one receipt path for a delivered shard set, whichever way it came:
     /// a registration, an `AssignShards` push, or a renewal reply that
-    /// corrected the set. Sweeps the agents whose shard went away, then hands
+    /// corrected the set. Sweeps the agents whose shard went away or came back
+    /// at a higher epoch, then hands
     /// the executor the new set to recover agents for. The sweep runs for
     /// every path, because a renewal can narrow the set as well as widen it:
     /// a path without it would leave agents running on shards this executor
@@ -1316,16 +1404,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         T: HasAll<Ctx> + Send + Sync + 'static,
     {
         let ticket = this.shard_manager_service().recovery_deferred();
-
-        // Pure set membership on purpose: a lapsed lease must not restart every
-        // running agent: a lapsed lease refuses new work and leaves running work alone.
-        for (agent_id, worker_details) in this.active_agents().snapshot().await {
-            if this.shard_service().check_worker(&agent_id).is_err() {
-                worker_details
-                    .interrupt_and_retire(InterruptKind::Restart)
-                    .await?;
-            }
-        }
+        // Membership and epochs, never the lease: a lapsed lease must not give up every running
+        // agent - a lapsed lease refuses new work and leaves running work alone.
+        //
+        // Given up rather than restarted: a narrowing delivery means these shards have another
+        // owner now, and a restart in place would reopen their oplogs at the stale epoch. A
+        // delivery that raises the epoch of a shard this executor kept means the shard left and
+        // came back, so another executor may have written to its agents. Those are given up the
+        // same way, and the recovery below or their next invocation reopens them at the new epoch.
+        //
+        // The epochs come from one snapshot and the assignment from one read, both taken just
+        // before the sweep selects. An agent created after the snapshot read its epoch from the
+        // delivered assignment, so only membership applies to it. An agent given up and reopened
+        // at the new epoch between the snapshot and the selection is given up once more, which
+        // the same reopen repairs.
+        let held_epochs: HashMap<AgentId, Option<ShardEpoch>> = this
+            .active_agents()
+            .snapshot()
+            .await
+            .into_iter()
+            .map(|(agent_id, worker)| (agent_id, worker.oplog().shard_epoch()))
+            .collect();
+        let assignment = this.shard_service().try_get_current_assignment();
+        this.active_agents()
+            .give_up_matching(
+                |agent_id| {
+                    retired_by_assignment(
+                        assignment.as_ref(),
+                        agent_id,
+                        held_epochs.get(agent_id).copied().flatten(),
+                    )
+                },
+                RetirementReason::ShardNotAssigned,
+            )
+            .await;
 
         if !this.shard_service().is_ready() {
             tracing::info!(
@@ -1444,7 +1556,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn update_worker_internal(
         &self,
         request: UpdateWorkerRequest,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<OplogIndex, WorkerExecutorError> {
         let owned_agent_id =
             extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
 
@@ -1541,15 +1653,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1645,15 +1758,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
 
         let component_service = self.component_service();
-        let agent_mode = self
+        let identity = self
             .worker_service()
-            .get_agent_mode(&owned_agent_id)
+            .resolve_agent_identity(&owned_agent_id)
             .await?
             .ok_or_else(|| {
                 WorkerExecutorError::invalid_request(format!(
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        let agent_mode = identity.agent_mode;
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1762,7 +1876,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             GetFileSystemNodeResult::NotFound => GetFileSystemNodeResponse {
                 result: Some(
                     golem::workerexecutor::v1::get_file_system_node_response::Result::NotFound(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             },
@@ -1809,80 +1923,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_file_contents_internal(
         &self,
         request: GetFileContentsRequest,
-    ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, WorkerExecutorError> {
+    ) -> Result<Result<FileReadResponse, FileReadError>, WorkerExecutorError> {
         Self::validate_auth_ctx(&request.auth_ctx)?;
-
-        let path = CanonicalFilePath::from_abs_str(&request.file_path)
-            .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid path: {e}")))?;
-
-        let worker = self.get_or_create(&request).await?;
-
-        let result = worker.read_file(path).await?;
-
-        let response: <Self as WorkerExecutor>::GetFileContentsStream = match result {
-            ReadFileResult::NotFound => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotFound(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::NotAFile => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            }
-            ReadFileResult::Ok(stream) => {
-                let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::Success(golem::common::Empty {})),
-                };
-                let header_chunk = GetFileContentsResponse {
-                    result: Some(
-                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
-                            header,
-                        ),
-                    ),
-                };
-                let header_stream = tokio_stream::iter(vec![Ok(header_chunk)]);
-
-                let content_stream = stream
-                    .map(|item| {
-                        let transformed = match item {
-                            Ok(data) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Success(data.into())
-                                    )
-                                }
-                            }
-                            Err(e) => {
-                                GetFileContentsResponse {
-                                    result: Some(
-                                        golem::workerexecutor::v1::get_file_contents_response::Result::Failure(e.into())
-                                    )
-                                }
-                            }
-                        };
-                        Ok(transformed)
-                    });
-                Box::pin(header_stream.chain(content_stream))
+        let path = validate_file_read_path(&request.file_path).and_then(|()| {
+            CanonicalFilePath::from_abs_str(&request.file_path)
+                .map_err(|_| FileReadError::InvalidTarget)
+        });
+        let selection = request
+            .selection
+            .ok_or(FileReadError::InvalidSelection)
+            .and_then(FileByteSelection::try_from);
+        let (path, selection) = match (path, selection) {
+            (Ok(path), Ok(selection)) => (path, selection),
+            (Err(error), _) | (_, Err(error)) => {
+                return Ok(Err(error));
             }
         };
-        Ok(response)
+        let owned_agent_id =
+            extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
+        let owned_agent_id = self.canonicalize_owned_agent_id(&owned_agent_id).await?;
+        self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
+        let worker = self.get_or_create(&request).await?;
+        Ok(worker.read_file(path, selection).await)
     }
 
     async fn activate_plugin_internal(
@@ -2105,6 +2167,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         metadata: AgentMetadata,
         last_error_and_retry_count: Option<LastError>,
     ) -> Result<golem::worker::AgentMetadata, WorkerExecutorError> {
+        let update_metadata = |pending: Option<&golem_common::model::PendingUpdateRef>| {
+            use golem_common::model::PendingUpdateKind;
+
+            let Some(pending) = pending else {
+                return (None, UpdateMode::Manual as i32, None);
+            };
+            let (mode, assisted) = match &pending.kind {
+                PendingUpdateKind::Automatic => (UpdateMode::Automatic, None),
+                PendingUpdateKind::SnapshotBased { .. } => (UpdateMode::Manual, None),
+                PendingUpdateKind::SnapshotAssistedAutomatic(selection) => (
+                    UpdateMode::Automatic,
+                    Some(golem::worker::SnapshotAssistedUpdateMetadata {
+                        source_component_revision: selection.snapshot.component_revision.into(),
+                        source_revision_start_index: selection.source_revision_start_index.into(),
+                        snapshot_index: selection.snapshot.index.into(),
+                        snapshot_revision: selection.snapshot.component_revision.into(),
+                        filesystem_snapshot: selection
+                            .snapshot
+                            .filesystem_snapshot
+                            .clone()
+                            .map(String::from),
+                    }),
+                ),
+            };
+            (Some(pending.admission_index.into()), mode as i32, assisted)
+        };
+
         let mut updates = Vec::new();
 
         let latest_status = metadata.last_known_status;
@@ -2116,28 +2205,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),
+                    pending_update_index: Some(pending_invocation.oplog_index.into()),
+                    mode: UpdateMode::Manual as i32,
+                    snapshot_assisted_details: None,
                 });
             }
         }
         for pending_update in &latest_status.pending_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) =
+                update_metadata(Some(pending_update));
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
                 target_revision: pending_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         for successful_update in &latest_status.successful_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) =
+                update_metadata(successful_update.pending_update.as_ref());
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(successful_update.timestamp.into()),
                 target_revision: successful_update.target_revision.into(),
                 update: Some(golem::worker::update_record::Update::Successful(
                     golem::worker::SuccessfulUpdate {},
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         for failed_update in &latest_status.failed_updates {
+            let (pending_update_index, mode, snapshot_assisted_details) =
+                update_metadata(failed_update.pending_update.as_ref());
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(failed_update.timestamp.into()),
                 target_revision: failed_update.target_revision.into(),
@@ -2146,6 +2250,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         details: failed_update.details.clone(),
                     },
                 )),
+                pending_update_index,
+                mode,
+                snapshot_assisted_details,
             });
         }
         updates.sort_by_key(|record| {
@@ -2348,7 +2455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::DeleteWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::delete_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2426,7 +2533,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::InterruptWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::interrupt_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2462,7 +2569,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::RevokeShardsResponse {
                     result: Some(
                         golem::workerexecutor::v1::revoke_shards_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2498,7 +2605,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::AssignShardsResponse {
                     result: Some(
                         golem::workerexecutor::v1::assign_shards_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2586,7 +2693,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 golem::workerexecutor::v1::ResumeWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::resume_worker_response::Result::Success(
-                            golem::common::Empty {},
+                            golem_schema::proto::golem::common::Empty {},
                         ),
                     ),
                 },
@@ -2703,10 +2810,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await
         {
-            Ok(_) => record.succeed(Ok(Response::new(UpdateWorkerResponse {
+            Ok(update_attempt_index) => record.succeed(Ok(Response::new(UpdateWorkerResponse {
                 result: Some(
                     golem::workerexecutor::v1::update_worker_response::Result::Success(
-                        golem::common::Empty {},
+                        update_attempt_index.into(),
                     ),
                 ),
             }))),
@@ -2802,7 +2909,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(ForkWorkerResponse {
                 result: Some(
                     golem::workerexecutor::v1::fork_worker_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -2839,7 +2946,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(RevertWorkerResponse {
                 result: Some(
                     golem::workerexecutor::v1::revert_worker_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3002,7 +3109,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "get_file_contents",
             agent_id = proto_agent_id_string(&request.agent_id),
-            path = request.file_path,
         );
 
         let result = self
@@ -3010,8 +3116,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .instrument(record.span.clone())
             .await;
 
+        use golem::workerexecutor::v1::get_file_contents_response::Result as Frame;
         let stream: Self::GetFileContentsStream = match result {
-            Ok(stream) => record.succeed(stream),
+            Ok(Ok(response)) => {
+                let head = futures::stream::iter([Ok(GetFileContentsResponse {
+                    result: Some(Frame::Header(response.head.into())),
+                })]);
+                let body = response.body.map(|item| {
+                    Ok(GetFileContentsResponse {
+                        result: Some(match item {
+                            Ok(bytes) => Frame::Success(bytes.into()),
+                            Err(error) => {
+                                Frame::ReadFailure(golem::worker::FileReadError::from(error) as i32)
+                            }
+                        }),
+                    })
+                });
+                record.succeed(Box::pin(head.chain(body)))
+            }
+            Ok(Err(mut error)) => {
+                let stream: Self::GetFileContentsStream =
+                    Box::pin(futures::stream::iter([Ok(GetFileContentsResponse {
+                        result: Some(Frame::ReadFailure(
+                            golem::worker::FileReadError::from(error) as i32,
+                        )),
+                    })]));
+                record.fail(stream, &mut error)
+            }
             Err(mut err) => {
                 let res = GetFileContentsResponse {
                     result: Some(
@@ -3050,7 +3181,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(ActivatePluginResponse {
                 result: Some(
                     golem::workerexecutor::v1::activate_plugin_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3087,7 +3218,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ok(_) => record.succeed(Ok(Response::new(DeactivatePluginResponse {
                 result: Some(
                     golem::workerexecutor::v1::deactivate_plugin_response::Result::Success(
-                        golem::common::Empty {},
+                        golem_schema::proto::golem::common::Empty {},
                     ),
                 ),
             }))),
@@ -3132,7 +3263,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     result: Some(result),
                 })))
             }
-            Err(mut error) => record.fail(
+            Err(DurableStreamRemoteError::Unavailable) => {
+                let message = "durable stream producer is unavailable";
+                record.fail(
+                    Err(Status::unavailable(message)),
+                    &mut WorkerExecutorError::runtime(message),
+                )
+            }
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamAttachmentControlResponse {
                     result: Some(durable_stream_attachment_control_response::Result::Failure(
                         error.clone().into(),
@@ -3162,14 +3300,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     payload,
                 )),
             }))),
-            Err(DurableStreamReadError::Unavailable) => {
+            Err(DurableStreamRemoteError::Unavailable) => {
                 let message = "durable stream producer is unavailable";
                 record.fail(
                     Err(Status::unavailable(message)),
                     &mut WorkerExecutorError::runtime(message),
                 )
             }
-            Err(DurableStreamReadError::Other(mut error)) => record.fail(
+            Err(DurableStreamRemoteError::Other(mut error)) => record.fail(
                 Ok(Response::new(DurableStreamSegmentReadResponse {
                     result: Some(durable_stream_segment_read_response::Result::Failure(
                         error.clone().into(),
@@ -3182,7 +3320,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
     async fn create_stream_session(
         &self,
-        request: Request<golem::worker::InvocationStart>,
+        request: Request<golem::workerexecutor::v1::CreateStreamSessionRequest>,
     ) -> ResponseResult<golem::workerexecutor::v1::CreateStreamSessionResponse> {
         use golem::workerexecutor::v1::create_stream_session_response::Result as Outcome;
         let result = self
@@ -3210,20 +3348,20 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker = match extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)
         {
             Ok(id) => self.stream_slot_worker(&id, request.auth_ctx.clone()).await,
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         };
         let result = match worker {
-            Ok(worker) => match request.try_into() {
+            Ok((worker, _response_lease)) => match request.try_into() {
                 Ok(request) => worker.read_stream_slot(request).await,
-                Err(error) => Err(DurableStreamReadError::Other(error)),
+                Err(error) => Err(DurableStreamRemoteError::Other(error)),
             },
-            Err(error) => Err(error.into()),
+            Err(error) => Err(error),
         };
         let result = match result {
             Ok(Some(value)) => Outcome::Success(value.into()),
-            Ok(None) => Outcome::NotFound(golem::common::Empty {}),
-            Err(DurableStreamReadError::Other(error)) => Outcome::Failure(error.into()),
-            Err(DurableStreamReadError::Unavailable) => {
+            Ok(None) => Outcome::NotFound(golem_schema::proto::golem::common::Empty {}),
+            Err(DurableStreamRemoteError::Other(error)) => Outcome::Failure(error.into()),
+            Err(DurableStreamRemoteError::Unavailable) => {
                 return Err(Status::unavailable(
                     "durable stream producer is unavailable",
                 ));
@@ -3244,23 +3382,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = async {
             let id = extract_owned_agent_id(&request, |r| &r.agent_id, |r| &r.environment_id)?;
             let auth_ctx = request.auth_ctx.clone();
-            let outcome = self
-                .stream_slot_worker(&id, auth_ctx)
-                .await?
-                .append_to_stream_slot(request.into())
-                .await?;
-            Ok::<_, WorkerExecutorError>(AppendToStreamSlotResponse::from(outcome))
+            let (worker, _response_lease) = self.stream_slot_worker(&id, auth_ctx).await?;
+            let outcome = worker.append_to_stream_slot(request.into()).await?;
+            Ok::<_, DurableStreamRemoteError<WorkerExecutorError>>(
+                AppendToStreamSlotResponse::from(outcome),
+            )
         }
         .await;
-        Ok(Response::new(result.unwrap_or_else(|error| {
-            AppendToStreamSlotResponse {
-                result: Some(
-                    golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
-                        error.into(),
+        match result {
+            Ok(response) => Ok(Response::new(response)),
+            Err(DurableStreamRemoteError::Unavailable) => Err(Status::unavailable(
+                "durable stream producer is unavailable",
+            )),
+            Err(DurableStreamRemoteError::Other(error)) => {
+                Ok(Response::new(AppendToStreamSlotResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::append_to_stream_slot_response::Result::Failure(
+                            error.into(),
+                        ),
                     ),
-                ),
+                    invocation_key: None,
+                    expiry_policy: None,
+                    expiry_deadline_millis: None,
+                    stream_head_offset: Vec::new(),
+                    stream_closed: None,
+                }))
             }
-        })))
+        }
     }
 
     async fn fork_stream_slot(
@@ -3303,7 +3451,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match result {
             Ok(_) => record.succeed(Ok(Response::new(ProcessOplogEntriesResponse {
                 result: Some(process_oplog_entries_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 )),
             }))),
             Err(mut err) => record.fail(
@@ -3335,7 +3483,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match result {
             Ok(()) => record.succeed(Ok(Response::new(DeliverCardTransferResponse {
                 result: Some(deliver_card_transfer_response::Result::Success(
-                    golem::common::Empty {},
+                    golem_schema::proto::golem::common::Empty {},
                 )),
             }))),
             Err(mut error) => record.fail(

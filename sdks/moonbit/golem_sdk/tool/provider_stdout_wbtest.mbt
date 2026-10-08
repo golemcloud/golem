@@ -38,6 +38,21 @@ fn run_provider_async(body : async () -> Unit) -> Unit raise {
 }
 
 ///|
+fn declared_tool_error() -> @types.ToolError {
+  let payload = try @schema.try_into_typed_schema_value(()) catch {
+    error => abort("failed to build declared error payload: \{repr(error)}")
+  } noraise {
+    value => value
+  }
+  let payload = try @model.typed_schema_value_to_wit(payload) catch {
+    error => abort("failed to encode declared error payload: \{repr(error)}")
+  } noraise {
+    value => value
+  }
+  @types.ToolError::CustomError({ name: "original", payload, })
+}
+
+///|
 #warnings("-unused_async")
 test "provider stdout writes, finishes, and drops exactly once" {
   run_provider_async(async fn() {
@@ -45,7 +60,7 @@ test "provider stdout writes, finishes, and drops exactly once" {
     let finishes = Ref(0)
     let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
     let drops = Ref(0)
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       async fn(bytes) {
         writes.val.push(bytes)
         Ok(())
@@ -77,11 +92,40 @@ test "provider stdout writes, finishes, and drops exactly once" {
 }
 
 ///|
+test "provider stdout batches bytes in bounded 64 KiB writes" {
+  run_provider_async(() => {
+    for use_bytes in [false, true] {
+      let lengths : Array[Int] = []
+      let stdout = provider_output_from_callbacks(
+        bytes => {
+          lengths.push(bytes.length())
+          Ok(())
+        },
+        () => Ok(()),
+        _ => Ok(()),
+        () => (),
+      )
+      for size in [0, 1, 63, 64, 65, 4096, 65535, 65536, 65537] {
+        let data = Array::makei(size, i => (i % 251).to_byte())
+        if use_bytes {
+          assert_true(stdout.write_all_bytes(Bytes::from_array(data)))
+        } else {
+          assert_true(stdout.write_all(data))
+        }
+      }
+      assert_eq(lengths, [1, 63, 64, 65, 4096, 65535, 65536, 65536, 1])
+      stdout.finish()
+      stdout.drop()
+    }
+  })
+}
+
+///|
 #warnings("-unused_async")
 test "provider stdout skips empty writes before calling the host" {
   run_provider_async(async fn() {
     let writes : Ref[Array[FixedArray[Byte]]] = Ref([])
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       bytes => {
         writes.val.push(bytes)
         Ok(())
@@ -107,7 +151,7 @@ test "provider stdout dispatches one typed failure terminal" {
     let finishes = Ref(0)
     let failures : Ref[Array[@toolStreams.ByteStreamFailure]] = Ref([])
     let drops = Ref(0)
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       _ => Ok(()),
       async fn() {
         finishes.val += 1
@@ -137,7 +181,7 @@ test "provider stdout dispatches one typed failure terminal" {
 test "provider stdout closes when the host writer is already closed" {
   run_provider_async(async fn() {
     let drops = Ref(0)
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       _ => {
         Err(
           @toolStreams.StreamWriteError::Closed(
@@ -161,7 +205,7 @@ test "provider stdout closes when the host writer is already closed" {
     assert_eq(stdout.write([2]), 0)
     stdout.drop()
 
-    let finish_stdout = provider_stdout_from_callbacks(
+    let finish_stdout = provider_output_from_callbacks(
       _ => Ok(()),
       () => {
         Err(
@@ -184,7 +228,7 @@ test "provider stdout closes when the host writer is already closed" {
     assert_true(!finish_stdout.is_open())
     finish_stdout.drop()
 
-    let fail_stdout = provider_stdout_from_callbacks(
+    let fail_stdout = provider_output_from_callbacks(
       _ => Ok(()),
       () => Ok(()),
       _ => {
@@ -217,7 +261,7 @@ test "provider stdout rejects a concurrent terminal operation" {
     let (started, started_promise) = @async-core.Future::new()
     let (blocked, blocked_promise) = @async-core.Future::new()
     let finishes = Ref(0)
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       async fn(_) {
         ignore(started_promise.complete(()))
         blocked.get()
@@ -255,15 +299,15 @@ test "invocation stdout terminals preserve structured results and original error
   run_provider_async(() => {
     for
       mode in [
-        "success", "tool-error", "explicit-failure", "exception", "cancelled", "abandoned",
-        "finish-error",
+        "success", "declared-error", "validation-error", "explicit-failure", "exception",
+        "cancelled", "abandoned", "finish-error", "finish-error-declared",
       ] {
       let terminals : Array[String] = []
       let drops = Ref(0)
-      let stdout = provider_stdout_from_callbacks(
+      let stdout = provider_output_from_callbacks(
         _ => Ok(()),
         () => {
-          if mode == "finish-error" {
+          if mode == "finish-error" || mode == "finish-error-declared" {
             Err(@toolStreams.StreamWriteError::ConcurrentOperation)
           } else {
             terminals.push("finish")
@@ -284,9 +328,12 @@ test "invocation stdout terminals preserve structured results and original error
         () => drops.val += 1,
       )
       let result = try
-        invoke_with_stdout(stdout, () => {
+        invoke_with_output(stdout, () => {
           match mode {
-            "tool-error" => Err(@types.ToolError::InvalidInput("original"))
+            "declared-error" | "finish-error-declared" =>
+              Err(declared_tool_error())
+            "validation-error" =>
+              Err(@types.ToolError::InvalidInput("original"))
             "exception" => raise ToolStreamError::Failed("original")
             "cancelled" => raise @async-core.Cancelled::Cancelled
             _ => {
@@ -305,7 +352,11 @@ test "invocation stdout terminals preserve structured results and original error
         error => Err(error)
       }
       match mode {
-        "tool-error" => {
+        "declared-error" => {
+          assert_true(result is Ok(Err(@types.ToolError::CustomError(_))))
+          assert_eq(terminals, ["finish"])
+        }
+        "validation-error" => {
           assert_true(
             result is Ok(Err(@types.ToolError::InvalidInput("original"))),
           )
@@ -320,9 +371,11 @@ test "invocation stdout terminals preserve structured results and original error
           assert_eq(terminals, ["cancelled"])
         }
         "finish-error" => {
-          assert_true(
-            result is Err(@toolStreams.StreamWriteError::ConcurrentOperation),
-          )
+          assert_true(result is Ok(Ok(_)))
+          assert_eq(terminals, [])
+        }
+        "finish-error-declared" => {
+          assert_true(result is Ok(Err(@types.ToolError::CustomError(_))))
           assert_eq(terminals, [])
         }
         _ => {
@@ -352,7 +405,7 @@ test "invocation completion and drop wait for an outstanding writer operation" {
       let (release, unblock) = @async-core.Future::new()
       let (completing, complete_started) = @async-core.Future::new()
       let events : Array[String] = []
-      let stdout = provider_stdout_from_callbacks(
+      let stdout = provider_output_from_callbacks(
         _ => {
           ignore(start.complete(()))
           release.get()
@@ -378,7 +431,7 @@ test "invocation completion and drop wait for an outstanding writer operation" {
         }
         assert_eq(events, [])
         let completion = group.spawn(() => {
-          invoke_with_stdout(stdout, () => {
+          invoke_with_output(stdout, () => {
             ignore(complete_started.complete(()))
             Ok(invocation_result_empty())
           })
@@ -405,12 +458,12 @@ test "invocation completion and drop wait for an outstanding writer operation" {
 ///|
 test "completion drains every chunk of an already started write all" {
   run_provider_async(() => {
-    let payload = Array::makei(193, i => (i % 251).to_byte())
+    let payload = Array::makei(131073, i => (i % 251).to_byte())
     let actual : Array[Byte] = []
     let (started, start) = @async-core.Future::new()
     let (release, unblock) = @async-core.Future::new()
     let (completing, complete_started) = @async-core.Future::new()
-    let stdout = provider_stdout_from_callbacks(
+    let stdout = provider_output_from_callbacks(
       bytes => {
         if actual.is_empty() {
           ignore(start.complete(()))
@@ -432,7 +485,7 @@ test "completion drains every chunk of an already started write all" {
       let write = group.spawn(() => stdout.write_all(payload))
       started.get()
       let completion = group.spawn(() => {
-        invoke_with_stdout(stdout, () => {
+        invoke_with_output(stdout, () => {
           ignore(complete_started.complete(()))
           Ok(invocation_result_empty())
         })
@@ -457,7 +510,7 @@ test "real task cancellation during invocation and completion releases stdout an
       let drops = Ref(0)
       let result_drops = Ref(0)
       let terminals : Array[String] = []
-      let stdout = provider_stdout_from_callbacks(
+      let stdout = provider_output_from_callbacks(
         _ => Ok(()),
         () => {
           ignore(start.complete(()))
@@ -476,7 +529,7 @@ test "real task cancellation during invocation and completion releases stdout an
       )
       @async-core.with_task_group(group => {
         let task = group.spawn(() => {
-          invoke_with_stdout(stdout, () => {
+          invoke_with_output(stdout, () => {
             if !during_finish {
               ignore(start.complete(()))
               release.get()
@@ -486,7 +539,7 @@ test "real task cancellation during invocation and completion releases stdout an
               () => (),
               () => result_drops.val += 1,
             )
-            Ok({ result: None, stdout: Some(result_stream), })
+            Ok({ result: None, stdout: Some(result_stream), stderr: None, })
           })
         })
         started.get()

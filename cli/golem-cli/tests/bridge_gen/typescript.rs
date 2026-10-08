@@ -28,7 +28,7 @@ use golem_cli::bridge_gen::{
     BridgeGenerator, BridgeMode, bridge_client_directory_name, tool_bridge_client_directory_name,
 };
 use golem_cli::model::language::GuestLanguage;
-use golem_common::model::agent::AgentMode;
+use golem_common::model::agent::{AgentMode, CorsOptions, FileMapping, HttpMountDetails};
 use golem_common::schema::schema_type::{
     BinaryRestrictions, DiscriminatorRule, PathDirection, PathKind, PathSpec, QuantitySpec,
     ResultSpec, TextRestrictions, UnionBranch, UnionSpec, UrlRestrictions,
@@ -302,6 +302,85 @@ fn static_and_instance_agent_methods_can_share_names() {
         }
         install_and_build(&package_dir);
     }
+}
+
+#[test]
+fn external_rest_config_uses_application_json_for_named_non_streaming_values() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let mut agent_type = agent(
+        "ConfigAgent",
+        "typescript",
+        vec![],
+        vec![],
+        vec![def(
+            "config-shape",
+            SchemaType::record(vec![
+                named_field("maybe-region", SchemaType::option(SchemaType::string())),
+                named_field(
+                    "outcome",
+                    SchemaType::result(ResultSpec {
+                        ok: Some(Box::new(SchemaType::string())),
+                        err: None,
+                    }),
+                ),
+                named_field(
+                    "mode",
+                    SchemaType::variant(vec![
+                        variant_case("off", None),
+                        variant_case("on", Some(SchemaType::string())),
+                    ]),
+                ),
+                named_field(
+                    "target",
+                    SchemaType::union(UnionSpec {
+                        branches: vec![UnionBranch {
+                            tag: "command".to_string(),
+                            body: SchemaType::string(),
+                            discriminator: DiscriminatorRule::Prefix {
+                                prefix: "cmd:".to_string(),
+                            },
+                            metadata: MetadataEnvelope::default(),
+                        }],
+                    }),
+                ),
+                named_field(
+                    "document",
+                    unstructured_text_schema_type(TextRestrictions::default()),
+                ),
+                named_field(
+                    "attachment",
+                    unstructured_binary_schema_type(BinaryRestrictions::default()),
+                ),
+            ]),
+        )],
+        AgentMode::Durable,
+    );
+    agent_type.config = vec![local_config(
+        vec!["limits", "maximum"],
+        ref_to("config-shape"),
+    )];
+    let package_dir = target.join("config-agent-client");
+    TypeScriptBridgeGenerator::new_with_mode(
+        agent_type,
+        &package_dir,
+        true,
+        TypeScriptBridgeMode::ExternalRest,
+    )
+    .unwrap()
+    .generate()
+    .unwrap();
+
+    let source = std::fs::read_to_string(package_dir.join("config-agent-client.ts")).unwrap();
+    assert!(source.contains("function encodeConfigShape(value: ConfigShape): base.SchemaValue"));
+    assert!(source.contains(".application(encodeConfigShape(configLimitsMaximum))"));
+    assert!(source.contains("value: configValue"));
+    assert!(source.contains("kind: 'result'"));
+    assert!(source.contains("Unknown variant case"));
+    assert!(source.contains("Unknown union branch"));
+    assert!(source.contains("base.UnstructuredText.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredBinary.toSchemaValue"));
+    install_and_build(&package_dir);
 }
 
 #[test]
@@ -807,7 +886,12 @@ fn guest_sdk_native_shapes_generate_direct_codecs_and_compile() {
     assert!(source.contains("base.UnstructuredTextType<['en', 'de']>"));
     assert!(source.contains("base.UnstructuredBinaryType<['image/png']>"));
     assert!(source.contains("payload: { tag: 'text', text: v.val, language: v.languageCode }"));
-    assert!(source.contains("payload: { tag: 'binary', bytes: v.val, mimeType: v.mimeType }"));
+    assert!(
+        source.contains(
+            "payload: { tag: 'binary', bytes: v.val as Uint8Array, mimeType: v.mimeType }"
+        )
+    );
+    assert!(source.contains("{ tag: 'url', value: v.val as string }"));
     assert!(
         source.contains("base.UnstructuredText.fromInline(n.payload.text, n.payload.language)")
     );
@@ -969,10 +1053,234 @@ fn external_generation_keeps_rest_runtime_and_name() {
     assert!(source.contains("unsigned: bigint"));
     assert!(source.contains("{ kind: 's64', value:"));
     assert!(source.contains("{ kind: 'u64', value:"));
-    assert!(source.contains("n.value as bigint"));
+    assert!(source.contains("BigInt("), "{source}");
     assert!(!source.contains("signed: number"));
     assert!(!source.contains("unsigned: number"));
     assert!(source.contains("Creates a new agent instance with a fresh random phantom id."));
+}
+
+#[test]
+fn external_rest_generation_uses_native_null_float_and_local_result_validation() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let unit_result = SchemaType::result(ResultSpec {
+        ok: None,
+        err: None,
+    });
+    generate_and_compile(
+        agent(
+            "NativeValueAgent",
+            "typescript",
+            vec![],
+            vec![
+                method(
+                    "encode",
+                    vec![
+                        field("optional", SchemaType::option(SchemaType::string())),
+                        field("float", SchemaType::f64()),
+                        field("result", unit_result.clone()),
+                    ],
+                    Some(unit_result),
+                ),
+                method("float", vec![], Some(SchemaType::f64())),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "native-value-agent").join("native-value-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(source.contains("base.encodeOption("));
+    assert!(source.contains("{ tag: 'ok', value: null }"));
+    assert!(source.contains("{ tag: 'err', value: null }"));
+    for tag in ["nan", "positive-infinity", "negative-infinity"] {
+        assert!(source.contains(&format!("$float: '{tag}'")), "{source}");
+    }
+    assert!(source.contains("Number.NaN"));
+    assert!(source.contains("Number.POSITIVE_INFINITY"));
+    assert!(source.contains("Number.NEGATIVE_INFINITY"));
+    assert!(source.contains(".validate(__out.value, 'none')"));
+}
+
+#[test]
+fn external_streaming_multimodal_constructor_and_method_compile() {
+    let dir = TempDir::new().unwrap();
+    let target = Utf8Path::from_path(dir.path()).unwrap();
+    let constructor_parts = multimodal(vec![variant_case("text", Some(SchemaType::string()))]);
+    let method_parts = multimodal(vec![
+        variant_case("text", Some(SchemaType::string())),
+        variant_case("bytes", Some(SchemaType::stream(Some(SchemaType::u8())))),
+    ]);
+    generate_and_compile(
+        agent(
+            "MultimodalStreamAgent",
+            "typescript",
+            vec![field("parts", constructor_parts)],
+            vec![
+                method(
+                    "exchange",
+                    vec![field("parts", method_parts.clone())],
+                    Some(method_parts),
+                ),
+                method(
+                    "empty-check",
+                    vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                    Some(SchemaType::tuple(vec![])),
+                ),
+            ],
+            vec![],
+            AgentMode::Durable,
+        ),
+        target,
+    );
+    let source = std::fs::read_to_string(
+        generated_package_dir(target, "multimodal-stream-agent")
+            .join("multimodal-stream-agent-client.ts"),
+    )
+    .unwrap();
+    assert!(
+        source.contains("(multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(
+        source.contains("(__multimodalInput).map((v: any)"),
+        "{source}"
+    );
+    assert!(source.contains("v.type === \"text\""), "{source}");
+    assert!(source.contains("v.value"), "{source}");
+    assert!(
+        source.contains("return { type: \"text\" as const, value:"),
+        "{source}"
+    );
+    assert!(
+        source.contains("const __validatedResult =") && source.contains("return [];"),
+        "empty tuple streaming results must validate before decoding: {source}"
+    );
+    assert_eq!(
+        source.matches(".validate((value as any).value").count(),
+        2,
+        "each streaming result must perform one local validation: {source}"
+    );
+    assert!(
+        source.contains("const __validatedItem =")
+            && source.matches(".validate(item,").count() == 1,
+        "stream-item validation must be evaluated once before decoding: {source}"
+    );
+
+    let package = generated_package_dir(target, "multimodal-stream-agent");
+    std::fs::write(
+        package.join("runtime-test.mjs"),
+        r#"import assert from 'node:assert/strict';
+import { WebSocketServer } from 'ws';
+import { agentStream } from '@golemcloud/golem-ts-bridge';
+import { MultimodalStreamAgent, configure } from './multimodal-stream-agent-client.js';
+
+const wss = new WebSocketServer({ port: 0 });
+await new Promise((resolve) => wss.once('listening', resolve));
+const port = wss.address().port;
+let connection = 0;
+const accepted = (start, mappings = []) => ({
+  version: 1, type: 'invocationAccepted', attemptId: start.attemptId,
+  idempotencyKey: start.idempotencyKey, sessionToken: 'session', mappings,
+});
+const finish = (socket) => socket.send(JSON.stringify({
+  version: 1, type: 'invocationFinished', outcome: { kind: 'success' },
+}));
+const provisionalRef = (value) => {
+  if (value && typeof value === 'object') {
+    if (typeof value.provisionalRef === 'string') return value.provisionalRef;
+    for (const nested of Object.values(value)) {
+      const found = provisionalRef(nested);
+      if (found) return found;
+    }
+  }
+};
+wss.on('connection', (socket) => socket.once('message', (raw) => {
+  const start = JSON.parse(raw);
+  connection += 1;
+  if (connection === 1) {
+    socket.send(JSON.stringify(accepted(start, [
+      { channel: 2, direction: 'output', streamToken: 'output' },
+    ])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: {
+        kind: 'value',
+        graph: { root: { kind: 'list', value: { element: { kind: 'variant', value: { cases: [
+          { name: 'text', payload: { kind: 'string', value: {} } },
+          { name: 'bytes', payload: { kind: 'stream', value: { inner: { kind: 'u8', value: {} } } } },
+        ] } } } } },
+        value: { kind: 'list', value: { elements: [
+          { kind: 'variant', value: { case: 1, payload: { kind: 'stream', value: { streamToken: 'output' } } } },
+        ] } },
+      },
+    }));
+    socket.send(JSON.stringify({
+      version: 1, type: 'outputStreamEnd', channel: 2, sequence: '0',
+      cursorToken: 'cursor-end', outcome: { kind: 'ok' },
+    }));
+    finish(socket);
+  } else {
+    const provisional = provisionalRef(start.methodParameters);
+    socket.send(JSON.stringify(accepted(start, [{
+      channel: 1, direction: 'input', streamToken: 'input', provisionalRef: provisional,
+      inputHighWater: { sequence: '0', terminal: false },
+    }])));
+    socket.send(JSON.stringify({
+      version: 1, type: 'invocationResult', mappings: [],
+      result: { kind: 'value', graph: { root: { kind: 'u32', value: {} } }, value: { kind: 'u32', value: 7 } },
+    }));
+    finish(socket);
+  }
+}));
+
+configure({
+  server: { type: 'custom', url: `http://127.0.0.1:${port}`, token: 'test' },
+  application: 'app', environment: 'env',
+});
+const constructorValue = { kind: 'record', value: { fields: [
+  { kind: 'list', value: { elements: [
+    { kind: 'variant', value: { case: 0, payload: { kind: 'string', value: 'constructor' } } },
+  ] } },
+] } };
+const remote = new MultimodalStreamAgent(
+  constructorValue, undefined, { componentId: 'component', agentId: 'agent' },
+  constructorValue, [],
+);
+const output = await remote.exchange([{ type: 'text', value: 'request' }]);
+assert.equal(output[0].type, 'bytes');
+assert.equal(typeof output[0].value[Symbol.asyncIterator], 'function');
+await assert.rejects(
+  remote.empty_check(agentStream((async function* () {})())),
+  /tuple/i,
+);
+for (const client of wss.clients) client.terminate();
+await new Promise((resolve) => wss.close(resolve));
+"#,
+    )
+    .unwrap();
+    assert!(
+        std::process::Command::new("npm")
+            .args(["install", "--no-save", "ws"])
+            .current_dir(&package)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let output = std::process::Command::new("node")
+        .arg("runtime-test.mjs")
+        .current_dir(&package)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "generated multimodal runtime test failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
@@ -1025,8 +1333,27 @@ fn external_streaming_generation_compiles_recursive_streams() {
                 )))),
             ),
             method("status", vec![], Some(SchemaType::string())),
+            method(
+                "document",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Document")),
+            ),
+            method(
+                "attachment",
+                vec![field("input", SchemaType::stream(Some(SchemaType::u8())))],
+                Some(ref_to("Attachment")),
+            ),
         ],
-        vec![],
+        vec![
+            def(
+                "Document",
+                unstructured_text_schema_type(TextRestrictions::default()),
+            ),
+            def(
+                "Attachment",
+                unstructured_binary_schema_type(BinaryRestrictions::default()),
+            ),
+        ],
         AgentMode::Durable,
     );
     agent_type.config = vec![local_config(
@@ -1047,16 +1374,51 @@ fn external_streaming_generation_compiles_recursive_streams() {
     .unwrap();
     assert!(source.contains("createStreamingRemoteMethod"));
     assert!(source.contains("AgentStream<base.AgentBinary>"));
+    assert!(source.contains("base.UnstructuredBinary.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredBinary.fromSchemaValue"));
     assert!(source.contains("AgentStream<number>"));
     assert!(source.contains(": bigint;"));
     assert!(source.contains("amount: base.QuantityValue"));
     assert!(source.contains("configLimitsMaximum?: bigint"));
     assert!(source.contains("base.publicValueCodec"));
+    for method_name in [
+        "getWithConfig",
+        "getPhantomWithConfig",
+        "newPhantomWithConfig",
+    ] {
+        let method_source = source
+            .split_once(&format!("static async {method_name}("))
+            .unwrap()
+            .1
+            .split("\n  static async ")
+            .next()
+            .unwrap();
+        assert_eq!(
+            method_source.matches(".application(").count(),
+            1,
+            "{method_name} must project each supplied config value exactly once"
+        );
+    }
     assert!(source.contains(".validate(") && source.contains("'none'"));
     assert!(source.contains("'provisional'"));
     assert!(source.contains("\"stable\""));
     assert!(source.contains("config: this.publicConfig"));
     assert!(source.contains("path: [\"limits\",\"maximum\"]"));
+    assert!(source.contains("base.UnstructuredText.toSchemaValue"));
+    assert!(source.contains("base.UnstructuredText.fromSchemaValue"));
+    for line in source
+        .lines()
+        .filter(|line| line.contains(".push({ path: [\"limits\",\"maximum\"]"))
+    {
+        assert!(
+            line.contains("value: configValue"),
+            "config is not application JSON: {line}"
+        );
+        assert!(
+            !line.contains("kind:"),
+            "config is tagged schema JSON: {line}"
+        );
+    }
     assert!(source.contains("val: 9007199254740993n"));
     assert!(source.contains("val: 18446744073709551615n"));
     assert!(!source.contains("triggerExchange"));
@@ -1075,7 +1437,6 @@ fn external_streaming_generation_compiles_recursive_streams() {
     }
 }
 
-// PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
 #[test]
 fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
     let dir = TempDir::new().unwrap();
@@ -1106,7 +1467,7 @@ fn external_streaming_generation_uses_binary_lane_for_referenced_u8() {
     )
     .unwrap();
     assert!(
-        source.contains(", \"u8\")") && source.contains(", \"u8\"));"),
+        source.contains(", \"u8\")") && source.contains(", \"u8\");"),
         "stream<ref ByteAlias -> ref Byte -> u8> must use the direct packed-u8 lane:\n{source}"
     );
 }
@@ -1152,8 +1513,10 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     assert!(source.contains("type ToolInputStream = base.ToolInputStream;"));
     assert!(source.contains("grep(") && source.contains("base.StartedToolInvocation<string[]>"));
     assert!(source.contains("replace(") && source.contains("base.StartedToolInvocation<void>"));
-    assert!(source.contains("this.runtime.start([], typedInput, stdin, true)"));
-    assert!(source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true)"));
+    assert!(source.contains("this.runtime.start([], typedInput, stdin, true, false)"));
+    assert!(
+        source.contains("this.runtime.start([\"replace\"], typedInput, undefined, true, false)")
+    );
     assert!(source.contains("[...this.inherited"));
     assert!(source.contains("{ tag: 'record', fields }"));
     assert!(source.contains("const __golemSchemaGraphs = {"));
@@ -1185,7 +1548,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     );
     assert!(source.contains("base.typedSchemaValueConforms(expectedGraph, typed)"));
     assert!(source.contains(
-        "base.startedToolInvocation(invocation.stdout, settledResult, () => invocation.cancel())"
+        "base.startedToolInvocation(invocation.stdout, invocation.stderr, settledResult, () => invocation.cancel())"
     ));
     assert!(source.contains("invocation.cancel(); throw protocol('tool invocation did not provide declared stdout stream')"));
     assert!(source.contains("tool result did not contain a value"));
@@ -1200,7 +1563,7 @@ fn guest_tool_client_tree_compiles_and_uses_sdk_native_protocol() {
     std::fs::write(
         package_dir.join(format!("{package_name}.ts")),
         format!(
-            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<{{ result: string[]; stdout: Uint8Array }}> = started.collect();\nvoid stdout; void result; void collected;\n"
+            "{source}\n\ndeclare const consumer: GrepClient;\nconst started = consumer.grep(...([] as unknown as Parameters<typeof consumer.grep>));\nconst stdout: ReadableStream<Uint8Array> | undefined = started.stdout;\nconst result: Promise<string[]> = started.result;\nstarted.cancel();\nconst collected: Promise<base.CollectedToolInvocation<string[]>> = started.collect();\nvoid stdout; void result; void collected;\n"
         ),
     )
     .unwrap();
@@ -1314,4 +1677,82 @@ fn install_and_build(package_dir: &Utf8Path) {
 
 fn generated_package_dir(target_dir: &Utf8Path, package_name: &str) -> Utf8PathBuf {
     target_dir.join(format!("{package_name}-client"))
+}
+
+#[test]
+fn http_router_bridge_rejection_uses_kind_not_name() {
+    let corpus: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../golem-service-base/tests/fixtures/http-handlers/corpus.json"
+    ))
+    .unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = Utf8Path::from_path(dir.path()).unwrap();
+    for mode in [
+        TypeScriptBridgeMode::ExternalRest,
+        TypeScriptBridgeMode::GuestWasmRpc,
+    ] {
+        let mut metadata = agent(
+            "HttpRouterLookingName",
+            "typescript",
+            vec![],
+            vec![],
+            vec![],
+            AgentMode::Durable,
+        );
+        let regular_files_id = "tooling-regular-files-still-callable";
+        let regular_files_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == regular_files_id)
+            .unwrap();
+        metadata.http_mount = Some(HttpMountDetails {
+            path_prefix: vec![],
+            auth_details: None,
+            phantom_agent: false,
+            cors_options: CorsOptions {
+                allowed_patterns: vec![],
+            },
+            webhook_suffix: vec![],
+            static_bindings: vec![],
+            filesystem_bindings: FileMapping::compile_list(
+                regular_files_case["input"]["filesystem_bindings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|mapping| (mapping[0].as_str().unwrap(), mapping[1].as_str().unwrap())),
+            )
+            .unwrap(),
+            file_response_headers: vec![],
+            openapi_provider_method: None,
+        });
+        assert_eq!(
+            TypeScriptBridgeGenerator::new_with_mode(metadata.clone(), path, false, mode).is_ok(),
+            regular_files_case["expect"]["included"].as_bool().unwrap(),
+            "{regular_files_id}"
+        );
+        metadata.type_name =
+            golem_common::model::agent::AgentTypeName("OrdinaryLookingName".into());
+        metadata.kind = golem_common::schema::agent::AgentTypeKind::HttpRouter;
+        let result = TypeScriptBridgeGenerator::new_with_mode(metadata, path, false, mode);
+        let router_id = "tooling-router-clients";
+        let router_case = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == router_id)
+            .unwrap();
+        assert_eq!(
+            result.is_ok(),
+            router_case["expect"]["included"].as_bool().unwrap(),
+            "{router_id}"
+        );
+        assert!(
+            result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("HTTP routers do not have ordinary agent clients")
+        );
+    }
 }

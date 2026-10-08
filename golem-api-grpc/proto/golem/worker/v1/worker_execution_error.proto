@@ -34,11 +34,35 @@ message WorkerExecutionError {
     InvalidAccount invalid_account = 22;
     AgentNotFound agent_not_found = 23;
     ShardingNotReady sharding_not_ready = 24;
-    InitialAgentFileDownloadFailed initial_agent_file_download_failed = 25;
     FileSystemError file_system_error = 26;
     InvocationFailed invocation_failed = 27;
     PermissionDenied permission_denied = 28;
+    ComponentServiceUnavailable component_service_unavailable = 29;
+    ComponentServiceRefused component_service_refused = 30;
   }
+}
+
+message ComponentServiceUnavailable {
+  golem.component.ComponentId component_id = 1;
+  optional uint64 component_revision = 2;
+  string reason = 3;
+}
+
+enum ComponentServiceRefusal {
+  COMPONENT_SERVICE_REFUSAL_UNSPECIFIED = 0;
+  UNAUTHORIZED = 1;
+  COULD_NOT_AUTHENTICATE = 2;
+  BAD_REQUEST = 3;
+  LIMIT_EXCEEDED = 4;
+  MISSING_BINARY = 5;
+  OTHER = 6;
+}
+
+message ComponentServiceRefused {
+  golem.component.ComponentId component_id = 1;
+  optional uint64 component_revision = 2;
+  ComponentServiceRefusal kind = 3;
+  string reason = 4;
 }
 
 message InvalidRequest {
@@ -138,11 +162,6 @@ message AgentNotFound {
 }
 
 message ShardingNotReady {}
-
-message InitialAgentFileDownloadFailed {
-  string path = 1;
-  string reason = 2;
-}
 
 message FileSystemError {
   string path = 1;

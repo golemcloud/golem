@@ -19,7 +19,7 @@
 // we replace them with in-memory fakes. Key-value and WebSocket use `vi.mock`,
 // while blobstore uses the test alias in `vitest.config.ts`. These fakes let us drive
 // the PURE logic the surfaces own — the `forSchema` JSON validate/encode/decode
-// round-trip, the typed error classes, the whole-object read recovery, and the
+// round-trip, the typed error classes, the whole-object read, and the
 // list-objects paging — without touching a live host.
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -177,7 +177,6 @@ import * as websocket from '../src/websocket';
 beforeEach(() => {
   h.kvStores.clear();
   __blobTestState.containers.clear();
-  __blobTestState.endExclusive = false;
   __blobTestState.lastOutgoingBody = undefined;
   h.ws.last = undefined;
 });
@@ -297,13 +296,6 @@ describe('blobstore', () => {
 
     await c.delete('a.txt');
     expect(await c.has('a.txt')).toBe(false);
-  });
-
-  it('whole-object read recovers when the backend treats end as exclusive', async () => {
-    const c = await blobstore.createContainer('exclusive');
-    __blobTestState.endExclusive = true; // in-memory/fs-style backend bug
-    await c.writeData('o', new TextEncoder().encode('abcd'));
-    expect(new TextDecoder().decode(await c.getData('o'))).toBe('abcd');
   });
 
   it('whole-object read of an empty object returns no bytes without a host call', async () => {

@@ -17,8 +17,6 @@ use tokio::sync::Notify;
 
 use super::run;
 
-const CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
-
 #[derive(Clone, Default)]
 struct LiveBodies {
     count: Arc<AtomicUsize>,
@@ -26,8 +24,10 @@ struct LiveBodies {
 }
 
 impl LiveBodies {
+    /// Counts one more live body, and wakes each wait for a count.
     fn guard(&self) -> BodyGuard {
         self.count.fetch_add(1, Ordering::SeqCst);
+        self.changed.notify_waiters();
         BodyGuard(self.clone())
     }
 
@@ -35,20 +35,18 @@ impl LiveBodies {
         self.count.load(Ordering::SeqCst)
     }
 
+    /// Waits until the count is `expected`. The wait has no limit of its own; the timeout of each
+    /// test ends a wait that never ends.
     async fn wait_for(&self, expected: usize) {
-        tokio::time::timeout(CLEANUP_TIMEOUT, async {
-            loop {
-                let changed = self.changed.notified();
-                tokio::pin!(changed);
-                changed.as_mut().enable();
-                if self.count() == expected {
-                    return;
-                }
-                changed.await;
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.count() == expected {
+                return;
             }
-        })
-        .await
-        .unwrap_or_else(|_| panic!("body count did not become {expected}; was {}", self.count()));
+            changed.await;
+        }
     }
 }
 
@@ -59,6 +57,24 @@ impl Drop for BodyGuard {
         self.0.count.fetch_sub(1, Ordering::SeqCst);
         self.0.changed.notify_waiters();
     }
+}
+
+#[test]
+#[timeout("5s")]
+async fn live_body_waiters_observe_acquisition_and_release() {
+    let bodies = LiveBodies::default();
+    let acquired = bodies.wait_for(1);
+    tokio::pin!(acquired);
+    assert!(futures::poll!(acquired.as_mut()).is_pending());
+
+    let guard = bodies.guard();
+    assert!(futures::poll!(acquired.as_mut()).is_ready());
+
+    let released = bodies.wait_for(0);
+    tokio::pin!(released);
+    assert!(futures::poll!(released.as_mut()).is_pending());
+    drop(guard);
+    assert!(futures::poll!(released.as_mut()).is_ready());
 }
 
 fn idle_body(guard: BodyGuard) -> Body {

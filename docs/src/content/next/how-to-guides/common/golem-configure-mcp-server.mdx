@@ -2,9 +2,15 @@
 
 ## Overview
 
-Any Golem agent can be automatically exposed as an **MCP (Model Context Protocol) server** without writing any extra code. MCP is enabled by adding an `mcp` section to `golem.yaml` — the same way HTTP API deployments are configured under `httpApi`.
+Golem agents with MCP-compatible method schemas can be automatically exposed as an **MCP (Model Context Protocol) server** without writing any extra code. MCP is enabled by adding an `mcp` section to `golem.yaml` — the same way HTTP API deployments are configured under `httpApi`.
 
 The MCP server uses the **Streamable HTTP** transport. Once deployed, any MCP-compatible client (Claude Desktop, MCP Inspector, Cursor, custom clients) can connect to the server and interact with your agents through MCP tools, resources, and prompts.
+
+Streamable HTTP describes the MCP connection; it does not make agent `stream<T>` values
+MCP-compatible. A method is not exposed when its input or output schema recursively contains an
+agent stream, including a stream nested in a record, variant, collection, or another stream. Add a
+bounded stream-free adapter method if MCP clients need the same capability. Do not collect an
+unbounded stream solely to bypass this limitation.
 
 ## Adding an MCP Deployment
 

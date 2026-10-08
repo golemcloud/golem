@@ -1,6 +1,9 @@
 {
   "name": "@golemcloud/effect-golem",
   "version": "0.0.0",
+  "sideEffects": [
+    "./test/fixtures/**"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -26,38 +29,44 @@
   "main": "dist/index.mjs",
   "types": "dist/effect-golem.d.ts",
   "exports": {
+    "./build": "./build/component.mjs",
     ".": {
       "types": "./dist/effect-golem.d.ts",
+      "golem-component": "./dist/component/index.js",
       "import": "./dist/index.mjs"
     },
     "./middleware": {
       "types": "./dist/effect-golem-middleware.d.ts",
+      "golem-component": "./dist/component/Middleware.js",
       "import": "./dist/middleware.mjs"
+    },
+    "./ai": {
+      "types": "./dist/effect-golem-ai.d.ts",
+      "golem-component": "./dist/component/Ai.js",
+      "import": "./dist/ai.mjs"
     },
     "./sqlite": {
       "types": "./dist/effect-golem-sqlite.d.ts",
+      "golem-component": "./dist/component/Sqlite/SqliteClient.js",
       "import": "./dist/sqlite.mjs"
     },
     "./postgres": {
       "types": "./dist/effect-golem-postgres.d.ts",
+      "golem-component": "./dist/component/Postgres/PgClient.js",
       "import": "./dist/postgres.mjs"
     },
     "./mysql": {
       "types": "./dist/effect-golem-mysql.d.ts",
+      "golem-component": "./dist/component/Mysql/MySqlClient.js",
       "import": "./dist/mysql.mjs"
     },
     "./ignite2": {
       "types": "./dist/effect-golem-ignite2.d.ts",
+      "golem-component": "./dist/component/Ignite/IgniteClient.js",
       "import": "./dist/ignite.mjs"
     },
     "./agent-guest": {
       "types": "./golem-types/exports.d.ts"
-    },
-    "./tool-middleware-guest": {
-      "types": "./golem-types/tool_middleware_exports.d.ts"
-    },
-    "./agent-tool-middleware-guest": {
-      "types": "./golem-types/agent_tool_middleware_exports.d.ts"
     },
     "./internal/*": null,
     "./host/*": null,
@@ -67,6 +76,7 @@
     "./Ignite/internal/*": null,
     "./*": {
       "types": "./dist/src/*.d.ts",
+      "golem-component": "./dist/component/*.js",
       "import": "./dist/src/*.js"
     }
   },
@@ -74,12 +84,6 @@
     "*": {
       "agent-guest": [
         "golem-types/exports.d.ts"
-      ],
-      "tool-middleware-guest": [
-        "golem-types/tool_middleware_exports.d.ts"
-      ],
-      "agent-tool-middleware-guest": [
-        "golem-types/agent_tool_middleware_exports.d.ts"
       ],
       "golem:agent/common@2.0.0": [
         "golem-types/golem_agent_2_0_0_common.d.ts"
@@ -120,6 +124,7 @@
     }
   },
   "files": [
+    "build",
     "dist",
     "!dist/**/*.map",
     "wasm",
@@ -127,18 +132,20 @@
     "golem-types"
   ],
   "scripts": {
+    "prebuild": "node ./scripts/clean-build-output.mjs",
     "build": "tsc -p tsconfig.build.json && node ./scripts/build-types-entry.mjs",
     "build:bundle": "rollup -c",
     "generate-dts": "node ./scripts/generate-dts.mjs",
     "check:dts": "node ./scripts/check-dts.mjs",
     "check:contracts": "node ./scripts/check-stale-contracts.mjs",
     "check:artifacts": "node ./scripts/check-artifacts.mjs",
+    "check:ai-package": "node ./scripts/check-ai-package.mjs",
     "check:package": "node ./scripts/check-package.mjs",
     "clean": "node ./scripts/clean.mjs",
     "generate-agent-template": "node ./scripts/generate-agent-template.mjs",
     "compile-agent-template": "node ./scripts/compile-agent-templates.mjs",
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
-    "build-agent-template": "npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
+    "build-agent-template": "npm run build && npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -148,11 +155,13 @@
   },
   "dependencies": {
     "@noble/hashes": "^1.8.0",
-    "effect": "4.0.0-beta.98"
+    "effect": "4.0.0",
+    "typescript": "^5.7.2"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-beta.98",
+    "@effect/vitest": "4.0.0",
     "@eslint/js": "^9.17.0",
+    "@golemcloud/http-contract": "file:../http-contract",
     "@rollup/plugin-commonjs": "^29.0.2",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
@@ -161,11 +170,11 @@
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.17.0",
     "eslint-config-prettier": "^9.1.0",
+    "fast-check": "4.10.2",
     "prettier": "^3.4.2",
     "rollup": "^4.60.2",
     "rollup-plugin-typescript2": "^0.37.0",
-    "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0",
-    "vitest": "^3.2.4"
+    "vitest": "5.0.1"
   }
 }

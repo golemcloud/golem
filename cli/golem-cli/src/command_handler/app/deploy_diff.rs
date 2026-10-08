@@ -47,6 +47,13 @@ pub struct DeployableManifest {
     pub http_api_deployments: BTreeMap<Domain, HttpApiDeploymentDeployProperties>,
     #[allow(dead_code)]
     pub mcp_deployments: BTreeMap<Domain, McpDeploymentDeployProperties>,
+    pub mcp_imports: Vec<golem_common::model::mcp_import::McpImportDeployment>,
+    pub environment_tool_middleware_bindings:
+        BTreeMap<golem_common::model::tool::ToolName, golem_common::model::tool::ToolBindingInput>,
+    pub agent_tool_middleware_bindings: BTreeMap<
+        golem_common::model::agent::AgentTypeName,
+        BTreeMap<golem_common::model::tool::ToolName, golem_common::model::tool::ToolBindingInput>,
+    >,
 }
 
 #[derive(Debug)]
@@ -116,6 +123,7 @@ impl DeployDiff {
         !self.diff.components.is_empty()
             || !self.diff.http_api_deployments.is_empty()
             || !self.diff.mcp_deployments.is_empty()
+            || !self.diff.mcp_imports.is_empty()
             || !self.diff.remote_tools.is_empty()
             || !self.diff.published_tools.is_empty()
             || !self.diff.remote_tool_middleware_deployments.is_empty()
@@ -157,6 +165,7 @@ impl DeployDiff {
             components: BTreeMap::new(),
             http_api_deployments: BTreeMap::new(),
             mcp_deployments: BTreeMap::new(),
+            mcp_imports: BTreeMap::new(),
             remote_tools: BTreeMap::new(),
             published_tools: BTreeMap::new(),
             remote_tool_middleware_deployments: BTreeMap::new(),

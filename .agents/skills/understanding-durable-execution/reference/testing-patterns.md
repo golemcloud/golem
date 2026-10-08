@@ -25,6 +25,9 @@ golem-worker-executor --test <file> -- <filter>`); build the required WASM fixtu
   - `TestExecutorOverrides::wrap_shard_service` — fake ownership changes.
   - `executor.oplog_service_call_count(&worker_id, "read_exact")` — prove a path did not scan
     the oplog.
+  - `probe_http_body_read_starts`, `external_end_payload_id`, the exact-payload download outage,
+    and `probe_runtime_disposal` — target an uncached p2 response-body recovery payload and prove
+    that each failed physical runtime is destroyed before replacement.
 - `golem-test-framework/src/dsl/mod.rs`
   - `simulated_crash(&agent_id)` — `InterruptKind::Restart`; the resident worker reconstructs
     immediately, or on its next wakeup if already unloaded.
@@ -97,6 +100,12 @@ as stream-session completion may follow), expected `CompletionDelivered` markers
 component
 revision, plugins or metadata matter, the restart must go through instance creation
 (`recovering_an_old_worker_after_updating_a_component`).
+
+For infrastructure reconstruction, also assert the accepted invocation remains pending while the
+fault is active, `Error.kind` is `Recovery`, the complete semantic retry-state map is unchanged,
+each failed body-read `Start` has no invented `End`/`Cancelled`, and clearing the fault completes
+the original idempotency key with exact asymmetric output. Repeated failures must cross distinct
+runtime-disposal generations; rewinding only the replay cursor is not recovery.
 
 Copy: `tests/api.rs::p3_promise_suspend_survives_executor_restart`,
 `tests/rpc.rs::ts_cancel_survives_executor_restart`,
@@ -191,6 +200,27 @@ caller_recovery_restarts_input_drain_after_rpc_result_commit}`,
 active_stream_crash_replays_pinned_activation_with_fresh_attachments,
 concurrent_tool_attempt_identity_survives_reordered_admission_and_replay,
 completed_reconstruction_claim_blocks_concurrent_replay_to_live}`.
+
+## Pattern 11: treat owner and entities as one lifecycle unit
+
+Mistake caught: restarting only the primary Store, allowing reconstruction to overtake an entity
+drain, or letting stale owner A mutate replacement B because both have the same `AgentId`.
+
+Do: enter a real entity body or completed-body reconstruction and hold it at a named checkpoint,
+then request restart, suspend, or terminal interruption. For restart/control races, assert the
+original invocation identity completes, its semantic retry counters are unchanged, completed
+external effects are not repeated, filesystem state and the asymmetric result reconstruct
+correctly, and a fresh follow-up invocation is safe. For explicit terminal interruption, assert
+the invocation remains stopped until resume rather than silently restarting. Run the stale-owner
+case asymmetrically: publish B, release A's delayed cleanup, and prove B still accepts and completes
+fresh work—not merely that A's operation returned. For executor shutdown, enter and retain the
+callback before shutdown, then prove task destruction and callback/oplog-layer joins complete
+without semantic finalization.
+
+Copy: `tests/tool_streaming/mod.rs::suspended_restart_replays_completed_tool_without_semantic_retry`,
+the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`, and the retained
+entity shutdown cases in `src/services/active_agents/tests.rs` and
+`src/worker/entity_invocation.rs`.
 
 ## Anti-patterns
 

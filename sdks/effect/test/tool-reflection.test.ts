@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { c, compileDefinition, toolDefinition } from "../src/internal/tool/model.js"
 import { ToolType } from "../src/ToolReflection.js"
 import { toolClientDefinition, ToolTransport } from "../src/Tool.js"
@@ -8,7 +8,7 @@ import { compile } from "../src/WitCodec.js"
 import { t } from "../src/internal/schema-model/model.js"
 import { schemaGraphToWit } from "../src/internal/schema-model/wit.js"
 import { SchemaRef } from "../src/SchemaRef.js"
-import { Binary, restrict } from "../src/WitTypes.js"
+import { Binary, restrict, Uint8 } from "../src/WitTypes.js"
 
 const definition = toolDefinition("effect-reflection").body((body) =>
   body.positional("name", Schema.String).returns(Schema.String),
@@ -20,6 +20,13 @@ const registered = {
 }
 
 describe("native tool reflection", () => {
+  it("emits the authored tool version while retaining the default", () => {
+    expect(compileDefinition(toolDefinition("default-version")).wire.version).toBe("0.1.0")
+    expect(
+      compileDefinition(toolDefinition("authored-version", { version: "1.0.0" })).wire.version,
+    ).toBe("1.0.0")
+  })
+
   it("treats a default-true negatable flag as present when set to false", () => {
     const definition = toolDefinition("negatable-reflection").body((body) =>
       body
@@ -135,7 +142,7 @@ describe("native tool reflection", () => {
       getTool: () => optionalRegistered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -203,7 +210,7 @@ describe("native tool reflection", () => {
       getTool: () => optionalRegistered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -245,6 +252,31 @@ describe("native tool reflection", () => {
     expect(command.result?.toJsonSchema()).toBeDefined()
   })
 
+  it("preserves command annotations and enforces schema restrictions during validation", () => {
+    const annotated = toolDefinition("annotated-reflection").body((body) =>
+      body.positional("bounded", Uint8.pipe(restrict({ min: 10 }))).annotate({
+        readOnly: true,
+        destructive: false,
+        idempotent: true,
+        openWorld: false,
+      }),
+    )
+    const command = new ToolType({
+      ...registered,
+      lookupName: "annotated-reflection",
+      definition: compileDefinition(annotated).wire,
+    }).client.command([])
+
+    expect(command.annotations).toEqual({
+      readOnly: true,
+      destructive: false,
+      idempotent: true,
+      openWorld: false,
+    })
+    expect(command.validateJson({ bounded: 9 }).success).toBe(false)
+    expect(command.validateJson({ bounded: 10 }).success).toBe(true)
+  })
+
   it("returns a validated result and releases its scoped invocation", async () => {
     const codec = Effect.runSync(compile(Schema.String))
     const cancel = vi.fn()
@@ -265,7 +297,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
@@ -280,7 +312,7 @@ describe("native tool reflection", () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
-  it("settles result and stdout and gives the result error precedence", async () => {
+  it("settles result and stdout and preserves both failures", async () => {
     const streaming = toolDefinition("settle-both").body((body) =>
       body.positional("name", Schema.String).output().returns(Schema.String),
     )
@@ -309,11 +341,11 @@ describe("native tool reflection", () => {
       getTool: () => registration,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })
-    const failure = new ToolType(registration).client
+    const collected = new ToolType(registration).client
       .command([])
       .startJson({ name: "hello" })
       .pipe(
@@ -321,13 +353,18 @@ describe("native tool reflection", () => {
         Effect.provideService(ToolTransport, transport),
         Effect.provideService(ToolClient, host),
         Effect.scoped,
-        Effect.flip,
       )
 
-    await expect(Effect.runPromise(failure)).resolves.toMatchObject({
+    const outcomes = await Effect.runPromise(collected)
+    expect(Result.isFailure(outcomes.result) && outcomes.result.failure).toMatchObject({
       tag: "rpc",
       error: { tag: "denied", val: "result failed" },
     })
+    expect(Result.isFailure(outcomes.stdout) && outcomes.stdout.failure).toMatchObject({
+      tag: "rpc",
+      error: { tag: "protocol-error", val: "tool stdout failed" },
+    })
+    expect(outcomes.stderr).toEqual(Result.succeed(undefined))
     expect(stdoutSettled).toBe(true)
   })
 
@@ -343,7 +380,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: rpc as never,
       createRpc: createRpc as never,
     })
@@ -387,7 +424,7 @@ describe("native tool reflection", () => {
       getTool: () => registered,
       createStdin: vi.fn() as never,
       createStdinFromStream: vi.fn() as never,
-      createStdout: vi.fn() as never,
+      createOutput: vi.fn() as never,
       rpc: vi.fn() as never,
       createRpc: vi.fn() as never,
     })

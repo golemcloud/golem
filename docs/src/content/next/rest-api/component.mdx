@@ -1387,6 +1387,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
   "agentTypes": [
     {
       "type_name": "string",
+      "kind": "regular",
       "description": "string",
       "source_language": "string",
       "schema": {
@@ -1537,7 +1538,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
           "http_endpoint": [
             {
               "httpMethod": {
-                "type": "Patch"
+                "type": "Any"
               },
               "pathSuffix": [
                 {
@@ -1564,6 +1565,25 @@ The request body is encoded as multipart/form-data containing metadata and the W
                 "allowedPatterns": [
                   "string"
                 ]
+              },
+              "durableStreams": {
+                "slots": [
+                  {
+                    "source": {
+                      "type": "input",
+                      "name": "string"
+                    },
+                    "name": "string",
+                    "contentType": "string"
+                  }
+                ],
+                "allowExternalWrites": true,
+                "allowStreamDelete": true,
+                "allowInvocationDelete": true,
+                "load": {
+                  "maxConcurrentReadersPerStream": 0,
+                  "maxAppendRequestsPerSecondPerStream": 0
+                }
               }
             }
           ],
@@ -1727,7 +1747,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "http_endpoint": [
                 {
                   "httpMethod": {
-                    "type": "Patch"
+                    "type": "Any"
                   },
                   "pathSuffix": [
                     {
@@ -1754,6 +1774,25 @@ The request body is encoded as multipart/form-data containing metadata and the W
                     "allowedPatterns": [
                       "string"
                     ]
+                  },
+                  "durableStreams": {
+                    "slots": [
+                      {
+                        "source": {
+                          "type": "input",
+                          "name": "string"
+                        },
+                        "name": "string",
+                        "contentType": "string"
+                      }
+                    ],
+                    "allowExternalWrites": true,
+                    "allowStreamDelete": true,
+                    "allowInvocationDelete": true,
+                    "load": {
+                      "maxConcurrentReadersPerStream": 0,
+                      "maxAppendRequestsPerSecondPerStream": 0
+                    }
                   }
                 }
               ],
@@ -1789,7 +1828,32 @@ The request body is encoded as multipart/form-data containing metadata and the W
             "type": "Literal",
             "value": "string"
           }
-        ]
+        ],
+        "staticBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "filesystemBindings": [
+          {
+            "type": "Exact",
+            "publicPath": [
+              "string"
+            ],
+            "filePath": "string"
+          }
+        ],
+        "fileResponseHeaders": [
+          {
+            "name": "string",
+            "value": "string"
+          }
+        ],
+        "openapiProviderMethod": "string"
       },
       "snapshotting": {
         "type": "Disabled"
@@ -1884,6 +1948,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
   "tools": [
     {
       "version": "string",
+      "requires_filesystem": true,
       "commands": {
         "nodes": [
           {
@@ -2181,6 +2246,22 @@ The request body is encoded as multipart/form-data containing metadata and the W
                 ],
                 "required": true
               },
+              "stderr": {
+                "doc": {
+                  "summary": "string",
+                  "description": "string",
+                  "examples": [
+                    {
+                      "title": "string",
+                      "body": "string"
+                    }
+                  ]
+                },
+                "mime": [
+                  "string"
+                ],
+                "required": true
+              },
               "result": {
                 "type_": {
                   "kind": "ref",
@@ -2357,10 +2438,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       },
       "componentBindings": {
@@ -2384,10 +2471,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         },
         "property2": {
           "version": "string",
@@ -2409,10 +2502,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       },
       "agentBindings": {
@@ -2436,10 +2535,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         },
         "property2": {
           "version": "string",
@@ -2461,10 +2566,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       }
     },
@@ -2502,10 +2613,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       },
       "componentBindings": {
@@ -2529,10 +2646,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         },
         "property2": {
           "version": "string",
@@ -2554,10 +2677,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       },
       "agentBindings": {
@@ -2581,10 +2710,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         },
         "property2": {
           "version": "string",
@@ -2606,10 +2741,16 @@ The request body is encoded as multipart/form-data containing metadata and the W
               "version": "string",
               "parameters": {},
               "account": "string",
+              "secretKeysReadable": {
+                "kind": "all"
+              },
+              "secretKeysRevealable": {
+                "kind": "all"
+              },
               "filesystemAccess": "unset"
             }
           ],
-          "middlewareMergeMode": "Prepend"
+          "middlewareMergeMode": "prepend"
         }
       }
     }
@@ -2636,6 +2777,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
         "value": {
           "presented": {
             "version": "string",
+            "requires_filesystem": true,
             "commands": {
               "nodes": [
                 {
@@ -2846,6 +2988,22 @@ The request body is encoded as multipart/form-data containing metadata and the W
                       "required": true
                     },
                     "stdout": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stderr": {
                       "doc": {
                         "summary": "string",
                         "description": "string",
@@ -2986,6 +3144,7 @@ The request body is encoded as multipart/form-data containing metadata and the W
           },
           "expected": {
             "version": "string",
+            "requires_filesystem": true,
             "commands": {
               "nodes": [
                 {
@@ -3196,6 +3355,22 @@ The request body is encoded as multipart/form-data containing metadata and the W
                       "required": true
                     },
                     "stdout": {
+                      "doc": {
+                        "summary": "string",
+                        "description": "string",
+                        "examples": [
+                          {
+                            "title": "string",
+                            "body": "string"
+                          }
+                        ]
+                      },
+                      "mime": [
+                        "string"
+                      ],
+                      "required": true
+                    },
+                    "stderr": {
                       "doc": {
                         "summary": "string",
                         "description": "string",

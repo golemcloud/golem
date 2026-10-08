@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { Effect, Fiber, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Stream } from "effect"
 import {
   createToolClientRuntime,
   splitToolRpcError,
+  type ToolClientRuntime,
   typedSchemaValueConforms,
 } from "../src/BridgeTool.js"
 import { ToolClient } from "../src/host/ToolClient.js"
@@ -10,6 +11,19 @@ import { ToolTransport, type ToolTransport as ToolTransportShape } from "../src/
 import type { TypedSchemaValue } from "../src/Bridge.js"
 import { emptyMetadata, schemaType, t, v } from "../src/Bridge.js"
 import { typedSchemaValueToWit } from "../src/internal/schema-model/wit.js"
+
+const checkToolClientRuntimeRequirements = (
+  runtime: ToolClientRuntime,
+  input: TypedSchemaValue,
+) => {
+  const started = runtime.start([], input, undefined, false, false)
+  // @ts-expect-error invocation startup acquires a resource in Scope
+  const scopeFree: Effect.Effect<unknown, unknown, ToolClient> = started
+  const scoped: Effect.Effect<unknown, unknown, ToolClient> = Effect.scoped(started)
+  void scopeFree
+  void scoped
+}
+void checkToolClientRuntimeRequirements
 
 describe("BridgeTool", () => {
   it("passes the declared custom-error name and payload to generated decoders", () => {
@@ -28,8 +42,20 @@ describe("BridgeTool", () => {
     ).toMatchObject({ tag: "tool", error: { name: "second" } })
   })
 
-  it("requires exact result graphs and values that conform to the expected graph", () => {
+  it("requires equivalent result graphs and values that conform to the expected graph", () => {
     const expected = { defs: new Map(), root: t.u32({ min: { tag: "unsigned", val: 1n } }) }
+    const referenced = {
+      defs: new Map([
+        [
+          "example.Number",
+          {
+            name: "DisplayNumber",
+            body: t.u32({ min: { tag: "unsigned", val: 1n } }),
+          },
+        ],
+      ]),
+      root: schemaType({ tag: "ref", id: "example.Number" }),
+    }
     expect(
       typedSchemaValueConforms(expected, {
         graph: expected,
@@ -44,6 +70,12 @@ describe("BridgeTool", () => {
     ).toBe(false)
     expect(
       typedSchemaValueConforms(expected, {
+        graph: referenced,
+        value: { tag: "u32", value: 1 },
+      }),
+    ).toBe(true)
+    expect(
+      typedSchemaValueConforms(expected, {
         graph: {
           defs: new Map(),
           root: schemaType(
@@ -56,7 +88,7 @@ describe("BridgeTool", () => {
         },
         value: { tag: "u32", value: 1 },
       }),
-    ).toBe(false)
+    ).toBe(true)
     expect(
       typedSchemaValueConforms(expected, {
         graph: expected,
@@ -86,6 +118,7 @@ describe("BridgeTool", () => {
           input,
           undefined,
           false,
+          false,
         )
         return yield* invocation.result
       }),
@@ -100,8 +133,8 @@ describe("BridgeTool", () => {
     expect(observed?.[4]).toBe(false)
   })
 
-  it("returns independently consumable stdout, result, and explicit cancellation", async () => {
-    let cancelled = false
+  it("keeps an invocation alive until its owning scope closes", async () => {
+    let cancellations = 0
     const transport: ToolTransportShape = {
       start: () =>
         Effect.succeed({
@@ -110,7 +143,7 @@ describe("BridgeTool", () => {
           })(),
           result: Effect.succeed({}),
           cancel: Effect.sync(() => {
-            cancelled = true
+            cancellations += 1
           }),
         }),
     }
@@ -125,56 +158,96 @@ describe("BridgeTool", () => {
             },
             undefined,
             true,
+            false,
           )
           expect(invocation.stdout).toBeDefined()
           expect(yield* Stream.runCollect(invocation.stdout!)).toEqual([Uint8Array.of(1, 2)])
           expect(yield* invocation.result).toEqual({ result: undefined })
-          expect(cancelled).toBe(false)
-          yield* invocation.cancel
+          expect(cancellations).toBe(0)
         }),
       ).pipe(
         Effect.provideService(ToolTransport, transport),
         Effect.provideService(ToolClient, {} as never),
       ),
     )
-    expect(cancelled).toBe(true)
+    expect(cancellations).toBe(1)
   })
 
-  it("lets a started handle escape the admission scope without cancelling or dropping stdout", async () => {
-    let disposed = false
+  it("finalizes an invocation after its result fails", async () => {
+    let cancellations = 0
     const transport: ToolTransportShape = {
       start: () =>
         Effect.succeed({
-          stdout: {
-            [Symbol.asyncIterator]: () => ({
-              next: () => new Promise<IteratorResult<never>>(() => undefined),
-              return: async () => {
-                disposed = true
-                return { done: true, value: undefined }
-              },
-            }),
-          },
-          result: Effect.succeed({}),
-          cancel: Effect.void,
+          result: Effect.fail("failed"),
+          cancel: Effect.sync(() => {
+            cancellations += 1
+          }),
         }),
     }
-    const invocation = await Effect.runPromise(
+    const exit = await Effect.runPromiseExit(
       Effect.scoped(
-        createToolClientRuntime("grep").start(
-          [],
-          { graph: { defs: new Map(), root: t.record([]) }, value: { tag: "record", fields: [] } },
-          undefined,
-          true,
-        ),
+        Effect.gen(function* () {
+          const invocation = yield* createToolClientRuntime("grep").start(
+            [],
+            {
+              graph: { defs: new Map(), root: t.record([]) },
+              value: { tag: "record", fields: [] },
+            },
+            undefined,
+            false,
+            false,
+          )
+          return yield* invocation.result
+        }),
       ).pipe(
         Effect.provideService(ToolTransport, transport),
         Effect.provideService(ToolClient, {} as never),
       ),
     )
-    expect(disposed).toBe(false)
-    const fiber = Effect.runFork(Stream.runDrain(invocation.stdout!))
-    await Effect.runPromise(Effect.sleep("1 millis"))
-    await Effect.runPromise(Fiber.interrupt(fiber))
-    expect(disposed).toBe(true)
+    expect(Exit.isFailure(exit)).toBe(true)
+    expect(cancellations).toBe(1)
+  })
+
+  it("finalizes an acquired invocation when its pending result is interrupted", async () => {
+    let cancellations = 0
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const resultStarted = yield* Deferred.make<void>()
+        const finalized = yield* Deferred.make<void>()
+        const transport: ToolTransportShape = {
+          start: () =>
+            Effect.succeed({
+              result: Deferred.succeed(resultStarted, undefined).pipe(Effect.andThen(Effect.never)),
+              cancel: Effect.sync(() => {
+                cancellations += 1
+              }).pipe(Effect.andThen(Deferred.succeed(finalized, undefined)), Effect.asVoid),
+            }),
+        }
+        const program = Effect.scoped(
+          Effect.gen(function* () {
+            const invocation = yield* createToolClientRuntime("grep").start(
+              [],
+              {
+                graph: { defs: new Map(), root: t.record([]) },
+                value: { tag: "record", fields: [] },
+              },
+              undefined,
+              false,
+              false,
+            )
+            return yield* invocation.result
+          }),
+        ).pipe(
+          Effect.provideService(ToolTransport, transport),
+          Effect.provideService(ToolClient, {} as never),
+        )
+        const fiber = yield* Effect.forkChild(program)
+        yield* Deferred.await(resultStarted)
+        expect(cancellations).toBe(0)
+        yield* Fiber.interrupt(fiber)
+        yield* Deferred.await(finalized)
+        expect(cancellations).toBe(1)
+      }),
+    )
   })
 })

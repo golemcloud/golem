@@ -11,6 +11,7 @@
 package golem.reflection
 
 import golem.Uuid
+import golem.host.ToolWireInterop
 import golem.schema._
 import golem.schema.SchemaTypeBody.{ListType, RecordType, RefType, S32Type, StringType}
 import golem.schema.SchemaValue._
@@ -18,14 +19,34 @@ import golem.schema.wire.SchemaWire
 import golem.tool._
 import golem.tool.wire._
 import zio.ZIO
+import zio.blocks.async.*
 import zio.blocks.schema.json.Json
+import zio.blocks.streams.{JvmType, Stream}
 import zio.test._
 
+import java.util.concurrent.CancellationException
 import scala.collection.immutable.ListMap
 import scala.concurrent.{ExecutionContext, Future, Promise}
 
 object ToolReflectionSpec extends ZIOSpecDefault {
   private val stringGraph = SchemaGraph(ListMap.empty, SchemaType(StringType))
+
+  private def bytes(values: Byte*): ToolInputStream = new ToolInputStream {
+    override val stream: Stream[ByteStreamFailure, Byte] = Stream.fromArray(values.toArray)
+    override def cancel(): Future[Unit]                  = Future.successful(())
+  }
+
+  private def failedRead(failure: Throwable): ToolInputStream = new ToolInputStream {
+    override val stream: Stream[ByteStreamFailure, Byte] = Stream.unfoldAsync(()) { _ =>
+      Async.fromFuture[Option[(Byte, Unit)]](Future.failed(failure))
+    }(using JvmType.Infer.byte)
+    override def cancel(): Future[Unit] = Future.successful(())
+  }
+
+  private def throwingStream(failure: Throwable): ToolInputStream = new ToolInputStream {
+    override def stream: Stream[ByteStreamFailure, Byte] = throw failure
+    override def cancel(): Future[Unit]                  = Future.successful(())
+  }
 
   private def sample(valueGraph: SchemaGraph = stringGraph, errorName: Option[String] = None): ToolType = {
     val doc    = Doc("", "", Nil)
@@ -40,6 +61,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       Nil,
       None,
       None,
+      None,
       Some(WitResultSpec(schema.root, doc, Nil, "")),
       errorName.toList.map(name => WitErrorCase(name, doc, ErrorKind.RuntimeError, 1, Some(schema.root))),
       None
@@ -48,6 +70,7 @@ object ToolReflectionSpec extends ZIOSpecDefault {
       "sample",
       WitTool(
         "1",
+        requiresFilesystem = true,
         WitCommandTree(
           Vector(
             WitCommandNode("sample", Nil, doc, WitGlobals(Nil, Nil), List(1), None),
@@ -61,6 +84,17 @@ object ToolReflectionSpec extends ZIOSpecDefault {
   }
 
   def spec = suite("ToolReflectionSpec")(
+    test("filesystem requirement survives reflection and JS wire conversion") {
+      val wire         = sample().definition
+      val js           = ToolWireInterop.toolToJs(wire)
+      val roundtripped = ToolWireInterop.toolFromJs(js)
+      assertTrue(
+        wire.requiresFilesystem,
+        ToolReflection.fromWire(wire).requiresFilesystem,
+        js.requiresFilesystem,
+        roundtripped.requiresFilesystem
+      )
+    },
     test("alias resolves to the canonical command path") {
       val command = sample().command(List("r")).toOption.get
       assertTrue(command.path == List("run"), command.arguments.map(_.name) == List("message"))
@@ -292,28 +326,79 @@ object ToolReflectionSpec extends ZIOSpecDefault {
     },
     test("stream failures remain recoverable for reflected calls") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal: Future[Either[ToolError[NamedToolError], Option[SchemaValue]]] = Future.successful(Right(None))
-      val invocation                                                               = ReflectedToolInvocation(Some(broken), terminal, () => ())
+      val invocation                                                               = ReflectedToolInvocation(Some(broken), None, terminal, () => ())
       ZIO.fromFuture(_ => invocation.collect()(using ExecutionContext.global)).map { result =>
-        assertTrue(result.left.toOption.exists(_.isInstanceOf[ToolError.Rpc]))
+        assertTrue(
+          result.result == Right(None),
+          result.stdout == Left(ByteStreamFailure.Failed("broken")),
+          result.stderr == Right(None)
+        )
       }
     },
-    test("declared tool errors win after stdout failure while both channels settle") {
+    test("declared tool and stdout failures are both retained after all channels settle") {
       val broken = new ToolInputStream {
-        override def read(): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-          Future.successful(Left(ByteStreamFailure.Failed("broken")))
+        override val stream   = zio.blocks.streams.Stream.fail(ByteStreamFailure.Failed("broken"))
+        override def cancel() = Future.successful(())
       }
       val terminal   = Promise[Either[ToolError[NamedToolError], Option[SchemaValue]]]()
-      val invocation = ReflectedToolInvocation(Some(broken), terminal.future, () => ())
+      val invocation = ReflectedToolInvocation(Some(broken), None, terminal.future, () => ())
       val collected  = invocation.collect()(using ExecutionContext.global)
       val payload    = TypedSchemaValue(stringGraph, StringValue("details"))
       terminal.success(Left(ToolError.Tool(NamedToolError("declared", payload))))
       ZIO.fromFuture(_ => collected).map { result =>
-        assertTrue(result == Left(ToolError.Tool(NamedToolError("declared", payload))))
+        assertTrue(
+          result.result == Left(ToolError.Tool(NamedToolError("declared", payload))),
+          result.stdout == Left(ByteStreamFailure.Failed("broken")),
+          result.stderr == Right(None)
+        )
       }
+    },
+    test("failed reflected result and read futures remain isolated from sibling output") {
+      val resultFailure = new RuntimeException("reflected result failed")
+      val readFailure   = new RuntimeException("reflected stdout failed")
+      val invocation    = ReflectedToolInvocation(
+        Some(failedRead(readFailure)),
+        Some(bytes(5, 6)),
+        Future.failed(resultFailure),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(
+          result.result == Left(ToolError.Rpc(RpcError.Protocol("reflected result failed"))),
+          result.stdout == Left(ByteStreamFailure.Failed("reflected stdout failed")),
+          result.stderr.exists(_.exists(_.sameElements(Array[Byte](5, 6))))
+        )
+      }
+    },
+    test("synchronous reflected stream failures remain isolated from sibling output") {
+      val failure    = new RuntimeException("reflected stderr failed")
+      val invocation = ReflectedToolInvocation(
+        Some(bytes(1, 2)),
+        Some(throwingStream(failure)),
+        Future.successful(Right(None)),
+        () => ()
+      )
+      ZIO.fromFuture(ec => invocation.collect()(ec)).map { result =>
+        assertTrue(
+          result.result == Right(None),
+          result.stdout.exists(_.exists(_.sameElements(Array[Byte](1, 2)))),
+          result.stderr == Left(ByteStreamFailure.Failed("reflected stderr failed"))
+        )
+      }
+    },
+    test("reflected collection does not convert cancellation into a result") {
+      val cancellation = new CancellationException("cancelled")
+      val invocation   = ReflectedToolInvocation(None, None, Future.failed(cancellation), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec).failed).map(error => assertTrue(error eq cancellation))
+    },
+    test("reflected collection does not convert a boxed fatal failure") {
+      val fatal      = new LinkageError("fatal reflected result")
+      val invocation = ReflectedToolInvocation(None, None, Future.failed(fatal), () => ())
+      ZIO.fromFuture(ec => invocation.collect()(ec).failed).map(error => assertTrue(error.getCause eq fatal))
     }
   )
 }

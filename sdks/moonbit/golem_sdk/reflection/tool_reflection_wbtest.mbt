@@ -46,6 +46,7 @@ fn sample_tool() -> ToolType raise {
     constraints: [],
     stdin: None,
     stdout: None,
+    stderr: None,
     result: Some({
       type_: graph.root,
       doc,
@@ -57,6 +58,7 @@ fn sample_tool() -> ToolType raise {
   }
   let definition : @toolCommon.Tool = {
     version: "1",
+    requires_filesystem: false,
     commands: {
       nodes: [
         {
@@ -94,8 +96,54 @@ test "reflected tool resolves aliases and rejects input before RPC" {
   assert_eq(command.arguments[0].name, "message")
   let invalid = @model.SchemaValue::Record([@model.SchemaValue::S32(1)])
   match command.start_value(invalid) {
-    Err(@tool.ToolError::InvalidInput(_)) => ()
+    Err(@tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(_))) =>
+      ()
     _ => fail("expected local tool input rejection")
+  }
+}
+
+///|
+test "reflected trigger rejects each required output before RPC" {
+  let base = sample_tool()
+  let nodes = base.definition.commands.nodes
+  let command = nodes[1]
+  let body = command.body.unwrap()
+  let required : @toolCommon.StreamSpec = {
+    doc: { summary: "", description: "", examples: [], },
+    mime: [],
+    required: true,
+  }
+  let input = @model.SchemaValue::Record([
+    @model.SchemaValue::String("hello"),
+    @model.SchemaValue::Option(None),
+    @model.SchemaValue::Option(None),
+  ])
+  for
+    output_case in [
+      (Some(required), None, "command requires caller-readable stdout"),
+      (None, Some(required), "command requires caller-readable stderr"),
+    ] {
+    let (stdout, stderr, expected) = output_case
+    let tool : ToolType = {
+      ..base,
+      definition: {
+        ..base.definition,
+        commands: {
+          nodes: [
+            nodes[0],
+            { ..command, body: Some({ ..body, stdout, stderr, }), },
+          ],
+        },
+      },
+    }
+    match tool.command(["run"]).trigger_value(input) {
+      Err(
+        @tool.ToolError::RemoteTool(
+          @tool.RemoteToolError::InvalidInput(message)
+        )
+      ) => assert_eq(message, expected)
+      _ => fail("expected required output to be rejected before RPC")
+    }
   }
 }
 
@@ -160,8 +208,9 @@ test "namespace-only commands expose metadata and reject invocation locally" {
   assert_true(metadata.body is None)
   assert_eq(metadata.subcommands, ["run"])
   match metadata.start_value(@model.SchemaValue::Record([])) {
-    Err(@tool.ToolError::InvalidInput(message)) =>
-      assert_true(message.contains("namespace"))
+    Err(
+      @tool.ToolError::RemoteTool(@tool.RemoteToolError::InvalidInput(message))
+    ) => assert_true(message.contains("namespace"))
     _ => fail("expected namespace invocation to fail locally")
   }
 }
@@ -285,6 +334,44 @@ test "reflected optional tool inputs share the canonical wire schema" {
 }
 
 ///|
+test "tool snapshot accessors cannot mutate later command lookup" {
+  let tool = sample_tool()
+  let command = tool.command(["r"])
+  let path = command.path()
+  path[0] = "mutated"
+  let arguments = command.arguments()
+  let aliases = arguments[0].aliases()
+  aliases.push("mutated")
+  arguments[0] = arguments[1]
+  let graph = command.input_schema().graph()
+  guard graph.root.body is Record(fields) else {
+    fail("expected reflected record input")
+  }
+  fields[0] = { ..fields[0], name: "mutated", }
+  fields[1].metadata.aliases.push("mutated")
+
+  let fresh = tool.command(["r"])
+  assert_eq(fresh.path(), ["run"])
+  assert_eq(fresh.arguments()[0].name(), "message")
+  assert_eq(fresh.arguments()[0].aliases(), [])
+  let fresh_graph = fresh.input_schema().graph()
+  guard fresh_graph.root.body is Record(fresh_fields) else {
+    fail("expected reflected record input")
+  }
+  assert_eq(fresh_fields[0].name, "message")
+  assert_eq(fresh_fields[1].metadata.aliases, [])
+  fresh
+  .input_schema()
+  .validate_value(
+    @model.SchemaValue::Record([
+      @model.SchemaValue::String("message"),
+      @model.SchemaValue::Option(None),
+      @model.SchemaValue::Option(None),
+    ]),
+  )
+}
+
+///|
 extern "wasm" fn set_reflection_tool_host_mode(mode : Int) = "golem:test" "set-tool-host-mode"
 
 ///|
@@ -336,7 +423,7 @@ test "repeated reflected convenience calls release result futures on every exit"
   run_reflection_tool_async(async fn() {
     for _ in 0..<50 {
       match command.invoke_value(input) {
-        Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+        Err(@tool.ToolError::Rpc(@tool.RpcError::Protocol(_))) => ()
         _ => fail("expected missing remote result")
       }
     }
@@ -347,8 +434,8 @@ test "repeated reflected convenience calls release result futures on every exit"
 ///|
 test "reflected tool reports malformed remote result" {
   let command = sample_tool().command(["run"])
-  match command.decode_result({ result: None, stdout: None, }) {
-    Err(@tool.ToolError::MalformedRemoteOutput(_)) => ()
+  match command.decode_result({ result: None, stdout: None, stderr: None, }) {
+    Err(@tool.ToolError::Rpc(@tool.RpcError::Protocol(_))) => ()
     _ => fail("expected missing tool result to be malformed")
   }
 }

@@ -29,11 +29,17 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "file_creation_mask"
+path = "tests/file_creation_mask.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
+golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
-golem-schema = { workspace = true, features = ["host"] }
+golem-schema = { workspace = true, features = ["host", "protobuf"] }
 
 golem-service-base = { workspace = true, features = ["worker-executor"] }
 
@@ -42,21 +48,19 @@ applying = { workspace = true }
 arc-swap = { workspace = true }
 async-broadcast = { workspace = true }
 async-lock = { workspace = true }
-async-recursion = { workspace = true }
-async-scoped = { workspace = true, features = ["use-tokio"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+bytesize = { workspace = true }
 cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 desert_rust = { workspace = true }
-drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
@@ -89,9 +93,11 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 ringbuf = { workspace = true }
+rustic_core = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
@@ -122,10 +128,12 @@ zstd = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
-linux-raw-sys = { workspace = true }
 rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-raw-sys = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
@@ -144,6 +152,7 @@ name = "oplog_read"
 harness = false
 
 [dev-dependencies]
+golem-human-approval = { workspace = true }
 golem-test-framework = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 
@@ -160,7 +169,9 @@ proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
 tracing-subscriber = { workspace = true }
 system-interface = { workspace = true }

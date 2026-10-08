@@ -468,6 +468,35 @@ pub mod workers {
             "Oplog entries processed while catching up the physical invocation-result index"
         )
         .unwrap();
+        static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
+            "agent_identity_resolution_total",
+            "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
+            &["event"]
+        )
+        .unwrap();
+        static ref STALE_RUNNING_WORKER_TOTAL: CounterVec = register_counter_vec!(
+            "stale_running_worker_total",
+            "Stale recovery-index members removed by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref STATUS_CACHE_PUBLICATION_TOTAL: CounterVec = register_counter_vec!(
+            "status_cache_publication_total",
+            "Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events",
+            &["cache", "event"]
+        )
+        .unwrap();
+        static ref DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec = register_counter_vec!(
+            "derived_cache_publication_failed_total",
+            "Derived-cache publications that failed while atomically applying expiry",
+            &["cache"]
+        )
+        .unwrap();
+        static ref FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter = register_counter!(
+            "foreign_stream_fingerprint_mismatch_total",
+            "Foreign durable-stream accesses rejected because the current fingerprint differs"
+        )
+        .unwrap();
         static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
             "golem_agent_filesystem_lifecycle_seconds",
             "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
@@ -547,6 +576,34 @@ pub mod workers {
     pub fn record_invocation_result_index_catch_up(entries: usize) {
         INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.inc();
         INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.inc_by(entries as f64);
+    }
+
+    pub fn record_agent_identity_resolution(outcome: &'static str) {
+        AGENT_IDENTITY_RESOLUTION_TOTAL
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
+    pub fn record_stale_running_worker(reason: &'static str) {
+        STALE_RUNNING_WORKER_TOTAL
+            .with_label_values(&[reason])
+            .inc();
+    }
+
+    pub fn record_status_cache_publication(cache: &'static str, outcome: &'static str) {
+        STATUS_CACHE_PUBLICATION_TOTAL
+            .with_label_values(&[cache, outcome])
+            .inc();
+    }
+
+    pub fn record_derived_cache_publication_failed(cache: &'static str) {
+        DERIVED_CACHE_PUBLICATION_FAILED_TOTAL
+            .with_label_values(&[cache])
+            .inc();
+    }
+
+    pub fn record_foreign_stream_fingerprint_mismatch() {
+        FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL.inc();
     }
 
     pub fn record_agent_filesystem_lifecycle(
@@ -951,6 +1008,7 @@ pub mod scheduler {
             ScheduledAction::CompletePromise { .. } => "complete_promise",
             ScheduledAction::ArchiveOplog { .. } => "archive_oplog",
             ScheduledAction::Invoke { .. } | ScheduledAction::InvokeEphemeral { .. } => "invoke",
+            ScheduledAction::ExpireDurableStreamSession { .. } => "expire_stream_session",
             ScheduledAction::Resume { .. } => "resume",
         }
     }
@@ -1237,6 +1295,22 @@ pub mod oplog {
             &["op"]
         )
         .unwrap();
+        static ref OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_archive_maintenance_failure_total",
+            "Number of failed background oplog archive maintenance operations",
+            &["operation"]
+        )
+        .unwrap();
+        static ref OPLOG_EPOCH_FENCE_TOTAL: CounterVec = register_counter_vec!(
+            "oplog_epoch_fence_total",
+            "Oplog operations checked against the shard epoch: `op` is `record` for an open \
+             recording its epoch, `append` for a write and `drop_prefix` for a trim after \
+             archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and \
+             `archive_delete_empty` for the same on a compressed archive level or a blob level's \
+             manifest; `outcome` is `accepted` or `refused`",
+            &["op", "outcome"]
+        )
+        .unwrap();
     }
 
     pub fn record_oplog_call(api_name: &'static str) {
@@ -1252,6 +1326,18 @@ pub mod oplog {
     pub fn record_oplog_storage_retry(op_name: &str) {
         OPLOG_STORAGE_RETRY_TOTAL
             .with_label_values(&[op_name])
+            .inc();
+    }
+
+    pub fn record_archive_maintenance_failure(operation: &'static str) {
+        OPLOG_ARCHIVE_MAINTENANCE_FAILURE_TOTAL
+            .with_label_values(&[operation])
+            .inc();
+    }
+
+    pub fn record_oplog_epoch_fence(op: &'static str, refused: bool) {
+        OPLOG_EPOCH_FENCE_TOTAL
+            .with_label_values(&[op, if refused { "refused" } else { "accepted" }])
             .inc();
     }
 
@@ -1633,7 +1719,7 @@ pub mod durable_stream {
             record_backpressure();
             record_attempt("resume", "accepted", Some(2));
             record_journal_lag(1);
-            record_attachment_operation("renew", "committed");
+            record_attachment_operation("activate", "committed");
             record_lease_remaining(20_000);
             record_reconciliation("active");
             record_cascade("complete");
@@ -1716,5 +1802,130 @@ pub mod storage {
         STORAGE_FILESYSTEM_POOL_USED_BYTES
             .with_label_values(&[executor_id()])
             .sub(bytes as f64);
+    }
+}
+
+pub mod filesystem_snapshots {
+    use lazy_static::lazy_static;
+    use prometheus::*;
+    use std::time::Duration;
+
+    lazy_static! {
+        static ref CAPTURE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_capture_seconds",
+            "Time that a capture of an agent filesystem, or a check of its initial files on an executor \
+             without filesystem snapshots, stops the file calls, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOAD_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_upload_seconds",
+            "Time of an upload of a filesystem snapshot, with its retries, by kind and outcome",
+            &["kind", "outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref UPLOADED_BYTES: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_uploaded_bytes_total",
+            "Bytes of the trees of the uploaded filesystem snapshots, by kind",
+            &["kind"]
+        )
+        .unwrap();
+        static ref UPLOADS_IN_PROGRESS: Gauge = register_gauge!(
+            "filesystem_snapshot_uploads_in_progress",
+            "Number of store attempts of uploads of filesystem snapshots that hold a slot now"
+        )
+        .unwrap();
+        static ref RESTORE_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_restore_seconds",
+            "Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref DROPPED_CONFIRMATIONS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_dropped_confirmations_total",
+            "Uploaded filesystem snapshots that no confirmation record names, by reason",
+            &["reason"]
+        )
+        .unwrap();
+        static ref LEAKED_CLEANUPS: CounterVec = register_counter_vec!(
+            "filesystem_snapshot_leaked_cleanups_total",
+            "Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation",
+            &["operation"]
+        )
+        .unwrap();
+        static ref CLEANUPS_PENDING: Gauge = register_gauge!(
+            "filesystem_snapshot_cleanups_pending",
+            "Number of agents with pending or running clean-up work of filesystem snapshots"
+        )
+        .unwrap();
+        static ref COPY_SECONDS: HistogramVec = register_histogram_vec!(
+            "filesystem_snapshot_copy_seconds",
+            "Time of a copy of the filesystem snapshots of a fork source, by outcome",
+            &["outcome"],
+            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
+        )
+        .unwrap();
+        static ref FAILED_SPACE_RECLAIMS: Counter = register_counter!(
+            "filesystem_snapshot_failed_space_reclaims_total",
+            "Deletes of filesystem snapshots whose release of unused storage failed; the next delete tries again"
+        )
+        .unwrap();
+    }
+
+    pub fn set_cleanups_pending(agents: usize) {
+        CLEANUPS_PENDING.set(agents as f64);
+    }
+
+    pub fn record_copy(outcome: &'static str, elapsed: Duration) {
+        COPY_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_failed_space_reclaim() {
+        FAILED_SPACE_RECLAIMS.inc();
+    }
+
+    pub fn record_capture(outcome: &'static str, elapsed: Duration) {
+        CAPTURE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_upload(kind: &'static str, outcome: &'static str, elapsed: Duration) {
+        UPLOAD_SECONDS
+            .with_label_values(&[kind, outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_uploaded_bytes(kind: &'static str, bytes: u64) {
+        UPLOADED_BYTES
+            .with_label_values(&[kind])
+            .inc_by(bytes as f64);
+    }
+
+    pub fn inc_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.inc();
+    }
+
+    pub fn dec_uploads_in_progress() {
+        UPLOADS_IN_PROGRESS.dec();
+    }
+
+    pub fn record_restore(outcome: &'static str, elapsed: Duration) {
+        RESTORE_SECONDS
+            .with_label_values(&[outcome])
+            .observe(elapsed.as_secs_f64());
+    }
+
+    pub fn record_dropped_confirmation(reason: &'static str) {
+        DROPPED_CONFIRMATIONS.with_label_values(&[reason]).inc();
+    }
+
+    pub fn record_leaked_cleanup(operation: &'static str) {
+        LEAKED_CLEANUPS.with_label_values(&[operation]).inc();
     }
 }

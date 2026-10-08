@@ -143,7 +143,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
 
     let mut streams = linker.instance("golem:tool/streams@0.1.0")?;
     streams.resource(
-        "tool-stdout-writer",
+        "tool-output-writer",
         ResourceType::host::<StdoutWriter>(),
         |mut store, rep| {
             let output = store
@@ -160,7 +160,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         },
     )?;
     streams.func_wrap_concurrent(
-        "[method]tool-stdout-writer.write",
+        "[method]tool-output-writer.write",
         |accessor, (writer, bytes): (Resource<StdoutWriter>, Vec<u8>)| {
             Box::pin(async move {
                 let result = accessor.with(|mut store| {
@@ -176,7 +176,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         },
     )?;
     streams.func_wrap_concurrent(
-        "[method]tool-stdout-writer.finish",
+        "[method]tool-output-writer.finish",
         |accessor, (writer,): (Resource<StdoutWriter>,)| {
             Box::pin(async move {
                 let result = accessor.with(|mut store| {
@@ -192,7 +192,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         },
     )?;
     streams.func_wrap_concurrent(
-        "[method]tool-stdout-writer.fail",
+        "[method]tool-output-writer.fail",
         |accessor, (writer, failure): (Resource<StdoutWriter>, ByteStreamFailure)| {
             Box::pin(async move {
                 let result = accessor.with(|mut store| {
@@ -213,7 +213,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         "tool-stdin-writer",
         "tool-stdin",
         "tool-stdin-closed",
-        "tool-stdout",
+        "tool-output",
         "tool-rpc",
         "future-invoke-result",
     ] {
@@ -229,7 +229,7 @@ async fn instantiate(path: &Path) -> Result<(Store<Host>, wasmtime::component::I
         bail!("fixture does not import golem:tool/host");
     };
     for (name, item) in tool_host.exports(&engine) {
-        if name.starts_with("[method]tool-stdout-writer.") {
+        if name.starts_with("[method]tool-output-writer.") {
             continue;
         }
         match item.ty {
@@ -334,10 +334,18 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         .await?
         .0
         .map_err(|error| anyhow::anyhow!("discover-tools rejected: {error:?}"))?;
-    if tools.len() != 1 {
-        bail!("expected one MoonBit tool, got {}", tools.len());
-    }
-    let native_tool = Tool::try_from(&tools[0])?;
+    let native_tool = tools
+        .iter()
+        .map(Tool::try_from)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|tool| {
+            tool.commands
+                .nodes
+                .first()
+                .is_some_and(|command| command.name == "moonbit-streaming")
+        })
+        .context("discover-tools omitted moonbit-streaming")?;
 
     let get = exported(&mut store, &instance, "get-tool")?
         .typed::<(String,), (Result<tool_wire::Tool, tool_wire::ToolError>,)>(&store)?;
@@ -357,6 +365,7 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         Vec<String>,
         schema_wire::TypedSchemaValue,
         Option<wasmtime::component::StreamReader<Result<Vec<u8>, ByteStreamFailure>>>,
+        Option<Resource<StdoutWriter>>,
         Option<Resource<StdoutWriter>>,
         agent_wire::Principal,
     ), (Invocation,)>(&store)?;
@@ -391,6 +400,7 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
                     input(&native_tool, command, fields)?,
                     stdin,
                     writer,
+                    None,
                     principal(),
                 ),
             )
@@ -458,6 +468,7 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
                     input(&native_tool, "stream", fields)?,
                     attachment,
                     writer,
+                    None,
                     principal(),
                 ),
             )
@@ -486,10 +497,11 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         if let Some(reader) = reader {
             let output = reader.lock().unwrap();
             assert!(output.bytes.is_empty());
-            assert!(matches!(
-                output.terminal,
-                Some(ByteStreamCloseCause::Failed(_))
-            ));
+            assert!(
+                matches!(output.terminal, Some(ByteStreamCloseCause::Failed(_))),
+                "{expected} rejection selected {:?}",
+                output.terminal
+            );
             assert_eq!(output.drops, 1);
         }
         assert!(store.data().writers.is_empty());

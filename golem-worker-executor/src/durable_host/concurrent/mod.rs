@@ -39,7 +39,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry, OplogIndex,
     OplogPayload, ScopeScanState, host_functions::HostFunctionName,
 };
-use golem_common::model::regions::OplogRegion;
 use golem_common::model::{RetryProperties, Timestamp};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -52,8 +51,8 @@ use crate::durable_host::durability::{
     ClassifiedHostError, CustomBeginLifecycle, CustomInvocationContext, CustomInvocationScope,
     DurabilityHost, DurableCallTrapContext, DurableCallTrapError, DurableExecutionState,
     HostFailureKind, InFunctionRetryController, InFunctionRetryHost, InternalRetryResult,
-    TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
-    try_trigger_host_trap_retry,
+    SemanticTrapRetryOverride, TaskRetryContext, TerminalCallError, mark_durable_call_trap_context,
+    semantic_trap_retry_override_error, try_trigger_host_trap_retry,
 };
 use crate::durable_host::durable_session::DroppedDurableInput;
 use crate::durable_host::replay_state::{
@@ -65,7 +64,7 @@ use crate::durable_host::{
 };
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, PendingUpload};
 use crate::services::{HasShutdownToken, HasWorker};
-use crate::workerctx::{InvocationContextManagement, WorkerCtx};
+use crate::workerctx::WorkerCtx;
 use std::fmt::Display;
 
 mod access;
@@ -91,6 +90,8 @@ use call::{
 };
 pub use delivery::*;
 pub(crate) use demand_stream::*;
+#[cfg(test)]
+pub(crate) use drop_events::tests::cleanup_recorder;
 pub use drop_events::*;
 pub use replay::*;
 

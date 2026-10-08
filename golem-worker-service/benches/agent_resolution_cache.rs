@@ -117,6 +117,7 @@ fn representative_agent_type() -> AgentTypeSchema {
         .collect();
 
     AgentTypeSchema {
+        kind: golem_common::schema::agent::AgentTypeKind::Regular,
         type_name: AgentTypeName("bench-agent".to_string()),
         description: "benchmark agent".to_string(),
         source_language: "rust".to_string(),
@@ -166,6 +167,31 @@ struct BenchRegistryService {
 
 #[async_trait::async_trait]
 impl RegistryService for BenchRegistryService {
+    async fn resolve_mcp_import(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+        _: bool,
+    ) -> Result<golem_service_base::model::mcp_import::McpImportObservation, RegistryServiceError>
+    {
+        panic!("unexpected MCP discovery")
+    }
+    async fn get_mcp_runtime_credential(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+    ) -> Result<golem_service_base::clients::registry::McpRuntimeCredential, RegistryServiceError>
+    {
+        panic!("unexpected MCP credential request")
+    }
+    async fn report_mcp_resource_unauthorized(
+        &self,
+        _: &golem_common::model::mcp_import::McpImportSource,
+        _: &AuthCtx,
+        _: Option<uuid::Uuid>,
+    ) -> Result<(), RegistryServiceError> {
+        panic!("unexpected MCP feedback")
+    }
     async fn authenticate_token(
         &self,
         _: &golem_common::model::auth::TokenSecret,

@@ -72,6 +72,7 @@ impl Fixture {
                 self.initial_metadata.clone(),
                 last_known_status(),
                 execution_status(),
+                None,
             )
             .await
     }
@@ -140,12 +141,16 @@ async fn build_service(
         .await,
     );
     let compressed: Arc<dyn OplogArchiveService> = Arc::new(CompressedOplogArchiveService::new(
-        indexed_storage,
+        indexed_storage.clone(),
         1,
         RetryConfig::default(),
     ));
-    let blob: Arc<dyn OplogArchiveService> =
-        Arc::new(BlobOplogArchiveService::new(blob_storage, 2));
+    let blob: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+        blob_storage,
+        indexed_storage,
+        2,
+        RetryConfig::default(),
+    ));
 
     Arc::new(MultiLayerOplogService::new(
         primary,
@@ -176,13 +181,14 @@ async fn open_fixture(initial_entries: u64) -> Fixture {
             initial_metadata.clone(),
             last_known_status(),
             execution_status(),
+            None,
         )
         .await;
 
     for value in 1..initial_entries {
-        oplog.add(entry(value)).await;
+        oplog.add(entry(value)).await.unwrap();
     }
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
 
     Fixture {
         oplog,
@@ -200,7 +206,7 @@ async fn primary_fixture() -> Fixture {
 async fn buffered_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT - 8).await;
     for value in ENTRY_COUNT - 8..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
     fixture
 }
@@ -209,7 +215,7 @@ async fn compressed_fixture() -> Fixture {
     let fixture = open_fixture(ENTRY_COUNT).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     fixture
 }
@@ -218,7 +224,7 @@ async fn blob_fixture() -> Fixture {
     let fixture = compressed_fixture().await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(false)
+        Ok(Some(false))
     );
     fixture
 }
@@ -227,12 +233,12 @@ async fn cross_tier_fixture() -> Fixture {
     let fixture = open_fixture(ARCHIVE_BOUNDARY).await;
     assert_eq!(
         MultiLayerOplog::try_archive_blocking(&fixture.oplog).await,
-        Some(true)
+        Ok(Some(true))
     );
     for value in ARCHIVE_BOUNDARY..ENTRY_COUNT {
-        fixture.oplog.add(entry(value)).await;
+        fixture.oplog.add(entry(value)).await.unwrap();
     }
-    fixture.oplog.commit(CommitLevel::Always).await;
+    fixture.oplog.commit(CommitLevel::Always).await.unwrap();
     fixture
 }
 

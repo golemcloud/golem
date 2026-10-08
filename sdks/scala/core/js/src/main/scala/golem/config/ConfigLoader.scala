@@ -20,16 +20,47 @@ import golem.host.SecretApi
 import golem.runtime.autowire.SchemaPayload
 import golem.runtime.rpc.host.AgentHostApi
 import golem.schema.{FromSchema, IntoSchema, SchemaGraph, SchemaType, SchemaTypeBody, SchemaValue, SecretSpec}
-import golem.schema.wire.SchemaWire
+import golem.schema.wire.{ConcreteCodec, SchemaWire, WitSchemaGraph, WitSchemaValueNode, WireValuesReader}
 import golem.host.SchemaWireInterop
 
 private[golem] object ConfigLoader extends ConfigFieldLoader {
+
+  def loadLocalWire[A](path: List[String], graph: WitSchemaGraph, codec: ConcreteCodec[A]): A =
+    codec.decode(
+      SchemaWireInterop.valueTreeFromJs(AgentHostApi.getConfigValue(path, SchemaWireInterop.graphToJs(graph)))
+    )
+
+  def loadSecretWire[A](
+    path: List[String],
+    graph: WitSchemaGraph,
+    handleGraph: WitSchemaGraph,
+    codec: ConcreteCodec[A]
+  ): Secret[A] =
+    new Secret[A](
+      path,
+      () => {
+        val tree =
+          SchemaWireInterop.valueTreeFromJs(AgentHostApi.getConfigValue(path, SchemaWireInterop.graphToJs(handleGraph)))
+        val reader = new WireValuesReader(tree)
+        val handle = try {
+          val handle = reader.at(tree.root) { case WitSchemaValueNode.SecretValue(handle) => handle }
+          reader.finish()
+          handle
+        } catch {
+          case error: Throwable => reader.abort(); throw error
+        }
+        val revealed = SecretApi.reveal(handle, SchemaWireInterop.graphToJs(graph))
+        if (handle.take().isEmpty) throw new RuntimeException("Secret handle was already transferred")
+        codec.decode(SchemaWireInterop.valueTreeFromJs(revealed))
+      },
+      () => loadSecretHandleWire(path, handleGraph)
+    )
 
   override def loadLocal[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): A =
     loadValue[A](path)
 
   override def loadSecret[A](path: List[String])(implicit into: IntoSchema[A], from: FromSchema[A]): Secret[A] =
-    new Secret[A](path, () => loadSecretValue[A](path))
+    new Secret[A](path, () => loadSecretValue[A](path), () => loadSecretHandle[A](path))
 
   def loadConfig[T](builder: ConfigBuilder[T]): Config[T] =
     Config.eager(builder.build(Nil, this))
@@ -62,6 +93,20 @@ private[golem] object ConfigLoader extends ConfigFieldLoader {
       case SchemaValue.SecretValue(h) => h
       case other                      =>
         throw new RuntimeException(s"Expected secret handle at path ${path.mkString(".")}, got $other")
+    }
+  }
+
+  private def loadSecretHandleWire(path: List[String], handleGraph: WitSchemaGraph): golem.schema.GuestSecretHandle = {
+    val tree = SchemaWireInterop.valueTreeFromJs(
+      AgentHostApi.getConfigValue(path, SchemaWireInterop.graphToJs(handleGraph))
+    )
+    val reader = new WireValuesReader(tree)
+    try {
+      val handle = reader.at(tree.root) { case WitSchemaValueNode.SecretValue(handle) => handle }
+      reader.finish()
+      handle
+    } catch {
+      case error: Throwable => reader.abort(); throw error
     }
   }
 

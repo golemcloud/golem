@@ -1,0 +1,595 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "Golem Git built-in tool source",
+  "documentNamespace": "https://golem.cloud/spdx/tools/git/9b01a8490da9a95175e595653d69a159de54e09d2814e2ea5c867c8dc12983b0",
+  "creationInfo": {
+    "created": "2026-10-02T00:00:00Z",
+    "creators": [
+      "Tool: golem-builtin-git-compliance"
+    ]
+  },
+  "packages": [
+    {
+      "name": "@golemcloud/golem-ts-sdk",
+      "SPDXID": "SPDXRef-Package-1",
+      "versionInfo": "0.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "SEE LICENSE IN LICENSE",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "abort-controller",
+      "SPDXID": "SPDXRef-Package-2",
+      "versionInfo": "3.0.0",
+      "downloadLocation": "https://registry.npmjs.org/abort-controller/-/abort-controller-3.0.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "async-lock",
+      "SPDXID": "SPDXRef-Package-3",
+      "versionInfo": "1.4.1",
+      "downloadLocation": "https://registry.npmjs.org/async-lock/-/async-lock-1.4.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "available-typed-arrays",
+      "SPDXID": "SPDXRef-Package-4",
+      "versionInfo": "1.0.7",
+      "downloadLocation": "https://registry.npmjs.org/available-typed-arrays/-/available-typed-arrays-1.0.7.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "base64-js",
+      "SPDXID": "SPDXRef-Package-5",
+      "versionInfo": "1.5.1",
+      "downloadLocation": "https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "buffer",
+      "SPDXID": "SPDXRef-Package-6",
+      "versionInfo": "6.0.3",
+      "downloadLocation": "https://registry.npmjs.org/buffer/-/buffer-6.0.3.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "call-bind-apply-helpers",
+      "SPDXID": "SPDXRef-Package-7",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://registry.npmjs.org/call-bind-apply-helpers/-/call-bind-apply-helpers-1.0.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "call-bind",
+      "SPDXID": "SPDXRef-Package-8",
+      "versionInfo": "1.0.9",
+      "downloadLocation": "https://registry.npmjs.org/call-bind/-/call-bind-1.0.9.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "call-bound",
+      "SPDXID": "SPDXRef-Package-9",
+      "versionInfo": "1.0.4",
+      "downloadLocation": "https://registry.npmjs.org/call-bound/-/call-bound-1.0.4.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "clean-git-ref",
+      "SPDXID": "SPDXRef-Package-10",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "https://registry.npmjs.org/clean-git-ref/-/clean-git-ref-2.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "crc-32",
+      "SPDXID": "SPDXRef-Package-11",
+      "versionInfo": "1.2.2",
+      "downloadLocation": "https://registry.npmjs.org/crc-32/-/crc-32-1.2.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "decompress-response",
+      "SPDXID": "SPDXRef-Package-12",
+      "versionInfo": "6.0.0",
+      "downloadLocation": "https://registry.npmjs.org/decompress-response/-/decompress-response-6.0.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "define-data-property",
+      "SPDXID": "SPDXRef-Package-13",
+      "versionInfo": "1.1.4",
+      "downloadLocation": "https://registry.npmjs.org/define-data-property/-/define-data-property-1.1.4.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "diff",
+      "SPDXID": "SPDXRef-Package-14",
+      "versionInfo": "8.0.2",
+      "downloadLocation": "https://registry.npmjs.org/diff/-/diff-8.0.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "diff3",
+      "SPDXID": "SPDXRef-Package-15",
+      "versionInfo": "0.0.3",
+      "downloadLocation": "https://registry.npmjs.org/diff3/-/diff3-0.0.3.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "dunder-proto",
+      "SPDXID": "SPDXRef-Package-16",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "https://registry.npmjs.org/dunder-proto/-/dunder-proto-1.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "es-define-property",
+      "SPDXID": "SPDXRef-Package-17",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "https://registry.npmjs.org/es-define-property/-/es-define-property-1.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "es-errors",
+      "SPDXID": "SPDXRef-Package-18",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "https://registry.npmjs.org/es-errors/-/es-errors-1.3.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "es-object-atoms",
+      "SPDXID": "SPDXRef-Package-19",
+      "versionInfo": "1.1.2",
+      "downloadLocation": "https://registry.npmjs.org/es-object-atoms/-/es-object-atoms-1.1.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "event-target-shim",
+      "SPDXID": "SPDXRef-Package-20",
+      "versionInfo": "5.0.1",
+      "downloadLocation": "https://registry.npmjs.org/event-target-shim/-/event-target-shim-5.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "events",
+      "SPDXID": "SPDXRef-Package-21",
+      "versionInfo": "3.3.0",
+      "downloadLocation": "https://registry.npmjs.org/events/-/events-3.3.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "for-each",
+      "SPDXID": "SPDXRef-Package-22",
+      "versionInfo": "0.3.5",
+      "downloadLocation": "https://registry.npmjs.org/for-each/-/for-each-0.3.5.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "function-bind",
+      "SPDXID": "SPDXRef-Package-23",
+      "versionInfo": "1.1.2",
+      "downloadLocation": "https://registry.npmjs.org/function-bind/-/function-bind-1.1.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "get-intrinsic",
+      "SPDXID": "SPDXRef-Package-24",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "https://registry.npmjs.org/get-intrinsic/-/get-intrinsic-1.3.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "get-proto",
+      "SPDXID": "SPDXRef-Package-25",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "https://registry.npmjs.org/get-proto/-/get-proto-1.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "gopd",
+      "SPDXID": "SPDXRef-Package-26",
+      "versionInfo": "1.2.0",
+      "downloadLocation": "https://registry.npmjs.org/gopd/-/gopd-1.2.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "has-property-descriptors",
+      "SPDXID": "SPDXRef-Package-27",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://registry.npmjs.org/has-property-descriptors/-/has-property-descriptors-1.0.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "has-symbols",
+      "SPDXID": "SPDXRef-Package-28",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://registry.npmjs.org/has-symbols/-/has-symbols-1.1.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "has-tostringtag",
+      "SPDXID": "SPDXRef-Package-29",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://registry.npmjs.org/has-tostringtag/-/has-tostringtag-1.0.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "hasown",
+      "SPDXID": "SPDXRef-Package-30",
+      "versionInfo": "2.0.4",
+      "downloadLocation": "https://registry.npmjs.org/hasown/-/hasown-2.0.4.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ieee754",
+      "SPDXID": "SPDXRef-Package-31",
+      "versionInfo": "1.2.1",
+      "downloadLocation": "https://registry.npmjs.org/ieee754/-/ieee754-1.2.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "ignore",
+      "SPDXID": "SPDXRef-Package-32",
+      "versionInfo": "5.3.2",
+      "downloadLocation": "https://registry.npmjs.org/ignore/-/ignore-5.3.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "inherits",
+      "SPDXID": "SPDXRef-Package-33",
+      "versionInfo": "2.0.4",
+      "downloadLocation": "https://registry.npmjs.org/inherits/-/inherits-2.0.4.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "is-callable",
+      "SPDXID": "SPDXRef-Package-34",
+      "versionInfo": "1.2.7",
+      "downloadLocation": "https://registry.npmjs.org/is-callable/-/is-callable-1.2.7.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "is-typed-array",
+      "SPDXID": "SPDXRef-Package-35",
+      "versionInfo": "1.1.15",
+      "downloadLocation": "https://registry.npmjs.org/is-typed-array/-/is-typed-array-1.1.15.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "isarray",
+      "SPDXID": "SPDXRef-Package-36",
+      "versionInfo": "2.0.5",
+      "downloadLocation": "https://registry.npmjs.org/isarray/-/isarray-2.0.5.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "isomorphic-git",
+      "SPDXID": "SPDXRef-Package-37",
+      "versionInfo": "1.42.2",
+      "downloadLocation": "https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "math-intrinsics",
+      "SPDXID": "SPDXRef-Package-38",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://registry.npmjs.org/math-intrinsics/-/math-intrinsics-1.1.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "mimic-response",
+      "SPDXID": "SPDXRef-Package-39",
+      "versionInfo": "3.1.0",
+      "downloadLocation": "https://registry.npmjs.org/mimic-response/-/mimic-response-3.1.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minimist",
+      "SPDXID": "SPDXRef-Package-40",
+      "versionInfo": "1.2.8",
+      "downloadLocation": "https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "minimisted",
+      "SPDXID": "SPDXRef-Package-41",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "https://registry.npmjs.org/minimisted/-/minimisted-2.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "once",
+      "SPDXID": "SPDXRef-Package-42",
+      "versionInfo": "1.4.0",
+      "downloadLocation": "https://registry.npmjs.org/once/-/once-1.4.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "pako",
+      "SPDXID": "SPDXRef-Package-43",
+      "versionInfo": "1.0.11",
+      "downloadLocation": "https://registry.npmjs.org/pako/-/pako-1.0.11.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "(MIT AND Zlib)",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "pify",
+      "SPDXID": "SPDXRef-Package-44",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "https://registry.npmjs.org/pify/-/pify-4.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "possible-typed-array-names",
+      "SPDXID": "SPDXRef-Package-45",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://registry.npmjs.org/possible-typed-array-names/-/possible-typed-array-names-1.1.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "process",
+      "SPDXID": "SPDXRef-Package-46",
+      "versionInfo": "0.11.10",
+      "downloadLocation": "https://registry.npmjs.org/process/-/process-0.11.10.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "readable-stream",
+      "SPDXID": "SPDXRef-Package-47",
+      "versionInfo": "4.7.0",
+      "downloadLocation": "https://registry.npmjs.org/readable-stream/-/readable-stream-4.7.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "safe-buffer",
+      "SPDXID": "SPDXRef-Package-48",
+      "versionInfo": "5.2.1",
+      "downloadLocation": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "set-function-length",
+      "SPDXID": "SPDXRef-Package-49",
+      "versionInfo": "1.2.2",
+      "downloadLocation": "https://registry.npmjs.org/set-function-length/-/set-function-length-1.2.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "sha.js",
+      "SPDXID": "SPDXRef-Package-50",
+      "versionInfo": "2.4.12",
+      "downloadLocation": "https://registry.npmjs.org/sha.js/-/sha.js-2.4.12.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "(MIT AND BSD-3-Clause)",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "simple-concat",
+      "SPDXID": "SPDXRef-Package-51",
+      "versionInfo": "1.0.1",
+      "downloadLocation": "https://registry.npmjs.org/simple-concat/-/simple-concat-1.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "simple-get",
+      "SPDXID": "SPDXRef-Package-52",
+      "versionInfo": "4.0.1",
+      "downloadLocation": "https://registry.npmjs.org/simple-get/-/simple-get-4.0.1.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "string_decoder",
+      "SPDXID": "SPDXRef-Package-53",
+      "versionInfo": "1.3.0",
+      "downloadLocation": "https://registry.npmjs.org/string_decoder/-/string_decoder-1.3.0.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "to-buffer",
+      "SPDXID": "SPDXRef-Package-54",
+      "versionInfo": "1.2.2",
+      "downloadLocation": "https://registry.npmjs.org/to-buffer/-/to-buffer-1.2.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "typed-array-buffer",
+      "SPDXID": "SPDXRef-Package-55",
+      "versionInfo": "1.0.3",
+      "downloadLocation": "https://registry.npmjs.org/typed-array-buffer/-/typed-array-buffer-1.0.3.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "which-typed-array",
+      "SPDXID": "SPDXRef-Package-56",
+      "versionInfo": "1.1.24",
+      "downloadLocation": "https://registry.npmjs.org/which-typed-array/-/which-typed-array-1.1.24.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "wrappy",
+      "SPDXID": "SPDXRef-Package-57",
+      "versionInfo": "1.0.2",
+      "downloadLocation": "https://registry.npmjs.org/wrappy/-/wrappy-1.0.2.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "zod",
+      "SPDXID": "SPDXRef-Package-58",
+      "versionInfo": "4.4.3",
+      "downloadLocation": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    }
+  ]
+}
