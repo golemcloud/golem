@@ -47,7 +47,6 @@
     "eslint": "^9",
     "eslint-config-next": "^16.2.4",
     "glob": "^11.0.0",
-    "lefthook": "^2.1.6",
     "markdown-link-extractor": "^4.0.2",
     "mdast-util-to-string": "^4.0.0",
     "openapi-sampler": "^1.7.2",

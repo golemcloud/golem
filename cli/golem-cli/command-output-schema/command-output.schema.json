@@ -5142,13 +5142,13 @@
     },
     "SnapshotAssistedUpdateMetadata": {
       "type": "object",
-      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "ineligibilityReason"],
+      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "filesystemSnapshot"],
       "properties": {
         "sourceComponentRevision": { "type": "integer", "minimum": 0 },
         "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 },
-        "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 },
-        "snapshotRevision": { "type": ["integer", "null"], "minimum": 0 },
-        "ineligibilityReason": { "type": ["string", "null"] }
+        "snapshotIndex": { "type": "integer", "minimum": 0 },
+        "snapshotRevision": { "type": "integer", "minimum": 0 },
+        "filesystemSnapshot": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
@@ -5279,6 +5279,7 @@
         { "$ref": "#/definitions/PublicOplogEntryCommittedRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
+        { "$ref": "#/definitions/PublicOplogEntrySnapshotConfirmed" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
         { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
@@ -5570,7 +5571,13 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySnapshotConfirmed": {
+      "type": "object",
+      "required": ["type", "timestamp", "filesystemSnapshot"],
+      "properties": { "type": { "const": "SnapshotConfirmed" }, "timestamp": { "type": "string" }, "filesystemSnapshot": { "type": "string" } },
       "additionalProperties": false
     },
     "PublicOplogEntryOplogProcessorCheckpoint": {
@@ -5836,7 +5843,7 @@
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "Automatic" } }, "additionalProperties": false },
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "SnapshotAssistedAutomatic" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" }, "filesystemSnapshot": { "type": ["string", "null"] } }, "additionalProperties": false }
       ]
     },
     "PublicSnapshotAssistedUpdateDetails": {
@@ -5847,8 +5854,8 @@
     },
     "PublicFailedSnapshotAssistedUpdateDetails": {
       "type": "object",
-      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex"],
-      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": ["integer", "null"], "minimum": 0 }, "ineligibilityReason": { "type": ["string", "null"] } },
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },

@@ -26,7 +26,8 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder, decode_scan_cursor, downcast_oplog, first_scan_cursor,
+    ReservedRawStartBuilder, StagePublication, decode_scan_cursor, downcast_oplog,
+    first_scan_cursor,
 };
 use crate::storage::indexed::IndexedStorageMetaNamespace;
 use async_trait::async_trait;
@@ -848,11 +849,11 @@ impl OplogService for MultiLayerOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        stage_id: uuid::Uuid,
+        publication: StagePublication,
         expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         self.primary
-            .publish_staged(owned_agent_id, agent_mode, stage_id, expected_last_index)
+            .publish_staged(owned_agent_id, agent_mode, publication, expected_last_index)
             .await
     }
 

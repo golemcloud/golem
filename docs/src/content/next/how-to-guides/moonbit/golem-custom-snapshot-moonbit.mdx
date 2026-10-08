@@ -46,6 +46,8 @@ The `snapshotting` attribute accepts these values:
 | (omitted) | `#derive.agent` | Snapshotting disabled |
 | Every N | `#derive.agent(snapshotting="every_n(1)")` | Snapshot every N successful invocations |
 
+An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+
 ## Custom Snapshotting
 
 For custom binary serialization or cross-version migration, implement the saving-only `Snapshottable` trait and define a separate static restoration factory:
@@ -130,7 +132,7 @@ The restoration factory does not receive `self` and does not call `Agent::new`. 
 
 Snapshot loading runs in read-only mode and writes nothing to the oplog. Decoding, local computation, config reads, and other permitted reads can be used to construct the value. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
 
-If the factory returns `Err`, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
+If the factory returns `Err`, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
 ## How the SDK Wires Snapshots
 

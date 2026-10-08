@@ -29,6 +29,11 @@ name = "integration"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "file_creation_mask"
+path = "tests/file_creation_mask.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
@@ -49,6 +54,7 @@ bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
+bytesize = { workspace = true }
 cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
@@ -87,9 +93,11 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
+rayon = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
 ringbuf = { workspace = true }
+rustic_core = { workspace = true }
 rustls = { workspace = true, features = [ "ring" ] }
 scc = { workspace = true }
 serde = { workspace = true }
@@ -120,10 +128,12 @@ zstd = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_Storage_FileSystem"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
-linux-raw-sys = { workspace = true }
 rustix = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-raw-sys = { workspace = true }
 
 [[bench]]
 name = "invocation_lowering"
@@ -161,6 +171,7 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }
 tracing-subscriber = { workspace = true }
 system-interface = { workspace = true }

@@ -252,6 +252,11 @@ When a directory source is used, the permission setting applies to all files wit
 - There is a configurable disk space limit for cached initial files on each executor node.
 - Initial files are **not** passed per agent instance at creation time via `golem agent new`. They are defined at the agent type level in the manifest and applied to all instances of that type.
 
+## Initial Files, Updates and Snapshots
+
+- When an agent updates to a new component revision, Golem applies the initial files of the target revision at the update point. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails, and the agent stays on its current revision.
+- On an executor without filesystem snapshots, Golem takes snapshots of an agent only while its files are exactly its initial files. A `read-write` initial file counts as a change, also when the agent does not write to it. Such an agent then takes no automatic snapshots and recovers by a replay, and a snapshot-based manual update fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`. Use `read-only` initial files where the agent does not need to write.
+
 ## Summary of All Methods
 
 | Method | Scope | Where |
