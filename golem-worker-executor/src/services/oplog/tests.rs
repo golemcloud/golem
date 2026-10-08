@@ -29,7 +29,6 @@ use crate::storage::indexed::{
 use assert2::check;
 use bytes::Bytes;
 use futures::FutureExt;
-use futures::stream::BoxStream;
 use golem_common::config::RedisConfig;
 use golem_common::model::ShardEpoch;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -46,10 +45,10 @@ use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, PutIfAbsent, agent_path_segment,
 };
 use nonempty_collections::nev;
 use std::collections::{HashSet, VecDeque};
@@ -1316,13 +1315,34 @@ impl ReadCountingBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorage for ReadCountingBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for ReadCountingBlobStorage {
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+    }
+
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, anyhow::Error> {
         self.count_read();
         let pause = self.pause_read.lock().unwrap().take();
@@ -1331,57 +1351,44 @@ impl BlobStorage for ReadCountingBlobStorage {
             let _ = release.await;
         }
         self.inner
-            .get_raw(target_label, op_label, namespace, path)
+            .get_raw_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn get_stream(
+    async fn get_range_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, anyhow::Error>>>, anyhow::Error> {
-        self.count_read();
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> Result<Option<golem_service_base::storage::blob::BlobRangeStream>, anyhow::Error> {
         self.count_read();
         self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .get_range_stream_at(target_label, op_label, namespace, path, offset, length)
             .await
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, anyhow::Error> {
         self.count_read();
         self.inner
-            .get_metadata(target_label, op_label, namespace, path)
+            .get_metadata_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), anyhow::Error> {
         let put = self.puts.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1394,29 +1401,29 @@ impl BlobStorage for ReadCountingBlobStorage {
             return Err(anyhow::anyhow!("injected blob write failure {put}"));
         }
         self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
+            .put_raw_at(target_label, op_label, namespace, path, data)
             .await
     }
 
-    async fn put_stream(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, anyhow::Error>, Error = anyhow::Error>,
-    ) -> Result<(), anyhow::Error> {
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, anyhow::Error> {
         self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
+            .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
             .await
     }
 
-    async fn delete(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), anyhow::Error> {
         if self
             .fail_delete_after
@@ -1433,7 +1440,7 @@ impl BlobStorage for ReadCountingBlobStorage {
             |remaining| remaining.checked_sub(1),
         ) == Ok(1);
         self.inner
-            .delete(target_label, op_label, namespace, path)
+            .delete_at(target_label, op_label, namespace, path)
             .await?;
         if fail_after_commit {
             Err(anyhow::anyhow!(
@@ -1444,56 +1451,69 @@ impl BlobStorage for ReadCountingBlobStorage {
         }
     }
 
-    async fn create_dir(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), anyhow::Error> {
         self.inner
-            .create_dir(target_label, op_label, namespace, path)
+            .create_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, anyhow::Error> {
         self.count_read();
         self.inner
-            .list_dir(target_label, op_label, namespace, path)
+            .list_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn delete_dir(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, anyhow::Error> {
+        self.count_read();
+        self.inner
+            .list_blobs_below_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, anyhow::Error> {
         if self.fail_delete_dir_once.swap(false, Ordering::Relaxed) {
             return Err(anyhow::anyhow!("injected blob directory delete failure"));
         }
         self.inner
-            .delete_dir(target_label, op_label, namespace, path)
+            .delete_dir_at(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, anyhow::Error> {
         self.count_read();
         self.inner
-            .exists(target_label, op_label, namespace, path)
+            .exists_at(target_label, op_label, namespace, path)
             .await
     }
 }
@@ -1893,7 +1913,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
     assert!(
         service
-            .publish_staged(&owned, AgentMode::Ephemeral, stage_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Ephemeral,
+                StagePublication::for_tests(stage_id),
+                OplogIndex::INITIAL
+            )
             .await
             .is_err()
     );
@@ -1974,7 +1999,7 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
             .publish_staged(
                 &owned,
                 AgentMode::Durable,
-                stage_id,
+                StagePublication::for_tests(stage_id),
                 OplogIndex::from_u64(3)
             )
             .await
@@ -2037,7 +2062,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     drop(losing);
     assert!(
         !service
-            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                StagePublication::for_tests(losing_id),
+                OplogIndex::INITIAL
+            )
             .await
             .unwrap()
     );
@@ -2050,7 +2080,12 @@ async fn staged_oplog_is_hidden_through_flush_and_published_without_cache_or_blo
     );
     assert!(
         !service
-            .publish_staged(&owned, AgentMode::Durable, losing_id, OplogIndex::INITIAL)
+            .publish_staged(
+                &owned,
+                AgentMode::Durable,
+                StagePublication::for_tests(losing_id),
+                OplogIndex::INITIAL
+            )
             .await
             .unwrap()
     );
@@ -4866,6 +4901,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             ComponentRevision::new(11).unwrap(),
             vec![1, 2, 3],
             "application/octet-stream".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -5333,6 +5369,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             ComponentRevision::new(11).unwrap(),
             large_payload4.clone(),
             "application/octet-stream".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -6906,7 +6943,7 @@ async fn missing_listed_blob_chunk_is_reported_as_corruption(_tracing: &Tracing)
             "blob_oplog",
             "test",
             namespace.clone(),
-            Path::new(&owned_agent_id.agent_name()),
+            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
         )
         .await
         .unwrap();
@@ -7626,7 +7663,7 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
         agent_mode: AgentMode::Durable,
         level: 1,
     };
-    let path = PathBuf::from(owned_agent_id.agent_name()).join("2");
+    let path = PathBuf::from(agent_path_segment(&agent_id)).join("2");
     storage
         .put_raw(
             "blob_oplog",
@@ -10228,6 +10265,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             ComponentRevision::new(2).unwrap(),
             inline,
             "application/inline".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -10249,6 +10287,7 @@ async fn owned_snapshot_payloads_persist_and_replay_across_inline_threshold(_tra
             ComponentRevision::new(3).unwrap(),
             external,
             "application/external".to_string(),
+            None,
         )
         .await
         .unwrap();
@@ -12296,7 +12335,7 @@ async fn blob_objects(
                 agent_mode: AgentMode::Durable,
                 level,
             },
-            Path::new(&owned_agent_id.agent_name()),
+            Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
         )
         .await
         .unwrap()

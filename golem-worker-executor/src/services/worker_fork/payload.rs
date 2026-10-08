@@ -180,7 +180,8 @@ where
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::CompletionDiscarded { .. }
-        | OplogEntry::CompletionDelivered { .. } => {}
+        | OplogEntry::CompletionDelivered { .. }
+        | OplogEntry::SnapshotConfirmed { .. } => {}
     }
     Ok(())
 }
@@ -503,6 +504,7 @@ mod tests {
                 mime_type: "application/octet-stream".to_string(),
                 active_cards: Vec::new(),
                 wallet_generation: 0,
+                filesystem_snapshot: None,
             },
             OplogEntry::stream_registered(None, external(), None),
             OplogEntry::stream_items(None, external(), None),
@@ -514,6 +516,7 @@ mod tests {
                     target_revision: golem_common::model::component::ComponentRevision::INITIAL,
                     payload: external(),
                     mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
                 },
                 None,
             ),

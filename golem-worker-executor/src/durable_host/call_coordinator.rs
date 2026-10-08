@@ -850,7 +850,9 @@ where
                 tracing::debug!(
                     "Updating worker state to component metadata revision {new_revision}"
                 );
-                update_state_to_new_component_revision_access(store, get_ctx, new_revision).await?;
+                update_state_to_new_component_revision_access(store, get_ctx, new_revision)
+                    .await
+                    .map_err(|error| error.to_worker_executor_error())?;
             }
             crate::durable_host::replay_state::ReplayEvent::InvocationWalletPinned {
                 wallet_pin,
@@ -1350,26 +1352,6 @@ where
     Ok(())
 }
 
-struct AccessRevisionUpdateInputs {
-    component_service: Arc<dyn ComponentService>,
-    file_loader: Arc<FileLoader>,
-    filesystem_generation_handle: FilesystemGenerationHandle,
-    owned_agent_id: golem_common::model::OwnedAgentId,
-    agent_id: Option<ParsedAgentId>,
-    initial_agent_config: Vec<golem_common::model::worker::TypedAgentConfigEntry>,
-    current_revision: ComponentRevision,
-}
-
-type AccessRevisionUpdateAgentState = (
-    HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
-    BTreeMap<golem_common::model::card::CardId, golem_common::model::card::StoredCard>,
-);
-
-struct AccessRevisionUpdate {
-    metadata: Component,
-    agent_state: Option<AccessRevisionUpdateAgentState>,
-}
-
 async fn finalize_pending_automatic_update_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
@@ -1394,58 +1376,35 @@ where
         Ok::<_, WorkerExecutorError>(pending_update)
     });
 
-    let pending_update = if let Some(pending_update) = pending_update? {
-        pending_update
-    } else {
+    let Some(crate::model::HydratedUpdate {
+        reference,
+        description,
+    }) = pending_update?
+    else {
         return Ok(());
     };
-
-    let target_revision = *pending_update.description.target_revision();
-    let snapshot_assisted_details = match pending_update.description {
-        UpdateDescription::Automatic { .. } => None,
-        UpdateDescription::SnapshotAssistedAutomatic { .. } => {
-            let details = store.with(|mut access| {
-                let ctx = get_ctx(access.data_mut());
-                ctx.take_snapshot_assisted_update_details(pending_update.oplog_index)
-            });
-            match details {
-                Ok(details) => Some(details),
-                Err(error) => {
-                    record_worker_update_failed_access(
-                        store,
-                        get_ctx,
-                        target_revision,
-                        format!("Applying worker update failed: {error}"),
-                        None,
-                    )
-                    .await?;
-                    return Err(error);
-                }
-            }
-        }
-        UpdateDescription::SnapshotBased { .. } => {
-            return Err(WorkerExecutorError::runtime(
-                "pending replay event finalization expected an automatic update description",
-            ));
-        }
-    };
+    if matches!(description, UpdateDescription::SnapshotBased { .. }) {
+        return Err(WorkerExecutorError::runtime(
+            "pending replay event finalization expected an automatic update description",
+        ));
+    }
+    let target_revision = *description.target_revision();
 
     tracing::debug!("Finalizing pending automatic update");
     if let Err(error) =
         update_state_to_new_component_revision_access(store, get_ctx, target_revision).await
     {
-        let stringified_error = format!("Applying worker update failed: {error}");
-        record_worker_update_failed_access(
-            store,
-            get_ctx,
-            target_revision,
-            stringified_error,
-            snapshot_assisted_details
-                .as_ref()
-                .map(failed_snapshot_assisted_update_details),
-        )
-        .await?;
-        return Err(error);
+        let (action, worker) = store.with(|mut access| {
+            let ctx = get_ctx(access.data_mut());
+            (
+                ctx.start_action(
+                    Some(&reference),
+                    crate::worker::start_outcome::RawStartError::UpdateState(&error),
+                ),
+                ctx.public_state.worker(),
+            )
+        });
+        return Err(crate::durable_host::perform_at_update_point(&worker, action).await);
     }
 
     let (component_size, active_plugins) = store.with(|mut access| {
@@ -1467,7 +1426,7 @@ where
         target_revision,
         component_size,
         active_plugins,
-        snapshot_assisted_details,
+        crate::worker::start_outcome::success_details_of(&reference),
     )
     .await?;
     tracing::debug!("Finalizing automatic update to revision {target_revision}");
@@ -1478,148 +1437,35 @@ async fn update_state_to_new_component_revision_access<T, D, Ctx>(
     store: &Accessor<T, D>,
     get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
     new_revision: ComponentRevision,
-) -> Result<(), WorkerExecutorError>
+) -> Result<(), crate::durable_host::revision_update::UpdateStateError>
 where
     T: 'static,
     D: HasData + ?Sized,
     Ctx: WorkerCtx,
 {
-    let inputs = store.with(|mut access| {
+    use crate::durable_host::revision_update::{
+        AgentInputs, RevisionUpdateInputs, UpdateStateError, apply_revision_update,
+        prepare_revision_update,
+    };
+    let (inputs, agent, current_revision) = store.with(|mut access| {
         let ctx = get_ctx(access.data_mut());
-        AccessRevisionUpdateInputs {
-            component_service: ctx.state.component_service.clone(),
-            file_loader: ctx.state.file_loader.clone(),
-            filesystem_generation_handle: ctx.filesystem_generation_handle(),
-            owned_agent_id: ctx.owned_agent_id.clone(),
-            agent_id: ctx.state.owner_context.agent().cloned(),
-            initial_agent_config: ctx.state.initial_agent_config.clone(),
-            current_revision: ctx.component_metadata().revision,
-        }
+        (
+            RevisionUpdateInputs::of(ctx),
+            AgentInputs::of(ctx),
+            ctx.component_metadata().revision,
+        )
     });
 
-    if new_revision <= inputs.current_revision {
+    if new_revision <= current_revision {
         tracing::debug!("Update {new_revision} was already applied, skipping");
         return Ok(());
     }
 
-    let update = prepare_revision_update_access(&inputs, new_revision).await?;
-    store.with(|mut access| -> Result<(), WorkerExecutorError> {
-        let ctx = get_ctx(access.data_mut());
-        apply_revision_update_access(ctx, update)
+    let update = prepare_revision_update(inputs, new_revision, || agent).await?;
+    store.with(|mut access| {
+        apply_revision_update(get_ctx(access.data_mut()), update)
+            .map_err(UpdateStateError::WalletCards)
     })
-}
-
-async fn prepare_revision_update_access(
-    inputs: &AccessRevisionUpdateInputs,
-    new_revision: ComponentRevision,
-) -> Result<AccessRevisionUpdate, WorkerExecutorError> {
-    let metadata = inputs
-        .component_service
-        .get_metadata(inputs.owned_agent_id.component_id(), Some(new_revision))
-        .await?;
-
-    let provision_config = inputs.agent_id.as_ref().and_then(|agent_id| {
-        metadata
-            .metadata
-            .agent_type_provision_configs()
-            .get(&agent_id.agent_type)
-            .cloned()
-    });
-
-    let agent_state = if let Some(agent_id) = &inputs.agent_id {
-        let agent_type = metadata
-            .metadata
-            .find_agent_type_by_name_ref(&agent_id.agent_type)
-            .ok_or_else(|| {
-                WorkerExecutorError::invalid_request(format!(
-                    "Agent type {} not found in updated agent metadata",
-                    agent_id.agent_type
-                ))
-            })?;
-
-        let updated_agent_config = effective_agent_config(
-            inputs.initial_agent_config.clone(),
-            provision_config
-                .as_ref()
-                .map(|c| c.config.clone())
-                .unwrap_or_default(),
-        )?;
-        validate_agent_config(&updated_agent_config, agent_type)?;
-
-        let initial_card = super::agent_initial_card_from_component_metadata(&metadata, agent_id)?;
-        let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-        Some((updated_agent_config, initial_wallet_cards))
-    } else {
-        None
-    };
-
-    crate::services::agent_filesystem::update_initial_files(
-        &inputs.filesystem_generation_handle,
-        Arc::clone(&inputs.file_loader),
-        inputs.owned_agent_id.environment_id,
-        provision_config
-            .as_ref()
-            .map(|c| c.files.clone())
-            .unwrap_or_default(),
-    )
-    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-    .await
-    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-
-    Ok(AccessRevisionUpdate {
-        metadata,
-        agent_state,
-    })
-}
-
-fn apply_revision_update_access<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    update: AccessRevisionUpdate,
-) -> Result<(), WorkerExecutorError> {
-    ctx.state.component_metadata = update.metadata.clone();
-    ctx.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(update.metadata));
-
-    if let Some((agent_config, initial_wallet_cards)) = update.agent_state {
-        ctx.state.agent_config = agent_config;
-        ctx.state.cached_agent_config_retry_policies = None;
-        crate::durable_host::replace_wallet_cards(
-            &mut ctx.state.agent_wallet_cards,
-            &mut ctx.state.wallet_generation,
-            initial_wallet_cards,
-        )?;
-        ctx.rederive_agent_effective_surface_from_wallet();
-    }
-    Ok(())
-}
-
-async fn record_worker_update_failed_access<T, D, Ctx>(
-    store: &Accessor<T, D>,
-    get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
-    target_revision: ComponentRevision,
-    details: String,
-    snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-) -> Result<(), WorkerExecutorError>
-where
-    T: 'static,
-    D: HasData + ?Sized,
-    Ctx: WorkerCtx,
-{
-    let public_state = store.with(|mut access| get_ctx(access.data_mut()).public_state.clone());
-    public_state
-        .worker()
-        .add_and_commit_oplog(OplogEntry::failed_update(
-            target_revision,
-            Some(details.clone()),
-            snapshot_assisted_details,
-            None,
-        ))
-        .await?;
-    tracing::warn!(
-        "Worker failed to update to {}: {}, update attempt aborted",
-        target_revision,
-        details
-    );
-    Ok(())
 }
 
 async fn record_worker_update_succeeded_access<T, D, Ctx>(

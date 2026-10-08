@@ -54,7 +54,7 @@ pub(crate) async fn open_file_for_inspection<Adapter: SandboxFilesystemAdapter>(
         let generation = admit(handle).map_err(|_| FileReadError::Lifecycle)?;
         let _lease = generation
             .registry
-            .lease_call()
+            .lease_call(CallEffect::Read)
             .map_err(|_| FileReadError::Lifecycle)?;
         return Ok(FileInspection::Rejected(FileReadHead::NotRegular));
     }
@@ -115,7 +115,7 @@ fn inspection_open<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<Opened>, AccessError> {
     let generation = admit(handle)?;
     validate_path_generation(&generation, &path)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     Ok(FilesystemCall::new(lease, async move {
         let opened = {
             let sandbox = generation.sandbox.read().await;

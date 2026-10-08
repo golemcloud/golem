@@ -18,6 +18,7 @@ use crate::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
     InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
 };
+use crate::model::component::ComponentRevision;
 use crate::model::component::PluginPriority;
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
@@ -35,14 +36,14 @@ use crate::model::oplog::public_oplog_entry::{
     GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotParams,
-    StartParams, SuccessfulUpdateParams, SuspendParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, JsonSnapshotData,
-    LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart, OplogEntry,
-    OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
+    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, FilesystemSnapshotName,
+    JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
+    OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
     PublicEntityInvocationContext, PublicEntityInvocationOperation,
@@ -52,6 +53,7 @@ use crate::model::oplog::{
     PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
     PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
     QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    UpdateDescription,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -1304,6 +1306,7 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         }),
     });
     let serialized = entry.to_json_string();
@@ -1366,8 +1369,7 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
             pending_update_index: OplogIndex::from_u64(5),
             source_component_revision: ComponentRevision::new(1).unwrap(),
             source_revision_start_index: OplogIndex::INITIAL,
-            snapshot_index: Some(OplogIndex::from_u64(3)),
-            ineligibility_reason: None,
+            snapshot_index: OplogIndex::from_u64(3),
         }),
     });
     let serialized = entry.to_json_string();
@@ -1604,6 +1606,7 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1620,6 +1623,7 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
         mime_type: "application/octet-stream".to_string(),
         active_cards,
         wallet_generation: 73,
+        filesystem_snapshot: None,
     };
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
@@ -1649,6 +1653,230 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
             assert_eq!(wallet_generation, 73);
         }
         other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn filesystem_snapshot_name_has_kind_prefix_and_parses_back() {
+    let periodic = FilesystemSnapshotName::periodic();
+    let update = FilesystemSnapshotName::update();
+    assert!(periodic.as_str().starts_with("p-"));
+    assert!(update.as_str().starts_with("u-"));
+    assert_ne!(FilesystemSnapshotName::periodic(), periodic);
+    assert_eq!(
+        periodic.as_str().parse::<FilesystemSnapshotName>().unwrap(),
+        periodic
+    );
+    assert_eq!(
+        update
+            .to_string()
+            .parse::<FilesystemSnapshotName>()
+            .unwrap(),
+        update
+    );
+    assert!(
+        "x-6e3e9a3a-0a2c-4c8e-8a4c-2b1b4a3d5e6f"
+            .parse::<FilesystemSnapshotName>()
+            .is_err()
+    );
+    assert!("p-not-a-uuid".parse::<FilesystemSnapshotName>().is_err());
+    assert!("".parse::<FilesystemSnapshotName>().is_err());
+}
+
+#[test]
+fn filesystem_snapshot_name_binary_encoding_matches_plain_string() {
+    let name = FilesystemSnapshotName::update();
+
+    let bytes = crate::serialization::serialize(&name).unwrap();
+    assert_eq!(
+        bytes,
+        crate::serialization::serialize(&name.as_str().to_string()).unwrap()
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&bytes).unwrap(),
+        name
+    );
+}
+
+#[test]
+fn raw_snapshot_with_filesystem_snapshot_roundtrips() {
+    let name = FilesystemSnapshotName::periodic();
+    let entry = OplogEntry::Snapshot {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards: Vec::new(),
+        wallet_generation: 1,
+        filesystem_snapshot: Some(name.clone()),
+    };
+
+    fn snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
+        match entry {
+            OplogEntry::Snapshot {
+                filesystem_snapshot,
+                ..
+            } => filesystem_snapshot.clone(),
+            other => panic!("expected snapshot entry, got {other:?}"),
+        }
+    }
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(snapshot_name(&binary_decoded), Some(name.clone()));
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(snapshot_name(&decoded), Some(name));
+}
+
+#[test]
+fn raw_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
+    let name = FilesystemSnapshotName::update();
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc().rounded(),
+        description: UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![9, 8, 7])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        },
+        update_attempt_index: None,
+    };
+
+    fn update_snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
+        match entry {
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    },
+                ..
+            } => filesystem_snapshot.clone(),
+            other => panic!("expected snapshot based pending update, got {other:?}"),
+        }
+    }
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(update_snapshot_name(&binary_decoded), Some(name.clone()));
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(update_snapshot_name(&decoded), Some(name));
+}
+
+#[test]
+fn raw_snapshot_confirmed_roundtrips_and_is_a_hint() {
+    let name = FilesystemSnapshotName::periodic();
+    let entry = OplogEntry::snapshot_confirmed(name.clone()).rounded();
+    assert!(entry.is_hint());
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(binary_decoded, entry);
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+    match decoded {
+        OplogEntry::SnapshotConfirmed {
+            filesystem_snapshot,
+            ..
+        } => assert_eq!(filesystem_snapshot, name),
+        other => panic!("expected snapshot confirmed entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn public_snapshot_with_filesystem_snapshot_roundtrips() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: Some(FilesystemSnapshotName::periodic().into()),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+
+    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    match raw {
+        OplogEntry::Snapshot {
+            filesystem_snapshot,
+            ..
+        } => assert_eq!(
+            filesystem_snapshot.map(String::from),
+            match entry {
+                PublicOplogEntry::Snapshot(params) => params.filesystem_snapshot,
+                _ => unreachable!(),
+            }
+        ),
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn public_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
+    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
+        description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+            payload: "test".as_bytes().to_vec(),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(FilesystemSnapshotName::update().into()),
+        }),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+#[test]
+fn public_snapshot_confirmed_roundtrips() {
+    let entry = PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        filesystem_snapshot: FilesystemSnapshotName::periodic().into(),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+
+    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    assert!(raw.is_hint());
+    match (raw, entry) {
+        (
+            OplogEntry::SnapshotConfirmed {
+                filesystem_snapshot,
+                ..
+            },
+            PublicOplogEntry::SnapshotConfirmed(params),
+        ) => assert_eq!(
+            String::from(filesystem_snapshot),
+            params.filesystem_snapshot
+        ),
+        other => panic!("expected snapshot confirmed entry, got {other:?}"),
     }
 }
 
@@ -2005,6 +2233,7 @@ fn snapshot_json_serialization_poem_serde_equivalence() {
         data: PublicSnapshotData::Json(JsonSnapshotData {
             data: serde_json::json!({"key": "value", "count": 42}),
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2035,6 +2264,7 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
                 },
             ],
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -2564,4 +2794,83 @@ mod scope_scan {
         ];
         assert!(scan(10, &entries));
     }
+}
+
+/// The serialized bytes of a filesystem snapshot name, of a successful update record that holds
+/// it, and of a pending update entry that holds it. The form on the wire must not change.
+const NAME_BYTES: &str =
+    "034c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d3030303030303030303030310000";
+const ENTRY_BYTES: &str = "030010000000000000000007000200000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d30303030303030303030303100";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
+    let name = "p-00000000-0000-4000-8000-000000000001"
+        .parse::<FilesystemSnapshotName>()
+        .unwrap();
+    let record = crate::model::SuccessfulUpdateRecord {
+        timestamp: crate::model::Timestamp::from(7),
+        target_revision: ComponentRevision::new(2).unwrap(),
+        oplog_index: crate::model::OplogIndex::from_u64(5),
+        filesystem_snapshot: Some(name.clone()),
+        pending_update: None,
+        snapshot_assisted_details: None,
+    };
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: crate::model::Timestamp::from(7),
+        description: crate::model::oplog::UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: crate::model::oplog::OplogPayload::Inline(Box::new(vec![1, 2, 3])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        },
+        update_attempt_index: None,
+    };
+    let written = [
+        hex(&crate::serialization::serialize(&name).unwrap()),
+        hex(&crate::serialization::serialize(&record).unwrap()),
+        hex(&crate::serialization::serialize(&entry).unwrap()),
+    ];
+
+    assert_eq!(written, [NAME_BYTES, RECORD_BYTES, ENTRY_BYTES]);
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&unhex(NAME_BYTES)).unwrap(),
+        name
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<crate::model::SuccessfulUpdateRecord>(&unhex(
+            RECORD_BYTES
+        ))
+        .unwrap(),
+        record
+    );
+    assert_eq!(
+        hex(&crate::serialization::serialize(
+            &crate::serialization::deserialize::<OplogEntry>(&unhex(ENTRY_BYTES)).unwrap()
+        )
+        .unwrap()),
+        ENTRY_BYTES
+    );
+}
+
+#[test]
+fn a_cloned_filesystem_snapshot_name_shares_its_text() {
+    let name = FilesystemSnapshotName::periodic();
+    let clone = name.clone();
+
+    assert!(std::ptr::eq(
+        name.as_str().as_ptr(),
+        clone.as_str().as_ptr()
+    ));
 }

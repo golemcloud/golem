@@ -1,5 +1,12 @@
 # Golem development
 
+## Before your first pull request
+
+Golem uses [vouch](https://github.com/mitchellh/vouch): you need to be listed in `.github/VOUCHED.td` to open pull requests, otherwise they are closed automatically.
+
+If this is your first contribution, introduce yourself and ask for permission on [Discord](https://discord.gg/UjXeH8uG4x).
+
+Once a maintainer vouches for you, you can open pull requests normally.
 
 ## Prerequisites
 

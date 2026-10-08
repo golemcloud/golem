@@ -227,19 +227,40 @@ property this relies on (bare Wasmtime, no oplog); the marker mechanics are cove
 ## 9. Automatic update with snapshot
 
 ```
-#70 PendingUpdate { target revision r2, Automatic } (h)
+#40 Snapshot { filesystem_snapshot: p-… } (h)          record S of revision r1
+#41 SnapshotConfirmed { p-… } (h)
+#70 PendingUpdate { target revision r2, Automatic } (h)   admission P
     worker unloaded and reconstructed by the outer loop
+#71 PendingUpdate { SnapshotAssistedAutomatic { r2, source r1, S = #40, p-… },
+                    update_attempt_index: Some(#70) } (h)   strategy, frozen
+    … tail #41..#70 and later source work replayed …
+#90 SuccessfulUpdate { r2 } (h)
 ```
 
-Instance creation (`worker/mod.rs`, `component_version_for_replay`): because an update is
-pending, automatic snapshots are ignored and the baseline is the last manual-update snapshot (or
-`INITIAL`); the new instance is created for revision `r2`. `prepare_instance` then, for
-`Automatic`: `try_load_snapshot` loads that baseline (the load hook runs in snapshotting mode:
-no oplog append or consume), and `resume_replay` replays the remaining old history against the
-`r2` component; success appends `SuccessfulUpdate` during that replay. If replay fails while the
-update is still pending, `on_worker_update_failed` appends `FailedUpdate` and returns
-`RetryDecision::Immediate`, so the outer loop rebuilds on the old revision with its automatic
-snapshot eligible again. Old-revision automatic snapshots are never used for `r2`
+When the agent is loaded at `#70` and the upload of its newest record is not confirmed, the agent
+waits for that upload before it unloads, so the update can select that record
+(`Worker::confirm_filesystem_snapshot_before_an_update`, at most `confirmation_wait`).
+
+Instance creation (`worker/mod.rs::create_instance`): `snapshot_selection::decide_start` sees the
+unselected admission `#70` at the queue head, selects `S` (the last usable record of r1 that
+passes; it can be newer than `#70`) and gives `PersistStrategy`. The start appends `#71` and
+decides again. Now the head is a selected snapshot-assisted update, so the baseline is
+`AssistedPending { S }`, the replay revision is r1, and the new instance is created for r2.
+`plan_start` gives one `StartPlan`: restore the filesystem snapshot `p-…`, then load the
+application snapshot of `#40` and skip `1..=#40`. `materialize` restores the tree; `prepare_instance`
+then runs `try_load_snapshot` (the load hook runs in snapshotting mode: no oplog append or
+consume) and `resume_replay` replays the tail against the r2 component with r1's metadata. At
+`ReplayFinished`, `update_state_to_new_component_revision(r2)` applies the initial-file rule from
+r1 to r2, and `SuccessfulUpdate` is appended. The fold promotes `S` to `authoritative_snapshot`
+with its name and keeps `component_revision_for_replay = r1`, so a later start from `S` restores
+`p-…`, replays the tail with r1's metadata and applies the rule at the replayed `#90`.
+
+Without a usable record, `#71` is a plain `Automatic` strategy: the baseline is the
+authoritative baseline (or `INITIAL`), and `resume_replay` replays all the remaining old history
+against r2. A failure of an attempt goes through `start_outcome::decide`, which builds the
+`FailedUpdate` (with `UPDATE_SNAPSHOT_INCOMPATIBLE`, `UPDATE_SNAPSHOT_UNAVAILABLE` or
+`UPDATE_REPLAY_FAILED` among others) and returns `RetryDecision::Immediate`, so the outer loop
+rebuilds on r1. Periodic records of r1 are never used as periodic baselines for r2
 (`tests/hot_update.rs::auto_update_invalidates_snapshot_from_previous_revision`).
 
 `SnapshotBased` differs: the save hook ran and the payload was recorded *before* unload;
@@ -250,13 +271,14 @@ A cursor rewind cannot do this: the component revision and metadata come from in
 creation in the outer loop, not from the cursor.
 
 With no update pending, failure to load an automatic snapshot or divergence while replaying its
-recorded suffix abandons it and returns `RetryDecision::Immediate`. The outer loop recreates the
-full Store and revision/plugin context from the authoritative manual-update baseline, so history
-before that migration is never replayed. Once this fallback has succeeded,
-`prepare_instance` persists the monotonic `rejected_periodic_snapshot_through` watermark under the
-worker's `AgentFingerprint` before publishing readiness. A payload-download failure is different:
-an in-memory unavailable watermark skips it only for that startup attempt and is cleared after a
-successful preparation. A manual-update snapshot load failure is terminal and retains its cause.
+recorded suffix rejects that exact record and returns `RetryDecision::Immediate`. The outer loop
+recreates the full Store and revision/plugin context and selects again: the previous usable
+record, the authoritative baseline, or a full replay, so history before a migration is never
+replayed. Once preparation has succeeded, `prepare_instance` merges the rejected indexes into the
+set stored under the worker's `AgentFingerprint` before publishing readiness. A payload-download
+failure, or a filesystem snapshot that does not restore, is different: an in-memory unavailable
+set skips the record only for that startup attempt and is cleared after a successful
+preparation. A manual-update snapshot load failure is terminal and retains its cause.
 
 ## 10. Suspend, interrupt/resume, evict, restart: one path
 
@@ -461,3 +483,36 @@ tool maps to `InvalidToolName`; true or a missing observation preserves the prot
 maps to `InvalidInput`. Other MCP `isError` content becomes a custom tool error. Fixed discovery
 uses its recorded exact deployment reference, while this dynamic execution uses the full admission
 snapshot. Middleware and code-generation acceptance are outside this completed executor path.
+
+## 17. Revert with filesystem snapshots
+
+```
+#20 Snapshot { files: p-a }                 periodic record, its upload saves p-a
+#21 SnapshotConfirmed { p-a }
+#22..#29 invocations
+#30 Snapshot { files: p-b }
+#31 SnapshotConfirmed { p-b }
+#32 Revert { region: 22..=31 }              committed through commit_oplog_and_update_state
+```
+
+`reverted_snapshot_names` collects `p-b` from the dropped region, without a name that a live record
+outside it uses. Only after the commit of `#32` does `RevertHold::delete_snapshots([p-b])` ask the
+clean-up queue to delete it; the queue runs it when the busy count of the agent is 0. The next
+start folds the status without the region and restores `p-a`. When the commit of `#32` is refused,
+the revert gives `OplogFenced`, deletes nothing, and the caller retries on the new owner.
+
+## 18. Delete of an incarnation
+
+```
+remove: cached status, indexes, stream sessions    (derived state first)
+remove: oplog delete                                 oplog of fingerprint F gone
+          after_oplog_delete(F) → delete_all_snapshots(AgentSnapshots::agent(id, F))
+          ✕ crash here leaves the RunningWorkers member (id, F)
+remove: RunningWorkers member (id, F)
+```
+
+A crash between the oplog delete and the member removal leaves the member. The next recovery scan
+finds no oplog for it, requests `delete_all_snapshots` for `(id, F)` first, and then removes the
+member. A crash after the member removal and before the store delete ended leaks the repository;
+no sweep removes it yet.
+

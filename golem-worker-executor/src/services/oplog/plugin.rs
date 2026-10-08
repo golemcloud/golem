@@ -20,7 +20,7 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, RawOplogPayloadDownloadError,
-    ReservedRawStartBuilder,
+    ReservedRawStartBuilder, StagePublication,
 };
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -734,11 +734,11 @@ impl OplogService for ForwardingOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        stage_id: uuid::Uuid,
+        publication: StagePublication,
         expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         self.inner
-            .publish_staged(owned_agent_id, agent_mode, stage_id, expected_last_index)
+            .publish_staged(owned_agent_id, agent_mode, publication, expected_last_index)
             .await
     }
 

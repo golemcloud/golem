@@ -39,7 +39,7 @@ pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;
 pub mod registry_service;
-pub mod s3_mock;
+pub mod s3;
 pub mod service;
 pub mod shard_manager;
 pub mod worker_executor;

@@ -382,7 +382,7 @@ async fn exercise_named_fork_tool_replay(
     audited: bool,
     incomplete: bool,
 ) -> anyhow::Result<()> {
-    use crate::fork::start_with_local_resume_and_overrides;
+    use crate::fork::start_with_local_resume_and;
     use golem_common::model::AgentId;
     use golem_worker_executor::services::golem_config::SnapshotPolicy;
 
@@ -401,7 +401,7 @@ async fn exercise_named_fork_tool_replay(
         })),
         ..Default::default()
     };
-    let executor = start_with_local_resume_and_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_local_resume_and(deps, &context, overrides()).await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
         .store()
@@ -568,7 +568,7 @@ async fn exercise_named_fork_tool_replay(
     );
     drop(executor);
 
-    let executor = start_with_local_resume_and_overrides(deps, &context, overrides()).await?;
+    let executor = start_with_local_resume_and(deps, &context, overrides()).await?;
     let recovered: Result<String, String> = executor
         .invoke_and_await_agent(
             &caller_component,
