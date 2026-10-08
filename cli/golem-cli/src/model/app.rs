@@ -769,6 +769,43 @@ pub fn manifest_metadata_from_yaml_file(source: &Path) -> app_raw::ApplicationMe
         .unwrap_or_default()
 }
 
+/// The default tools that an environment uses: all of them when it selects none or `"*"`,
+/// otherwise the ones that it names.
+fn selected_default_tools<'a>(
+    selection: Option<&app_raw::ManifestDefaultTools>,
+    default_tools: &'a [golem_common::model::tool::DefaultTool],
+) -> Vec<&'a golem_common::model::tool::DefaultTool> {
+    match selection {
+        None | Some(app_raw::ManifestDefaultTools::All(_)) => default_tools.iter().collect(),
+        Some(app_raw::ManifestDefaultTools::Names(names)) => default_tools
+            .iter()
+            .filter(|tool| names.iter().any(|name| name == tool.name))
+            .collect(),
+    }
+}
+
+/// The names in a selection of default tools that are not default tools.
+fn unknown_default_tool_names<'a>(
+    selection: Option<&'a app_raw::ManifestDefaultTools>,
+    default_tools: &[golem_common::model::tool::DefaultTool],
+) -> Vec<&'a str> {
+    match selection {
+        Some(app_raw::ManifestDefaultTools::Names(names)) => names
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !default_tools.iter().any(|tool| tool.name == *name))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A tool that the CLI declares by itself for every deployment of the selected environment.
+#[derive(Clone, Debug)]
+struct DefaultTool {
+    declaration: WithSource<app_raw::ToolDeclaration>,
+    environment_binding: app_raw::ToolBinding,
+}
+
 #[derive(Clone, Debug)]
 pub struct WithSource<T> {
     pub source: PathBuf,
@@ -860,6 +897,8 @@ pub struct Application {
         BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+    // Kept apart from `tool_declarations`: a build does not see the default tools.
+    default_tools: BTreeMap<ToolName, DefaultTool>,
     tool_middleware_declarations:
         BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
     tool_releases: BTreeMap<EnvironmentName, WithSource<IndexMap<String, app_raw::PublishTool>>>,
@@ -1078,11 +1117,52 @@ impl Application {
         &self.tool_middleware_declarations
     }
 
-    pub fn environment_tool_bindings(&self) -> Option<&IndexMap<String, app_raw::ToolBinding>> {
-        self.selected_environment()
+    /// The environment-level tool bindings that the manifest gives for the selected environment.
+    pub fn environment_tool_bindings(&self) -> BTreeMap<String, ToolBindingState> {
+        let mut bindings = BTreeMap::new();
+        self.apply_environment_tool_bindings(&mut bindings);
+        bindings
+    }
+
+    /// Environment-level tool bindings of a deployment: the binding of each default tool, with
+    /// the bindings that the manifest gives merged over them. A default tool that the
+    /// environment cannot use is not in the deployment, so it gets no binding, also not the one
+    /// that the manifest gives it.
+    pub fn deployed_environment_tool_bindings(
+        &self,
+        unavailable_default_tools: &BTreeSet<ToolName>,
+    ) -> BTreeMap<String, ToolBindingState> {
+        let mut bindings = self
+            .default_tools
+            .iter()
+            .map(|(name, tool)| {
+                (
+                    name.to_string(),
+                    ToolBindingState::from_binding(tool.environment_binding.clone()),
+                )
+            })
+            .collect();
+        self.apply_environment_tool_bindings(&mut bindings);
+        for name in unavailable_default_tools {
+            if self.default_tools.contains_key(name) {
+                bindings.remove(name.as_str());
+            }
+        }
+        bindings
+    }
+
+    fn apply_environment_tool_bindings(&self, bindings: &mut BTreeMap<String, ToolBindingState>) {
+        for (name, binding) in self
+            .selected_environment()
             .tools
-            .as_ref()
-            .map(|tools| &tools.bindings)
+            .iter()
+            .flat_map(|tools| &tools.bindings)
+        {
+            bindings
+                .entry(name.clone())
+                .or_default()
+                .apply(binding.clone());
+        }
     }
 
     pub fn universal_tool_middleware(&self) -> Result<Vec<ToolMiddlewareInstallation>, String> {
@@ -1137,6 +1217,72 @@ impl Application {
                     .as_ref()
                     .map(|release| (name, release))
             })
+    }
+
+    /// The default tools of the selected environment, with the release of each.
+    pub fn default_tool_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.default_tools.iter().filter_map(|(name, tool)| {
+            tool.declaration
+                .value
+                .release
+                .as_ref()
+                .map(|release| (name, release))
+        })
+    }
+
+    /// The default tools whose release the environment has no grant for.
+    /// The default tools that the deployment leaves to the server, because the server has a
+    /// native tool with the same name.
+    pub fn default_tools_with_a_native_tool(
+        &self,
+        native_tool_names: &BTreeSet<ToolName>,
+    ) -> BTreeSet<ToolName> {
+        self.default_tools
+            .keys()
+            .filter(|name| native_tool_names.contains(*name))
+            .cloned()
+            .collect()
+    }
+
+    pub fn default_tools_without_grant(
+        &self,
+        is_granted: impl Fn(&golem_common::model::tool_release::ToolReleaseReference) -> bool,
+    ) -> BTreeSet<ToolName> {
+        self.default_tool_release_references()
+            .filter(|(_, release)| {
+                !release
+                    .to_release_reference()
+                    .is_ok_and(|reference| is_granted(&reference))
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Remote releases that a deployment uses: the releases that the manifest declares, and the
+    /// default tools.
+    pub fn deployed_remote_release_references(
+        &self,
+    ) -> impl Iterator<Item = (&ToolName, &app_raw::RegistrySubject)> {
+        self.remote_release_references()
+            .chain(self.default_tool_release_references())
+    }
+
+    /// Tool declarations of a deployment: those of the manifest, and the default tools except
+    /// the ones that the environment cannot use.
+    pub fn deployed_tool_declarations(
+        &self,
+        unavailable_default_tools: &BTreeSet<ToolName>,
+    ) -> BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>> {
+        let mut declarations = self.tool_declarations.clone();
+        declarations.extend(
+            self.default_tools
+                .iter()
+                .filter(|(name, _)| !unavailable_default_tools.contains(*name))
+                .map(|(name, tool)| (name.clone(), tool.declaration.clone())),
+        );
+        declarations
     }
 
     pub fn remote_release_reference(&self, name: &ToolName) -> Option<&app_raw::RegistrySubject> {
@@ -1552,6 +1698,11 @@ impl Application {
     ) -> anyhow::Result<ResolvedToolProvision> {
         let declaration = declaration_override
             .or_else(|| self.tool_declarations.get(tool_name))
+            .or_else(|| {
+                self.default_tools
+                    .get(tool_name)
+                    .map(|tool| &tool.declaration)
+            })
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
         let mut store = Store::new();
 
@@ -3942,8 +4093,8 @@ mod app_builder {
     use super::ResourceDefinitionCreation;
     use super::ResourceName;
     use super::{
-        ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue, ToolValidationPhase,
-        add_tool_issues, multiple_template_paths_error,
+        DefaultTool, ToolEntityPath, ToolName, ToolValidationCode, ToolValidationIssue,
+        ToolValidationPhase, add_tool_issues, multiple_template_paths_error,
     };
     use crate::app::edit;
     use crate::fuzzy::FuzzySearch;
@@ -3972,6 +4123,7 @@ mod app_builder {
         HttpApiDeploymentAgentOptions, HttpApiDeploymentAgentSecurity, HttpApiDeploymentCreation,
         HttpApiDeploymentScheme, SecuritySchemeAgentSecurity, TestSessionHeaderAgentSecurity,
     };
+    use golem_common::model::tool::{BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL, DEFAULT_TOOLS};
     use golem_common::model::tool_middleware::ToolMiddlewareName;
     use indexmap::IndexMap;
     use itertools::Itertools;
@@ -4349,6 +4501,7 @@ mod app_builder {
             BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
         tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
+        default_tools: BTreeMap<ToolName, DefaultTool>,
         tool_middleware_declarations:
             BTreeMap<ToolMiddlewareName, WithSource<app_raw::ToolMiddlewareDeclaration>>,
         tool_releases:
@@ -4430,6 +4583,7 @@ mod app_builder {
             for app in apps {
                 builder.add_raw_app(&mut validation, app);
             }
+            builder.add_default_tools(&component_presets.environment);
 
             builder.validate_environment_preset_references(&mut validation);
             builder.validate_selected_preset_references(&mut validation, &component_presets);
@@ -4452,6 +4606,7 @@ mod app_builder {
                 components: builder.components,
                 agents: builder.agents,
                 tool_declarations: builder.tool_declarations,
+                default_tools: builder.default_tools,
                 tool_middleware_declarations: builder.tool_middleware_declarations,
                 tool_releases: builder.tool_releases,
                 tool_middleware_releases: builder.tool_middleware_releases,
@@ -4524,6 +4679,53 @@ mod app_builder {
                 local_server: builder.local_server,
                 version: builder.version,
             })
+        }
+
+        /// Declares the default tools as releases of the built-in tool owner and gives each an
+        /// environment-level binding that limits no config key and no secret, unless the selected
+        /// environment turns them off. A tool that the manifest declares is never replaced.
+        fn add_default_tools(&mut self, selected_environment: &EnvironmentName) {
+            let Some(environment) = self.environments.get(selected_environment) else {
+                return;
+            };
+            let default_tools =
+                super::selected_default_tools(environment.default_tools.as_ref(), DEFAULT_TOOLS);
+            let source = self
+                .environment_sources
+                .get(selected_environment)
+                .cloned()
+                .unwrap_or_default();
+            for default_tool in default_tools {
+                let tool_name = ToolName::try_from(default_tool.name)
+                    .expect("default tool names are valid tool names");
+                if self.tool_declarations.contains_key(&tool_name) {
+                    continue;
+                }
+                self.default_tools.insert(
+                    tool_name,
+                    DefaultTool {
+                        declaration: WithSource::new(
+                            source.clone(),
+                            app_raw::ToolDeclaration {
+                                release: Some(app_raw::RegistrySubject::ByCoordinates(
+                                    app_raw::RegistrySubjectByCoordinates {
+                                        account: BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL.to_string(),
+                                        name: default_tool.name.to_string(),
+                                        version: default_tool.version.to_string(),
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        ),
+                        // A binding without scopes reads the config keys and secrets that its
+                        // agent reads.
+                        environment_binding: app_raw::ToolBinding {
+                            filesystem_access: Some(default_tool.filesystem_access),
+                            ..Default::default()
+                        },
+                    },
+                );
+            }
         }
 
         fn add_entity_source(&mut self, key: UniqueSourceCheckedEntityKey, source: &Path) -> bool {
@@ -5259,6 +5461,21 @@ mod app_builder {
 
         fn validate_tool_release_configuration(&mut self, validation: &mut ValidationBuilder) {
             let mut issues = Vec::new();
+            for (environment_name, environment) in &self.environments {
+                for name in super::unknown_default_tool_names(
+                    environment.default_tools.as_ref(),
+                    DEFAULT_TOOLS,
+                ) {
+                    validation.add_error(format!(
+                        "Environment {environment_name} selects '{name}' in defaultTools, which is not a default tool. The default tools are: {}",
+                        DEFAULT_TOOLS
+                            .iter()
+                            .map(|tool| tool.name)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+            }
             for (name, declaration) in &self.tool_middleware_declarations {
                 if let Some(component_name) = &declaration.value.component
                     && !self.components.contains_key(component_name)
@@ -5903,6 +6120,7 @@ mod test {
     use golem_common::model::domain_registration::Domain;
     use golem_common::model::environment::EnvironmentName;
     use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+    use golem_common::model::tool::ToolFilesystemAccess;
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -7314,6 +7532,438 @@ bridge:
                 tool_name,
             } if tool_name.as_str() == "remote-tool"
         ));
+    }
+
+    fn default_bash_release() -> app_raw::RegistrySubject {
+        app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
+            account: "builtin-tool-owner@golem.cloud".to_string(),
+            name: "bash".to_string(),
+            version: golem_common::model::tool::BUILTIN_BASH_TOOL_VERSION.to_string(),
+        })
+    }
+
+    fn deployed_releases(app: &Application) -> Vec<(String, app_raw::RegistrySubject)> {
+        app.deployed_remote_release_references()
+            .map(|(name, release)| (name.to_string(), release.clone()))
+            .collect()
+    }
+
+    fn deployed_tool_names(app: &Application, unavailable_default_tools: &[&str]) -> Vec<String> {
+        let unavailable_default_tools = unavailable_default_tools
+            .iter()
+            .map(|name| ToolName::try_from(*name).unwrap())
+            .collect();
+        app.deployed_tool_declarations(&unavailable_default_tools)
+            .keys()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    fn environment_filesystem_access(
+        app: &Application,
+        unavailable_default_tools: &[&str],
+    ) -> Vec<(String, ToolFilesystemAccess)> {
+        let unavailable_default_tools = unavailable_default_tools
+            .iter()
+            .map(|name| ToolName::try_from(*name).unwrap())
+            .collect();
+        app.deployed_environment_tool_bindings(&unavailable_default_tools)
+            .into_iter()
+            .map(|(name, binding)| (name, binding.filesystem_access))
+            .collect()
+    }
+
+    #[test]
+    fn default_tools_get_an_environment_binding_with_file_access() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+    }
+
+    #[test]
+    fn a_manifest_environment_binding_merges_over_the_default_tool_binding() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+                tools:
+                  bash: {}
+              restricted:
+                server: local
+                tools:
+                  bash:
+                    filesystemAccess: denied
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+
+        let (app, _dir) = load_app_for_env(source, "restricted", &[]);
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Denied)]
+        );
+    }
+
+    #[test]
+    fn an_unavailable_default_tool_gets_no_environment_binding() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              explicit:
+                server: local
+                tools:
+                  bash:
+                    secretKeysReadable: []
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
+
+        // The binding that the manifest gives would name a tool that is not in the deployment.
+        let (app, _dir) = load_app_for_env(source, "explicit", &[]);
+        assert_eq!(environment_filesystem_access(&app, &["bash"]), []);
+    }
+
+    #[test]
+    fn an_agent_binding_of_a_default_tool_needs_no_declaration() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            components:
+              app:main:
+                componentWasm: main.wasm
+            agents:
+              Shell:
+                tools:
+                  bash:
+                    filesystemAccess: denied
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [("bash".to_string(), default_bash_release())]
+        );
+        assert_eq!(
+            environment_filesystem_access(&app, &[]),
+            [("bash".to_string(), ToolFilesystemAccess::Allowed)]
+        );
+        with_resolved_agent(&app, "app:main", "Shell", |agent| {
+            assert_eq!(
+                agent.tool_bindings()["bash"].filesystem_access,
+                ToolFilesystemAccess::Denied
+            );
+        });
+    }
+
+    #[test]
+    fn default_tools_take_no_part_in_a_build() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            bridge:
+              rust:
+                internal:
+                  tools: "*"
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(app.remote_release_references().count(), 0);
+        assert!(!app.known_application_tool_names().contains("bash"));
+        assert!(!app.requires_remote_release_bridge_metadata());
+        assert!(app.environment_tool_bindings().is_empty());
+    }
+
+    #[test]
+    fn a_deployment_declares_the_default_tools_that_the_environment_can_use() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+            tools:
+              search:
+                release:
+                  account: publisher@example.com
+                  name: search
+                  version: 1.0.0
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(deployed_tool_names(&app, &[]), ["bash", "search"]);
+        assert_eq!(deployed_tool_names(&app, &["bash"]), ["search"]);
+        assert_eq!(deployed_tool_names(&app, &["search"]), ["bash", "search"]);
+        assert!(
+            app.resolve_remote_tool_provision(&ToolName::try_from("bash").unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_default_tool_without_a_grant_is_unavailable() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        let bash_reference = default_bash_release().to_release_reference().unwrap();
+
+        assert_eq!(
+            app.default_tools_without_grant(|_| false),
+            BTreeSet::from([ToolName::try_from("bash").unwrap()])
+        );
+        assert_eq!(
+            app.default_tools_without_grant(|reference| reference == &bash_reference),
+            BTreeSet::new()
+        );
+    }
+
+    #[test]
+    fn a_native_tool_of_the_server_takes_the_place_of_a_default_tool() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              none:
+                server: local
+                defaultTools: []
+        "#};
+        let bash = ToolName::try_from("bash").unwrap();
+        let native = BTreeSet::from([bash.clone(), ToolName::try_from("native-search").unwrap()]);
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(
+            app.default_tools_with_a_native_tool(&native),
+            BTreeSet::from([bash])
+        );
+        assert!(
+            app.default_tools_with_a_native_tool(&BTreeSet::new())
+                .is_empty()
+        );
+
+        // A default tool that the environment does not select is not there to be replaced.
+        let (app, _dir) = load_app_for_env(source, "none", &[]);
+        assert!(app.default_tools_with_a_native_tool(&native).is_empty());
+    }
+
+    #[test]
+    fn default_tools_inherit_the_config_keys_and_secrets_of_the_agent() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+
+        // A binding without a scope reads what its agent reads.
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert!(bash.config_keys_readable.is_empty());
+        assert!(bash.secret_keys_readable.is_empty());
+        assert!(bash.secret_keys_revealable.is_empty());
+    }
+
+    #[test]
+    fn a_manifest_binding_limits_the_keys_of_a_default_tool_to_none_or_to_some() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              none:
+                server: local
+                tools:
+                  bash:
+                    configKeysReadable: []
+                    secretKeysReadable: []
+                    secretKeysRevealable: []
+              some:
+                server: local
+                tools:
+                  bash:
+                    secretKeysReadable:
+                      - credentials.github.token
+        "#};
+        let no_config_keys = app_raw::ManifestConfigKeyScope::Keys(vec![]);
+        let no_secrets = app_raw::ManifestSecretKeyScope::Keys(vec![]);
+
+        let (app, _dir) = load_app_for_env(source, "none", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert_eq!(bash.config_keys_readable, [no_config_keys]);
+        assert_eq!(bash.secret_keys_readable, std::slice::from_ref(&no_secrets));
+        assert_eq!(
+            bash.secret_keys_revealable,
+            std::slice::from_ref(&no_secrets)
+        );
+
+        // A scope that the manifest does not write stays without a limit.
+        let (app, _dir) = load_app_for_env(source, "some", &[]);
+        let bash = &app.deployed_environment_tool_bindings(&BTreeSet::new())["bash"];
+        assert!(bash.config_keys_readable.is_empty());
+        assert_eq!(
+            bash.secret_keys_readable,
+            [app_raw::ManifestSecretKeyScope::Keys(vec![
+                "credentials.github.token".to_string()
+            ])]
+        );
+        assert!(bash.secret_keys_revealable.is_empty());
+    }
+
+    #[test]
+    fn default_tools_are_added_when_the_manifest_declares_no_tools() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [("bash".to_string(), default_bash_release())]
+        );
+    }
+
+    #[test]
+    fn default_tools_are_selected_per_environment() {
+        let source = indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+                defaultTools: []
+              staging:
+                server: local
+                defaultTools: "*"
+              listed:
+                server: local
+                defaultTools: [bash]
+        "#};
+
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+        assert_eq!(deployed_releases(&app), []);
+        assert_eq!(environment_filesystem_access(&app, &[]), []);
+
+        for environment in ["staging", "listed"] {
+            let (app, _dir) = load_app_for_env(source, environment, &[]);
+            assert_eq!(
+                deployed_releases(&app),
+                [("bash".to_string(), default_bash_release())],
+                "{environment}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_environment_selects_all_none_or_some_of_the_default_tools() {
+        let tool = |name| golem_common::model::tool::DefaultTool {
+            name,
+            version: "1.0.0",
+            filesystem_access: ToolFilesystemAccess::Allowed,
+        };
+        let default_tools = [tool("bash"), tool("git")];
+        let list = |names: &[&str]| {
+            Some(app_raw::ManifestDefaultTools::Names(
+                names.iter().map(|name| name.to_string()).collect(),
+            ))
+        };
+        let selected = |selection: Option<app_raw::ManifestDefaultTools>| {
+            super::selected_default_tools(selection.as_ref(), &default_tools)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(selected(None), ["bash", "git"]);
+        assert_eq!(
+            selected(Some(app_raw::ManifestDefaultTools::All("*".to_string()))),
+            ["bash", "git"]
+        );
+        assert_eq!(selected(list(&[])), Vec::<&str>::new());
+        assert_eq!(selected(list(&["bash"])), ["bash"]);
+        assert_eq!(selected(list(&["git", "bash"])), ["bash", "git"]);
+
+        assert_eq!(
+            super::unknown_default_tool_names(list(&["git", "grep"]).as_ref(), &default_tools),
+            ["grep"]
+        );
+        assert!(super::unknown_default_tool_names(None, &default_tools).is_empty());
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_default_tool_is_a_manifest_error() {
+        let errors = load_app_errors(indoc! {r#"
+            app: plain-app
+            environments:
+              local:
+                server: local
+              staging:
+                server: local
+                defaultTools: [bash, grep]
+        "#});
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Environment staging selects 'grep'")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors.iter().any(|error| error.contains("'bash'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_declaration_replaces_the_default_tool_of_the_same_name() {
+        let source = indoc! {r#"
+            app: own-bash
+            environments:
+              local:
+                server: local
+            tools:
+              bash:
+                release:
+                  account: publisher@example.com
+                  name: bash
+                  version: 9.9.9
+        "#};
+        let (app, _dir) = load_app_for_env(source, "local", &[]);
+
+        assert_eq!(
+            deployed_releases(&app),
+            [(
+                "bash".to_string(),
+                app_raw::RegistrySubject::ByCoordinates(app_raw::RegistrySubjectByCoordinates {
+                    account: "publisher@example.com".to_string(),
+                    name: "bash".to_string(),
+                    version: "9.9.9".to_string(),
+                })
+            )]
+        );
+        assert_eq!(environment_filesystem_access(&app, &[]), []);
     }
 
     #[test]

@@ -114,6 +114,7 @@ pub enum ToolValidationCode {
     InvalidConfigScope,
     InvalidSecretScope,
     RevealableScopeNarrowed,
+    ScopeOutsideEnvironment,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]

@@ -200,7 +200,7 @@ impl<'de> Deserialize<'de> for ToolDeclarations {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ToolDeclaration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -507,6 +507,34 @@ pub enum ManifestSecretKeyScope {
 pub enum ManifestConfigKeyScope {
     All(String),
     Keys(Vec<String>),
+}
+
+/// The default tools that an environment uses: `"*"` for all of them, or their names.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ManifestDefaultTools {
+    All(String),
+    Names(Vec<String>),
+}
+
+impl<'de> Deserialize<'de> for ManifestDefaultTools {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RawManifestKeyScope::deserialize(deserializer)? {
+            RawManifestKeyScope::All(value) if value == "*" => Ok(Self::All(value)),
+            RawManifestKeyScope::All(value) => Err(serde::de::Error::custom(format!(
+                "expected '*' or a list of default tool names, found '{value}'"
+            ))),
+            RawManifestKeyScope::Keys(names) if names.iter().any(|name| name == "*") => {
+                Err(serde::de::Error::custom(
+                    "'*' must be used as the whole value of defaultTools, not as a list entry",
+                ))
+            }
+            RawManifestKeyScope::Keys(names) => Ok(Self::Names(names)),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1330,6 +1358,10 @@ pub struct Environment {
     pub version: Option<AppVersionSourceOverride>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tools: Option<EnvironmentTools>,
+    /// The tools that the CLI adds to every deployment of this environment: all default tools
+    /// when absent.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_tools: Option<ManifestDefaultTools>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]

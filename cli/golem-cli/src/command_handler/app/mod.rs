@@ -38,7 +38,7 @@ use crate::command_handler::app::tool_middleware::{
 use crate::command_handler::app::version_strategy::{ResolvedAppVersionSource, compute_version};
 use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
-use crate::error::service::{MapServiceError, ServiceError};
+use crate::error::service::{MapServiceError, ServiceError, ServiceErrorKind};
 use crate::error::{HintError, NonSuccessfulExit};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch, Match};
@@ -223,6 +223,18 @@ fn register_ambient_tool_name(
     Ok(())
 }
 
+/// The MCP-imported tools, as `(import index, tool name)`, that have the name of a default tool.
+fn mcp_tools_named_like_default_tools<'a>(
+    imported: impl IntoIterator<Item = (u32, &'a str)>,
+    default_tools: &BTreeSet<ToolName>,
+) -> Vec<(u32, String)> {
+    imported
+        .into_iter()
+        .filter(|(_, name)| default_tools.iter().any(|tool| tool.as_str() == *name))
+        .map(|(import_index, name)| (import_index, name.to_string()))
+        .collect()
+}
+
 fn canonical_mcp_diagnostic_name(prefix: Option<&str>, upstream_name: &str) -> String {
     let sanitized = golem_mcp_import::tool::sanitize_name(upstream_name);
     prefix
@@ -293,6 +305,29 @@ impl ToolGrantReconciliationPlan {
 
     fn upserts(&self) -> impl Iterator<Item = &ToolReleaseReference> {
         self.creations.iter().chain(&self.reference_updates)
+    }
+
+    /// Takes the grant that `reference` needs out of the plan. Returns false when the plan has
+    /// no such grant to create.
+    fn take_upsert(&mut self, reference: &ToolReleaseReference) -> bool {
+        let upserts = self.upserts().count();
+        self.creations.retain(|creation| creation != reference);
+        self.reference_updates.retain(|update| update != reference);
+        if self.upserts().count() == upserts {
+            return false;
+        }
+        let taken = tool_grant_plan_entry(EnvironmentToolGrantPlanAction::Create, reference, None);
+        self.view.entries.retain(|entry| {
+            !(matches!(
+                entry.action,
+                EnvironmentToolGrantPlanAction::Create
+                    | EnvironmentToolGrantPlanAction::UpdateReference
+            ) && entry.release_id == taken.release_id
+                && entry.account == taken.account
+                && entry.name == taken.name
+                && entry.version == taken.version)
+        });
+        true
     }
 }
 
@@ -384,6 +419,50 @@ fn build_tool_grant_reconciliation_plan(
         view: EnvironmentToolGrantPlanView { entries },
         resolved_grants,
     }
+}
+
+/// What became of the grant that a default tool needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DefaultToolGrantOutcome {
+    Granted,
+    /// The run must not change grants.
+    NotGranted,
+    /// The server did not make the grant; the text is its reason.
+    Refused(String),
+}
+
+/// Settles the grants that the default tools need, apart from the plan: such a grant is made
+/// without a question, and a tool that cannot get one is left out of the deployment instead of
+/// failing it. Returns the outcome for each default tool that had no grant.
+async fn settle_default_tool_grants<F, Fut>(
+    plan: &mut ToolGrantReconciliationPlan,
+    default_tools: &[(ToolName, ToolReleaseReference)],
+    may_change_grants: bool,
+    mut create_grant: F,
+) -> Vec<(ToolName, DefaultToolGrantOutcome)>
+where
+    F: FnMut(ToolReleaseReference) -> Fut,
+    Fut: Future<Output = anyhow::Result<EnvironmentToolGrantWithDetails>>,
+{
+    let mut outcomes = Vec::new();
+    for (name, reference) in default_tools {
+        if !plan.take_upsert(reference) {
+            continue;
+        }
+        let outcome = if !may_change_grants {
+            DefaultToolGrantOutcome::NotGranted
+        } else {
+            match create_grant(reference.clone()).await {
+                Ok(grant) => {
+                    plan.resolved_grants.insert(reference.clone(), grant);
+                    DefaultToolGrantOutcome::Granted
+                }
+                Err(error) => DefaultToolGrantOutcome::Refused(format!("{error:#}")),
+            }
+        };
+        outcomes.push((name.clone(), outcome));
+    }
+    outcomes
 }
 
 impl AppCommandHandler {
@@ -1040,10 +1119,26 @@ impl AppCommandHandler {
             .await
             .map_err(DeployError::PrepareError)?;
 
-        let mut tool_grant_plan = self
-            .plan_tool_grant_reconciliation(&environment)
+        let native_default_tools = self
+            .default_tools_with_a_native_tool(&environment)
             .await
             .map_err(DeployError::PrepareError)?;
+        self.reject_mcp_tools_named_like_default_tools(&environment, &native_default_tools)
+            .await
+            .map_err(DeployError::PrepareError)?;
+
+        let mut tool_grant_plan = self
+            .plan_tool_grant_reconciliation(&environment, Some(&native_default_tools))
+            .await
+            .map_err(DeployError::PrepareError)?;
+        self.settle_default_tool_grants(
+            &environment,
+            &mut tool_grant_plan,
+            !config.stage && !config.plan,
+            &native_default_tools,
+        )
+        .await
+        .map_err(DeployError::PrepareError)?;
         let requires_access_changes = tool_grant_plan.requires_access_changes()
             || tool_middleware_grant_plan.requires_access_changes();
         let has_tool_grant_changes =
@@ -2032,13 +2127,21 @@ impl AppCommandHandler {
     async fn plan_tool_grant_reconciliation(
         &self,
         environment: &ResolvedEnvironmentIdentity,
+        // The default tools that need no grant; `None` for a run that uses no default tool.
+        default_tools_left_out: Option<&BTreeSet<ToolName>>,
     ) -> anyhow::Result<ToolGrantReconciliationPlan> {
         let desired = {
             let app_ctx = self.ctx.app_context_lock().await;
-            app_ctx
-                .some_or_err()?
-                .application()
+            let application = app_ctx.some_or_err()?.application();
+            application
                 .remote_release_references()
+                .chain(
+                    application
+                        .default_tool_release_references()
+                        .filter(|(name, _)| {
+                            default_tools_left_out.is_some_and(|left_out| !left_out.contains(*name))
+                        }),
+                )
                 .map(|(_, reference)| reference.clone())
                 .collect::<BTreeSet<_>>()
                 .into_iter()
@@ -2056,6 +2159,223 @@ impl AppCommandHandler {
             .values;
 
         Ok(build_tool_grant_reconciliation_plan(&desired, &current))
+    }
+
+    /// The default tools that this deployment leaves to the server, because the server has a
+    /// native tool with the same name. The native tool can be another version of the tool.
+    async fn default_tools_with_a_native_tool(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+    ) -> anyhow::Result<BTreeSet<ToolName>> {
+        let has_default_tools = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .default_tool_release_references()
+                .next()
+                .is_some()
+        };
+        if !has_default_tools {
+            return Ok(BTreeSet::new());
+        }
+
+        let native_tool_names = self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .get_environment_deployment_plan(&environment.environment_id.0)
+            .await
+            .map_service_error()?
+            .ambient_tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<BTreeSet<_>>();
+        let replaced = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .default_tools_with_a_native_tool(&native_tool_names)
+        };
+        for name in &replaced {
+            log_action(
+                "Using",
+                format!(
+                    "the native tool {} of the server in place of the default tool",
+                    name.as_str().log_color_highlight()
+                ),
+            );
+        }
+        Ok(replaced)
+    }
+
+    /// Refuses a deployment in which an MCP import supplies a tool with the name of a default
+    /// tool. The default tool would take the name, and the imported tool would be left out.
+    async fn reject_mcp_tools_named_like_default_tools(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        native_default_tools: &BTreeSet<ToolName>,
+    ) -> anyhow::Result<()> {
+        let (imports, default_tools, native_tool_names) = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app = app_ctx.some_or_err()?.application();
+            (
+                app.mcp_imports(app.environment_name())
+                    .cloned()
+                    .unwrap_or_default(),
+                app.default_tool_release_references()
+                    .map(|(name, _)| name.clone())
+                    .filter(|name| !native_default_tools.contains(name))
+                    .collect::<BTreeSet<_>>(),
+                app.known_application_tool_names()
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        if imports.is_empty() || default_tools.is_empty() {
+            return Ok(());
+        }
+
+        let imports = imports
+            .into_iter()
+            .enumerate()
+            .map(|(index, import)| resolve_mcp_import_env_vars(import, index))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let resolution = match self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .resolve_mcp_imports(
+                &environment.environment_id.0,
+                &golem_client::model::McpImportResolutionRequest {
+                    imports,
+                    native_tool_names,
+                },
+            )
+            .await
+            .map_service_error()
+        {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                log_warn(format!(
+                    "Could not read the tools of the MCP imports, so their names are not compared with the default tools: {error}"
+                ));
+                return Ok(());
+            }
+        };
+
+        let clashes = mcp_tools_named_like_default_tools(
+            resolution
+                .tools
+                .iter()
+                .filter_map(|tool| tool.definition.name().map(|name| (tool.import_index, name))),
+            &default_tools,
+        );
+        if clashes.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "{}. A default tool keeps its name: give the import a prefix, exclude the tool from the import, or leave the default tool out of defaultTools for the environment",
+            clashes
+                .iter()
+                .map(|(index, name)| format!(
+                    "MCP import {index} supplies a tool named '{name}', which is the name of a default tool"
+                ))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+
+    /// Gives the environment the grants that the default tools need, and reports each default
+    /// tool that the deployment goes on without.
+    async fn settle_default_tool_grants(
+        &self,
+        environment: &ResolvedEnvironmentIdentity,
+        plan: &mut ToolGrantReconciliationPlan,
+        may_change_grants: bool,
+        native_default_tools: &BTreeSet<ToolName>,
+    ) -> anyhow::Result<()> {
+        let default_tools = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            app_ctx
+                .some_or_err()?
+                .application()
+                .default_tool_release_references()
+                .filter(|(name, _)| !native_default_tools.contains(*name))
+                .map(|(name, release)| {
+                    let reference = release.to_release_reference().map_err(anyhow::Error::msg)?;
+                    Ok((name.clone(), reference))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+        };
+        if default_tools.is_empty() {
+            return Ok(());
+        }
+
+        let clients = self.ctx.golem_clients().await?;
+        let outcomes =
+            settle_default_tool_grants(plan, &default_tools, may_change_grants, |release| {
+                let grants = &clients.environment_tool_grants;
+                async move {
+                    grants
+                        .create_environment_tool_grant(
+                            &environment.environment_id.0,
+                            &EnvironmentToolGrantCreation {
+                                release,
+                                automatic: true,
+                            },
+                        )
+                        .await
+                        .map_service_error()
+                        .map_err(|error| match &error.kind {
+                            ServiceErrorKind::ErrorResponse(response)
+                                if !response.errors.is_empty() =>
+                            {
+                                anyhow!(response.errors.join("; "))
+                            }
+                            _ => anyhow!(error),
+                        })
+                }
+            })
+            .await;
+
+        for (name, outcome) in outcomes {
+            let release = default_tools
+                .iter()
+                .find(|(default_tool, _)| default_tool == &name)
+                .map(|(_, reference)| match reference {
+                    ToolReleaseReference::ById(reference) => reference.release_id.to_string(),
+                    ToolReleaseReference::ByCoordinates(reference) => format!(
+                        "{}/{}@{}",
+                        reference.account, reference.name, reference.version
+                    ),
+                })
+                .unwrap_or_default()
+                .log_color_highlight();
+            let name = name.as_str().log_color_highlight();
+            match outcome {
+                DefaultToolGrantOutcome::Granted => {
+                    log_action("Granted", format!("default tool {name} to the environment"))
+                }
+                DefaultToolGrantOutcome::NotGranted => log_warn_action(
+                    "Skipping",
+                    format!(
+                        "default tool {name}: the environment has no grant for it yet, and --plan and --stage do not create one. A deployment without these flags adds the tool."
+                    ),
+                ),
+                DefaultToolGrantOutcome::Refused(reason) => log_warn_action(
+                    "Skipping",
+                    format!(
+                        "default tool {name}: the server did not grant its release {release} to the environment ({reason}). The deployment continues without the tool. To stop this message, leave the tool out of {} for the environment in the application manifest.",
+                        "defaultTools".log_color_highlight()
+                    ),
+                ),
+            }
+        }
+        Ok(())
     }
 
     async fn plan_tool_middleware_grant_reconciliation(
@@ -3438,7 +3758,10 @@ impl AppCommandHandler {
                 .environment_handler()
                 .resolve_environment(EnvironmentResolveMode::ManifestOnly)
                 .await?;
-            let mut plan = self.plan_tool_grant_reconciliation(&environment).await?;
+            // A build does not use the default tools.
+            let mut plan = self
+                .plan_tool_grant_reconciliation(&environment, None)
+                .await?;
             plan.retain_access_changes();
             self.validate_tool_grant_reconciliation(&environment, &plan)
                 .await?;
@@ -4221,11 +4544,12 @@ fn render_tool_middleware_publication_plan_entry(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_tool_grant_reconciliation_plan, canonical_mcp_diagnostic_name,
-        duplicate_component_matches, register_ambient_tool_name,
+        DefaultToolGrantOutcome, GrantExecutionDecision, build_tool_grant_reconciliation_plan,
+        canonical_mcp_diagnostic_name, duplicate_component_matches, grant_execution_decision,
+        mcp_tools_named_like_default_tools, register_ambient_tool_name,
         render_tool_middleware_publication_plan_entry, resolve_agent_secret_defaults_without_value,
         resolve_mcp_import_env_vars, resolve_secret_defaults, resolved_mcp_diagnostics,
-        should_resolve_mcp_imports,
+        settle_default_tool_grants, should_resolve_mcp_imports,
     };
     use crate::command_handler::template::EnvVarRenderer;
     use crate::fuzzy::Match;
@@ -4549,6 +4873,157 @@ mod tests {
                 == crate::model::deploy::EnvironmentToolGrantPlanAction::RetainAdministratorManaged
                 && entry.grant_id == Some(administrator_managed.grant.id)
         }));
+    }
+
+    fn default_bash() -> (ToolName, ToolReleaseReference) {
+        let name = ToolName::try_from("bash").unwrap();
+        let reference = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+            account: AccountEmail::new("builtin-tool-owner@golem.cloud"),
+            name: name.clone(),
+            version: "0.2.1".to_string(),
+        });
+        (name, reference)
+    }
+
+    #[test]
+    async fn a_default_tool_is_granted_and_leaves_no_plan_entry() {
+        let (name, reference) = default_bash();
+        let created = grant(
+            "bash",
+            "0.2.1",
+            "builtin-tool-owner@golem.cloud",
+            true,
+            true,
+        );
+        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
+
+        let outcomes = settle_default_tool_grants(
+            &mut plan,
+            &[(name.clone(), reference.clone())],
+            true,
+            |requested| {
+                assert_eq!(requested, reference);
+                let created = created.clone();
+                async move { Ok(created) }
+            },
+        )
+        .await;
+
+        assert_eq!(outcomes, [(name, DefaultToolGrantOutcome::Granted)]);
+        assert!(!plan.has_changes());
+        assert!(!plan.requires_access_changes());
+        assert_eq!(
+            plan.resolved_grants
+                .get(&reference)
+                .map(|grant| grant.grant.id),
+            Some(created.grant.id)
+        );
+    }
+
+    #[test]
+    async fn a_refused_default_tool_grant_is_reported_and_does_not_stop_the_deployment() {
+        let (name, reference) = default_bash();
+        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
+
+        let outcomes = settle_default_tool_grants(
+            &mut plan,
+            &[(name.clone(), reference.clone())],
+            true,
+            |_| async { Err(anyhow::anyhow!("Referenced tool release not found")) },
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            [(
+                name,
+                DefaultToolGrantOutcome::Refused("Referenced tool release not found".to_string())
+            )]
+        );
+        assert!(!plan.has_changes());
+        assert!(!plan.requires_access_changes());
+        assert!(plan.resolved_grants.get(&reference).is_none());
+    }
+
+    #[test]
+    fn mcp_tools_with_the_name_of_a_default_tool_are_found() {
+        let default_tools = BTreeSet::from([ToolName::try_from("bash").unwrap()]);
+        let imported = [(0, "catalog-lookup"), (1, "bash"), (2, "remote-bash")];
+
+        assert_eq!(
+            mcp_tools_named_like_default_tools(imported, &default_tools),
+            [(1, "bash".to_string())]
+        );
+        assert!(mcp_tools_named_like_default_tools(imported, &BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    async fn a_run_that_must_not_change_grants_leaves_a_default_tool_out() {
+        let (name, reference) = default_bash();
+        let mut plan = build_tool_grant_reconciliation_plan(std::slice::from_ref(&reference), &[]);
+
+        let outcomes = settle_default_tool_grants(
+            &mut plan,
+            &[(name.clone(), reference.clone())],
+            false,
+            |_| async { panic!("a grant must not be created") },
+        )
+        .await;
+
+        assert_eq!(outcomes, [(name, DefaultToolGrantOutcome::NotGranted)]);
+        assert!(plan.resolved_grants.get(&reference).is_none());
+        for (stage, plan_only) in [(true, false), (false, true)] {
+            assert_eq!(
+                grant_execution_decision(
+                    stage,
+                    plan_only,
+                    plan.requires_access_changes(),
+                    plan.has_changes()
+                ),
+                GrantExecutionDecision::ContinueReadOnly
+            );
+        }
+    }
+
+    #[test]
+    async fn settling_default_tools_keeps_existing_grants_and_manifest_grants() {
+        let (name, reference) = default_bash();
+        let existing = grant(
+            "bash",
+            "0.2.1",
+            "builtin-tool-owner@golem.cloud",
+            true,
+            true,
+        );
+        let manifest_reference = ToolReleaseReference::ByCoordinates(ToolReleaseByCoordinates {
+            account: AccountEmail::new("publisher@example.com"),
+            name: ToolName::try_from("search").unwrap(),
+            version: "1.2.0".to_string(),
+        });
+        let mut plan = build_tool_grant_reconciliation_plan(
+            &[reference.clone(), manifest_reference.clone()],
+            std::slice::from_ref(&existing),
+        );
+
+        let outcomes =
+            settle_default_tool_grants(&mut plan, &[(name, reference.clone())], true, |_| async {
+                panic!("the default tool is already granted")
+            })
+            .await;
+
+        assert_eq!(outcomes, []);
+        assert_eq!(plan.creations, [manifest_reference]);
+        assert_eq!(plan.view.entries.len(), 1);
+        assert_eq!(
+            plan.view.entries[0].action,
+            EnvironmentToolGrantPlanAction::Create
+        );
+        assert_eq!(
+            plan.resolved_grants
+                .get(&reference)
+                .map(|grant| grant.grant.id),
+            Some(existing.grant.id)
+        );
     }
 
     fn grant(

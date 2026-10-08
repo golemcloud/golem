@@ -1019,12 +1019,18 @@ impl ComponentCommandHandler {
         };
         let app_ctx = self.ctx.app_context_lock().await;
         let app = app_ctx.some_or_err()?.application();
-        let mut issues = Vec::new();
-        let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
         let ambient_names = ambient_tools
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<BTreeSet<_>>();
+        // A default tool is left out of the deployment, instead of failing it, when it has no
+        // grant, and when the server has a native tool with its name.
+        let mut unavailable_default_tools = app
+            .default_tools_without_grant(|reference| resolved_tool_grants.get(reference).is_some());
+        unavailable_default_tools.extend(app.default_tools_with_a_native_tool(&ambient_names));
+        let tool_declarations = app.deployed_tool_declarations(&unavailable_default_tools);
+        let mut issues = Vec::new();
+        let mut implementations = BTreeMap::<ToolName, Vec<DiscoveredToolImplementation>>::new();
 
         for agent_name in unknown_declared_agents {
             issues.push(ToolValidationIssue::error(
@@ -1062,7 +1068,7 @@ impl ComponentCommandHandler {
                         continue;
                     }
                 };
-                if let Some(declaration) = app.tool_declarations().get(&name)
+                if let Some(declaration) = tool_declarations.get(&name)
                     && declaration
                         .value
                         .component
@@ -1096,7 +1102,7 @@ impl ComponentCommandHandler {
             }
         }
 
-        for (tool_name, declaration) in app.tool_declarations() {
+        for (tool_name, declaration) in &tool_declarations {
             let Some(release) = declaration.value.release.as_ref() else {
                 continue;
             };
@@ -1145,7 +1151,7 @@ impl ComponentCommandHandler {
             );
         }
 
-        for (tool_name, declaration) in app.tool_declarations() {
+        for (tool_name, declaration) in &tool_declarations {
             if declaration.value.release.is_none() && !implementations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
@@ -1158,7 +1164,7 @@ impl ComponentCommandHandler {
         }
 
         for (tool_name, sources) in &implementations {
-            if !app.tool_declarations().contains_key(tool_name) {
+            if !tool_declarations.contains_key(tool_name) {
                 issues.push(ToolValidationIssue::error(
                     ToolValidationPhase::DeclarationDiscoveryIdentity,
                     ToolValidationCode::MissingDeclaration,
@@ -1200,20 +1206,8 @@ impl ComponentCommandHandler {
             })
             .collect::<BTreeMap<_, _>>();
         let resolved_agents = app.resolve_agents(&agent_components)?;
-        let environment_tool_bindings = app
-            .environment_tool_bindings()
-            .map(|bindings| {
-                bindings
-                    .iter()
-                    .map(|(name, binding)| {
-                        (
-                            name.clone(),
-                            ToolBindingState::from_binding(binding.clone()),
-                        )
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let environment_tool_bindings =
+            app.deployed_environment_tool_bindings(&unavailable_default_tools);
         let has_mcp_imports = app
             .mcp_imports(app.environment_name())
             .is_some_and(|imports| !imports.is_empty());
@@ -1225,6 +1219,7 @@ impl ComponentCommandHandler {
             app.selected_environment_source(),
             &implementations,
             &ambient_names,
+            &unavailable_default_tools,
             has_mcp_imports,
         );
         for agent_name in agent_components.keys() {
@@ -1237,6 +1232,7 @@ impl ComponentCommandHandler {
                     Some(agent.source()),
                     &implementations,
                     &ambient_names,
+                    &unavailable_default_tools,
                     has_mcp_imports,
                 );
             }
@@ -1270,6 +1266,7 @@ impl ComponentCommandHandler {
                     if let Ok(name) = ToolName::try_from(raw_name.as_str())
                         && !implementations.contains_key(&name)
                         && !ambient_names.contains(&name)
+                        && !unavailable_default_tools.contains(&name)
                     {
                         dynamic_agent_bindings
                             .entry(agent_name.clone())
@@ -1300,6 +1297,7 @@ impl ComponentCommandHandler {
                 Some(component.source()),
                 &implementations,
                 &ambient_names,
+                &unavailable_default_tools,
                 false,
             );
             used_tools.extend(
@@ -1418,7 +1416,9 @@ impl ComponentCommandHandler {
                         &mut issues,
                         &ambient.name,
                         Some(&ambient.environment_binding),
+                        None,
                         &binding,
+                        false,
                         agent_name,
                         agent.as_ref().unwrap().source(),
                     );
@@ -1478,7 +1478,7 @@ impl ComponentCommandHandler {
             let Some(source) = sources.as_slice().first() else {
                 continue;
             };
-            if sources.len() != 1 || !app.tool_declarations().contains_key(tool_name) {
+            if sources.len() != 1 || !tool_declarations.contains_key(tool_name) {
                 continue;
             }
             let definition = &source.definition;
@@ -1487,8 +1487,7 @@ impl ComponentCommandHandler {
                 .release_grant()
                 .map(|grant| &grant.release_owner.email)
                 .unwrap_or(local_owner);
-            let declaration_source = app
-                .tool_declarations()
+            let declaration_source = tool_declarations
                 .get(tool_name)
                 .map(|declaration| declaration.source.clone());
 
@@ -1529,7 +1528,12 @@ impl ComponentCommandHandler {
                         &mut issues,
                         tool_name,
                         environment_binding.as_ref(),
+                        Some(&format!(
+                            "environments.{}.tools.{tool_name}",
+                            app.environment_name()
+                        )),
                         &binding,
+                        !state.secret_keys_revealable.is_empty(),
                         agent_name,
                         agent.source(),
                     );
@@ -2762,6 +2766,7 @@ fn validate_tool_binding_references<'a>(
     source: Option<&std::path::Path>,
     implementations: &BTreeMap<ToolName, Vec<DiscoveredToolImplementation>>,
     ambient_names: &BTreeSet<ToolName>,
+    left_out_default_tools: &BTreeSet<ToolName>,
     allow_dynamic_tools: bool,
 ) {
     for raw_name in names {
@@ -2781,6 +2786,8 @@ fn validate_tool_binding_references<'a>(
             continue;
         }
         match ToolName::try_from(raw_name.as_str()) {
+            // The deployment goes on without this tool, so its bindings have no use in it.
+            Ok(tool_name) if left_out_default_tools.contains(&tool_name) => {}
             Ok(tool_name)
                 if implementations.contains_key(&tool_name)
                     || ambient_names.contains(&tool_name) => {}
@@ -3006,13 +3013,88 @@ fn validate_effective_tool_binding(
     issues: &mut Vec<ToolValidationIssue>,
     tool_name: &ToolName,
     environment: Option<&ToolBindingInput>,
+    environment_binding_path: Option<&str>,
     agent: &ToolBindingInput,
+    agent_lists_revealable_secrets: bool,
     agent_name: &AgentTypeName,
     source: &std::path::Path,
 ) {
     let Some(environment) = environment else {
         return;
     };
+
+    if let Some(environment_binding_path) = environment_binding_path {
+        use golem_common::model::tool::ConfigKeyScope;
+        let mut outside = Vec::new();
+        if let (ConfigKeyScope::Keys(allowed), ConfigKeyScope::Keys(listed)) = (
+            &environment.config_keys_readable,
+            &agent.config_keys_readable,
+        ) {
+            outside.push((
+                "configKeysReadable",
+                listed
+                    .difference(allowed)
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        for (field, allowed, listed) in [
+            (
+                "secretKeysReadable",
+                &environment.secret_keys_readable,
+                &agent.secret_keys_readable,
+            ),
+            (
+                "secretKeysRevealable",
+                &environment.secret_keys_revealable,
+                &agent.secret_keys_revealable,
+            ),
+        ] {
+            // A binding that lists no revealable secrets gets its readable scope as the
+            // revealable scope, so that copy is not something the manifest asked for.
+            if field == "secretKeysRevealable" && !agent_lists_revealable_secrets {
+                continue;
+            }
+            if let (SecretKeyScope::Keys(allowed), SecretKeyScope::Keys(listed)) = (allowed, listed)
+            {
+                outside.push((
+                    field,
+                    listed
+                        .difference(allowed)
+                        .map(ToString::to_string)
+                        .collect(),
+                ));
+            }
+        }
+        for (field, keys) in outside {
+            if keys.is_empty() {
+                continue;
+            }
+            issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingSemantics,
+                ToolValidationCode::ScopeOutsideEnvironment,
+                ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.{field}")),
+                Some(source.to_path_buf()),
+                format!(
+                    "The tool does not get these keys, because {environment_binding_path}.{field} does not allow them: {}. Add them there first; a binding under an agent type can only narrow the environment binding",
+                    keys.join(", ")
+                ),
+            ));
+        }
+        if environment.filesystem_access == golem_common::model::tool::ToolFilesystemAccess::Denied
+            && agent.filesystem_access == golem_common::model::tool::ToolFilesystemAccess::Allowed
+        {
+            issues.push(ToolValidationIssue::warning(
+                ToolValidationPhase::BindingSemantics,
+                ToolValidationCode::ScopeOutsideEnvironment,
+                ToolEntityPath::agent(agent_name, format!("tools.{tool_name}.filesystemAccess")),
+                Some(source.to_path_buf()),
+                format!(
+                    "The tool does not get the agent's files, because {environment_binding_path}.filesystemAccess is denied. Allow them there first; a binding under an agent type can only narrow the environment binding"
+                ),
+            ));
+        }
+    }
 
     let readable = environment
         .secret_keys_readable
@@ -3622,6 +3704,7 @@ mod tool_binding_tests {
             Some(Path::new("golem.yaml")),
             &BTreeMap::new(),
             &BTreeSet::new(),
+            &BTreeSet::new(),
             false,
         );
         assert_eq!(issues.len(), 3);
@@ -3677,6 +3760,49 @@ mod tool_binding_tests {
     }
 
     #[test]
+    fn a_binding_of_a_default_tool_that_is_left_out_is_not_an_unknown_reference() {
+        let left_out = BTreeSet::from([ToolName::try_from("bash").unwrap()]);
+        let names = ["bash".to_string()];
+        let agent_name = AgentTypeName("ReviewAgent".to_string());
+
+        for (field_prefix, agent_name) in [
+            ("environments.tools", None),
+            ("agents.tools", Some(&agent_name)),
+            ("components.tools", None),
+        ] {
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                field_prefix,
+                agent_name,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &left_out,
+                false,
+            );
+            assert!(issues.is_empty(), "{field_prefix}");
+
+            // A name that the deployment does not know at all stays an error.
+            let mut issues = Vec::new();
+            validate_tool_binding_references(
+                &mut issues,
+                names.iter(),
+                field_prefix,
+                agent_name,
+                Some(Path::new("golem.yaml")),
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                false,
+            );
+            assert_eq!(issues.len(), 1, "{field_prefix}");
+            assert_eq!(issues[0].code, ToolValidationCode::UnknownToolReference);
+        }
+    }
+
+    #[test]
     fn projected_tool_reference_is_warning_only_when_imports_exist() {
         for (allow_dynamic, expected_severity) in [
             (true, ToolValidationSeverity::Warning),
@@ -3691,6 +3817,7 @@ mod tool_binding_tests {
                 None,
                 Some(Path::new("golem.yaml")),
                 &BTreeMap::new(),
+                &BTreeSet::new(),
                 &BTreeSet::new(),
                 allow_dynamic,
             );
@@ -3707,6 +3834,7 @@ mod tool_binding_tests {
             None,
             Some(Path::new("golem.yaml")),
             &BTreeMap::new(),
+            &BTreeSet::new(),
             &BTreeSet::new(),
             true,
         );
@@ -3863,7 +3991,9 @@ mod tool_binding_tests {
             &mut issues,
             &ToolName::try_from("grep").unwrap(),
             Some(&environment),
+            Some("environments.local.tools.grep"),
             &agent,
+            true,
             &AgentTypeName("CoderAgent".to_string()),
             Path::new("agents.yaml"),
         );
@@ -3872,6 +4002,163 @@ mod tool_binding_tests {
         assert_eq!(issues[0].code, ToolValidationCode::RevealableScopeNarrowed);
         assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
         assert_eq!(issues[0].source.as_deref(), Some(Path::new("agents.yaml")));
+    }
+
+    #[test]
+    fn keys_of_an_agent_binding_that_the_environment_does_not_allow_are_reported() {
+        let check = |environment: &ToolBindingInput,
+                     environment_binding_path: Option<&str>,
+                     agent: &ToolBindingInput,
+                     agent_lists_revealable_secrets: bool| {
+            let mut issues = Vec::new();
+            validate_effective_tool_binding(
+                &mut issues,
+                &ToolName::try_from("bash").unwrap(),
+                Some(environment),
+                environment_binding_path,
+                agent,
+                agent_lists_revealable_secrets,
+                &AgentTypeName("ReviewAgent".to_string()),
+                Path::new("golem.yaml"),
+            );
+            issues
+        };
+        let fields = |issues: &[super::ToolValidationIssue]| {
+            issues
+                .iter()
+                .map(|issue| issue.path.field_path.clone())
+                .collect::<Vec<_>>()
+        };
+        let path = Some("environments.production.tools.bash");
+        let no_limit = binding(SecretKeyScope::All, SecretKeyScope::All);
+        let github = binding(keys(&["github"]), keys(&["github"]));
+        let no_secrets = binding(keys(&[]), keys(&[]));
+
+        // The agent type lists a secret that the environment does not list.
+        let issues = check(
+            &github,
+            path,
+            &binding(keys(&["github", "gitlab"]), keys(&["github"])),
+            true,
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].path.field_path, "tools.bash.secretKeysReadable");
+        assert!(
+            issues[0].message.contains("gitlab"),
+            "{}",
+            issues[0].message
+        );
+        assert!(
+            !issues[0].message.contains("github"),
+            "{}",
+            issues[0].message
+        );
+        assert!(
+            issues[0]
+                .message
+                .contains("environments.production.tools.bash.secretKeysReadable"),
+            "{}",
+            issues[0].message
+        );
+
+        // A revealable scope that the agent type wrote is reported in the same way.
+        assert_eq!(
+            fields(&check(&no_secrets, path, &github, true)),
+            [
+                "tools.bash.secretKeysReadable",
+                "tools.bash.secretKeysRevealable"
+            ]
+        );
+
+        // Without one, the revealable scope is a copy of the readable scope: one report.
+        assert_eq!(
+            fields(&check(&no_secrets, path, &github, false)),
+            ["tools.bash.secretKeysReadable"]
+        );
+
+        // The same for a config key.
+        let mut environment = no_limit.clone();
+        environment.config_keys_readable =
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["region".to_string()]),
+            ]));
+        let mut agent = no_limit.clone();
+        agent.config_keys_readable =
+            golem_common::model::tool::ConfigKeyScope::Keys(BTreeSet::from([
+                CanonicalAgentConfigPath(vec!["level".to_string()]),
+            ]));
+        let issues = check(&environment, path, &agent, true);
+        assert_eq!(fields(&issues), ["tools.bash.configKeysReadable"]);
+        assert!(issues[0].message.contains("level"), "{}", issues[0].message);
+
+        // An agent binding with no scope takes the scope of the environment.
+        assert!(check(&github, path, &no_limit, true).is_empty());
+
+        // An environment with no scope allows every key.
+        let gitlab = binding(keys(&["gitlab"]), keys(&["gitlab"]));
+        assert!(check(&no_limit, path, &gitlab, true).is_empty());
+
+        // A binding that the manifest does not own gives no advice about the manifest.
+        assert!(check(&no_secrets, None, &github, true).is_empty());
+    }
+
+    #[test]
+    fn file_access_of_an_agent_binding_that_the_environment_denies_is_reported() {
+        use ToolFilesystemAccess::{Allowed, Denied, Unset};
+        let with_access = |access| {
+            let mut binding = binding(SecretKeyScope::All, SecretKeyScope::All);
+            binding.filesystem_access = access;
+            binding
+        };
+        let check = |environment: ToolFilesystemAccess,
+                     environment_binding_path: Option<&str>,
+                     agent: ToolFilesystemAccess| {
+            let mut issues = Vec::new();
+            validate_effective_tool_binding(
+                &mut issues,
+                &ToolName::try_from("bash").unwrap(),
+                Some(&with_access(environment)),
+                environment_binding_path,
+                &with_access(agent),
+                true,
+                &AgentTypeName("ReviewAgent".to_string()),
+                Path::new("golem.yaml"),
+            );
+            issues
+        };
+        let path = Some("environments.production.tools.bash");
+
+        let issues = check(Denied, path, Allowed);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].code, ToolValidationCode::ScopeOutsideEnvironment);
+        assert_eq!(issues[0].severity, ToolValidationSeverity::Warning);
+        assert_eq!(issues[0].path.field_path, "tools.bash.filesystemAccess");
+        assert!(
+            issues[0]
+                .message
+                .contains("environments.production.tools.bash.filesystemAccess"),
+            "{}",
+            issues[0].message
+        );
+
+        // Only an agent type that asks for the files, on an environment that denies them.
+        for (environment, agent) in [
+            (Denied, Denied),
+            (Denied, Unset),
+            (Allowed, Allowed),
+            (Allowed, Denied),
+            (Unset, Allowed),
+        ] {
+            assert!(
+                check(environment, path, agent).is_empty(),
+                "{environment:?} {agent:?}"
+            );
+        }
+
+        // A binding that the manifest does not own gives no advice about the manifest.
+        assert!(check(Denied, None, Allowed).is_empty());
     }
 
     #[test]
