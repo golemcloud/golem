@@ -8624,7 +8624,7 @@ async fn replay_with_undrained_reconstruction(
     (rs, handle, reconstruction)
 }
 
-fn spawn_primary_clock_claim(
+fn spawn_start_claim(
     rs: &ReplayState,
     claim: StartClaim,
 ) -> tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>> {
@@ -8632,8 +8632,8 @@ fn spawn_primary_clock_claim(
     tokio::spawn(async move { rs.claim_start_or_replay_end(claim).await })
 }
 
-async fn assert_claim_parked(
-    claim: &mut tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>>,
+async fn assert_claim_parked<T>(
+    claim: &mut tokio::task::JoinHandle<Result<T, WorkerExecutorError>>,
 ) {
     if let Ok(outcome) = tokio::time::timeout(Duration::from_millis(50), &mut *claim).await {
         match outcome.unwrap() {
@@ -8643,9 +8643,9 @@ async fn assert_claim_parked(
     }
 }
 
-async fn finished_claim(
-    claim: tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>>,
-) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+async fn finished_claim<T>(
+    claim: tokio::task::JoinHandle<Result<T, WorkerExecutorError>>,
+) -> Result<T, WorkerExecutorError> {
     tokio::time::timeout(Duration::from_secs(5), claim)
         .await
         .expect("the blocked claim was not woken")
@@ -8664,7 +8664,7 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
         end_for(2, 2),
     ])
     .await;
-    let mut claim = spawn_primary_clock_claim(
+    let mut claim = spawn_start_claim(
         &rs,
         StartClaim::unowned(
             &HostFunctionName::WallClockNow,
@@ -8692,7 +8692,7 @@ async fn missing_request_claim_waits_while_an_active_body_owns_the_head_entry() 
     // entity terminal drains and the claim reports the end of replay.
     let (rs, handle, mut reconstruction) =
         replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
-    let mut claim = spawn_primary_clock_claim(
+    let mut claim = spawn_start_claim(
         &rs,
         StartClaim::unowned_matching_request(
             &HostFunctionName::WallClockNow,
@@ -8726,7 +8726,7 @@ async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_
         end_for(2, 2),
     ])
     .await;
-    let mut claim = spawn_primary_clock_claim(
+    let mut claim = spawn_start_claim(
         &rs,
         StartClaim::unowned(
             &HostFunctionName::WallClockNow,
@@ -8752,7 +8752,7 @@ async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the
     // is another top-level call of the primary, so the missing Start is decided at once.
     let (rs, _handle, mut reconstruction) =
         replay_with_undrained_reconstruction(vec![start_now(), end_for(3, 1), end_for(2, 2)]).await;
-    let claim = spawn_primary_clock_claim(
+    let claim = spawn_start_claim(
         &rs,
         StartClaim::unowned(
             &HostFunctionName::WallClockNow,
@@ -8772,7 +8772,7 @@ async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() 
     // Nothing but the body can consume that entry, so the claim is decided at once.
     let (rs, _handle, mut reconstruction) =
         replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
-    let claim = spawn_primary_clock_claim(
+    let claim = spawn_start_claim(
         &rs,
         StartClaim::owned(
             &HostFunctionName::WallClockNow,
@@ -8825,6 +8825,12 @@ fn missing_start_waits_for_the_nearest_active_body_enclosing_the_head() {
         missing_start_waits_for(&[i(3), i(2)], &[i(6)], &active, target),
         Some(i(2))
     );
+    // An entity nested in the head's body is another Store: its claim waits too, although the
+    // head's body is in its chain.
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[i(7), i(6), i(2)], &active, target),
+        Some(i(2))
+    );
     // A claim whose chain was appended live keeps its strict classification.
     assert_eq!(
         missing_start_waits_for(&[i(3), i(2)], &[i(21)], &active, target),
@@ -8856,7 +8862,7 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
         .unwrap();
     assert_eq!(scope.start_idx(), OplogIndex::from_u64(3));
 
-    let mut claim = spawn_primary_clock_claim(
+    let mut claim = spawn_start_claim(
         &rs,
         StartClaim::unowned(
             &HostFunctionName::WallClockNow,
@@ -8897,7 +8903,7 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
         )
         .await
         .unwrap();
-    let claim = spawn_primary_clock_claim(
+    let claim = spawn_start_claim(
         &rs,
         StartClaim::owned(
             &HostFunctionName::WallClockNow,
@@ -8936,22 +8942,74 @@ async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_hea
             .await
         }
     });
-    if let Ok(outcome) = tokio::time::timeout(Duration::from_millis(50), &mut claim).await {
-        match outcome.unwrap() {
-            Err(error) => panic!("the missing custom Start was decided too early: {error}"),
-            Ok(_) => panic!("the missing custom Start was decided too early"),
-        }
-    }
+    assert_claim_parked(&mut claim).await;
 
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
     ));
-    let outcome = tokio::time::timeout(Duration::from_secs(5), claim)
-        .await
-        .expect("the blocked custom claim was not woken")
-        .unwrap()
-        .unwrap();
-    assert!(matches!(outcome, CustomStartClaimOutcome::ReplayEnded));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        CustomStartClaimOutcome::ReplayEnded
+    ));
     reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_owns_the_head() {
+    // [NoOp(1), Start(entity A=2), Start(3, parent 2), Start(entity C=4, parent 2), End(3→5),
+    //  End(4→6), End(2→7)] — body A invoked the nested entity C. Both reconstructions are
+    // claimed, and nothing drained A's Start(3) at the head. C claims a call that was never recorded while A's Start(3) is
+    // at the head. C is another Store than A, so the claim waits until A's reconstruction drained
+    // the cursor, and then reports the end of replay.
+    let parent = OplogIndex::from_u64(1);
+    let (outer_start, outer_identity) = rejected_tool_reconstruction_start(parent);
+    let nested_parent = OplogIndex::from_u64(2);
+    let (nested_start, nested_identity) = rejected_tool_reconstruction_start(nested_parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        outer_start,
+        start_with_parent(2),
+        nested_start,
+        end_for(3, 1),
+        end_for(4, 2),
+        end_for(2, 3),
+    ])
+    .await;
+    let mut outer = claim_rejected_tool_reconstruction(&rs, parent, &outer_identity).await;
+    let mut outer_reconstruction = outer
+        .take_historical_reconstruction()
+        .expect("outer reconstruction guard");
+    let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent, &nested_identity).await;
+    assert_eq!(nested.start_idx(), OplogIndex::from_u64(4));
+    let mut nested_reconstruction = nested
+        .take_historical_reconstruction()
+        .expect("nested reconstruction guard");
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+
+    let mut claim = spawn_start_claim(
+        &rs,
+        StartClaim::owned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(4),
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+
+    assert!(matches!(
+        rs.await_resolution_outcome(outer).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    assert!(matches!(
+        rs.await_resolution_outcome(nested).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    nested_reconstruction.body_settled();
+    outer_reconstruction.body_settled();
 }

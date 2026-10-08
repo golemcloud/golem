@@ -913,7 +913,9 @@ impl CursorTx<'_> {
         let head_chain = self
             .parent_chain(Some(head_parent), floor, Some(&active_bodies))
             .await;
-        let claim_chain = self.parent_chain(claim_parent, floor, None).await;
+        let claim_chain = self
+            .parent_chain(claim_parent, floor, Some(&active_bodies))
+            .await;
         missing_start_waits_for(
             &head_chain,
             &claim_chain,
@@ -4139,9 +4141,10 @@ pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
 /// for the nearest active body that encloses the head entry: that body, or the supervisor that
 /// drains its recorded terminal, can still consume the head, and the claim's `Start` may then
 /// turn out to be recorded after it or not at all. The claim does not wait when no active body
-/// encloses the head, when the claim is issued from inside that body (only that body can consume
-/// its own entry, so it would wait for itself), or when its chain contains a live append after
-/// the replay target.
+/// encloses the head, when that body issued the claim (only that body can consume its own entry,
+/// so it would wait for itself), or when the claim's chain contains a live append after the
+/// replay target. The body that issued the claim is the nearest active body in its chain: an
+/// entity nested in the head's body is another Store, so its claim waits like any other.
 pub(super) fn missing_start_waits_for(
     head_chain: &[OplogIndex],
     claim_chain: &[OplogIndex],
@@ -4152,6 +4155,8 @@ pub(super) fn missing_start_waits_for(
         .iter()
         .find(|index| active_bodies.contains(index))?;
     let claim_is_live = claim_chain.iter().any(|index| *index > replay_target);
-    let claim_is_inside_body = claim_chain.contains(&body);
-    (!claim_is_live && !claim_is_inside_body).then_some(body)
+    let claiming_body = claim_chain
+        .iter()
+        .find(|index| active_bodies.contains(index));
+    (!claim_is_live && claiming_body != Some(&body)).then_some(body)
 }
