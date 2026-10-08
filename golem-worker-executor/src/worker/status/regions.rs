@@ -37,8 +37,9 @@ pub(crate) struct RegionFold {
     pub(crate) steps: BTreeMap<OplogIndex, UpdateStep>,
 }
 
-/// The regions and the update steps after `entries`, from the regions and the update queue of
-/// `baseline`.
+/// The regions and the update steps after `entries`, from the regions of `baseline` and the
+/// update queue of `pending_updates` and of the pending invocations of `baseline`. The pending
+/// updates of `baseline` are not read.
 ///
 /// `Jump` and `Revert` entries add skipped regions. A successful snapshot-based update commits
 /// the history up to and including its `PendingUpdate` entry, and a successful snapshot-assisted
@@ -46,44 +47,52 @@ pub(crate) struct RegionFold {
 /// the paired queue element. The override is the history up to and including the `PendingUpdate`
 /// entry of a snapshot-based queue head. Entries in a deleted region change only the manual
 /// admissions of the queue.
-pub(crate) fn fold_regions(
-    baseline: &AgentStatusRecord,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> RegionFold {
-    fold(
-        baseline,
-        baseline.pending_updates.clone(),
-        entries,
-        None,
-        true,
-    )
-}
-
-/// The fold of [`fold_regions`] for a caller that owns the pending updates of `baseline`: the
-/// queue starts from `pending_updates`, and the pending updates of `baseline` are not read.
 pub(crate) fn fold_regions_from(
     baseline: &AgentStatusRecord,
     pending_updates: VecDeque<PendingUpdateRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> RegionFold {
-    fold(baseline, pending_updates, entries, None, true)
+    fold(baseline, pending_updates, entries, None, FoldScope::Status)
+}
+
+/// The fold of [`fold_regions_from`] from the pending updates of `baseline`.
+#[cfg(test)]
+pub(crate) fn fold_regions(
+    baseline: &AgentStatusRecord,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> RegionFold {
+    fold_regions_from(baseline, baseline.pending_updates.clone(), entries)
+}
+
+/// The skipped regions after `entries`, from an empty status.
+pub(crate) fn skipped_regions(entries: &BTreeMap<OplogIndex, OplogEntry>) -> DeletedRegions {
+    fold_skipped_regions(entries, None)
 }
 
 /// The skipped regions that a revert which drops `dropped` must respect. The regions of
 /// snapshot-based and snapshot-assisted updates whose outcome is inside `dropped`, and the
 /// override of a snapshot-based queue head inside `dropped`, are left out; jumps and earlier
-/// reverts stay. No skipped region depends on the manual admissions, so the fold does not decode
-/// the invocation payloads.
+/// reverts stay.
 pub(crate) fn revert_validation_regions(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     dropped: &OplogRegion,
+) -> DeletedRegions {
+    fold_skipped_regions(entries, Some(dropped))
+}
+
+/// The skipped regions after `entries` from an empty status, without the regions that
+/// [`fold`] leaves out for `ignored`. No skipped region depends on the manual admissions or on
+/// the update steps, so the fold neither decodes the invocation payloads nor keeps the steps.
+fn fold_skipped_regions(
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+    ignored: Option<&OplogRegion>,
 ) -> DeletedRegions {
     fold(
         &AgentStatusRecord::default(),
         VecDeque::new(),
         entries,
-        Some(dropped),
-        false,
+        ignored,
+        FoldScope::Regions,
     )
     .skipped
 }
@@ -112,14 +121,23 @@ pub(crate) fn deleted_regions(
         .build()
 }
 
-/// The fold of `entries`. Without `manual_admissions` the manual update invocations do not reach
-/// the queue, which then holds no manual admissions.
+/// What a fold gives besides the regions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FoldScope {
+    /// The queue with its manual admissions, and the update steps.
+    Status,
+    /// Nothing that the skipped regions do not need: the manual update invocations do not reach
+    /// the queue, which then holds no manual admissions, and the fold keeps no update step.
+    Regions,
+}
+
+/// The fold of `entries` in `scope`.
 fn fold(
     baseline: &AgentStatusRecord,
     pending_updates: VecDeque<PendingUpdateRef>,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     ignored: Option<&OplogRegion>,
-    manual_admissions: bool,
+    scope: FoldScope,
 ) -> RegionFold {
     let deleted = deleted_regions(baseline.deleted_regions.clone(), entries);
     let mut committed = baseline.skipped_regions.clone();
@@ -137,7 +155,7 @@ fn fold(
         |(queue, mut skipped, mut steps), (index, entry)| {
             let is_deleted = deleted.is_in_deleted_region(*index);
             let (queue, step) = match entry {
-                OplogEntry::PendingAgentInvocation { .. } if !manual_admissions => {
+                OplogEntry::PendingAgentInvocation { .. } if scope == FoldScope::Regions => {
                     (queue, UpdateStep::Unchanged)
                 }
                 _ => queue.after(*index, entry, is_deleted),
@@ -157,7 +175,7 @@ fn fold(
                     skipped.add(region);
                 }
             }
-            if step != UpdateStep::Unchanged {
+            if scope == FoldScope::Status && step != UpdateStep::Unchanged {
                 steps.insert(*index, step);
             }
             (queue, skipped, steps)

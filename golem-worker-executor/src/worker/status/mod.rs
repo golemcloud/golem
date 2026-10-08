@@ -24,8 +24,10 @@ use std::sync::Arc;
 pub(crate) mod regions;
 pub(crate) mod update_queue;
 
+#[cfg(test)]
+pub(crate) use regions::fold_regions;
 pub(crate) use regions::{
-    RegionFold, deleted_regions, fold_regions, fold_regions_from, revert_validation_regions,
+    RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };
 use update_queue::{UpdateStep, manual_update_target_revision_of};
 
@@ -1141,7 +1143,7 @@ pub(crate) async fn skipped_regions_at(
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await
         .ok_or("Missing fork source history")?;
-    Ok(fold_regions(&AgentStatusRecord::default(), &entries).skipped)
+    Ok(skipped_regions(&entries))
 }
 
 /// The entries from `first` to the horizon of `reader` that the region fold reads: the jumps,
