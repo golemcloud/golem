@@ -443,6 +443,7 @@ jobs:
         group:
           - { name: cli-integration-tests-agents, shard: agents }
           - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
+          - { name: cli-integration-tests-agents-guest-bridge-sources, shard: agents_guest_bridge_sources }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
           - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
           - { name: cli-integration-tests-deploy, shard: deploy }

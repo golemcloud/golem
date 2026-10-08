@@ -872,11 +872,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-agents-guest-bridge]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_guest_bridge' shard (app::agents::*_guest_bridge_e2e)"
+description = "Runs the it-cli 'agents_guest_bridge' shard (Rust and TypeScript agent bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --skip ":tag:agents_guest_bridge_sources" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-agents-guest-bridge-sources]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'agents_guest_bridge_sources' shard (MCP, Effect, Scala, and MoonBit)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge_sources" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-streaming]

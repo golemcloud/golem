@@ -63,6 +63,19 @@ tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
 // `deploy`.
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(effect_source_conformance, agents_guest_bridge_sources);
+tag_suite!(mcp_import, agents_guest_bridge_sources);
+tag_suite!(mcp_oauth, agents_guest_bridge_sources);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge_sources);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge_sources);
+tag_suite!(moonbit_native_tool, agents_guest_bridge_sources);
+tag_suite!(scala_guest_streams, agents_guest_bridge_sources);
+tag_suite!(
+    scala_gol40_reflection_acceptance,
+    agents_guest_bridge_sources
+);
+tag_suite!(scala_http_router, agents_guest_bridge_sources);
+tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
