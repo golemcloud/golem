@@ -134,4 +134,7 @@ const (
 	// The successful completion of the durable host call started by the matching `start`
 	// was delivered to the agent at this point in the recorded execution
 	CompletionDelivered = oplogwit.PublicOplogEntryCompletionDelivered
+	// The store holds the named filesystem snapshot; the snapshot entry with the
+	// same name is usable
+	SnapshotConfirmed = oplogwit.PublicOplogEntrySnapshotConfirmed
 )

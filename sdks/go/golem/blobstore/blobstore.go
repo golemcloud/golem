@@ -232,25 +232,15 @@ func (c *Container) GetData(name string) (data []byte, found bool, err error) {
 	if info.Size == 0 {
 		return []byte{}, true, nil
 	}
-	// The WIT spec says the range end is inclusive, but Golem's in-memory/fs
-	// backends treat it as exclusive. Try inclusive first, then recover.
-	first, err := c.getRange(name, 0, info.Size-1)
+	data, err = c.getRange(name, 0, info.Size-1)
 	if err != nil {
 		return nil, false, err
 	}
-	if uint64(len(first)) == info.Size {
-		return first, true, nil
-	}
-	rest, err := c.getRange(name, 0, info.Size)
-	if err != nil {
-		return nil, false, err
-	}
-	return rest, true, nil
+	return data, true, nil
 }
 
-// GetRange reads bytes [start, end] of an object. The host's inclusive/exclusive
-// treatment of end differs across backends, so ranged reads are not portable —
-// prefer [Container.GetData] for whole objects.
+// GetRange reads bytes [start, end] of an object; both offsets are inclusive,
+// and it gives an error when a byte of the range is not in the object.
 func (c *Container) GetRange(name string, start, end uint64) ([]byte, error) {
 	return c.getRange(name, start, end)
 }
