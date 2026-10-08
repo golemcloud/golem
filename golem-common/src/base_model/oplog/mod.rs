@@ -393,6 +393,7 @@ oplog_entry! {
             details: Option<String>,
             snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
             update_attempt_index: Option<OplogIndex>,
+            snapshot_fault: Option<SnapshotFault>,
         }
         public {
             target_revision: ComponentRevision,
@@ -603,9 +604,15 @@ oplog_entry! {
             mime_type: String,
             active_cards: Vec<StoredCard>,
             wallet_generation: u64,
+            /// The filesystem snapshot that the executor captured with this application
+            /// snapshot. `None` means that the executor made no filesystem capture. The
+            /// filesystem snapshot is usable only after a `SnapshotConfirmed` entry with the
+            /// same name.
+            filesystem_snapshot: Option<FilesystemSnapshotName>,
         }
         public {
-            data: PublicSnapshotData
+            data: PublicSnapshotData,
+            filesystem_snapshot: Option<String>,
         }
     },
     /// Checkpoint for oplog processor plugin delivery tracking
@@ -993,6 +1000,20 @@ oplog_entry! {
         }
         public {
             start_index: OplogIndex,
+        }
+    },
+    /// Records that the store holds the filesystem snapshot with the given name. The `Snapshot`
+    /// entry that carries the same name is usable as a replay baseline from this point. The
+    /// position of this entry in the oplog carries no other meaning.
+    SnapshotConfirmed {
+        hint: true
+        wit_raw_type: "snapshot-confirmed-parameters"
+        wit_public_type: "snapshot-confirmed-parameters"
+        raw {
+            filesystem_snapshot: FilesystemSnapshotName,
+        }
+        public {
+            filesystem_snapshot: String,
         }
     }
 }

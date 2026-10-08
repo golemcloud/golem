@@ -123,7 +123,7 @@ pub(super) fn has_duplicate_pending_update(
     status.pending_updates.iter().any(|update| {
         matches!(
             update.kind,
-            PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic { .. }
+            PendingUpdateKind::Automatic | PendingUpdateKind::SnapshotAssistedAutomatic(_)
         ) && update.target_revision == target_revision
     })
 }
@@ -584,7 +584,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 mod tests {
     use super::*;
     use golem_common::model::{
-        AgentStatusRecord, PendingUpdateRef, SnapshotAssistedUpdateSelection,
+        AgentStatusRecord, AssistedSelection, PendingUpdateRef, UsableAutomaticSnapshot,
     };
     use test_r::test;
 
@@ -617,14 +617,14 @@ mod tests {
             oplog_index: OplogIndex::from_u64(6),
             admission_index: OplogIndex::from_u64(6),
             target_revision,
-            kind: PendingUpdateKind::SnapshotAssistedAutomatic {
-                source_component_revision: ComponentRevision::new(2).unwrap(),
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
                 source_revision_start_index: OplogIndex::INITIAL,
-                selection: SnapshotAssistedUpdateSelection::Selected {
-                    snapshot_index: OplogIndex::from_u64(4),
-                    snapshot_revision: ComponentRevision::new(2).unwrap(),
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(4),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
                 },
-            },
+            })),
         });
         assert!(has_duplicate_pending_update(&status, target_revision));
     }

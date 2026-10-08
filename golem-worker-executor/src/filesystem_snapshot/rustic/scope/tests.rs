@@ -1,0 +1,637 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Golem Source License v1.1 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://license.golem.cloud/LICENSE
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use super::super::files::SnapshotFiles;
+use super::super::tests::files_of;
+use super::super::tests::scripted::{Script, ScriptedBlobStorage};
+use super::{CatchUp, CopyError, MOST_CATCH_UPS, catch_up, copy_scope, delete_scope};
+use futures::StreamExt as _;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use pretty_assertions::assert_eq;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
+use test_r::{test, timeout};
+use uuid::Uuid;
+
+const DEADLINE: Duration = Duration::from_secs(2);
+
+/// The blobs of a small repository, with the ledger of the store.
+const REPOSITORY: [(&str, &str); 6] = [
+    ("config", "config"),
+    ("data/ab/abab", "pack"),
+    ("golem/prune-ledgers/1000-0-0f0f", "ledger"),
+    ("index/cdcd", "index"),
+    ("keys/efef", "key"),
+    ("snapshots/0101", "snapshot"),
+];
+
+fn files<S: BlobStorage + 'static>(
+    storage: &Arc<S>,
+    namespace: &BlobStorageNamespace,
+) -> SnapshotFiles {
+    files_of(
+        storage.clone(),
+        namespace.clone(),
+        DEADLINE,
+        tokio_util::sync::CancellationToken::new(),
+    )
+}
+
+fn new_namespace() -> BlobStorageNamespace {
+    BlobStorageNamespace::InitialAgentFiles {
+        environment_id: EnvironmentId(Uuid::new_v4()),
+    }
+}
+
+async fn put_all(
+    storage: &dyn BlobStorage,
+    namespace: &BlobStorageNamespace,
+    blobs: &[(&str, &str)],
+) {
+    futures::future::join_all(blobs.iter().map(|(path, content)| {
+        storage.put_raw(
+            "test",
+            "test",
+            namespace.clone(),
+            Path::new(path),
+            content.as_bytes(),
+        )
+    }))
+    .await
+    .into_iter()
+    .collect::<anyhow::Result<Vec<()>>>()
+    .unwrap();
+}
+
+/// Gives the path and the content of each blob of the namespace, in the order of the paths.
+async fn stored(
+    storage: &dyn BlobStorage,
+    namespace: &BlobStorageNamespace,
+) -> Vec<(String, String)> {
+    let listed = storage
+        .list_blobs_below("test", "test", namespace.clone(), Path::new(""))
+        .await
+        .unwrap();
+    let mut blobs = futures::future::join_all(listed.iter().map(|blob| async {
+        let content = storage
+            .get_raw("test", "test", namespace.clone(), &blob.path)
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            blob.path.display().to_string(),
+            String::from_utf8(content).unwrap(),
+        )
+    }))
+    .await;
+    blobs.sort();
+    blobs
+}
+
+fn owned(blobs: &[(&str, &str)]) -> Vec<(String, String)> {
+    blobs
+        .iter()
+        .map(|(path, content)| (path.to_string(), content.to_string()))
+        .collect()
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_gives_the_target_each_blob_of_the_repository_and_not_the_ledger() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (stored(&*storage, &to).await, stored(&*storage, &from).await),
+        (
+            owned(
+                &REPOSITORY
+                    .into_iter()
+                    .filter(|(path, _)| !path.starts_with("golem/"))
+                    .collect::<Vec<_>>()
+            ),
+            owned(&REPOSITORY)
+        )
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn copy_scope_copies_server_side_in_directory_order_and_skips_a_pruned_snapshot_file() {
+    // The listing of the packs waits for the gate. Before it opens, a delete removes the snapshot
+    // file `snapshots/0202`, which the copy listed already. Each copy of a pack waits a little, so
+    // more than one copy runs at once, and the next directory starts only after the last of them.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            match op_label {
+                "copy_list" if path == Path::new("data") => Script::WaitForGate,
+                "copy" if path.starts_with("data") => Script::Delay(Duration::from_millis(50)),
+                _ => Script::Pass,
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    let packs = (0..12)
+        .map(|index| format!("data/ab/{index:04x}"))
+        .collect::<Vec<_>>();
+    let repository = REPOSITORY
+        .iter()
+        .copied()
+        .chain(packs.iter().map(|path| (path.as_str(), "pack")))
+        .chain(std::iter::once(("snapshots/0202", "gone")))
+        .collect::<Vec<_>>();
+    put_all(&*storage, &from, &repository).await;
+    let deleting = async {
+        let listed = futures::stream::repeat(())
+            .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+            .filter(|()| {
+                std::future::ready(storage.calls().contains(&("copy_list", "data".to_string())))
+            });
+        std::pin::pin!(listed).next().await;
+        storage
+            .delete("test", "test", from.clone(), Path::new("snapshots/0202"))
+            .await
+            .unwrap();
+        storage.open_gate();
+    };
+
+    let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
+    let started = tokio::time::Instant::now();
+    let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), deleting);
+    let copy_time = started.elapsed();
+
+    let calls = storage.calls();
+    let directory_of = |path: &str| path.split('/').next().unwrap_or("").to_string();
+    let directories = calls
+        .iter()
+        .filter(|(op_label, _)| *op_label == "copy")
+        .map(|(_, path)| directory_of(path))
+        .fold(Vec::new(), |mut order, directory| {
+            if order.last() != Some(&directory) {
+                order.push(directory);
+            }
+            order
+        });
+    let reads = calls
+        .iter()
+        .filter(|(op_label, _)| *op_label == "copy_read")
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    assert!(copied.is_ok(), "{copied:?}");
+    assert_eq!(directories, vec!["data", "keys", "index", "snapshots"]);
+    assert_eq!(reads, vec!["config".to_string()]);
+    assert!(
+        copy_time < Duration::from_millis(packs.len() as u64 * 50),
+        "the packs were copied one at a time: {copy_time:?}"
+    );
+    assert_eq!(
+        stored(&*storage, &to).await.len(),
+        REPOSITORY.len() - 1 + packs.len()
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_writes_the_packs_the_keys_the_index_files_the_snapshot_files_and_then_the_config() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .calls()
+            .into_iter()
+            .filter(|(op_label, _)| *op_label == "copy" || *op_label == "copy_write")
+            .map(|(_, path)| path)
+            .collect::<Vec<_>>(),
+        vec![
+            "data/ab/abab",
+            "keys/efef",
+            "index/cdcd",
+            "snapshots/0101",
+            "config"
+        ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_lists_the_snapshot_files_before_the_index_files_the_keys_and_the_packs() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        storage
+            .calls()
+            .into_iter()
+            .filter(|(op_label, _)| *op_label == "copy_list")
+            .map(|(_, path)| path)
+            .collect::<Vec<_>>(),
+        vec!["snapshots", "index", "keys", "data", "index", "data"]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_of_a_namespace_without_a_config_copies_nothing() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(
+        &*storage,
+        &from,
+        &REPOSITORY
+            .into_iter()
+            .filter(|(path, _)| *path != "config")
+            .collect::<Vec<_>>(),
+    )
+    .await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), false)
+        .await
+        .unwrap();
+
+    assert_eq!(stored(&*storage, &to).await, Vec::<(String, String)>::new());
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_that_fails_gives_the_error_and_the_target_has_no_config() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy" && path.starts_with("index") {
+                Script::Refuse
+            } else {
+                Script::Pass
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+
+    assert_eq!(
+        (
+            copied.is_err(),
+            stored(&*storage, &to)
+                .await
+                .into_iter()
+                .map(|(path, _)| path)
+                .collect::<Vec<_>>()
+        ),
+        (
+            true,
+            vec!["data/ab/abab".to_string(), "keys/efef".to_string()]
+        )
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_deleted_scope_holds_no_blob_and_another_scope_keeps_its_blobs() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (deleted, kept) = (new_namespace(), new_namespace());
+    put_all(&*storage, &deleted, &REPOSITORY).await;
+    put_all(&*storage, &kept, &REPOSITORY).await;
+
+    delete_scope(&files(&storage, &deleted)).await.unwrap();
+
+    assert_eq!(
+        (
+            stored(&*storage, &deleted).await,
+            stored(&*storage, &kept).await
+        ),
+        (Vec::new(), owned(&REPOSITORY))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_of_a_scope_deletes_the_config_first() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |_, _| Script::Pass);
+    let namespace = new_namespace();
+    put_all(&*storage, &namespace, &REPOSITORY).await;
+
+    delete_scope(&files(&storage, &namespace)).await.unwrap();
+
+    assert_eq!(
+        storage
+            .calls()
+            .into_iter()
+            .filter(|(op_label, _)| *op_label == "delete_scope")
+            .map(|(_, path)| path)
+            .collect::<Vec<_>>(),
+        vec!["config", "snapshots", "index", "keys", "data", "golem"]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_delete_of_an_unused_scope_succeeds_and_can_run_again() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let namespace = new_namespace();
+
+    let first = delete_scope(&files(&storage, &namespace)).await;
+    put_all(&*storage, &namespace, &REPOSITORY).await;
+    let second = delete_scope(&files(&storage, &namespace)).await;
+    let third = delete_scope(&files(&storage, &namespace)).await;
+
+    assert_eq!(
+        (
+            first.is_ok(),
+            second.is_ok(),
+            third.is_ok(),
+            stored(&*storage, &namespace).await
+        ),
+        (true, true, true, Vec::new())
+    );
+}
+
+fn paths(names: &[&str]) -> Vec<Box<Path>> {
+    names.iter().map(|name| Path::new(name).into()).collect()
+}
+
+#[test]
+fn the_catch_up_copies_the_new_blobs_while_a_listing_holds_a_new_index_file() {
+    let copied = paths(&["index/a", "data/ab/1"]).into_iter().collect();
+
+    assert_eq!(
+        [
+            catch_up(&copied, &paths(&["index/a", "data/ab/1"]), 1),
+            catch_up(&copied, &paths(&["index/a", "data/ab/1", "data/ab/2"]), 1),
+            catch_up(
+                &copied,
+                &paths(&["index/a", "index/b", "data/ab/1", "data/ab/2"]),
+                1
+            ),
+            catch_up(&copied, &paths(&["index/b"]), MOST_CATCH_UPS - 1),
+            catch_up(&copied, &paths(&["index/b"]), MOST_CATCH_UPS),
+        ],
+        [
+            CatchUp::Done,
+            CatchUp::Done,
+            CatchUp::Copy {
+                packs: paths(&["data/ab/2"]).into_boxed_slice(),
+                index: paths(&["index/b"]).into_boxed_slice(),
+            },
+            CatchUp::Copy {
+                packs: Box::default(),
+                index: paths(&["index/b"]).into_boxed_slice(),
+            },
+            CatchUp::Race,
+        ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_of_a_source_that_saves_during_it_catches_up_and_succeeds_in_one_run() {
+    // A save of the source writes a new pack and a new index file after the copy listed the
+    // packs, and before the copy of the snapshot files.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy" && path.starts_with("index") {
+                Script::WaitForGate
+            } else {
+                Script::Pass
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+    let saving =
+        async {
+            let reached =
+                futures::stream::repeat(())
+                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                    .filter(|()| {
+                        std::future::ready(storage.calls().iter().any(|(op_label, path)| {
+                            *op_label == "copy" && path.starts_with("index")
+                        }))
+                    });
+            std::pin::pin!(reached).next().await;
+            put_all(
+                &*storage,
+                &from,
+                &[("data/cd/cdcd", "new pack"), ("index/efef", "new index")],
+            )
+            .await;
+            storage.open_gate();
+        };
+
+    let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
+    let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), saving);
+    let target = stored(&*storage, &to)
+        .await
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    assert!(copied.is_ok(), "{copied:?}");
+    assert_eq!(
+        target,
+        vec![
+            "config",
+            "data/ab/abab",
+            "data/cd/cdcd",
+            "index/cdcd",
+            "index/efef",
+            "keys/efef",
+            "snapshots/0101"
+        ]
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_catch_up_whose_new_pack_a_prune_removed_leaves_no_index_file_of_it_in_to() {
+    // A save of the source writes a new pack and a new index file after the copy listed the
+    // packs. A prune then removes the new pack before the catch-up copies it.
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy" && path.starts_with("index") {
+                Script::WaitForGate
+            } else if op_label == "copy" && path == Path::new("data/cd/cdcd") {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+    let saving =
+        async {
+            let reached =
+                futures::stream::repeat(())
+                    .then(|()| tokio::time::sleep(Duration::from_millis(5)))
+                    .filter(|()| {
+                        std::future::ready(storage.calls().iter().any(|(op_label, path)| {
+                            *op_label == "copy" && path.starts_with("index")
+                        }))
+                    });
+            std::pin::pin!(reached).next().await;
+            put_all(
+                &*storage,
+                &from,
+                &[("data/cd/cdcd", "new pack"), ("index/efef", "new index")],
+            )
+            .await;
+            storage.open_gate();
+        };
+
+    let (from_files, to_files) = (files(&storage, &from), files(&storage, &to));
+    let (copied, ()) = tokio::join!(copy_scope(&from_files, &to_files, false), saving);
+    let target = stored(&*storage, &to)
+        .await
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect::<Vec<_>>();
+
+    assert!(
+        matches!(&copied, Err(CopyError::CopySourceMissing { path }) if **path == *Path::new("data/cd/cdcd")),
+        "{copied:?}"
+    );
+    assert!(
+        !target.iter().any(|path| path == "index/efef"),
+        "an index file whose pack is gone landed in the target: {target:?}"
+    );
+}
+
+/// A source that gets a new index file before each listing of its index files never lets the
+/// catch-up end: the copy gives `Race` after exactly [`MOST_CATCH_UPS`] rounds. The source stops
+/// growing after four times that many listings, so a copy that counts its rounds wrong ends.
+#[test]
+#[timeout("60s")]
+async fn a_copy_whose_source_gets_a_new_index_file_at_each_listing_gives_race_after_the_last_round()
+{
+    let inner = Arc::new(InMemoryBlobStorage::new());
+    let from = new_namespace();
+    let listings = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let storage = {
+        let (inner, from, listings) = (inner.clone(), from.clone(), listings.clone());
+        ScriptedBlobStorage::in_namespaces(inner.clone(), move |namespace, op_label, path| {
+            if op_label == "copy_list" && namespace == &from && path == Path::new("index") {
+                let listing = listings.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if listing < 4 * MOST_CATCH_UPS {
+                    // Each listing runs alone, so the in-memory store takes the write at once.
+                    futures::executor::block_on(inner.put_raw(
+                        "test",
+                        "test",
+                        from.clone(),
+                        &Path::new("index").join(format!("{listing:08x}")),
+                        b"new index",
+                    ))
+                    .unwrap();
+                }
+            }
+            Script::Pass
+        })
+    };
+    let to = new_namespace();
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+
+    assert!(matches!(copied, Err(CopyError::Race)), "{copied:?}");
+    // The first listing of the copy, then one listing for each round.
+    assert_eq!(
+        listings.load(std::sync::atomic::Ordering::SeqCst),
+        1 + MOST_CATCH_UPS
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_run_again_removes_the_snapshot_files_that_its_source_no_longer_has() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+    put_all(&*storage, &to, &[("snapshots/0202", "of an earlier run")]).await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), true)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        stored(&*storage, &to)
+            .await
+            .into_iter()
+            .filter(|(path, _)| path.starts_with("snapshots"))
+            .collect::<Vec<_>>(),
+        owned(&[("snapshots/0101", "snapshot")])
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_run_again_whose_source_is_gone_leaves_to_without_snapshots() {
+    let storage = Arc::new(InMemoryBlobStorage::new());
+    let (from, to, first) = (new_namespace(), new_namespace(), new_namespace());
+    put_all(&*storage, &to, &[("snapshots/0202", "of an earlier run")]).await;
+    put_all(&*storage, &first, &[("snapshots/0303", "kept")]).await;
+
+    copy_scope(&files(&storage, &from), &files(&storage, &to), true)
+        .await
+        .unwrap();
+    copy_scope(&files(&storage, &from), &files(&storage, &first), false)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            stored(&*storage, &to).await,
+            stored(&*storage, &first).await
+        ),
+        (Vec::new(), owned(&[("snapshots/0303", "kept")]))
+    );
+}
+
+#[test]
+#[timeout("60s")]
+async fn a_copy_whose_listed_pack_a_prune_removed_ends_with_a_missing_source() {
+    let storage =
+        ScriptedBlobStorage::new(Arc::new(InMemoryBlobStorage::new()), |op_label, path| {
+            if op_label == "copy" && path.starts_with("data") {
+                Script::Vanish
+            } else {
+                Script::Pass
+            }
+        });
+    let (from, to) = (new_namespace(), new_namespace());
+    put_all(&*storage, &from, &REPOSITORY).await;
+
+    let copied = copy_scope(&files(&storage, &from), &files(&storage, &to), false).await;
+
+    assert!(
+        matches!(&copied, Err(CopyError::CopySourceMissing { path }) if **path == *Path::new("data/ab/abab")),
+        "{copied:?}"
+    );
+}

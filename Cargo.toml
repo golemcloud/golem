@@ -73,7 +73,9 @@ async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
+aws-runtime = "1.9.1"
 aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-runtime-api = { version = "1.15.0", features = ["client"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22.1"
@@ -83,6 +85,7 @@ bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bzip2 = "0.6.1"
 bytes = "1.10.1"
+bytesize = "2.7.0"
 camino = "1.1.10"
 cap-fs-ext = "3.4.5" # keep in sync with wasmtime
 cap-std = "3.4.5" # keep in sync with wasmtime
@@ -235,6 +238,7 @@ rsa = "0.9.7"
 
 rust_decimal = "1.39.0"
 rustc-hash = "2.1.1"
+rustic_core = { version = "0.13.0", default-features = false }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
@@ -346,6 +350,8 @@ wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+# The head of the branch `golem-rustic_core-v0.13.0` of the fork.
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
 
 [profile.dev]
 panic = "abort"

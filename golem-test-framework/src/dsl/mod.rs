@@ -1271,6 +1271,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to download component: {:?} revision {}: {}",
             component_id, component_revision, reason
         ),
+        error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,
@@ -1333,9 +1335,6 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
-        WorkerExecutorError::InitialAgentFileDownloadFailed { reason, .. } => {
-            format!("Initial File download failed: {}", reason)
-        }
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

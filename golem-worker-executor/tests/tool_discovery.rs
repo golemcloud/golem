@@ -895,10 +895,9 @@ async fn durable_tool_invocation_fails_when_middleware_component_is_missing(
 
     let error = result.expect_err("missing middleware component must fail the invocation");
     assert!(
-        error.to_string().contains(&format!(
-            "No such component found: {missing_component}/{}",
-            component.revision
-        )),
+        error
+            .to_string()
+            .contains(&format!("Component for id {missing_component} not found")),
         "dispatch must resolve the pinned middleware rather than bypass it: {error}"
     );
     assert_eq!(

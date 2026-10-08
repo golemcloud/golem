@@ -12,16 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
+//! The wall clock of a store.
 
-mod docker;
+use golem_common::model::Timestamp;
 
-pub use docker::DockerS3Mock;
+/// Gives the wall time.
+pub(super) trait Clock: Send + Sync {
+    /// Gives the time now.
+    fn now(&self) -> Timestamp;
+}
 
-#[async_trait]
-pub trait S3Mock: Send + Sync {
-    fn endpoint(&self) -> String;
-    fn access_key_id(&self) -> &str;
-    fn secret_access_key(&self) -> &str;
-    async fn kill(&self);
+/// The clock of the host.
+pub(super) struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::now_utc()
+    }
 }

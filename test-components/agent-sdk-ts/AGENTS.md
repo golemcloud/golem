@@ -273,7 +273,7 @@ Opt in with the `snapshotting` option on `defineAgent`. Give it `{ policy, state
 snapshotting: { state: z.object({ count: z.number() }), policy: { everyNInvocations: 5 } },
 ```
 
-Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. A bare policy without `state` falls back to reflective JSON serialization of the whole state. For full control over the bytes, supply a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it). See `golem-custom-snapshot-ts`.
+Policy is `'disabled'` (default) | `'default'` | `{ everyNInvocations: n }` | `{ periodicSeconds: n }`. An enabled policy without `state` needs a `snapshot: { save, load }` block on `.implement(...)` (`save` returns `Uint8Array`, `load` restores from it); without the block, the registration of the agent fails. With `state`, a `snapshot` block with both functions gives full control over the bytes. See `golem-custom-snapshot-ts`.
 
 ## Durability Primitives
 

@@ -3905,6 +3905,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -3993,6 +3994,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CommittedRemoteTransaction { .. }
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }

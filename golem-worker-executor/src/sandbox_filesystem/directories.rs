@@ -15,17 +15,30 @@
 use super::*;
 
 #[derive(Clone)]
-pub(super) struct UnmanagedProvisioning {
-    deterministic_root: Option<PathBuf>,
+pub(super) struct DirectoryProvisioning {
+    deterministic_root: Option<Arc<Path>>,
     cleanup_retry: RetryConfig,
+    name_mode: NativeNameModeSource,
 }
 
-impl UnmanagedProvisioning {
-    pub(super) fn new(deterministic_root: Option<PathBuf>, cleanup_retry: RetryConfig) -> Self {
+impl DirectoryProvisioning {
+    /// Keeps the storage settings. Without a deterministic root, each sandbox gets its own
+    /// temporary directory. `name_mode` tells how the sandboxes compare names.
+    pub(super) fn new(
+        deterministic_root: Option<Arc<Path>>,
+        cleanup_retry: RetryConfig,
+        name_mode: NativeNameModeSource,
+    ) -> Self {
         Self {
             deterministic_root,
             cleanup_retry,
+            name_mode,
         }
+    }
+
+    /// The configured root of the sandboxes and the host directories, if one is configured.
+    pub(super) fn deterministic_root(&self) -> Option<&Arc<Path>> {
+        self.deterministic_root.as_ref()
     }
 
     pub(super) async fn create_fresh(
@@ -47,7 +60,7 @@ impl UnmanagedProvisioning {
                 .await
                 .map_err(|error| {
                     FilesystemStorageError::io(
-                        "provision unmanaged sandbox filesystem",
+                        "provision sandbox filesystem",
                         &error_path,
                         std::io::Error::other(error),
                     )
@@ -80,12 +93,7 @@ impl UnmanagedProvisioning {
         root: PathBuf,
         lifecycle: OwnedMutexGuard<()>,
     ) -> Result<SandboxFilesystem, FilesystemStorageError> {
-        remove_and_verify(
-            &root,
-            "remove stale unmanaged runtime directory",
-            &self.cleanup_retry,
-        )
-        .await?;
+        remove_and_verify(&root, "remove stale runtime directory", &self.cleanup_retry).await?;
         let parent = root
             .parent()
             .expect("deterministic sandbox filesystem path must have a parent");
@@ -119,11 +127,7 @@ impl UnmanagedProvisioning {
             Err(error) => {
                 return Err(rollback_creation(
                     &root,
-                    FilesystemStorageError::io(
-                        "open fresh unmanaged runtime directory",
-                        &root,
-                        error,
-                    ),
+                    FilesystemStorageError::io("open fresh runtime directory", &root, error),
                     &self.cleanup_retry,
                 )
                 .await);
@@ -133,53 +137,18 @@ impl UnmanagedProvisioning {
             NativeRoot::new(root.clone(), directory),
             LeaseState {
                 lifecycle,
-                cleanup: NativeCleanup::Unmanaged {
+                cleanup: NativeCleanup::Directory {
                     path: root.clone(),
                     cleanup_retry: self.cleanup_retry.clone(),
                 },
             },
             volume,
-            FileCopyMode::Buffered,
             QuotaAuthority::Unsupported,
-            NativeNameModeSource::NativeDetection,
+            self.name_mode,
         );
         if let Err(error) = verify_fresh_directory(filesystem.root()).await {
             return Err(rollback_created_filesystem(filesystem, error).await);
         }
         Ok(filesystem)
     }
-}
-
-pub(super) fn copy_file(
-    root: &Path,
-    source: &Path,
-    target: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let parent = create_copy_parent(root, target)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    let mut source = File::open(source)?;
-    std::io::copy(&mut source, &mut temporary)?;
-    temporary.as_file().sync_all()?;
-    set_file_permissions(temporary.as_file(), read_only)?;
-    temporary
-        .persist_noclobber(target)
-        .map_err(|error| error.error)?;
-    Ok(())
-}
-
-pub(super) fn copy_file_at(
-    destination_directory: &cap_std::fs::Dir,
-    source: &Path,
-    destination: &Path,
-    read_only: bool,
-) -> std::io::Result<()> {
-    let (parent, destination) = create_capability_copy_parent(destination_directory, destination)?;
-    let mut temporary = CapabilityTempFile::new(parent)?;
-    let mut source = File::open(source)?;
-    std::io::copy(&mut source, temporary.as_file_mut())?;
-    temporary.as_file().sync_all()?;
-    let temporary_file = temporary.as_file().try_clone()?.into_std();
-    set_file_permissions(&temporary_file, read_only)?;
-    temporary.persist_noclobber(&destination)
 }
