@@ -1398,3 +1398,29 @@ async fn dropped_window_releases_permit() {
     .unwrap();
     assert!(!held.load(Ordering::Acquire));
 }
+
+#[test]
+fn filesystem_metering_needs_per_agent_accounting() {
+    let metering = |filesystem| ResourceUsageMeteringConfig {
+        filesystem,
+        ..ResourceUsageMeteringConfig::all_enabled()
+    };
+    let accountings = [
+        AgentAccounting::ProjectQuotas,
+        AgentAccounting::Development,
+        AgentAccounting::Unaccounted,
+    ];
+
+    assert_eq!(
+        accountings.map(|accounting| check_filesystem_metering(metering(true), accounting)),
+        [
+            Ok(()),
+            Ok(()),
+            Err("filesystem metering requires XFS storage with project quotas".to_string()),
+        ]
+    );
+    assert_eq!(
+        accountings.map(|accounting| check_filesystem_metering(metering(false), accounting)),
+        [Ok(()), Ok(()), Ok(())]
+    );
+}

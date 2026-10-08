@@ -152,10 +152,7 @@ pub(super) fn operation_start(
         }
     }
     let delivered = entries.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)).count();
-    ensure!(
-        delivered == if path == Path::Accessor { terminals } else { 0 },
-        "operation marker count {delivered}"
-    );
+    ensure!(delivered == terminals, "operation marker count {delivered}");
     if terminals == 1 {
         ensure!(entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start)), "operation must end, not cancel");
     }

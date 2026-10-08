@@ -205,7 +205,9 @@ const MONTHLY_DURABLE_STORAGE_GB_MONTH: &str =
     "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH";
 const MONTHLY_EPHEMERAL_STORAGE_GB_MONTH: &str =
     "GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH";
-const MANAGED_XFS_ROOT_DIR: &str = "GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR";
+const FILESYSTEM_STORAGE_MODE_TYPE: &str = "GOLEM__FILESYSTEM_STORAGE__MODE__TYPE";
+const FILESYSTEM_STORAGE_ROOT: &str = "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT";
+const REMOVED_MANAGED_XFS_ROOT_DIR: &str = "GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR";
 
 fn local_metering_from_env() -> anyhow::Result<LocalMetering> {
     local_metering_from(resource_usage_metering_from_env()?, env_value)
@@ -215,11 +217,37 @@ fn local_metering_from(
     resource_usage_metering: ResourceUsageMeteringConfig,
     mut value: impl FnMut(&str) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<LocalMetering> {
+    if value(REMOVED_MANAGED_XFS_ROOT_DIR)?.is_some() {
+        bail!(
+            "{REMOVED_MANAGED_XFS_ROOT_DIR} is not supported; configure {FILESYSTEM_STORAGE_MODE_TYPE} and {FILESYSTEM_STORAGE_ROOT}"
+        );
+    }
     let monthly_compute_gcu = value(MONTHLY_COMPUTE_GCU)?;
     let monthly_memory_gb_seconds = value(MONTHLY_MEMORY_GB_SECONDS)?;
     let monthly_durable_storage_gb_month = value(MONTHLY_DURABLE_STORAGE_GB_MONTH)?;
     let monthly_ephemeral_storage_gb_month = value(MONTHLY_EPHEMERAL_STORAGE_GB_MONTH)?;
-    let managed_xfs_root_dir = value(MANAGED_XFS_ROOT_DIR)?;
+    let storage_mode = value(FILESYSTEM_STORAGE_MODE_TYPE)?;
+    let storage_root = value(FILESYSTEM_STORAGE_ROOT)?;
+    let managed_xfs_root_dir = match (
+        storage_mode.as_deref(),
+        parse_optional_path(FILESYSTEM_STORAGE_ROOT, storage_root.as_deref())?,
+    ) {
+        (None, None) => None,
+        (Some("ManagedXfs"), Some(root)) => Some(root),
+        (Some("ManagedXfs"), None) => {
+            bail!(
+                "{FILESYSTEM_STORAGE_ROOT} is required when {FILESYSTEM_STORAGE_MODE_TYPE}=ManagedXfs"
+            );
+        }
+        (None, Some(_)) => {
+            bail!(
+                "{FILESYSTEM_STORAGE_MODE_TYPE} is required when {FILESYSTEM_STORAGE_ROOT} is configured"
+            );
+        }
+        (Some(_), _) => {
+            bail!("{FILESYSTEM_STORAGE_MODE_TYPE} must be ManagedXfs for local managed storage");
+        }
+    };
 
     resolve_local_metering(
         resource_usage_metering,
@@ -236,7 +264,7 @@ fn local_metering_from(
             MONTHLY_EPHEMERAL_STORAGE_GB_MONTH,
             monthly_ephemeral_storage_gb_month.as_deref(),
         )?,
-        parse_optional_path(MANAGED_XFS_ROOT_DIR, managed_xfs_root_dir.as_deref())?,
+        managed_xfs_root_dir,
     )
 }
 
@@ -266,7 +294,9 @@ fn resolve_local_metering(
             );
         }
         if managed_xfs_root_dir.is_none() {
-            bail!("{MANAGED_XFS_ROOT_DIR} is required when filesystem metering is enabled");
+            bail!(
+                "{FILESYSTEM_STORAGE_MODE_TYPE}=ManagedXfs and {FILESYSTEM_STORAGE_ROOT} are required when filesystem metering is enabled"
+            );
         }
     }
 
@@ -603,7 +633,8 @@ mod tests {
             (MONTHLY_MEMORY_GB_SECONDS, "3"),
             (MONTHLY_DURABLE_STORAGE_GB_MONTH, "5"),
             (MONTHLY_EPHEMERAL_STORAGE_GB_MONTH, "7"),
-            (MANAGED_XFS_ROOT_DIR, "/managed-xfs"),
+            (FILESYSTEM_STORAGE_MODE_TYPE, "ManagedXfs"),
+            (FILESYSTEM_STORAGE_ROOT, "/managed-xfs"),
         ]);
 
         let resolved = local_metering_from(ResourceUsageMeteringConfig::all_enabled(), |name| {
@@ -631,7 +662,7 @@ mod tests {
             .is_err()
         );
         values.insert(MONTHLY_COMPUTE_GCU, "2");
-        values.insert(MANAGED_XFS_ROOT_DIR, "");
+        values.insert(FILESYSTEM_STORAGE_ROOT, "");
         assert!(
             local_metering_from(ResourceUsageMeteringConfig::all_enabled(), |name| {
                 Ok(values.get(name).map(ToString::to_string))
@@ -641,16 +672,51 @@ mod tests {
     }
 
     #[test]
+    fn local_metering_rejects_removed_storage_key() {
+        let values = HashMap::from([
+            (REMOVED_MANAGED_XFS_ROOT_DIR, "/old-xfs"),
+            (FILESYSTEM_STORAGE_MODE_TYPE, "ManagedXfs"),
+            (FILESYSTEM_STORAGE_ROOT, "/managed-xfs"),
+        ]);
+        let error = local_metering_from(ResourceUsageMeteringConfig::default(), |name| {
+            Ok(values.get(name).map(ToString::to_string))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains(REMOVED_MANAGED_XFS_ROOT_DIR));
+    }
+
+    #[test]
+    fn local_metering_requires_complete_managed_xfs_mode() {
+        for (mode, root, field) in [
+            (None, Some("/xfs"), FILESYSTEM_STORAGE_MODE_TYPE),
+            (Some("ManagedXfs"), None, FILESYSTEM_STORAGE_ROOT),
+            (
+                Some("managedxfs"),
+                Some("/xfs"),
+                FILESYSTEM_STORAGE_MODE_TYPE,
+            ),
+            (
+                Some("ReflinkXfs"),
+                Some("/xfs"),
+                FILESYSTEM_STORAGE_MODE_TYPE,
+            ),
+        ] {
+            let error = local_metering_from(ResourceUsageMeteringConfig::default(), |name| {
+                Ok(match name {
+                    FILESYSTEM_STORAGE_MODE_TYPE => mode.map(ToString::to_string),
+                    FILESYSTEM_STORAGE_ROOT => root.map(ToString::to_string),
+                    _ => None,
+                })
+            })
+            .unwrap_err();
+            assert!(error.to_string().contains(field), "{error}");
+        }
+    }
+
+    #[test]
     fn local_metering_defaults_to_disabled_zero_amounts() {
-        let resolved = resolve_local_metering(
-            ResourceUsageMeteringConfig::default(),
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let resolved =
+            local_metering_from(ResourceUsageMeteringConfig::default(), |_| Ok(None)).unwrap();
 
         assert_eq!(
             resolved.resource_usage_metering,
@@ -707,7 +773,7 @@ mod tests {
             resolve_local_metering(filesystem, None, None, Some(1), Some(2), None)
                 .unwrap_err()
                 .to_string()
-                .contains(MANAGED_XFS_ROOT_DIR)
+                .contains(FILESYSTEM_STORAGE_ROOT)
         );
     }
 

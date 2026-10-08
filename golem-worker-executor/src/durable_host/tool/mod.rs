@@ -91,7 +91,7 @@ use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
-use golem_common::model::agent::{AgentPrincipal, Principal, ResolvedOwnerContext};
+use golem_common::model::agent::{Principal, ResolvedOwnerContext};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::ToolOwnerPattern;
 use golem_common::model::card::{
@@ -1305,7 +1305,6 @@ struct ToolInvocationAttempt {
     key_context: EntityInvocationKeyContext,
     parent: crate::worker::owner_lane::OwnerInvocationId,
     attempt_ordinal: u64,
-    calling_principal: Principal,
 }
 
 #[derive(Clone)]
@@ -1332,14 +1331,6 @@ impl ToolCallTarget {
                 }
             },
         }
-    }
-
-    fn calling_principal<Ctx: WorkerCtx>(&self, ctx: &DurableWorkerCtx<Ctx>) -> Principal {
-        let agent_id = match self {
-            Self::Ambient(rpc) => rpc.owner.owner_id.agent_id.clone(),
-            Self::Underlying(_) => ctx.state.owned_agent_id.agent_id.clone(),
-        };
-        Principal::Agent(AgentPrincipal { agent_id })
     }
 
     fn accepted_identity(
@@ -1386,12 +1377,10 @@ impl ToolInvocationAttempt {
             .target
             .accepted_identity()
             .expect("validated tool call target");
-        let calling_principal = self.calling_principal.clone();
         let input = self.input.as_ref().ok().map(strip_typed_streams);
         ToolInvocationClaimIdentity {
             accepted: input.clone().map(|input| EntityInvocationRequestIdentity {
                 entity,
-                calling_principal,
                 call_mode,
                 operation: EntityInvocationDescriptorIdentity::Tool(
                     ToolInvocationDescriptorIdentity {
@@ -1469,7 +1458,6 @@ where
                 .ok_or_else(|| anyhow!("underlying-tool has no next chain layer"))?;
         }
         let (parent, attempt_ordinal) = next_tool_attempt_ordinal(ctx)?;
-        let calling_principal = target.calling_principal(ctx);
         let key_context = EntityInvocationKeyContext::capture(ctx, attempt_ordinal)?;
         Ok(ToolInvocationAttempt {
             target,
@@ -1478,7 +1466,6 @@ where
             key_context,
             parent,
             attempt_ordinal,
-            calling_principal,
         })
     })
 }
@@ -1693,7 +1680,6 @@ where
         key_context: _,
         parent,
         attempt_ordinal,
-        calling_principal,
     } = attempt;
     let tool_name = target.tool_name()?;
     let input = match input {
@@ -1972,7 +1958,6 @@ where
                 parent,
                 call_mode,
                 activation,
-                calling_principal,
                 principal,
                 descriptor,
                 input,
@@ -4396,7 +4381,6 @@ where
                             parent: durability.parent().clone(),
                             call_mode: durability.call_mode(),
                             activation: durability.scope().activation().clone(),
-                            calling_principal: durability.scope().calling_principal().clone(),
                             principal: durability.principal().clone(),
                             descriptor,
                             input,
@@ -4450,7 +4434,6 @@ where
                 context.parent.clone(),
                 &key_context,
                 context.activation.entity(),
-                context.calling_principal.clone(),
                 context.principal.clone(),
                 context.call_mode,
                 context.descriptor.clone(),
@@ -4887,7 +4870,7 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
         };
         let (stdout, stdout_drain) = create_output(stdout_handle)?;
         let (stderr, stderr_drain) = create_output(stderr_handle)?;
-        let (target, parent, attempt_ordinal, key_context, calling_principal) = accessor
+        let (target, parent, attempt_ordinal, key_context) = accessor
             .with(|mut access| {
                 let ctx = access.get();
                 let rpc = tool_rpc_for_current_owner(ctx, tool_name)?;
@@ -4902,15 +4885,8 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     .checked_add(1)
                     .ok_or_else(|| anyhow!("tool invocation attempt ordinal overflow"))?;
                 let target = ToolCallTarget::Ambient(rpc);
-                let calling_principal = target.calling_principal(ctx);
                 let key_context = EntityInvocationKeyContext::capture(ctx, attempt_ordinal)?;
-                Ok::<_, anyhow::Error>((
-                    target,
-                    parent,
-                    attempt_ordinal,
-                    key_context,
-                    calling_principal,
-                ))
+                Ok::<_, anyhow::Error>((target, parent, attempt_ordinal, key_context))
             })
             .map_err(wasmtime::Error::from_anyhow)?;
         let stdin_rep = stdin.as_ref().map(Resource::rep);
@@ -4926,7 +4902,6 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
                     key_context,
                     parent,
                     attempt_ordinal,
-                    calling_principal,
                 },
                 command_path,
                 stdin,

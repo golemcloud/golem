@@ -70,6 +70,11 @@ cache_eviction_interval = "1m"
 nanos = 0
 secs = 300
 
+[filesystem_snapshots]
+type = "Disabled"
+
+[filesystem_snapshots.config]
+
 [filesystem_storage.cleanup_retry]
 max_attempts = 4
 max_delay = "250ms"
@@ -80,6 +85,9 @@ multiplier = 4.0
 maximum_objects = 131072
 minimum_objects = 8192
 objects_per_gib = 32768
+
+[filesystem_storage.mode]
+type = "Temporary"
 
 [filesystem_storage.pressure]
 minimum_available_bytes = 67108864
@@ -472,6 +480,7 @@ without_time = false
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
 # custom_data_bucket = "custom-data"
+# filesystem_snapshots_bucket = "filesystem-snapshots"
 # initial_agent_files_bucket = "golem-initial-agent-files"
 # object_prefix = ""
 # oplog_payload_bucket = "oplog-payload"
@@ -519,6 +528,11 @@ without_time = false
 # nanos = 0
 # secs = 300
 #
+# [filesystem_snapshots]
+# type = "Disabled"
+#
+# [filesystem_snapshots.config]
+#
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
@@ -529,6 +543,9 @@ without_time = false
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
+#
+# [filesystem_storage.mode]
+# type = "Temporary"
 #
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864
@@ -939,6 +956,11 @@ without_time = false
 # nanos = 0
 # secs = 300
 #
+# [filesystem_snapshots]
+# type = "Disabled"
+#
+# [filesystem_snapshots.config]
+#
 # [filesystem_storage.cleanup_retry]
 # max_attempts = 4
 # max_delay = "250ms"
@@ -949,6 +971,9 @@ without_time = false
 # maximum_objects = 131072
 # minimum_objects = 8192
 # objects_per_gib = 32768
+#
+# [filesystem_storage.mode]
+# type = "Temporary"
 #
 # [filesystem_storage.pressure]
 # minimum_available_bytes = 67108864

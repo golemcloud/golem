@@ -38,7 +38,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use tracing::{Instrument, debug, info};
+use tracing::{Instrument, debug, info, warn};
 
 use crate::durable_host::tool::operation::OwnerFailureWinner;
 use crate::services::HasAll;
@@ -83,6 +83,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use wasmtime::Store;
 use wasmtime::component::Instance;
 
@@ -828,6 +829,16 @@ impl std::fmt::Debug for InvocationLoops {
     }
 }
 
+/// The number of refused admission attempts of one worker start between two warnings. With the
+/// default retry delay of 500 ms, the first warning comes after about 10 s of waiting, and one
+/// more comes every 10 s while the wait goes on.
+const ADMISSION_REFUSALS_PER_WARNING: u32 = 20;
+
+/// Whether `acquire_memory` logs a warning after its `refusals`-th refused attempt.
+fn admission_wait_warns(refusals: u32) -> bool {
+    refusals.is_multiple_of(ADMISSION_REFUSALS_PER_WARNING)
+}
+
 /// Holds owner-keyed active agent groups.
 pub struct ActiveAgents<Ctx: WorkerCtx> {
     _unloaded_worker_eviction: UnloadedWorkerEvictionTask,
@@ -910,10 +921,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .is_some_and(|worker| worker.pending_startup_attempt().is_some())
     }
 
-    pub fn new(
+    pub async fn new(
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
@@ -926,24 +938,28 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             active_agents_config,
             memory_config,
             storage_config,
+            initial_files_service,
             agent_status_flush_config,
             shutdown_token,
         )
+        .await
     }
 
     /// Like [`Self::new`] but with an explicitly provided memory probe instead of
     /// the one derived from the config. The in-process test harness uses this to
     /// supply a probe with a pinned limit and current usage, so the gate's
     /// decision is deterministic and isolated from the shared test process's RSS.
-    pub fn new_with_probe(
+    pub async fn new_with_probe(
         probe: Box<dyn MemoryProbe>,
         active_agents_config: &ActiveAgentsConfig,
         memory_config: &MemoryConfig,
         storage_config: &FilesystemStorageConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         agent_status_flush_config: &AgentStatusFlushConfig,
         shutdown_token: CancellationToken,
     ) -> Result<Self, FilesystemStorageError> {
-        let agent_filesystems = Arc::new(AgentFilesystems::new(storage_config)?);
+        let agent_filesystems =
+            Arc::new(AgentFilesystems::new(storage_config, initial_files_service).await?);
         let admission = memory_config.enable_measured_admission.then(|| {
             Arc::new(AdmissionController::new(
                 probe,
@@ -1011,7 +1027,8 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         component_revision: ComponentRevision,
         component_module_bytes: u64,
     ) -> WorkerComponentCharge {
-        let charge_bytes = (self.component_size_coefficient * component_module_bytes as f64) as u64;
+        let charge_bytes =
+            component_charge_bytes(self.component_size_coefficient, component_module_bytes);
         self.component_charges
             .acquire((component_id, component_revision), charge_bytes)
             .await
@@ -1557,11 +1574,21 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         let Some(admission) = &self.admission else {
             return MemoryGrant::inert(memory);
         };
+        let mut refusals: u32 = 0;
         loop {
             // Evicts idle-then-warm when real headroom is short; rejects (and we
             // back off) when it cannot make room rather than risking the limit.
             if let Some(grant) = admission.admit(memory, &self.eviction_source()).await {
                 return grant;
+            }
+            refusals = refusals.saturating_add(1);
+            if admission_wait_warns(refusals) {
+                warn!(
+                    requested = memory,
+                    refusals,
+                    retry_delay_ms = self.acquire_retry_delay.as_millis(),
+                    "Memory admission keeps refusing a worker start"
+                );
             }
             debug!("Measured headroom insufficient for {memory}, backing off and retrying");
             tokio::time::sleep(self.acquire_retry_delay).await;
@@ -1899,7 +1926,7 @@ async fn evict_at_most_memory<Ctx: WorkerCtx>(
             // correct.
             let (component_id, component_revision, module_bytes) =
                 worker.resident_component_charge_requirement().await;
-            let charge_bytes = (component_size_coefficient * module_bytes as f64) as u64;
+            let charge_bytes = component_charge_bytes(component_size_coefficient, module_bytes);
             let component: ComponentChargeKey = (component_id, component_revision);
             let last_changed = worker.last_execution_state_change();
             candidates.push((
@@ -1980,6 +2007,13 @@ impl<Ctx: WorkerCtx> EvictionSource for WorkerEvictionSource<Ctx> {
         )
         .await
     }
+}
+
+/// Gives the bytes that a component charges for its compiled module: the module size multiplied by
+/// `coefficient`, rounded toward zero. A result above `u64::MAX` gives `u64::MAX`, and a negative
+/// or NaN result gives 0.
+fn component_charge_bytes(coefficient: f64, module_bytes: u64) -> u64 {
+    (coefficient * module_bytes as f64) as u64
 }
 
 /// Single attempt of the charge-first admission ordering used by

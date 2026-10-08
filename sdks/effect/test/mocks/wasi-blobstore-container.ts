@@ -13,6 +13,7 @@ import {
   OutgoingValue,
   type ContainerMetadata,
 } from "./wasi-blobstore-types.js"
+import { hostRange } from "../blob-range.js"
 
 interface ObjectEntry {
   bytes: () => Uint8Array
@@ -86,10 +87,12 @@ export class Container {
     const obj = this._entry.objects.get(name)
     maybeFail("getData", obj === undefined, `object ${name} not found`)
     const bytes = obj!.bytes()
-    const s = Number(start)
-    // Mock follows the in-memory backend: `end` is exclusive (Rust slice).
-    const e = Math.min(Number(end), bytes.length)
-    const slice = bytes.subarray(s, e)
+    // Mock follows the host, offsets included: see `test/blob-range.ts`.
+    const resolved = hostRange(start, end, BigInt(bytes.length))
+    if (resolved.kind === "error") {
+      throw new Error(resolved.message)
+    }
+    const slice = bytes.subarray(resolved.first, resolved.last + 1)
     return new IncomingValue(new Uint8Array(slice))
   }
 

@@ -133,22 +133,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let svc = self.state.blob_store_service.clone();
             let result = loop {
+                // Creation reads the container back because the guest receives its timestamp.
+                // A missing container after successful creation is a permanent NotFound error.
                 let result = await_blob_provider(
                     self.create_interrupt_signal(),
                     svc.create_container(environment_id, name.clone()),
                 )
                 .await
-                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?
-                .map(|_| name.clone());
+                .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?;
                 let result = match result {
-                    Ok(name) => await_blob_provider(
+                    Ok(_) => await_blob_provider(
                         self.create_interrupt_signal(),
-                        svc.get_container(environment_id, name),
+                        svc.get_container(environment_id, name.clone()),
                     )
                     .await
                     .map_err(|kind| handle.trap(anyhow::Error::new(kind)))?
-                    .map(|r| r.unwrap()),
-                    Err(e) => Err(e),
+                    .and_then(|created_at| {
+                        created_at.ok_or_else(|| {
+                            BlobStoreError::NotFound(format!(
+                                "the container {name:?} was created, and the storage holds no container at that name"
+                            ))
+                        })
+                    }),
+                    Err(err) => Err(err),
                 };
                 match handle
                     .try_trigger_retry_or_loop(self, &result, classify_blob_store_error)

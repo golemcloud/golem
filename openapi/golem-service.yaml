@@ -18492,12 +18492,11 @@ components:
         snapshotIndex:
           type: integer
           format: uint64
-        ineligibilityReason:
-          type: string
       required:
       - pendingUpdateIndex
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
     PublicInvocationWalletPin:
       title: PublicInvocationWalletPin
       type: object
@@ -18621,6 +18620,7 @@ components:
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicOplogEntry_r#CreateParams'
@@ -18679,6 +18679,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
     PublicOplogEntryAttribution:
       discriminator:
         propertyName: type
@@ -19292,6 +19293,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
+    PublicOplogEntry_r#SnapshotConfirmedParams:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotConfirmed
+            type: string
+            enum:
+            - SnapshotConfirmed
+        required:
+        - type
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -21701,11 +21714,16 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        ineligibilityReason:
+        filesystemSnapshot:
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
           type: string
       required:
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
     SnapshotBasedUpdateParameters:
       title: SnapshotBasedUpdateParameters
       type: object
@@ -21716,6 +21734,8 @@ components:
             type: integer
             format: uint8
         mimeType:
+          type: string
+        filesystemSnapshot:
           type: string
       required:
       - payload
@@ -22966,6 +22986,18 @@ components:
       required:
       - timestamp
       - policy
+    r#SnapshotConfirmedParams:
+      title: r#SnapshotConfirmedParams
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        filesystemSnapshot:
+          type: string
+      required:
+      - timestamp
+      - filesystemSnapshot
     r#SnapshotParams:
       title: r#SnapshotParams
       type: object
@@ -22975,6 +23007,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
       required:
       - timestamp
       - data

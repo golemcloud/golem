@@ -391,9 +391,9 @@ mod protobuf {
                 source_revision_start_index: OplogIndex::from_u64(
                     value.source_revision_start_index,
                 ),
-                snapshot_index: value.snapshot_index.map(OplogIndex::from_u64),
-                snapshot_revision: value.snapshot_revision.map(TryInto::try_into).transpose()?,
-                ineligibility_reason: value.ineligibility_reason,
+                snapshot_index: OplogIndex::from_u64(value.snapshot_index),
+                snapshot_revision: value.snapshot_revision.try_into()?,
+                filesystem_snapshot: value.filesystem_snapshot,
             })
         }
     }
@@ -405,9 +405,9 @@ mod protobuf {
             Self {
                 source_component_revision: value.source_component_revision.into(),
                 source_revision_start_index: value.source_revision_start_index.into(),
-                snapshot_index: value.snapshot_index.map(Into::into),
-                snapshot_revision: value.snapshot_revision.map(Into::into),
-                ineligibility_reason: value.ineligibility_reason,
+                snapshot_index: value.snapshot_index.into(),
+                snapshot_revision: value.snapshot_revision.into(),
+                filesystem_snapshot: value.filesystem_snapshot,
             }
         }
     }

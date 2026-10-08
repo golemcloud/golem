@@ -8861,13 +8861,45 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     validation_result?;
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
-    if case != CompletedReconstructionExclusiveCase::Success {
-        assert!(
-            invocation_result.is_err(),
-            "divergent reconstruction must fail the owner invocation"
-        );
-    } else {
-        invocation_result?;
+    match case {
+        CompletedReconstructionExclusiveCase::Success => {
+            invocation_result?;
+        }
+        CompletedReconstructionExclusiveCase::Divergence => {
+            invocation_result?;
+            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+            let failed_updates = oplog
+                .iter()
+                .filter_map(|entry| match &entry.entry {
+                    PublicOplogEntry::FailedUpdate(failed) => Some(failed),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(failed_updates.len(), 1, "{failed_updates:?}");
+            assert!(
+                failed_updates[0]
+                    .details
+                    .as_deref()
+                    .is_some_and(|details| details.starts_with("UPDATE_REPLAY_FAILED")),
+                "{:?}",
+                failed_updates[0].details
+            );
+            assert!(
+                oplog.iter().all(|entry| !matches!(
+                    entry.entry,
+                    PublicOplogEntry::Error(_) | PublicOplogEntry::SuccessfulUpdate(_)
+                )),
+                "the divergent update replay wrote an invocation error or applied the update"
+            );
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            assert_eq!(metadata.component_revision, caller_component.revision);
+        }
+        CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
+            assert!(
+                invocation_result.is_err(),
+                "an executor shutdown during body validation must fail the owner invocation"
+            );
+        }
     }
     Ok(())
 }
@@ -8895,7 +8927,7 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
 #[test]
 #[tracing::instrument]
 #[timeout("5m")]
-async fn completed_reconstruction_divergence_fails_exclusive_p2_wait(
+async fn completed_reconstruction_divergence_fails_automatic_update_and_runs_on_source_revision(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,

@@ -95,7 +95,10 @@ mod tests {
             }
         );
 
-        config.filesystem_storage.managed_xfs_root_dir = Some("/managed-xfs".into());
+        config.filesystem_storage.mode =
+            crate::services::golem_config::FilesystemStorageMode::ManagedXfs {
+                root: "/managed-xfs".into(),
+            };
         assert_eq!(
             config.effective_resource_usage_metering(),
             ResourceUsageMeteringConfig::all_enabled()
@@ -262,6 +265,83 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("objects_per_gib"), "{error}");
+    }
+
+    #[test]
+    fn a_removed_storage_key_fails_to_load_with_its_name() {
+        ["managed_xfs_root_dir", "deterministic_root_dir"]
+            .into_iter()
+            .for_each(|key| {
+                let error = make_config_loader()
+                    .default_figment()
+                    .merge(Toml::string(&format!(
+                        "[filesystem_storage]\n{key} = \"/var/lib/golem/agents\""
+                    )))
+                    .extract::<GolemConfig>()
+                    .unwrap_err();
+
+                assert!(error.to_string().contains(key), "{error}");
+            });
+    }
+
+    #[test]
+    fn an_unknown_key_of_the_storage_mode_fails_to_load_with_its_name() {
+        let error = make_config_loader()
+            .default_figment()
+            .merge(Toml::string(
+                "[filesystem_storage.mode]\ntype = \"ReflinkXfs\"\n\
+                 [filesystem_storage.mode.config]\nroot = \"/var/lib/golem/agents\"\n\
+                 project_quotas = false",
+            ))
+            .extract::<GolemConfig>()
+            .unwrap_err();
+
+        assert!(error.to_string().contains("project_quotas"), "{error}");
+    }
+
+    #[test]
+    fn a_removed_storage_key_in_the_environment_fails_to_load_with_its_name() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env(
+                "GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR",
+                "/var/lib/golem/agents",
+            );
+            let error = make_config_loader()
+                .default_figment()
+                .merge(env_config_provider())
+                .extract::<GolemConfig>()
+                .unwrap_err();
+            assert!(
+                error.to_string().contains("managed_xfs_root_dir"),
+                "{error}"
+            );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn the_storage_mode_loads_from_the_environment() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.set_env("GOLEM__FILESYSTEM_STORAGE__MODE__TYPE", "ReflinkXfs");
+            jail.set_env(
+                "GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT",
+                "/var/lib/golem/agents",
+            );
+            let config = make_config_loader()
+                .default_figment()
+                .merge(env_config_provider())
+                .extract::<GolemConfig>()
+                .unwrap();
+            assert_eq!(
+                config.filesystem_storage.mode,
+                crate::services::golem_config::FilesystemStorageMode::ReflinkXfs {
+                    root: std::path::PathBuf::from("/var/lib/golem/agents").into(),
+                }
+            );
+            Ok(())
+        });
     }
 
     #[test]

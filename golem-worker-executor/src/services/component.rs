@@ -191,12 +191,13 @@ impl ComponentService for ComponentServiceDefault {
                                         .registry_client
                                         .download_component(component_id, component_revision)
                                         .await
-                                        .map_err(|e| {
-                                            WorkerExecutorError::ComponentDownloadFailed {
+                                        .map_err(|error| {
+                                            registry_error(
+                                                RegistryCall::DownloadComponent,
                                                 component_id,
-                                                component_revision,
-                                                reason: e.to_safe_string(),
-                                            }
+                                                Some(component_revision),
+                                                error,
+                                            )
                                         })?;
 
                                     let start = Instant::now();
@@ -275,14 +276,13 @@ impl ComponentService for ComponentServiceDefault {
                                 let metadata = client
                                     .get_component_metadata(component_id, component_revision)
                                     .await
-                                    .map_err(|e| match e {
-                                        RegistryServiceError::NotFound(_) => {
-                                            WorkerExecutorError::ComponentNotFound { component_id }
-                                        }
-                                        _ => WorkerExecutorError::runtime(format!(
-                                            "Failed getting component metadata: {}",
-                                            e.to_safe_string()
-                                        )),
+                                    .map_err(|error| {
+                                        registry_error(
+                                            RegistryCall::Metadata,
+                                            component_id,
+                                            Some(component_revision),
+                                            error,
+                                        )
                                     })?;
                                 Ok(metadata)
                             })
@@ -299,14 +299,13 @@ impl ComponentService for ComponentServiceDefault {
                             client
                                 .get_deployed_component_metadata(component_id)
                                 .await
-                                .map_err(|e| match e {
-                                    RegistryServiceError::NotFound(_) => {
-                                        WorkerExecutorError::ComponentNotFound { component_id }
-                                    }
-                                    _ => WorkerExecutorError::runtime(format!(
-                                        "Failed getting component metadata: {}",
-                                        e.to_safe_string()
-                                    )),
+                                .map_err(|error| {
+                                    registry_error(
+                                        RegistryCall::Metadata,
+                                        component_id,
+                                        None,
+                                        error,
+                                    )
                                 })
                         })
                     })
@@ -470,6 +469,62 @@ fn create_component_cache(
         },
         "component",
     )
+}
+
+/// The call to the component service that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegistryCall {
+    /// The metadata of a component revision.
+    Metadata,
+    /// The binary of a component revision.
+    DownloadComponent,
+}
+
+/// The executor error of a failed component service call. It keeps the kind of the failure: the
+/// service did not answer (`ComponentServiceUnavailable`, a later call can succeed), the revision
+/// does not exist (`ComponentNotFound`), or the service refused the call
+/// (`ComponentServiceRefused`). A revision without a binary is a refusal of the download.
+fn registry_error(
+    call: RegistryCall,
+    component_id: ComponentId,
+    component_revision: Option<ComponentRevision>,
+    error: RegistryServiceError,
+) -> WorkerExecutorError {
+    use golem_service_base::error::worker_executor::ComponentServiceRefusal;
+    let refused = |kind| WorkerExecutorError::ComponentServiceRefused {
+        component_id,
+        component_revision,
+        kind,
+        reason: error.to_safe_string(),
+    };
+    match (&error, call) {
+        (
+            RegistryServiceError::InternalClientError(_)
+            | RegistryServiceError::InternalServerError(_),
+            _,
+        ) => WorkerExecutorError::ComponentServiceUnavailable {
+            component_id,
+            component_revision,
+            reason: error.to_safe_string(),
+        },
+        (RegistryServiceError::NotFound(_), RegistryCall::Metadata) => {
+            WorkerExecutorError::ComponentNotFound { component_id }
+        }
+        (RegistryServiceError::NotFound(_), RegistryCall::DownloadComponent) => {
+            refused(ComponentServiceRefusal::MissingBinary)
+        }
+        (RegistryServiceError::Unauthorized(_), _) => {
+            refused(ComponentServiceRefusal::Unauthorized)
+        }
+        (RegistryServiceError::CouldNotAuthenticate(_), _) => {
+            refused(ComponentServiceRefusal::CouldNotAuthenticate)
+        }
+        (RegistryServiceError::BadRequest(_), _) => refused(ComponentServiceRefusal::BadRequest),
+        (RegistryServiceError::LimitExceeded(_), _) => {
+            refused(ComponentServiceRefusal::LimitExceeded)
+        }
+        (RegistryServiceError::AlreadyExists(_), _) => refused(ComponentServiceRefusal::Other),
+    }
 }
 
 #[cfg(test)]
@@ -865,6 +920,70 @@ mod tests {
             calls.get(&second_component_id).copied().unwrap_or_default(),
             1,
             "other environments should stay cached"
+        );
+    }
+
+    /// Each kind of component service failure keeps its kind for the metadata call and for the
+    /// download of the binary.
+    #[test]
+    fn a_registry_error_keeps_its_kind_for_each_call() {
+        use golem_service_base::error::worker_executor::ComponentServiceRefusal;
+        let component_id = ComponentId::new();
+        let revision = Some(ComponentRevision::new(3).unwrap());
+        let unavailable = |reason: &str| WorkerExecutorError::ComponentServiceUnavailable {
+            component_id,
+            component_revision: revision,
+            reason: reason.to_string(),
+        };
+        let refused = |kind, reason: &str| WorkerExecutorError::ComponentServiceRefused {
+            component_id,
+            component_revision: revision,
+            kind,
+            reason: reason.to_string(),
+        };
+        let errors = || {
+            [
+                RegistryServiceError::InternalClientError("transport".to_string()),
+                RegistryServiceError::InternalServerError("server".to_string()),
+                RegistryServiceError::NotFound("missing".to_string()),
+                RegistryServiceError::Unauthorized("token".to_string()),
+                RegistryServiceError::CouldNotAuthenticate("token".to_string()),
+                RegistryServiceError::BadRequest(vec!["bad".to_string()]),
+                RegistryServiceError::LimitExceeded("limit".to_string()),
+                RegistryServiceError::AlreadyExists("exists".to_string()),
+            ]
+        };
+        let reasons = errors().map(|error| error.to_safe_string());
+        let shared = |not_found| {
+            [
+                unavailable(&reasons[0]),
+                unavailable(&reasons[1]),
+                not_found,
+                refused(ComponentServiceRefusal::Unauthorized, &reasons[3]),
+                refused(ComponentServiceRefusal::CouldNotAuthenticate, &reasons[4]),
+                refused(ComponentServiceRefusal::BadRequest, &reasons[5]),
+                refused(ComponentServiceRefusal::LimitExceeded, &reasons[6]),
+                refused(ComponentServiceRefusal::Other, &reasons[7]),
+            ]
+        };
+
+        assert_eq!(
+            errors().map(|error| registry_error(
+                RegistryCall::Metadata,
+                component_id,
+                revision,
+                error
+            )),
+            shared(WorkerExecutorError::ComponentNotFound { component_id })
+        );
+        assert_eq!(
+            errors().map(|error| registry_error(
+                RegistryCall::DownloadComponent,
+                component_id,
+                revision,
+                error
+            )),
+            shared(refused(ComponentServiceRefusal::MissingBinary, &reasons[2]))
         );
     }
 }

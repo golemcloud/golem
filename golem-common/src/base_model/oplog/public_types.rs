@@ -760,6 +760,7 @@ pub enum PublicAgentInvocationResult {
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
     pub mime_type: String,
+    pub filesystem_snapshot: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
@@ -795,8 +796,7 @@ pub struct PublicFailedSnapshotAssistedUpdateDetails {
     pub pending_update_index: OplogIndex,
     pub source_component_revision: ComponentRevision,
     pub source_revision_start_index: OplogIndex,
-    pub snapshot_index: Option<OplogIndex>,
-    pub ineligibility_reason: Option<String>,
+    pub snapshot_index: OplogIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize)]

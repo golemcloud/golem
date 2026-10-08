@@ -4788,7 +4788,8 @@ mod tests {
     async fn unmanaged_filesystem_config_constructs_no_monthly_storage_path_but_keeps_disk_limit() {
         let mut config = GolemConfig::default();
         config.resource_usage_metering.filesystem = true;
-        config.filesystem_storage.managed_xfs_root_dir = None;
+        config.filesystem_storage.mode =
+            crate::services::golem_config::FilesystemStorageMode::Temporary;
         let metering = config.effective_resource_usage_metering();
         let entry = AtomicResourceEntry::new_with_all_limits_metering_policy_and_revisions(
             MonthlyResourcePolicy {

@@ -19,7 +19,7 @@ use crate::durable_host::{
     SnapshotBoundaryBlocker,
 };
 use crate::metrics::wasm::record_allocated_memory;
-use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
     AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
     FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
@@ -70,9 +70,8 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::{self, InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError,
-    FailedSnapshotAssistedUpdateDetails, SnapshotAssistedUpdateDetails,
-    TimestampedUpdateDescription,
+    AgentError, EphemeralCannotSuspendError, EphemeralFuelExhaustedError, OplogEntry,
+    SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey,
@@ -792,18 +791,10 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-        update_attempt_index: Option<OplogIndex>,
+        failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .on_worker_update_failed(
-                target_revision,
-                details,
-                snapshot_assisted_details,
-                update_attempt_index,
-            )
+            .on_worker_update_failed(failed_update)
             .await
     }
 
@@ -1096,7 +1087,7 @@ impl WorkerCtx for Context {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,

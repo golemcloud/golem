@@ -42,7 +42,8 @@ Filesystem metering requires a managed XFS root and separate durable and ephemer
 GOLEM__RESOURCE_USAGE_METERING__FILESYSTEM=true
 GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_DURABLE_STORAGE_GB_MONTH=100
 GOLEM__INITIAL_PLANS__DEFAULT__MONTHLY_EPHEMERAL_STORAGE_GB_MONTH=25
-GOLEM__FILESYSTEM_STORAGE__MANAGED_XFS_ROOT_DIR=/var/lib/golem/managed-xfs
+GOLEM__FILESYSTEM_STORAGE__MODE__TYPE=ManagedXfs
+GOLEM__FILESYSTEM_STORAGE__MODE__CONFIG__ROOT=/var/lib/golem/managed-xfs
 ```
 
 The managed XFS root cannot be combined with the deterministic agent filesystem root. Durable and ephemeral storage are separate limits; configuring one does not provide or change the other. When filesystem metering is disabled, managed XFS may still be configured for project quotas without enabling storage billing.
@@ -55,11 +56,13 @@ These switches control monthly usage accounting, caps, overage, and billing for 
 | --- | --- | --- |
 | `compute` | No compute usage accounting, monthly compute cap, overage, or billing. | Epoch-based interruption and executor scheduling |
 | `memory` | No linear-memory byte-time accounting, monthly memory cap, overage, or billing. | Per-agent memory limits, measured admission, and memory-pressure eviction |
-| `filesystem` | No allocated-byte-time accounting, monthly durable or ephemeral storage caps, overage, or billing. | Managed XFS project quotas, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
+| `filesystem` | No allocated-byte-time accounting, monthly durable or ephemeral storage caps, overage, or billing. | Project quotas of `ManagedXfs` storage, filesystem-object limits, physical-pressure recovery, lifecycle, replay, and cleanup |
 
 With every meter disabled, monthly usage mode has no runtime effect. Maximum memory per agent remains enforced. Finite maximum storage per agent remains available only on managed quota-capable storage, currently managed XFS; unmanaged storage reports it disabled.
 
-Managed XFS does not enable storage billing. A self-hosted deployment may use managed XFS and quotas while leaving `filesystem = false`.
+The `ManagedXfs` storage mode does not enable storage billing. A self-hosted deployment may use `ManagedXfs` and its project quotas while leaving `filesystem = false`.
+
+Filesystem metering reads the project quota of each agent, so it needs the `ManagedXfs` storage mode. An executor with the `ReflinkXfs` storage mode and `filesystem = true` does not start: `filesystem metering requires XFS storage with project quotas`. The development modes `Temporary` and `Directory` meter no filesystem usage.
 
 ### Current filesystem exceptions
 

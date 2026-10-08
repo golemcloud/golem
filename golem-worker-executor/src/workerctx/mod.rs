@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -55,8 +55,7 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponseEntityInvocation,
-    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
+    AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
@@ -289,7 +288,7 @@ pub trait WorkerCtx:
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
@@ -571,14 +570,12 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed. Fails when the oplog refused to record the
-    /// failure: the agent has been given up, and must not be rebuilt on its old revision here.
+    /// Called when an update attempt has failed, with its `FailedUpdate` entry. Fails when the
+    /// oplog refused to record the failure: the agent has been given up, and must not be rebuilt
+    /// on its old revision here.
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-        update_attempt_index: Option<OplogIndex>,
+        failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when an update attempt succeeded. Fails when the oplog refused to record the

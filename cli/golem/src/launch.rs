@@ -40,8 +40,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -477,8 +477,20 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            deterministic_root_dir: args.agent_filesystem_root.clone(),
-            managed_xfs_root_dir: args.managed_xfs_root_dir.clone(),
+            mode: match (&args.managed_xfs_root_dir, &args.agent_filesystem_root) {
+                (Some(root), None) => FilesystemStorageMode::ManagedXfs {
+                    root: root.clone().into(),
+                },
+                (None, Some(root)) => FilesystemStorageMode::Directory {
+                    root: root.clone().into(),
+                },
+                (None, None) => FilesystemStorageMode::Temporary,
+                (Some(_), Some(_)) => {
+                    anyhow::bail!(
+                        "managed XFS root cannot be combined with the agent filesystem root"
+                    );
+                }
+            },
             ..Default::default()
         },
         ..Default::default()
@@ -678,10 +690,11 @@ mod tests {
             }
         );
         assert_eq!(
-            config.filesystem_storage.managed_xfs_root_dir,
-            Some(PathBuf::from("/managed-xfs"))
+            config.filesystem_storage.mode,
+            FilesystemStorageMode::ManagedXfs {
+                root: PathBuf::from("/managed-xfs").into(),
+            }
         );
-        assert_eq!(config.filesystem_storage.deterministic_root_dir, None);
         assert_eq!(config.shard_manager.host, "127.0.0.1");
         assert_eq!(config.shard_manager.port, 1001);
         assert_eq!(config.registry_service.host, "127.0.0.1");

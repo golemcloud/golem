@@ -78,16 +78,26 @@ fn p2_descriptor_guest_path(
         .map_err(|_| FsError::from(ErrorCode::NotPermitted))
 }
 
-fn p2_is_immutable_initial_file(
-    generation_handle: &FilesystemGenerationHandle,
-    guest_path: &CanonicalGuestPath,
+/// Gives the path of `guest_path` relative to the root of the agent filesystem.
+fn p2_root_relative_path(guest_path: &CanonicalGuestPath) -> std::path::PathBuf {
+    std::path::PathBuf::from(guest_path.as_str().strip_prefix('/').unwrap_or_default())
+}
+
+/// Runs the check of `agent_filesystem::is_immutable_initial_file`: `true` when the stat reads
+/// Golem's read-only initial file, so its volatile timestamps can be removed without an oplog
+/// entry. A failure of the check traps, as a failure of the stat of the fast path does, because a
+/// guest error that the oplog does not record could differ in a replay.
+async fn p2_is_immutable_initial_file(
+    check: Result<Option<agent_filesystem::FilesystemCall<bool>>, agent_filesystem::AccessError>,
 ) -> Result<bool, FsError> {
-    let relative_path = guest_path.as_str().strip_prefix('/').unwrap_or_default();
-    agent_filesystem::is_immutable_initial_file(
-        generation_handle,
-        std::path::Path::new(relative_path),
-    )
-    .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))
+    match check.map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))? {
+        None => Ok(false),
+        Some(call) => call.await.map_err(|error| {
+            FsError::trap(wasmtime::Error::msg(format!(
+                "immutable initial-file check failed: {error}"
+            )))
+        }),
+    }
 }
 
 async fn p2_stable_initial_file_stat(
@@ -143,7 +153,13 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         AgentFilesystemError::Sandbox(error) => p2_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => ErrorCode::InsufficientSpace.into(),
-        error @ (AgentFilesystemError::Access(_) | AgentFilesystemError::RuntimeInvalidated) => {
+        // An install of initial files is not a call of the guest, so a conflict and an
+        // unavailable initial-file source cannot reach a guest descriptor. It traps with the other internal lifecycle failures.
+        error @ (AgentFilesystemError::Access(_)
+        | AgentFilesystemError::Baseline(_)
+        | AgentFilesystemError::InitialFileConflict(_)
+        | AgentFilesystemError::InitialFileUnavailable(_)
+        | AgentFilesystemError::RuntimeInvalidated) => {
             FsError::trap(wasmtime::Error::msg(error.to_string()))
         }
     }
@@ -484,13 +500,13 @@ fn p2_agent_path_target(
     })
 }
 
-fn p2_agent_flags(
-    generation_handle: &FilesystemGenerationHandle,
-    descriptor: &AgentDescriptor,
-) -> Result<DescriptorFlags, FsError> {
+fn p2_agent_flags(descriptor: &AgentDescriptor) -> Result<DescriptorFlags, FsError> {
     let (kind, mode) = descriptor.with_node(|node| (node.kind(), node.access()));
     let mut flags = DescriptorFlags::empty();
-    if matches!(mode, AccessMode::Read | AccessMode::ReadWrite) {
+    if matches!(
+        mode,
+        AccessMode::Read | AccessMode::ReadAndSetTimes | AccessMode::ReadWrite
+    ) {
         flags |= DescriptorFlags::READ;
     }
     if matches!(mode, AccessMode::Write | AccessMode::ReadWrite) {
@@ -499,13 +515,6 @@ fn p2_agent_flags(
         } else {
             DescriptorFlags::WRITE
         };
-    }
-    if kind == ObjectKind::File
-        && agent_filesystem::path_permissions(generation_handle, descriptor.path())
-            .map_err(|error| p2_agent_error(AgentFilesystemError::Access(error)))?
-            == golem_common::model::component::AgentFilePermissions::ReadOnly
-    {
-        flags &= !DescriptorFlags::WRITE;
     }
     Ok(flags)
 }
@@ -794,7 +803,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "write_via_stream");
-        let flags = p2_agent_flags(&generation_handle, &descriptor)?;
+        let flags = p2_agent_flags(&descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
         }
@@ -818,7 +827,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let path = p2_descriptor_guest_path(&descriptor, "")?;
         let authorization_permit = authorize_paths(self, &[(FilesystemVerb::Write, path)]).await?;
         self.observe_function_call("filesystem::types::descriptor", "append_via_stream");
-        let flags = p2_agent_flags(&generation_handle, &descriptor)?;
+        let flags = p2_agent_flags(&descriptor)?;
         if !flags.contains(DescriptorFlags::WRITE) {
             return Err(ErrorCode::NotPermitted.into());
         }
@@ -861,9 +870,8 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
     async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
         self.observe_function_call("filesystem::types::descriptor", "get_flags");
 
-        let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &fd)?;
-        p2_agent_flags(&generation_handle, &descriptor)
+        p2_agent_flags(&descriptor)
     }
 
     async fn get_type(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorType, FsError> {
@@ -1031,10 +1039,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, "")?;
-        let immutable_initial_file = p2_is_immutable_initial_file(&generation_handle, &guest_path)?;
+        let root_relative_path = p2_root_relative_path(&guest_path);
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let path = descriptor.path().to_path_buf();
+        let immutable_initial_file = p2_is_immutable_initial_file(descriptor.with_node(|node| {
+            agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                &root_relative_path,
+                AgentTarget::Open(node),
+            )
+        }))
+        .await?;
 
         if immutable_initial_file {
             let call = descriptor
@@ -1146,7 +1162,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         let generation_handle = self.filesystem_generation_handle();
         let descriptor = p2_agent_descriptor(self, &self_)?;
         let guest_path = p2_descriptor_guest_path(&descriptor, &path)?;
-        let immutable_initial_file = p2_is_immutable_initial_file(&generation_handle, &guest_path)?;
+        let root_relative_path = p2_root_relative_path(&guest_path);
         let _authorization_permit =
             authorize_paths(self, &[(FilesystemVerb::Stat, guest_path)]).await?;
         let full_path = descriptor.path().join(path.clone());
@@ -1156,6 +1172,13 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         } else {
             agent_filesystem::Follow::No
         };
+        let immutable_initial_file =
+            p2_is_immutable_initial_file(agent_filesystem::is_immutable_initial_file(
+                &generation_handle,
+                &root_relative_path,
+                AgentTarget::Path(&target, follow),
+            ))
+            .await?;
 
         if immutable_initial_file {
             let call = agent_filesystem::attributes(

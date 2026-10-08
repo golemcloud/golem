@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::sandbox_filesystem::FilesystemStorageError;
+use crate::sandbox_filesystem::{AgentAccounting, FilesystemStorageError};
 use crate::services::active_agents::ConcurrentAgentPermit;
 use crate::services::agent_memory_meter::AgentMemoryMeter;
 use crate::services::byte_time_accumulator::{
@@ -1369,6 +1369,26 @@ fn spawn_metering_task(task: impl Future<Output = ()> + Send + 'static) {
                     .block_on(task);
             })
             .expect("failed to start resource usage metering thread");
+    }
+}
+
+/// Refuses filesystem metering on storage that measures no per-agent usage.
+///
+/// Filesystem metering reads the usage of each agent from the project quota of its filesystem.
+/// Production storage without per-agent accounting would meter zero for every agent without an
+/// error, so `metering` with `filesystem` on is refused there. Development storage measures no
+/// usage either, and is not refused.
+pub(crate) fn check_filesystem_metering(
+    metering: ResourceUsageMeteringConfig,
+    accounting: AgentAccounting,
+) -> Result<(), String> {
+    match (metering.filesystem, accounting) {
+        (true, AgentAccounting::Unaccounted) => {
+            Err("filesystem metering requires XFS storage with project quotas".to_string())
+        }
+        (true, AgentAccounting::ProjectQuotas | AgentAccounting::Development) | (false, _) => {
+            Ok(())
+        }
     }
 }
 
