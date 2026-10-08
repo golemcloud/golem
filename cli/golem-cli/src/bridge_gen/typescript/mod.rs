@@ -987,11 +987,33 @@ impl TypeScriptBridgeGenerator {
         let args = self.input_type_list(&method.input_schema)?;
         let result = self.output_result_type(&method.output_schema)?;
         let method_name = serde_json::to_string(&method.name)?;
-        let encode = self.build_encode_args_fn(method)?.trim().to_string();
-        let decode = self
+        let mut encode = self.build_encode_args_fn(method)?.trim().to_string();
+        let mut decode = self
             .build_guest_decode_result_fn(method)?
             .trim()
             .to_string();
+        let mut remote = "this.resolved";
+        if let (TsInput::Params(params), TsOutput::Single(output)) = (
+            self.ts_input(&method.input_schema)?,
+            self.ts_output(&method.output_schema)?,
+        ) && params.iter().all(|(_, typ)| Self::guest_wire_eligible(typ))
+            && Self::guest_wire_eligible(&output)
+        {
+            let fields = params
+                .iter()
+                .enumerate()
+                .map(|(i, (_, typ))| self.encode_guest_wire(&format!("__args[{i}]"), typ))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            encode = format!(
+                "(__args: [{args}]): base.SchemaValueTree => {{ const __writer = new base.SchemaValueWriter(); const root = __writer.add({{ tag: 'record-value', val: [{}] }}); return {{ valueNodes: __writer.valueNodes, root }}; }}",
+                fields.join(", ")
+            );
+            let direct_decode = self.decode_guest_wire("__tree.root", &output)?;
+            decode = format!(
+                "(__tree: base.SchemaValueTree | undefined): {result} => {{ const __fallback = {decode}; if (!__tree) return __fallback(undefined); if (__tree.valueNodes.some(n => n.tag === 'secret-value' || n.tag === 'quota-token-handle' || n.tag === 'permission-card-handle' || n.tag === 'stream-value')) return __fallback(base.schemaValueFromWit(__tree)); return ({direct_decode}) as {result}; }}"
+            );
+            remote = "base.wireRemoteAgent(this.resolved)!";
+        }
         let ephemeral = self.agent_type.mode == AgentMode::Ephemeral;
         let await_result = if ephemeral {
             format!("{{ metadata: base.RemoteInvocationResult['metadata']; value: {result} }}")
@@ -1050,31 +1072,31 @@ impl TypeScriptBridgeGenerator {
         };
         let await_call = if ephemeral {
             format!(
-                "const __result = await this.resolved.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
+                "const __result = await {remote}.invokeAndAwaitWithMetadata({method_name}, __encode(__args), signal); return {{ metadata: __result.metadata, value: __decode(__result.value) }};"
             )
         } else {
             format!(
-                "const __result = await this.resolved.invokeAndAwait({method_name}, __encode(__args), signal); return __decode(__result);"
+                "const __result = await {remote}.invokeAndAwait({method_name}, __encode(__args), signal); return __decode(__result);"
             )
         };
         let trigger_call = if ephemeral {
-            format!("return this.resolved.invokeWithMetadata({method_name}, __encode(__args));")
+            format!("return {remote}.invokeWithMetadata({method_name}, __encode(__args));")
         } else {
-            format!("this.resolved.invoke({method_name}, __encode(__args));")
+            format!("{remote}.invoke({method_name}, __encode(__args));")
         };
         let cancel_call = if ephemeral {
             format!(
-                "return this.resolved.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
+                "return {remote}.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
             )
         } else {
-            format!("return this.resolved.scheduleCancelable(at, {method_name}, __encode(__args));")
+            format!("return {remote}.scheduleCancelable(at, {method_name}, __encode(__args));")
         };
         let schedule_call = if ephemeral {
             format!(
-                "return this.resolved.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
+                "return {remote}.scheduleCancelableWithMetadata(at, {method_name}, __encode(__args));"
             )
         } else {
-            format!("return this.resolved.scheduleCancelable(at, {method_name}, __encode(__args));")
+            format!("return {remote}.scheduleCancelable(at, {method_name}, __encode(__args));")
         };
         writer.write_doc(&method.description);
         writer.write_line(formatdoc! {"
@@ -1101,6 +1123,105 @@ impl TypeScriptBridgeGenerator {
             await_result, await_call, args, args, args, trigger_result, trigger_call,
             args, schedule_result, schedule_call, args, cancel_result, cancel_call});
         Ok(())
+    }
+
+    fn guest_wire_scalar(typ: &SchemaType) -> Option<&'static str> {
+        match typ {
+            SchemaType::Bool { .. } => Some("bool"),
+            SchemaType::S8 { .. } => Some("s8"),
+            SchemaType::S16 { .. } => Some("s16"),
+            SchemaType::S32 { .. } => Some("s32"),
+            SchemaType::S64 { .. } => Some("s64"),
+            SchemaType::U8 { .. } => Some("u8"),
+            SchemaType::U16 { .. } => Some("u16"),
+            SchemaType::U32 { .. } => Some("u32"),
+            SchemaType::U64 { .. } => Some("u64"),
+            SchemaType::F32 { .. } => Some("f32"),
+            SchemaType::F64 { .. } => Some("f64"),
+            SchemaType::Char { .. } => Some("char"),
+            SchemaType::String { .. } => Some("string"),
+            _ => None,
+        }
+    }
+
+    fn guest_wire_eligible(typ: &SchemaType) -> bool {
+        Self::guest_wire_scalar(typ).is_some()
+            || match typ {
+                SchemaType::List { element, .. } => Self::guest_wire_eligible(element),
+                SchemaType::Record { fields, .. } => fields
+                    .iter()
+                    .all(|field| Self::guest_wire_eligible(&field.body)),
+                _ => false,
+            }
+    }
+
+    fn encode_guest_wire(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        if let Some(tag) = Self::guest_wire_scalar(typ) {
+            return Ok(format!("__writer.scalar('{tag}', {value})"));
+        }
+        Ok(match typ {
+            SchemaType::List { element, .. } => format!(
+                "__writer.add({{ tag: 'list-value', val: Array.from({value} as Iterable<any>, (__item: any) => ({})) }})",
+                self.encode_guest_wire("__item", element)?
+            ),
+            SchemaType::Record { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                    .map(|(field, name)| {
+                        self.encode_guest_wire(&format!("{value}.{name}"), &field.body)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                format!(
+                    "__writer.add({{ tag: 'record-value', val: [{}] }})",
+                    fields.join(", ")
+                )
+            }
+            _ => anyhow::bail!("unsupported direct guest schema"),
+        })
+    }
+
+    fn decode_guest_wire(&self, index: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        let fallback = self.decode_schema_value(
+            "base.schemaValueFromWit({ valueNodes: __tree.valueNodes, root: __index })",
+            typ,
+        )?;
+        let (tag, value) = if let Some(tag) = Self::guest_wire_scalar(typ) {
+            (tag, "__node.val".to_string())
+        } else {
+            match typ {
+                SchemaType::List { element, .. } => {
+                    let decoded = self.decode_guest_wire("__item", element)?;
+                    let items = format!("__node.val.map((__item: number) => ({decoded}))");
+                    (
+                        "list",
+                        if matches!(**element, SchemaType::U8 { .. }) {
+                            format!("new Uint8Array({items})")
+                        } else {
+                            items
+                        },
+                    )
+                }
+                SchemaType::Record { fields, .. } => {
+                    let fields = fields
+                        .iter()
+                        .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                        .enumerate()
+                        .map(|(i, (field, name))| {
+                            Ok(format!(
+                                "{name}: {}",
+                                self.decode_guest_wire(&format!("__node.val[{i}]"), &field.body)?
+                            ))
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    ("record", format!("({{ {} }})", fields.join(", ")))
+                }
+                _ => anyhow::bail!("unsupported direct guest schema"),
+            }
+        };
+        Ok(format!(
+            "((__index: number): any => {{ const __node: any = __tree.valueNodes[__index]; return __node?.tag === '{tag}-value' ? {value} : ({fallback}); }})({index})"
+        ))
     }
 
     pub(crate) fn build_guest_decode_result_fn(
@@ -2619,6 +2740,19 @@ impl TypeScriptBridgeGenerator {
                 match other {
                     TsOutput::Unit => unreachable!(),
                     TsOutput::Single(schema) => {
+                        if self.mode == TypeScriptBridgeMode::ExternalRest
+                            && Self::external_application_eligible(&schema)
+                        {
+                            writer.write_line(format!(
+                                "const __application: any = {}.application(__out.value);",
+                                self.public_codec(&schema)
+                            ));
+                            writer.write_line(format!(
+                                "return {};",
+                                self.decode_application("__application", &schema)?
+                            ));
+                            return Ok(());
+                        }
                         if self.mode == TypeScriptBridgeMode::ExternalRest {
                             writer.write_line(format!(
                                 "const __outValue: {schema_value_type} = {}.validate(__out.value, 'none') as {schema_value_type};",
@@ -2649,6 +2783,53 @@ impl TypeScriptBridgeGenerator {
                 Ok(())
             }
         }
+    }
+
+    fn external_application_eligible(typ: &SchemaType) -> bool {
+        match typ {
+            SchemaType::F32 { .. } | SchemaType::F64 { .. } => false,
+            SchemaType::List { element, .. } => Self::external_application_eligible(element),
+            SchemaType::Record { fields, .. } => fields
+                .iter()
+                .all(|field| Self::external_application_eligible(&field.body)),
+            _ => Self::guest_wire_scalar(typ).is_some(),
+        }
+    }
+
+    fn decode_application(&self, value: &str, typ: &SchemaType) -> anyhow::Result<String> {
+        Ok(match typ {
+            SchemaType::S64 { .. } | SchemaType::U64 { .. } => format!("BigInt({value})"),
+            SchemaType::List { element, .. } if matches!(**element, SchemaType::U8 { .. }) => {
+                format!("new Uint8Array({value})")
+            }
+            SchemaType::List { element, .. } => {
+                let item = self.decode_application("__item", element)?;
+                if item == "__item" {
+                    value.to_string()
+                } else {
+                    format!("{value}.map((__item: any) => ({item}))")
+                }
+            }
+            SchemaType::Record { fields, .. } => {
+                let mut identity = true;
+                let fields = fields
+                    .iter()
+                    .zip(self.member_names(fields.iter().map(|field| field.name.as_str())))
+                    .map(|(field, name)| {
+                        let source = format!("{value}[{}]", serde_json::to_string(&field.name)?);
+                        let decoded = self.decode_application(&source, &field.body)?;
+                        identity &= name == field.name && decoded == source;
+                        Ok(format!("{name}: {decoded}"))
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                if identity {
+                    value.to_string()
+                } else {
+                    format!("({{ {} }})", fields.join(", "))
+                }
+            }
+            _ => value.to_string(),
+        })
     }
 
     /// Writes a `return` statement that decodes the input `record` `SchemaValue`
