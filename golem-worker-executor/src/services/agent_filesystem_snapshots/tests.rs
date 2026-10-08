@@ -21,6 +21,8 @@ use crate::filesystem_snapshot::{
 };
 use crate::services::agent_filesystem::{RestoreClass, RestoreTree};
 use crate::services::golem_config::FilesystemSnapshotUploadValues;
+#[cfg(target_os = "linux")]
+use crate::services::golem_config::FilesystemStorageMode;
 use async_trait::async_trait;
 use futures::FutureExt as _;
 use futures::StreamExt as _;
