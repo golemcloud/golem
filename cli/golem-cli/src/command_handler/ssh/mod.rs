@@ -425,10 +425,13 @@ impl SshCommandHandler {
             background,
         } = terminal;
         let at_terminal = mode != InputMode::Lines;
-        // The band behind every prompt, a shade off the terminal's own background, and what
-        // was typed while the session connected.
-        let backdrop::Answer { band, typed_ahead } =
-            background.map(backdrop::Query::finish).unwrap_or_default();
+        // The band behind every prompt, a shade off the terminal's own background, what was
+        // typed while the session connected, and the start of an answer that came too late.
+        let backdrop::Answer {
+            band,
+            typed_ahead,
+            unfinished,
+        } = background.map(backdrop::Query::finish).unwrap_or_default();
         // Output of a command that could not be written.
         let mut lost_output = false;
         if let Some(palette) = styled {
@@ -462,6 +465,7 @@ impl SshCommandHandler {
                     colorize.then_some(palette),
                     self.history(session),
                     completions.clone(),
+                    unfinished,
                 );
                 if !typed_ahead.is_empty() {
                     editor.run_edit_commands(&[EditCommand::InsertString(typed_ahead)]);

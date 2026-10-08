@@ -92,21 +92,73 @@ pub fn parse_background(reply: &[u8]) -> Option<Rgb> {
     Some(Rgb(parts.next()??, parts.next()??, parts.next()??))
 }
 
-/// Whether `text` can be the start of a terminal's answer about its background, as it reads
-/// after the escape that opens it: `11;rgb:RRRR/GGGG/BBBB`, or `rgba:` with a fourth part.
-pub fn begins_background_answer(text: &str) -> bool {
-    const OPENING: &str = "11;rgb";
-    let Some(rest) = text.strip_prefix(OPENING) else {
-        return OPENING.starts_with(text);
+/// How much of one of the terminal's answers has arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Arrived {
+    /// All of it, up to what ends it.
+    All,
+    /// Its start. The rest may still come.
+    Part,
+    /// Something else.
+    Nothing,
+}
+
+/// How much of an answer to [`BACKGROUND_QUERY`] `reply` is, from the escape that opens it.
+/// The background reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, or `rgba:` with a fourth part, up to
+/// BEL or `ESC \`. The device attributes read `ESC [ ?`, numbers and `;`, up to `c`.
+pub fn arrived(reply: &[u8]) -> Arrived {
+    let (whole, started) = if let Some(rest) = after(reply, b"\x1b]11;rgb") {
+        background_arrived(rest)
+    } else if let Some(rest) = after(reply, b"\x1b[?") {
+        let numbers = rest
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit() || **byte == b';')
+            .count();
+        (&rest[numbers..] == b"c", numbers == rest.len())
+    } else {
+        // Not yet longer than either opening: the start of one of them, or neither.
+        let opens = |opening: &[u8]| opening.starts_with(reply);
+        (
+            false,
+            !reply.is_empty() && (opens(b"\x1b]11;rgb") || opens(b"\x1b[?")),
+        )
     };
-    let Some(parts) = rest.strip_prefix("a:").or_else(|| rest.strip_prefix(':')) else {
-        return rest.is_empty() || rest == "a";
+    match (whole, started) {
+        (true, _) => Arrived::All,
+        (false, true) => Arrived::Part,
+        (false, false) => Arrived::Nothing,
+    }
+}
+
+/// What follows `opening` in `reply`, when `reply` is longer than it and starts with it.
+fn after<'a>(reply: &'a [u8], opening: &[u8]) -> Option<&'a [u8]> {
+    reply.strip_prefix(opening).filter(|rest| !rest.is_empty())
+}
+
+/// Whether `rest`, what follows `ESC ] 11 ; rgb` in an answer, is all of that answer, and
+/// whether it is the start of one.
+fn background_arrived(rest: &[u8]) -> (bool, bool) {
+    let Some(rest) = rest.strip_prefix(b"a:").or_else(|| rest.strip_prefix(b":")) else {
+        return (false, rest == b"a");
     };
-    let hex = |part: &str| part.len() <= 4 && part.bytes().all(|byte| byte.is_ascii_hexdigit());
-    let mut parts: Vec<&str> = parts.split('/').collect();
+    let end = rest
+        .iter()
+        .position(|byte| matches!(byte, 0x07 | 0x1b))
+        .unwrap_or(rest.len());
+    let (colour, ending) = rest.split_at(end);
+    let hex = |part: &[u8]| part.len() <= 4 && part.iter().all(u8::is_ascii_hexdigit);
+    let mut parts: Vec<&[u8]> = colour.split(|byte| *byte == b'/').collect();
     // Only the part that is still arriving may be empty.
     let last = parts.pop().unwrap_or_default();
-    parts.len() <= 3 && hex(last) && parts.iter().all(|part| !part.is_empty() && hex(part))
+    let started =
+        parts.len() <= 3 && hex(last) && parts.iter().all(|part| !part.is_empty() && hex(part));
+    let named = started && parts.len() >= 2 && !last.is_empty();
+    match ending {
+        b"" => (false, started),
+        b"\x07" | b"\x1b\\" => (named, false),
+        b"\x1b" => (false, named),
+        _ => (false, false),
+    }
 }
 
 /// The background a session shows in place of `background`: a little lighter on a dark one
@@ -955,10 +1007,10 @@ pub fn cancelled(palette: Palette) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKGROUND_QUERY, CONTINUATION, Loader, Palette, Readiness, Rgb, VERBS, animation,
-        answered, band, banner, begins_background_answer, cancelled, context, detached,
-        elapsed_text, finished, layout, marker, parse_background, result, result_width, running,
-        running_compact, session_shade, shown, shown_message, split_agent, verb,
+        Arrived, BACKGROUND_QUERY, CONTINUATION, Loader, Palette, Readiness, Rgb, VERBS, animation,
+        answered, arrived, band, banner, cancelled, context, detached, elapsed_text, finished,
+        layout, marker, parse_background, result, result_width, running, running_compact,
+        session_shade, shown, shown_message, split_agent, verb,
     };
     use std::time::Duration;
     use test_r::test;
@@ -1200,34 +1252,43 @@ mod tests {
     }
 
     #[test]
-    fn the_start_of_an_answer_about_the_background_is_told_from_other_text() {
-        // The answer as it reads after its escape, cut off at any point.
-        for answer in [
-            "11;rgb:1414/1313/1b1b",
-            "11;rgba:1e/1e/1e/ff",
-            "11;rgb:F/0/8",
+    fn how_much_of_an_answer_has_arrived_is_read_from_its_bytes() {
+        for whole in [
+            &b"\x1b]11;rgb:1414/1313/1b1b\x07"[..],
+            b"\x1b]11;rgba:1e/1e/1e/ff\x1b\\",
+            b"\x1b]11;rgb:F/0/8\x07",
+            b"\x1b[?62;4c",
+            b"\x1b[?6c",
         ] {
-            for end in 0..=answer.len() {
-                assert!(
-                    begins_background_answer(&answer[..end]),
-                    "{:?}",
-                    &answer[..end]
-                );
+            assert_eq!(arrived(whole), Arrived::All, "{whole:?}");
+            // Cut off at any point, it is the start of one.
+            for end in 1..whole.len() {
+                assert_eq!(arrived(&whole[..end]), Arrived::Part, "{:?}", &whole[..end]);
             }
         }
         for other in [
-            "ls",
-            "12",
-            "11;rgx",
-            "11;rgbb",
-            "11;rgb:g",
-            "11;rgb:12345",
-            "11;rgb:/",
-            "11;rgb:1//2",
-            "11;rgb:1/2/3/4/5",
-            "11;rgb:1414/1313/1b1b ",
+            &b""[..],
+            b"ls",
+            b"\x1b]12",
+            b"\x1b]11;rgx",
+            b"\x1b]11;rgb:g",
+            b"\x1b]11;rgb:12345",
+            b"\x1b]11;rgb:/",
+            b"\x1b]11;rgb:1//2",
+            b"\x1b]11;rgb:1/2/3/4/5",
+            // It ends before it names a colour.
+            b"\x1b]11;rgb:14/13\x07",
+            b"\x1b]11;rgb:14/13\x1b",
+            // Something follows it.
+            b"\x1b]11;rgb:f/f/f\x07x",
+            b"\x1b[?62;4cx",
+            // An arrow key, and other escapes.
+            b"\x1b[A",
+            b"\x1b[?6x",
+            b"\x1b[62c",
+            b"\x1bO",
         ] {
-            assert!(!begins_background_answer(other), "{other:?}");
+            assert_eq!(arrived(other), Arrived::Nothing, "{other:?}");
         }
     }
 

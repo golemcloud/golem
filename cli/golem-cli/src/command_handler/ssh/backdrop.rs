@@ -18,7 +18,8 @@
 //! about how the terminal looks is changed.
 //!
 //! An answer that arrives after the session has stopped waiting goes to the line editor, whose
-//! edit mode keeps it off the line. The prompts then have no band.
+//! edit mode takes it out of the line. The prompts then have no band. An answer that the end
+//! of the wait cut in two is told to the editor, which has to know its start.
 
 use super::look;
 use std::io::Write;
@@ -37,6 +38,9 @@ pub struct Answer {
     pub band: Option<String>,
     /// What was typed meanwhile, which would otherwise be lost.
     pub typed_ahead: String,
+    /// The start of an answer that the end of the wait cut off. Its rest goes to the line
+    /// editor, which has to know what came before to tell it from typed text.
+    pub unfinished: Vec<u8>,
 }
 
 /// The question put to the terminal, open until its answer is collected.
@@ -107,6 +111,7 @@ impl Query {
             band: look::parse_background(&bytes)
                 .map(|background| look::band(background, self.truecolor)),
             typed_ahead: typed_ahead(&bytes),
+            unfinished: unfinished(&bytes),
         }
     }
 
@@ -160,6 +165,18 @@ impl Drop for Query {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+/// The start of an answer at the end of `bytes`, when the answer is cut off there.
+fn unfinished(bytes: &[u8]) -> Vec<u8> {
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte == 0x1b)
+        .map(|(at, _)| &bytes[at..])
+        .find(|rest| look::arrived(rest) == look::Arrived::Part)
+        .unwrap_or_default()
+        .to_vec()
 }
 
 fn wanted(var: &impl Fn(&str) -> Option<String>) -> bool {
@@ -218,7 +235,7 @@ fn typed_ahead(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{typed_ahead, wanted};
+    use super::{typed_ahead, unfinished, wanted};
     use test_r::test;
 
     #[test]
@@ -236,6 +253,34 @@ mod tests {
         assert!(with(Some("")));
         for no in ["0", "false", "no", "off", " Off "] {
             assert!(!with(Some(no)), "{no:?}");
+        }
+    }
+
+    #[test]
+    fn the_start_of_an_answer_that_the_wait_cut_off_is_kept() {
+        for (bytes, start) in [
+            // The escape that opens the answer came in time, and nothing after it.
+            (&b"\x1b]"[..], &b"\x1b]"[..]),
+            (b"\x1b", b"\x1b"),
+            // Something was typed before it.
+            (b"ls\x1b]11;rgb:14", b"\x1b]11;rgb:14"),
+            // Only the first half of what ends it came.
+            (b"\x1b]11;rgb:f/f/f\x1b", b"\x1b]11;rgb:f/f/f\x1b"),
+            // The background came whole, the device attributes did not.
+            (b"\x1b]11;rgb:f/f/f\x07\x1b[?6", b"\x1b[?6"),
+        ] {
+            assert_eq!(unfinished(bytes), start, "{bytes:?}");
+        }
+        for whole in [
+            &b""[..],
+            b"ls",
+            b"\x1b]11;rgb:1414/1313/1b1b\x07",
+            b"\x1b]11;rgb:1414/1313/1b1b\x07\x1b[?62;c",
+            b"\x1b[?62;c",
+            // An arrow key, and something typed after it.
+            b"a\x1b[Ab",
+        ] {
+            assert_eq!(unfinished(whole), b"", "{whole:?}");
         }
     }
 
