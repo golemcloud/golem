@@ -908,11 +908,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'deploy' shard (deploy-tagged app modules without prebuilt test components)"
+description = "Runs the it-cli 'deploy' shard (component and conformance tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --skip ":tag:deploy_runtime" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-deploy-runtime]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]

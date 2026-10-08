@@ -446,6 +446,7 @@ jobs:
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
           - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
           - { name: cli-integration-tests-deploy, shard: deploy }
+          - { name: cli-integration-tests-deploy-runtime, shard: deploy_runtime }
           - { name: cli-integration-tests-core, shard: core }
     steps: &cli-test-steps
       - uses: actions/checkout@v5
@@ -576,6 +577,19 @@ jobs:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
 
+      - name: List all CLI integration tests
+        if: matrix.group.shard == 'agents'
+        run: cargo-test-r run --package golem-cli --test integration -- --list --format pretty --color never > tmp/cli-test-inventory.txt
+      - name: Upload CLI test inventory
+        if: matrix.group.shard == 'agents'
+        uses: actions/upload-artifact@v6
+        with:
+          name: cli-test-inventory
+          path: tmp/cli-test-inventory.txt
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
       - name: it-cli ${{ matrix.group.shard }}
         env:
           QUIET: true
@@ -627,6 +641,9 @@ jobs:
       - it-cli
       - it-cli-streaming
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - name: Download test reports for this attempt
         uses: actions/download-artifact@v8
         with:
@@ -649,7 +666,26 @@ jobs:
             mkdir -p "tmp/test-reports/${artifact_names[0]}"
             mv tmp/test-reports/ctrf-report.json "tmp/test-reports/${artifact_names[0]}/"
           fi
+      - name: Download CLI test inventory
+        if: needs.it-cli.result == 'success' && needs.it-cli-streaming.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: cli-test-inventory
+          path: tmp/cli-test-inventory
+      - name: Download CLI reports from all attempts
+        if: needs.it-cli.result == 'success' && needs.it-cli-streaming.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: 'cli-integration-tests-*-report-attempt*'
+          path: tmp/cli-shard-reports
+          merge-multiple: false
+      - name: Check CLI shard coverage
+        if: needs.it-cli.result == 'success' && needs.it-cli-streaming.result == 'success'
+        run: |
+          python3 -m unittest discover -s .github/tools -p test_cli_shard_coverage.py
+          python3 .github/tools/check_cli_shard_coverage.py tmp/cli-test-inventory/cli-test-inventory.txt tmp/cli-shard-reports
       - name: Upload consolidated test reports
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: ci-test-reports-attempt${{ github.run_attempt }}
@@ -1483,6 +1519,7 @@ jobs:
       - it
       - it-cli
       - it-cli-streaming
+      - consolidate-test-reports
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20
