@@ -603,7 +603,7 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: test_binary_path(&binary_profile, "golem"),
-            golem_cli_path: test_binary_path(&binary_profile, "golem-cli"),
+            golem_cli_path: test_binary_path(&binary_profile, "golem"),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),

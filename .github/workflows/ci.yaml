@@ -325,7 +325,7 @@ jobs:
       - name: Package CLI test binaries
         run: |
           mkdir -pv tmp/golem-cli-test-binaries
-          cp target/dev-release-ci/golem target/dev-release-ci/golem-cli tmp/golem-cli-test-binaries/
+          cp target/dev-release-ci/golem tmp/golem-cli-test-binaries/
           find tmp/golem-cli-test-binaries -type f | sort
         timeout-minutes: 2
       - name: Save CLI test binaries to cache
@@ -1148,8 +1148,8 @@ jobs:
           path: tmp/golem-cli-test-binaries
           key: golem-cli-test-binaries-${{ github.run_id }}
           fail-on-cache-miss: true
-      - name: Install golem-cli
-        run: chmod +x tmp/golem-cli-test-binaries/golem-cli
+      - name: Install golem
+        run: chmod +x tmp/golem-cli-test-binaries/golem
 
       - name: Setup MoonBit
         if: matrix.chunk.needs-moonbit
@@ -1259,7 +1259,7 @@ jobs:
         working-directory: test-components
         env:
           GOLEM_TS_PRESET: quick
-          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
+          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem
         run: ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs

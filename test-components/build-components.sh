@@ -175,7 +175,7 @@ if [[ -z "${GOLEM_CLI:-}" ]]; then
       fi
     fi
   else
-    GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
+    GOLEM_CLI="${TARGET_DIR}/debug/golem"
   fi
 fi
 
