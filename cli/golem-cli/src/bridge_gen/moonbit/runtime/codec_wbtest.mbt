@@ -197,3 +197,65 @@ test "nested structure round trip" {
   ])
   @debug.assert_eq(round_trip(v), v)
 }
+
+///|
+test "validation-only traversal visits late nested values without building JSON" {
+  let codec = public_value_codec(
+    (
+      #|{"root":{"kind":"record","value":{"fields":[{"name":"bytes","body":{"kind":"list","value":{"element":{"kind":"u8","value":{}}}}},{"name":"maybe","body":{"kind":"option","value":{"inner":{"kind":"tuple","value":{"elements":[{"kind":"string","value":{}},{"kind":"u16","value":{}}]}}}}}]}}}
+    ),
+  )
+  let value = RecordValue([
+    ListValue([U8Value(0), U8Value(251), U8Value(255)]),
+    OptionValue(Some(TupleValue([StringValue("árvíz😀"), U16Value(65535)]))),
+  ])
+  let charge = Ref(0)
+  assert_eq(
+    codec.encode_at(
+      pvc_field(pvc_object(codec.graph), "root"),
+      value,
+      0,
+      charge,
+      false,
+      materialize=false,
+    ),
+    Json::null(),
+  )
+  assert_true(charge.val > 20)
+  @debug.assert_eq(codec.decode(codec.encode(value)), value)
+  let invalid = RecordValue([
+    ListValue([U8Value(0), U8Value(255)]),
+    OptionValue(Some(TupleValue([StringValue("ok"), U16Value(65536)]))),
+  ])
+  assert_true(raises(() => ignore(codec.encode(invalid))))
+  assert_true(raises(() => ignore(codec.decode(schema_value_to_json(invalid)))))
+}
+
+///|
+test "validation-only calls retain stream registration and reset it between calls" {
+  let codec = public_value_codec(
+    (
+      #|{"root":{"kind":"list","value":{"element":{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}}}}
+    ),
+  )
+  let value = ListValue([StreamReferenceValue(None, Some("stable-token"))])
+  for _ in 0..<2 {
+    ignore(codec.encode(value))
+    assert_true(codec.stream_elements.contains("stable-token"))
+    @debug.assert_eq(codec.decode(schema_value_to_json(value)), value)
+    assert_true(codec.stream_elements.contains("stable-token"))
+  }
+  assert_true(
+    raises(() => {
+      ignore(
+        codec.encode(
+          ListValue([
+            StreamReferenceValue(None, Some("stable-token")),
+            StreamReferenceValue(None, Some("stable-token")),
+          ]),
+        ),
+      )
+    }),
+  )
+  ignore(codec.encode(value))
+}
