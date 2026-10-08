@@ -1211,6 +1211,7 @@ pub(super) fn copy_flat_tree(from: &Path, to: &Path) {
 }
 
 /// Gives the change time of the file as seconds and nanoseconds.
+#[cfg(unix)]
 fn changed_at(path: &Path) -> (i64, i64) {
     use std::os::unix::fs::MetadataExt;
     let metadata = std::fs::symlink_metadata(path).unwrap();
@@ -1218,6 +1219,7 @@ fn changed_at(path: &Path) -> (i64, i64) {
 }
 
 /// The longest time that [`wait_past_change_times`] waits.
+#[cfg(unix)]
 const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
 
 /// Waits until a file that changes now gets a later change time than each of the files.
@@ -1226,6 +1228,7 @@ const CHANGE_TIME_WAIT: Duration = Duration::from_secs(10);
 /// changes within one tick get the same change time. The wait changes a probe file in its own
 /// directory until the change time of the probe is later than the latest change time of the
 /// files. It fails the test when that does not happen within [`CHANGE_TIME_WAIT`].
+#[cfg(unix)]
 pub(super) fn wait_past_change_times(files: &[PathBuf]) {
     let latest = files.iter().map(|file| changed_at(file)).max().unwrap();
     let probe_directory = Scratch::new();
@@ -1321,6 +1324,7 @@ fn each_setting_goes_into_its_rustic_option() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 #[timeout("60s")]
 async fn a_size_and_mtime_save_misses_a_rewrite_of_the_same_size_with_the_old_mtime_and_a_full_save_reads_it()
