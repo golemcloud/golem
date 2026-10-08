@@ -898,7 +898,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 }
                 _ => {}
             }
-            if let Some(entry) = ForkUpdates::update_entry(oplog_index, entry, manual_update) {
+            if let Some(entry) = ForkUpdates::update_entry(entry, manual_update) {
                 update_entries.push((oplog_index, entry));
             }
         }
@@ -1329,22 +1329,20 @@ pub(crate) struct ForkUpdates {
 }
 
 impl ForkUpdates {
-    /// The entry that [`ForkUpdates::after_kept`] reads for `entry` at `oplog_index`: an update
-    /// entry as it is, and the admission of a manual update invocation, whose target
-    /// `manual_update` gives, so the fold does not decode the payload again. `None` for every other
-    /// entry, which leaves the updates unchanged.
+    /// The entry that [`ForkUpdates::after_kept`] reads for `entry`: an update entry as it is,
+    /// and the admission of a manual update invocation, whose target `manual_update` gives, so the
+    /// fold does not decode the payload again. `None` for every other entry, which leaves the
+    /// updates unchanged.
     pub(crate) fn update_entry(
-        oplog_index: OplogIndex,
         entry: OplogEntry,
         manual_update: Option<ComponentRevision>,
     ) -> Option<KeptUpdateEntry> {
         match (entry, manual_update) {
             (OplogEntry::PendingAgentInvocation { timestamp, .. }, Some(target_revision)) => {
-                Some(KeptUpdateEntry::ManualAdmission(ManualAdmission {
+                Some(KeptUpdateEntry::ManualAdmission {
                     timestamp,
-                    index: oplog_index,
                     target_revision,
-                }))
+                })
             }
             (
                 entry @ (OplogEntry::PendingUpdate { .. }
@@ -1375,8 +1373,15 @@ impl ForkUpdates {
     ) -> Self {
         match entry {
             KeptUpdateEntry::Update(entry) => self.after(oplog_index, &entry, deleted),
-            KeptUpdateEntry::ManualAdmission(admission) => {
-                let (queue, step) = self.queue.after_admission(admission);
+            KeptUpdateEntry::ManualAdmission {
+                timestamp,
+                target_revision,
+            } => {
+                let (queue, step) = self.queue.after_admission(ManualAdmission {
+                    timestamp,
+                    index: oplog_index,
+                    target_revision,
+                });
                 Self::of_step(queue, step, self.baseline)
             }
         }
@@ -1434,8 +1439,12 @@ impl ForkUpdates {
 pub(crate) enum KeptUpdateEntry {
     /// A `PendingUpdate`, `SuccessfulUpdate` or `FailedUpdate` entry.
     Update(OplogEntry),
-    /// The admission of a manual update invocation.
-    ManualAdmission(ManualAdmission),
+    /// The admission of a manual update invocation. The index of the admission is the index of
+    /// the entry.
+    ManualAdmission {
+        timestamp: Timestamp,
+        target_revision: ComponentRevision,
+    },
 }
 
 /// The details of a failed update that a fork writes for an update of its copied prefix.
@@ -1797,7 +1806,7 @@ mod tests {
                         }
                         _ => None,
                     };
-                    match ForkUpdates::update_entry(index(at), entry.clone(), manual_update) {
+                    match ForkUpdates::update_entry(entry.clone(), manual_update) {
                         Some(kept) => updates.after_kept(index(at), kept, deleted.contains(&at)),
                         None => updates,
                     }
@@ -1844,12 +1853,11 @@ mod tests {
             invocation_context: Vec::new(),
         };
         assert!(matches!(
-            ForkUpdates::update_entry(index(7), stored, Some(revision(4))),
-            Some(KeptUpdateEntry::ManualAdmission(ManualAdmission {
-                index: admission_index,
+            ForkUpdates::update_entry(stored, Some(revision(4))),
+            Some(KeptUpdateEntry::ManualAdmission {
                 target_revision,
                 ..
-            })) if admission_index == index(7) && target_revision == revision(4)
+            }) if target_revision == revision(4)
         ));
     }
 
