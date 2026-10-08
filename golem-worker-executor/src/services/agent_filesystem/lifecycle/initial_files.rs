@@ -656,13 +656,7 @@ impl InitialFileSources {
                             .loader
                             .get_source(sources.environment_id, file.content_hash, file.size)
                             .await
-                            .map_err(|error| {
-                                Error::Sandbox(FilesystemStorageError::io(
-                                    "load verified initial-file source",
-                                    path,
-                                    std::io::Error::other(error),
-                                ))
-                            })?;
+                            .map_err(|error| super::load_error(error, path))?;
                         sources.loaded.insert(file.content_hash, source);
                         Ok(sources)
                     }

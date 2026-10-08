@@ -13,8 +13,11 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::file_loader::scripted_storage::{ScriptedSourceStorage, SourceRead};
 use crate::services::golem_config::FilesystemStorageMode;
 use futures::StreamExt as _;
+use golem_common::model::agent::AgentFileContentHash;
+use golem_service_base::storage::blob::BlobStorage;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
@@ -95,9 +98,12 @@ struct InitialFileStore {
 
 impl InitialFileStore {
     async fn new() -> Self {
-        let service = Arc::new(InitialAgentFilesService::new(Arc::new(
-            InMemoryBlobStorage::new(),
-        )));
+        Self::over(Arc::new(InMemoryBlobStorage::new())).await
+    }
+
+    /// Makes a store of initial files on `storage`, with a loader that reads it.
+    async fn over(storage: Arc<dyn BlobStorage>) -> Self {
+        let service = Arc::new(InitialAgentFilesService::new(storage));
         Self {
             environment_id: EnvironmentId::new(),
             loader: Arc::new(FileLoader::new(
@@ -1204,6 +1210,74 @@ async fn an_update_with_two_sizes_for_one_content_fails_before_any_change() {
     let root = agents.root(&agent);
     assert!(!root.join("first.txt").exists());
     assert!(!root.join("second.txt").exists());
+    assert!(!filesystem_activity(&resident).has_terminal_failure());
+    delete(seal(resident)).await.unwrap();
+}
+
+/// A source that the blob storage cannot give now stops an update before its first change as an
+/// unavailable source, and the generation stays valid: the same update passes when the storage
+/// gives the source. A source that the storage does not hold is a sandbox error.
+#[test]
+#[timeout("60s")]
+async fn an_unavailable_initial_file_source_stops_an_update_before_any_change_and_a_later_update_passes()
+ {
+    let agents = UnmanagedAgents::new().await;
+    let store = InitialFileStore::over(Arc::new(ScriptedSourceStorage::new([
+        SourceRead::Unavailable,
+    ])))
+    .await;
+    let content = b"added";
+    let added = store
+        .declare("/added.txt", AgentFilePermissions::ReadWrite, content)
+        .await;
+    let missing = InitialAgentFile {
+        content_hash: AgentFileContentHash(golem_common::model::diff::Hash::new(blake3::hash(
+            b"missing",
+        ))),
+        path: AgentFilePath::from_abs_str("/missing.txt").unwrap(),
+        permissions: AgentFilePermissions::ReadWrite,
+        size: 7,
+    };
+    let agent = agents.agent("unavailable-source");
+    let resident = agents.start(&agent, &[], NO_RESTORE).await.unwrap();
+    let root = agents.root(&agent);
+
+    let unavailable = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![added.clone()],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+    let unchanged = !root.join("added.txt").exists();
+    let failed = update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![missing],
+    )
+    .unwrap()
+    .await
+    .unwrap_err();
+    update_initial_files(
+        &resident_generation_handle(&resident),
+        Arc::clone(&store.loader),
+        store.environment_id,
+        vec![added],
+    )
+    .unwrap()
+    .await
+    .unwrap();
+
+    assert!(
+        matches!(unavailable, Error::InitialFileUnavailable(_)),
+        "{unavailable}"
+    );
+    assert!(unchanged);
+    assert!(matches!(failed, Error::Sandbox(_)), "{failed}");
+    assert_eq!(std::fs::read(root.join("added.txt")).unwrap(), content);
     assert!(!filesystem_activity(&resident).has_terminal_failure());
     delete(seal(resident)).await.unwrap();
 }
@@ -2324,6 +2398,7 @@ enum StepOutcome {
     Done,
     Access(AccessError),
     Sandbox(Option<std::io::ErrorKind>),
+    InitialFileUnavailable,
     AgentQuota,
     PhysicalCapacity,
     Baseline,
@@ -2691,6 +2766,7 @@ fn error_outcome(error: Error) -> StepOutcome {
     match error {
         Error::Access(error) => StepOutcome::Access(error),
         Error::Sandbox(error) => StepOutcome::Sandbox(error.io_kind()),
+        Error::InitialFileUnavailable(_) => StepOutcome::InitialFileUnavailable,
         Error::InitialFileConflict(conflict) => {
             StepOutcome::Conflict(conflict.path().display().to_string())
         }

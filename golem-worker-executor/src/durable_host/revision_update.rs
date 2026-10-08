@@ -60,7 +60,7 @@ impl UpdateStateError {
                 "Agent type {agent_type} not found in updated agent metadata"
             )),
             Self::InitialFiles(error) => {
-                crate::worker::start_outcome::reconstruction_startup_error(error)
+                crate::worker::start_outcome::update_point_filesystem_error(error)
             }
         }
     }

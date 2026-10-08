@@ -18,6 +18,7 @@ use async_lock::Mutex;
 use axum::Router;
 use axum::routing::post;
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use futures::{StreamExt as _, TryStreamExt as _};
 use golem_common::base_model::oplog::PublicUpdateDescription;
 use golem_common::model::component::{ComponentDto, ComponentRevision};
@@ -31,7 +32,14 @@ use golem_common::model::{AgentEvent, AgentId, AgentStatus, OwnedAgentId, ScanCu
 use golem_common::{agent_id, data_value, phantom_agent_id};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::replayable_stream::ErasedReplayableStream;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+};
+use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
     TestFilesystemSnapshotStore, with_snapshot_store,
 };
@@ -48,6 +56,7 @@ use http::StatusCode;
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -4537,6 +4546,404 @@ async fn an_unavailable_component_service_at_a_host_call_update_point_retries_an
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
+}
+
+/// While the blob storage cannot give a new initial file of the target at the update point, and
+/// the replay reaches the update point inside a host call of the in-flight invocation, the agent
+/// retries through recovery: the invocation records no error and no failed update is written,
+/// and after the outage the update completes with the file and the invocation finishes on the
+/// target.
+#[test]
+#[timeout("120s")]
+async fn a_transient_initial_file_download_at_a_host_call_update_point_retries_and_fails_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(InitialFileOutage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_blob_storage: Some(Arc::new(move |inner| {
+                Arc::new(FlakyInitialFileStorage {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let mut http_server = TestHttpServer::start().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), http_server.port().to_string());
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
+        .await?;
+
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_id_clone = agent_id.clone();
+    let mut control = http_server.f1_control(100).await;
+    let fiber = spawn(
+        async move {
+            executor_clone
+                .invoke_and_await_agent(&component_clone, &agent_id_clone, "f1", data_value!(50u64))
+                .await
+        }
+        .in_current_span(),
+    );
+    control.await_reached().await;
+
+    outage.begin();
+    let updated_component = executor
+        .update_component_with_files(
+            &component.id,
+            "UpdateTest",
+            "it_agent_update_v2_release",
+            vec![IFSEntry {
+                source_path: PathBuf::from("initial-file-system/files/foo.txt"),
+                target_path: CanonicalFilePath::from_abs_str("/update-point.txt")
+                    .map_err(anyhow::Error::msg)?,
+                permissions: AgentFilePermissions::ReadOnly,
+            }],
+        )
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            if outage.refused() > 0 && metadata.last_error_kind == Some(OplogErrorKind::Recovery) {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let during = executor.get_worker_metadata(&worker_id).await?;
+    let error_count = |oplog: &[golem_common::model::oplog::PublicOplogEntryWithIndex],
+                       kind: OplogErrorKind| {
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Error(params) if params.kind == kind)
+            })
+            .count()
+    };
+    let invocation_errors_during = error_count(
+        &executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?,
+        OplogErrorKind::Invocation,
+    );
+    outage.end();
+
+    control.resume();
+    let mut control2 = http_server.f1_control(110).await;
+    control2.await_reached().await;
+    control2.resume();
+    let result = fiber.await??;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let file = executor
+        .get_file_contents(&worker_id, "/update-point.txt")
+        .await?;
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let invocation_errors = error_count(&oplog, OplogErrorKind::Invocation);
+    let recovery_errors = error_count(&oplog, OplogErrorKind::Recovery);
+
+    drop(executor);
+    http_server.abort();
+
+    assert_eq!(during.last_error_kind, Some(OplogErrorKind::Recovery));
+    assert_eq!(during.component_revision, component.revision);
+    assert_eq!(update_counts(&during), (1, 0, 0));
+    assert_eq!(invocation_errors_during, 0);
+    assert!(recovery_errors > 0);
+    assert_eq!(invocation_errors, 0);
+    assert_eq!(result.into_typed::<u64>()?, 150);
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_eq!(file, Bytes::from_static(b"foo\n"));
+    Ok(())
+}
+
+/// A blob storage that cannot give the content of an initial file while it is down, as a blob
+/// storage whose outage outlived the retry budget of its backend cannot. Every other operation
+/// goes to the storage that it wraps.
+#[derive(Debug)]
+struct FlakyInitialFileStorage {
+    inner: Arc<dyn BlobStorage>,
+    outage: Arc<InitialFileOutage>,
+}
+
+/// Whether a [`FlakyInitialFileStorage`] is down, and how many reads of an initial file it
+/// refused.
+#[derive(Debug, Default)]
+struct InitialFileOutage {
+    down: std::sync::atomic::AtomicBool,
+    refused: std::sync::atomic::AtomicUsize,
+}
+
+impl InitialFileOutage {
+    fn begin(&self) {
+        self.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn end(&self) {
+        self.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn refused(&self) -> usize {
+        self.refused.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Fails a read in `namespace` while the storage is down, when the namespace holds the
+    /// initial files. The error is of the backend, so it is transient.
+    fn check(&self, namespace: &BlobStorageNamespace) -> anyhow::Result<()> {
+        if matches!(namespace, BlobStorageNamespace::InitialAgentFiles { .. })
+            && self.down.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.refused
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(anyhow::anyhow!("injected 503: the blob storage is down"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl BlobStorageBackend for FlakyInitialFileStorage {
+    async fn get_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.outage.check(&namespace)?;
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
+        self.outage.check(&namespace)?;
+        self.inner
+            .get_stream(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> anyhow::Result<Option<BlobRangeStream>> {
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
+    async fn get_raw_slice_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.inner
+            .get_raw_slice(target_label, op_label, namespace, path, start, end)
+            .await
+    }
+
+    async fn get_metadata_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<BlobMetadata>> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .put_stream(target_label, op_label, namespace, path, stream)
+            .await
+    }
+
+    async fn delete_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_many_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        paths: &[NormalizedBlobPath<'_>],
+    ) -> anyhow::Result<()> {
+        let paths = paths
+            .iter()
+            .map(|path| path.to_path_buf())
+            .collect::<Vec<_>>();
+        self.inner
+            .delete_many(target_label, op_label, namespace, &paths)
+            .await
+    }
+
+    async fn create_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Vec<PathBuf>> {
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Box<[ListedBlob]>> {
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<ExistsResult> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        match self
+            .inner
+            .copy_between(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.is::<BlobMissingError>() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
 }
 
 /// Check that GOLEM_COMPONENT_REVISION environment variable is updated as part of a worker update

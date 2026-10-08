@@ -27,7 +27,9 @@ use crate::sandbox_filesystem::{
     TreeExclusions,
 };
 use crate::services::active_agents::ConcurrentAgentPermit;
-use crate::services::file_loader::{FileLoader, InitialFileSource};
+use crate::services::file_loader::{
+    FileLoader, InitialFileLoadError, InitialFileLoadFailure, InitialFileSource,
+};
 use crate::services::resource_usage_metering::{
     FilesystemUsage, FilesystemUsageReader, FilesystemUsageSource, MeteringOpenError,
     ResourceUsageAccount, ResourceUsageMeter, ResourceUsageMeteringWindow, create_unbound_meter,
@@ -338,6 +340,9 @@ impl DeleteFailure {
 pub(crate) enum Error {
     Access(AccessError),
     Sandbox(FilesystemStorageError),
+    /// The blob storage could not give an initial-file source that an install or a start
+    /// loads. The load changes nothing, and a later load can pass.
+    InitialFileUnavailable(FilesystemStorageError),
     /// An install of initial files found something other than what the old declarations left at a
     /// path. The install changed nothing, and the generation stays valid.
     InitialFileConflict(Box<InitialFileConflict>),
@@ -351,9 +356,10 @@ impl Display for Error {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Access(error) => Display::fmt(error, formatter),
-            Self::Sandbox(error) | Self::AgentQuota(error) | Self::PhysicalCapacity(error) => {
-                Display::fmt(error, formatter)
-            }
+            Self::Sandbox(error)
+            | Self::InitialFileUnavailable(error)
+            | Self::AgentQuota(error)
+            | Self::PhysicalCapacity(error) => Display::fmt(error, formatter),
             Self::InitialFileConflict(error) => Display::fmt(error, formatter),
             Self::Baseline(error) => Display::fmt(error, formatter),
             Self::RuntimeInvalidated => formatter.write_str("agent filesystem runtime is invalid"),
@@ -362,6 +368,22 @@ impl Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+/// The error of a failed load of the initial-file source that an install or a start seeds at
+/// `path`: [`Error::InitialFileUnavailable`] when a later load can pass, and
+/// [`Error::Sandbox`] for every other failure.
+fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
+    let failure = error.failure;
+    let source = FilesystemStorageError::io(
+        "load verified initial-file source",
+        path,
+        std::io::Error::other(error),
+    );
+    match failure {
+        InitialFileLoadFailure::Unavailable => Error::InitialFileUnavailable(source),
+        InitialFileLoadFailure::Failed => Error::Sandbox(source),
+    }
+}
 
 impl From<FilesystemStorageError> for Error {
     fn from(source: FilesystemStorageError) -> Self {
@@ -429,13 +451,7 @@ pub(crate) async fn prepare_initial_files(
                 let source = file_loader
                     .get_source(environment_id, file.content_hash, file.size)
                     .await
-                    .map_err(|error| {
-                        Error::Sandbox(FilesystemStorageError::io(
-                            "load verified initial-file source",
-                            &target,
-                            std::io::Error::other(error),
-                        ))
-                    })?;
+                    .map_err(|error| load_error(error, &target))?;
                 sources
                     .entry(file.content_hash)
                     .or_insert_with(|| source.clone())

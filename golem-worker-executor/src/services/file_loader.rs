@@ -18,10 +18,11 @@ use async_lock::Mutex;
 use futures::TryStreamExt;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
+use golem_service_base::storage::blob::BlobFailure;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt::{Display, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::Weak;
@@ -51,6 +52,70 @@ impl InitialFileSource {
         self.size
     }
 }
+
+/// Tells if a later load of an initial-file source can pass where a load failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InitialFileLoadFailure {
+    /// The blob storage could not give the source, or a concurrent download of it stopped
+    /// before its end. A later load can pass.
+    Unavailable,
+    /// The source cannot load: the blob storage has no source with the key, gives a permanent
+    /// error, or gives bytes that do not verify, or the local cache failed.
+    Failed,
+}
+
+/// The error of a load of an initial-file source.
+///
+/// A concurrent load of the same source gets a clone of the error, so the reason is shared. The
+/// reason names the content hash of the source, except for a stopped download, whose error is
+/// the placeholder of each new cache entry and is built without formatting.
+#[derive(Clone, Debug)]
+pub(crate) struct InitialFileLoadError {
+    pub(crate) failure: InitialFileLoadFailure,
+    reason: Arc<str>,
+}
+
+impl InitialFileLoadError {
+    fn failed(key: AgentFileContentHash, reason: impl Display) -> Self {
+        Self {
+            failure: InitialFileLoadFailure::Failed,
+            reason: format!("{key}: {reason}").into(),
+        }
+    }
+
+    /// The error of a failed read of the blob storage: unavailable for a transient error, and
+    /// failed for a permanent one ([`BlobFailure::of`]).
+    fn of_blob(key: AgentFileContentHash, error: &anyhow::Error) -> Self {
+        Self {
+            failure: match BlobFailure::of(error) {
+                BlobFailure::Transient => InitialFileLoadFailure::Unavailable,
+                BlobFailure::Permanent => InitialFileLoadFailure::Failed,
+            },
+            reason: format!("{key}: {error:#}").into(),
+        }
+    }
+
+    /// The error that a concurrent load sees when the download of the source stopped before its
+    /// end, for example because its task was dropped.
+    fn download_stopped() -> Self {
+        Self {
+            failure: InitialFileLoadFailure::Unavailable,
+            reason: "the download of the source stopped before its end".into(),
+        }
+    }
+}
+
+impl Display for InitialFileLoadError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "failed to load an initial-file source: {}",
+            self.reason
+        )
+    }
+}
+
+impl std::error::Error for InitialFileLoadError {}
 
 /// Interface for loading immutable, content-addressed initial-file sources.
 pub struct FileLoader {
@@ -82,31 +147,25 @@ impl FileLoader {
         }
     }
 
+    /// Gives the verified source with the content hash `key` and the size `file_size`. A failure
+    /// tells if a later load can pass ([`InitialFileLoadFailure`]).
     pub(crate) async fn get_source(
         &self,
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
         file_size: u64,
-    ) -> Result<InitialFileSource, WorkerExecutorError> {
+    ) -> Result<InitialFileSource, InitialFileLoadError> {
         let cache_entry = self
             .get_or_add_cache_entry(environment_id, key, file_size)
-            .await
-            .map_err(|error| {
-                WorkerExecutorError::initial_file_download_failed(
-                    key.to_string(),
-                    error.to_string(),
-                )
-            })?;
+            .await?;
         let (path, size) = {
             let cache_entry_guard = cache_entry.lock().await;
-            let entry = cache_entry_guard.as_ref().map_err(|error| {
-                WorkerExecutorError::initial_file_download_failed(key.to_string(), error.clone())
-            })?;
+            let entry = cache_entry_guard.as_ref().map_err(Clone::clone)?;
             (entry.path.clone(), entry.size)
         };
         if size != file_size {
-            return Err(WorkerExecutorError::initial_file_download_failed(
-                key.to_string(),
+            return Err(InitialFileLoadError::failed(
+                key,
                 format!("Cached initial file size {size} does not match declared size {file_size}"),
             ));
         }
@@ -124,7 +183,7 @@ impl FileLoader {
         environment_id: EnvironmentId,
         key: AgentFileContentHash,
         file_size: u64,
-    ) -> Result<Arc<CacheEntry>, anyhow::Error> {
+    ) -> Result<Arc<CacheEntry>, InitialFileLoadError> {
         let cache_entry;
         {
             let maybe_prelocked_entry;
@@ -138,7 +197,8 @@ impl FileLoader {
                     cache_entry = existing_cache_entry;
                 } else {
                     // insert an entry so no one else tries to download the file
-                    cache_entry = Arc::new(Mutex::new(Err("File not downloaded yet".to_string())));
+                    cache_entry =
+                        Arc::new(Mutex::new(Err(InitialFileLoadError::download_stopped())));
 
                     // immediately lock the entry so no one accesses the file while we are downloading it
                     maybe_prelocked_entry = Some(cache_entry.lock().await);
@@ -170,7 +230,7 @@ impl FileLoader {
                         )
                         .await
                         .map(|()| path),
-                    Err(error) => Err(error.into()),
+                    Err(error) => Err(InitialFileLoadError::failed(key, error)),
                 };
 
                 match downloaded {
@@ -183,7 +243,7 @@ impl FileLoader {
                     }
                     Err(e) => {
                         // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
-                        *prelocked_entry = Err(format!("Other thread failed to download: {e}"));
+                        *prelocked_entry = Err(e.clone());
                         self.cache.lock().await.remove(&key);
 
                         return Err(e);
@@ -201,15 +261,18 @@ impl FileLoader {
         path: &Path,
         key: AgentFileContentHash,
         expected_size: u64,
-    ) -> Result<(), anyhow::Error> {
-        let temporary = tempfile::NamedTempFile::new_in(self.cache_dir.path().as_path())?;
+    ) -> Result<(), InitialFileLoadError> {
+        let failed = |error| InitialFileLoadError::failed(key, error);
+        let temporary =
+            tempfile::NamedTempFile::new_in(self.cache_dir.path().as_path()).map_err(failed)?;
         self.download_file(environment_id, &temporary, key, expected_size)
             .await?;
-        crate::sandbox_filesystem::set_file_permissions(temporary.as_file(), true)?;
-        temporary.as_file().sync_all()?;
+        crate::sandbox_filesystem::set_file_permissions(temporary.as_file(), true)
+            .map_err(failed)?;
+        temporary.as_file().sync_all().map_err(failed)?;
         temporary
             .persist_noclobber(path)
-            .map_err(|error| error.error)?;
+            .map_err(|error| failed(error.error))?;
         Ok(())
     }
 
@@ -219,29 +282,36 @@ impl FileLoader {
         temporary: &tempfile::NamedTempFile,
         key: AgentFileContentHash,
         expected_size: u64,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), InitialFileLoadError> {
         debug!("Downloading {} to immutable cache", key);
+        let failed_io = |error: std::io::Error| InitialFileLoadError::failed(key, error);
+        let failed = |error: anyhow::Error| InitialFileLoadError::failed(key, error);
         let mut data = self
             .initial_agent_files_service
             .get(environment_id, key)
             .await
-            .map_err(|e| anyhow!(e))?
-            .ok_or_else(|| anyhow!("File not found"))?;
+            .map_err(|error| InitialFileLoadError::of_blob(key, &error))?
+            .ok_or_else(|| InitialFileLoadError::failed(key, "File not found"))?;
 
-        let file = tokio::fs::File::from_std(temporary.reopen()?);
+        let file = tokio::fs::File::from_std(temporary.reopen().map_err(failed_io)?);
         let mut writer = tokio::io::BufWriter::new(file);
         let mut hasher = blake3::Hasher::new();
         let mut actual_size = 0u64;
 
-        while let Some(chunk) = data.try_next().await.map_err(|e| anyhow!(e))? {
-            actual_size = downloaded_size(actual_size, chunk.len() as u64, expected_size)?;
+        while let Some(chunk) = data
+            .try_next()
+            .await
+            .map_err(|error| InitialFileLoadError::of_blob(key, &error))?
+        {
+            actual_size =
+                downloaded_size(actual_size, chunk.len() as u64, expected_size).map_err(failed)?;
             hasher.update(&chunk);
-            writer.write_all(&chunk).await?;
+            writer.write_all(&chunk).await.map_err(failed_io)?;
         }
 
-        writer.flush().await?;
-        writer.get_ref().sync_all().await?;
-        verify_download(&hasher.finalize(), &key, actual_size, expected_size)
+        writer.flush().await.map_err(failed_io)?;
+        writer.get_ref().sync_all().await.map_err(failed_io)?;
+        verify_download(&hasher.finalize(), &key, actual_size, expected_size).map_err(failed)
     }
 }
 
@@ -294,7 +364,7 @@ fn verify_download(
 // InitializedCacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
 type Cache = Mutex<HashMap<AgentFileContentHash, Weak<CacheEntry>>>;
 
-type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
+type CacheEntry = Mutex<Result<InitializedCacheEntry, InitialFileLoadError>>;
 
 #[derive(Debug)]
 struct InitializedCacheEntry {
@@ -316,11 +386,260 @@ impl Drop for InitializedCacheEntry {
     }
 }
 
+/// A blob storage for tests of the loads of initial-file sources.
+#[cfg(test)]
+pub(crate) mod scripted_storage {
+    use anyhow::{Error, anyhow};
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use futures::StreamExt;
+    use futures::stream::BoxStream;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use golem_service_base::storage::blob::{
+        BlobMetadata, BlobNameError, BlobRangeStream, BlobStorageBackend, BlobStorageNamespace,
+        ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    };
+    use std::collections::VecDeque;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The answer of the next streamed read of a [`ScriptedSourceStorage`].
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum SourceRead {
+        /// The read fails with an error of the backend, which is transient.
+        Unavailable,
+        /// The read fails with a [`BlobNameError`], which is permanent.
+        Permanent,
+        /// The read opens the stream, and the stream fails with an error of the backend
+        /// after its first chunk.
+        BrokenChunk,
+    }
+
+    /// An in-memory blob storage whose streamed reads answer as the script tells, in order. A
+    /// read after the end of the script passes. Each streamed read yields once before it
+    /// answers, so a concurrent load can start while the read runs.
+    #[derive(Debug)]
+    pub(crate) struct ScriptedSourceStorage {
+        inner: InMemoryBlobStorage,
+        script: Mutex<VecDeque<SourceRead>>,
+        reads: AtomicUsize,
+    }
+
+    impl ScriptedSourceStorage {
+        pub(crate) fn new(script: impl IntoIterator<Item = SourceRead>) -> Self {
+            Self {
+                inner: InMemoryBlobStorage::new(),
+                script: Mutex::new(script.into_iter().collect()),
+                reads: AtomicUsize::new(0),
+            }
+        }
+
+        /// How many streamed reads the storage got.
+        pub(crate) fn reads(&self) -> usize {
+            self.reads.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl BlobStorageBackend for ScriptedSourceStorage {
+        async fn get_raw_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<Option<Vec<u8>>, Error> {
+            self.inner
+                .get_raw_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn get_stream_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            tokio::task::yield_now().await;
+            let read = self.script.lock().unwrap().pop_front();
+            match read {
+                Some(SourceRead::Unavailable) => Err(anyhow!("injected 503")),
+                Some(SourceRead::Permanent) => Err(BlobNameError::NulByte.into()),
+                Some(SourceRead::BrokenChunk) => Ok(self
+                    .inner
+                    .get_stream_at(target_label, op_label, namespace, path)
+                    .await?
+                    .map(|stream| {
+                        stream
+                            .take(1)
+                            .chain(futures::stream::iter([Err(anyhow!("injected reset"))]))
+                            .boxed()
+                    })),
+                None => {
+                    self.inner
+                        .get_stream_at(target_label, op_label, namespace, path)
+                        .await
+                }
+            }
+        }
+
+        async fn get_range_stream_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+            offset: u64,
+            length: u64,
+        ) -> Result<Option<BlobRangeStream>, Error> {
+            self.inner
+                .get_range_stream_at(target_label, op_label, namespace, path, offset, length)
+                .await
+        }
+
+        async fn get_metadata_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<Option<BlobMetadata>, Error> {
+            self.inner
+                .get_metadata_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn put_raw_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+            data: &[u8],
+        ) -> Result<(), Error> {
+            self.inner
+                .put_raw_at(target_label, op_label, namespace, path, data)
+                .await
+        }
+
+        async fn put_raw_if_absent_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+            data: &[u8],
+        ) -> Result<PutIfAbsent, Error> {
+            self.inner
+                .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
+                .await
+        }
+
+        async fn delete_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<(), Error> {
+            self.inner
+                .delete_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn create_dir_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<(), Error> {
+            self.inner
+                .create_dir_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn list_dir_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<Vec<PathBuf>, Error> {
+            self.inner
+                .list_dir_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn list_blobs_below_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<Box<[ListedBlob]>, Error> {
+            self.inner
+                .list_blobs_below_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn delete_dir_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<bool, Error> {
+            self.inner
+                .delete_dir_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn exists_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            namespace: BlobStorageNamespace,
+            path: &NormalizedBlobPath<'_>,
+        ) -> Result<ExistsResult, Error> {
+            self.inner
+                .exists_at(target_label, op_label, namespace, path)
+                .await
+        }
+
+        async fn copy_between_at(
+            &self,
+            target_label: &'static str,
+            op_label: &'static str,
+            from_namespace: BlobStorageNamespace,
+            from: &NormalizedBlobPath<'_>,
+            to_namespace: BlobStorageNamespace,
+            to: &NormalizedBlobPath<'_>,
+        ) -> Result<bool, Error> {
+            self.inner
+                .copy_between_at(
+                    target_label,
+                    op_label,
+                    from_namespace,
+                    from,
+                    to_namespace,
+                    to,
+                )
+                .await
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::scripted_storage::{ScriptedSourceStorage, SourceRead};
     use super::*;
     use crate::sandbox_filesystem::SandboxFilesystemProvisioning;
     use crate::services::golem_config::FilesystemStorageMode;
+    use futures::StreamExt;
     use golem_common::model::RetryConfig;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::widen_infallible;
@@ -437,7 +756,127 @@ mod tests {
             .get_source(env_id, hash, content.len() as u64 + 1)
             .await;
 
-        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().failure, InitialFileLoadFailure::Failed);
+    }
+
+    /// Makes a loader over a [`ScriptedSourceStorage`] with `script`, and uploads `content` to
+    /// it.
+    async fn scripted_setup(
+        content: &[u8],
+        script: impl IntoIterator<Item = SourceRead>,
+    ) -> (
+        FileLoader,
+        Arc<ScriptedSourceStorage>,
+        AgentFileContentHash,
+        EnvironmentId,
+    ) {
+        let storage = Arc::new(ScriptedSourceStorage::new(script));
+        let service = Arc::new(InitialAgentFilesService::new(storage.clone()));
+        let env_id = EnvironmentId::new();
+        let hash = service
+            .put_if_not_exists(
+                env_id,
+                content
+                    .to_vec()
+                    .map_error(widen_infallible::<anyhow::Error>)
+                    .map_item(|i| i.map_err(widen_infallible::<anyhow::Error>)),
+            )
+            .await
+            .unwrap();
+        let loader = FileLoader::new(service, cache_directory().await);
+        (loader, storage, hash, env_id)
+    }
+
+    /// A read that the blob storage cannot answer now, and a stream that breaks, make an
+    /// unavailable source. A permanent error of the storage, a missing source and a wrong size
+    /// make a failed one.
+    #[test]
+    async fn a_load_is_unavailable_only_for_a_transient_error_of_the_blob_storage() {
+        let content = b"scripted content";
+        let reads = [
+            Some(SourceRead::Unavailable),
+            Some(SourceRead::BrokenChunk),
+            Some(SourceRead::Permanent),
+        ];
+
+        let failures = futures::stream::iter(reads)
+            .then(|read| async move {
+                let (loader, _, hash, env_id) = scripted_setup(content, read).await;
+                loader
+                    .get_source(env_id, hash, content.len() as u64)
+                    .await
+                    .unwrap_err()
+                    .failure
+            })
+            .collect::<Vec<_>>()
+            .await;
+        let (loader, _, _, env_id) = scripted_setup(content, None).await;
+        let missing = loader
+            .get_source(env_id, key_of(b"not uploaded"), 12)
+            .await
+            .unwrap_err()
+            .failure;
+
+        assert_eq!(
+            failures,
+            [
+                InitialFileLoadFailure::Unavailable,
+                InitialFileLoadFailure::Unavailable,
+                InitialFileLoadFailure::Failed,
+            ]
+        );
+        assert_eq!(missing, InitialFileLoadFailure::Failed);
+    }
+
+    /// A load that waits for a concurrent download of the same source gets the error of that
+    /// download with its kind, and does not read the storage itself. A later load reads the
+    /// storage again and passes.
+    #[test]
+    async fn a_waiter_gets_the_kind_of_the_failed_download_and_a_later_load_passes() {
+        let content = b"shared content";
+        let (loader, storage, hash, env_id) =
+            scripted_setup(content, [SourceRead::Unavailable]).await;
+        let size = content.len() as u64;
+
+        let (first, second) = futures::join!(
+            loader.get_source(env_id, hash, size),
+            loader.get_source(env_id, hash, size)
+        );
+        let reads_after_failure = storage.reads();
+        let later = loader.get_source(env_id, hash, size).await.unwrap();
+
+        assert_eq!(
+            (
+                first.unwrap_err().failure,
+                second.unwrap_err().failure,
+                reads_after_failure
+            ),
+            (
+                InitialFileLoadFailure::Unavailable,
+                InitialFileLoadFailure::Unavailable,
+                1
+            )
+        );
+        assert_eq!(std::fs::read(later.path().as_path()).unwrap(), content);
+        assert_eq!(storage.reads(), 2);
+    }
+
+    /// A load that waits for a download that stops before its end, because its load was
+    /// dropped, gets an unavailable source.
+    #[test]
+    async fn a_waiter_on_a_dropped_download_gets_an_unavailable_source() {
+        let content = b"dropped content";
+        let (loader, _, hash, env_id) = scripted_setup(content, None).await;
+        let size = content.len() as u64;
+        let mut first = Box::pin(loader.get_source(env_id, hash, size));
+        let mut second = Box::pin(loader.get_source(env_id, hash, size));
+
+        assert!(futures::poll!(&mut first).is_pending());
+        assert!(futures::poll!(&mut second).is_pending());
+        drop(first);
+        let failure = second.await.unwrap_err().failure;
+
+        assert_eq!(failure, InitialFileLoadFailure::Unavailable);
     }
 
     fn key_of(content: &[u8]) -> AgentFileContentHash {

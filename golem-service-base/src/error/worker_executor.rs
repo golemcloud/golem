@@ -113,10 +113,6 @@ pub enum WorkerExecutorError {
         details: String,
     },
     ShardingNotReady,
-    InitialAgentFileDownloadFailed {
-        path: String,
-        reason: String,
-    },
     FileSystemError {
         path: String,
         reason: String,
@@ -267,10 +263,6 @@ impl WorkerExecutorError {
         }
     }
 
-    pub fn initial_file_download_failed(path: String, reason: String) -> Self {
-        Self::InitialAgentFileDownloadFailed { path, reason }
-    }
-
     pub fn invalid_request(details: impl Into<String>) -> Self {
         Self::InvalidRequest {
             details: details.into(),
@@ -380,12 +372,6 @@ impl Display for WorkerExecutorError {
                 write!(
                     f,
                     "Failed to get current version of component {component_id}: {reason}"
-                )
-            }
-            Self::InitialAgentFileDownloadFailed { path, reason } => {
-                write!(
-                    f,
-                    "Failed to download initial file for component to {path}: {reason}"
                 )
             }
             Self::PromiseNotFound { promise_id } => {
@@ -523,7 +509,6 @@ impl Error for WorkerExecutorError {
             Self::PromiseDropped { .. } => "Promise dropped",
             Self::PromiseAlreadyCompleted { .. } => "Promise already completed",
             Self::Interrupted { .. } => "Interrupted",
-            Self::InitialAgentFileDownloadFailed { .. } => "Failed to download initial file",
             Self::ParamTypeMismatch { .. } => "Parameter type mismatch",
             Self::NoValueInMessage => "No value in message",
             Self::ValueMismatch { .. } => "Value mismatch",
@@ -559,7 +544,6 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentDownloadFailed { .. } => "ComponentDownloadFailed",
             Self::ComponentParseFailed { .. } => "ComponentParseFailed",
             Self::GetCurrentVersionOfComponentFailed { .. } => "GetCurrentVersionOfComponentFailed",
-            Self::InitialAgentFileDownloadFailed { .. } => "InitialAgentFileDownloadFailed",
             Self::PromiseNotFound { .. } => "PromiseNotFound",
             Self::PromiseDropped { .. } => "PromiseDropped",
             Self::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
@@ -605,7 +589,6 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::ComponentServiceRefused { .. }
             | Self::ComponentParseFailed { .. }
             | Self::GetCurrentVersionOfComponentFailed { .. }
-            | Self::InitialAgentFileDownloadFailed { .. }
             | Self::ParamTypeMismatch { .. }
             | Self::NoValueInMessage
             | Self::ValueMismatch { .. }
@@ -818,13 +801,6 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            WorkerExecutorError::InitialAgentFileDownloadFailed { path, reason } => Self {
-                    error: Some(
-                        golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
-                            golem::worker::v1::InitialAgentFileDownloadFailed { path, reason },
-                        ),
-                    ),
-                },
             WorkerExecutorError::PromiseNotFound { promise_id } => Self {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
@@ -1233,14 +1209,6 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(Self::ShardingNotReady)
             }
-            Some(
-                golem::worker::v1::worker_execution_error::Error::InitialAgentFileDownloadFailed(
-                    initial_file_download_failed,
-                ),
-            ) => Ok(Self::InitialAgentFileDownloadFailed {
-                path: initial_file_download_failed.path,
-                reason: initial_file_download_failed.reason,
-            }),
             Some(golem::worker::v1::worker_execution_error::Error::FileSystemError(
                 file_system_error,
             )) => Ok(Self::FileSystemError {

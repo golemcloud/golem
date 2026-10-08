@@ -281,6 +281,23 @@ pub(crate) fn reconstruction_startup_error(error: &FilesystemError) -> WorkerExe
     }
 }
 
+/// The error of a failed initial-file rule at the update point: a full quota suspends, an
+/// unavailable initial-file source retries as a recovery, and every other error is a
+/// reconstruction error ([`reconstruction_startup_error`]).
+///
+/// The update point can be inside a host call of a replayed invocation, where only a required
+/// recovery stays off the guest's failure path. An unavailable source is transient: the install
+/// loads every source before its first change, so the agent filesystem and the frozen attempt
+/// stay as they were, and the same attempt runs again.
+pub(crate) fn update_point_filesystem_error(error: &FilesystemError) -> WorkerExecutorError {
+    match error {
+        FilesystemError::InitialFileUnavailable(_) => {
+            WorkerExecutorError::recovery_required(format!("the update point failed: {error}"))
+        }
+        error => reconstruction_startup_error(error),
+    }
+}
+
 /// The error that ends a start at the update point for the passed error `error`. The update
 /// stays pending and the start runs again. The update point can be inside a host call of a
 /// replayed invocation, where only a required recovery stays off the guest's failure path, so the
@@ -431,6 +448,7 @@ impl StartProblem {
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
+                | FilesystemError::InitialFileUnavailable(_)
                 | FilesystemError::PhysicalCapacity(_)
                 | FilesystemError::RuntimeInvalidated => Self::Reconstruction,
             },
@@ -468,11 +486,13 @@ impl StartProblem {
             // The initial-file rule at the update point fails the update only for a conflict;
             // the other filesystem errors retry the start, as they do at the restore. The update
             // point restores nothing, so a restore error counts as a reconstruction error.
+            // `update_point_filesystem_error` gives the error of each passed one.
             RawStartError::UpdateState(UpdateStateError::InitialFiles(error)) => match error {
                 FilesystemError::InitialFileConflict(_) => Self::UpdateState(FetchProblem::Other),
                 FilesystemError::AgentQuota(_) => Self::Quota,
                 FilesystemError::Access(_)
                 | FilesystemError::Sandbox(_)
+                | FilesystemError::InitialFileUnavailable(_)
                 | FilesystemError::PhysicalCapacity(_)
                 | FilesystemError::RuntimeInvalidated
                 | FilesystemError::Baseline(_) => Self::Reconstruction,
@@ -1250,6 +1270,10 @@ mod tests {
             ),
             (FilesystemError::Sandbox(storage()), Problem::Reconstruction),
             (
+                FilesystemError::InitialFileUnavailable(storage()),
+                Problem::Reconstruction,
+            ),
+            (
                 FilesystemError::InitialFileConflict(Box::new(conflict())),
                 Problem::RestoreConflict,
             ),
@@ -1899,8 +1923,9 @@ mod tests {
     }
 
     /// The initial-file rule at the update point fails the update only for a conflict. A full
-    /// quota suspends the start, and every other filesystem error, a failed download of an
-    /// initial file included, retries the start; none of them writes a failed update.
+    /// quota suspends the start, an initial-file source that the blob storage cannot give now
+    /// retries as a recovery, and every other filesystem error, a failed download of an initial
+    /// file included, retries the start; none of them writes a failed update.
     #[test]
     fn the_initial_file_rule_at_the_update_point_fails_the_update_only_for_a_conflict() {
         let assisted = assisted_head();
@@ -1924,16 +1949,21 @@ mod tests {
                 kind: InterruptKind::Suspend(_),
             }) => "suspend",
             StartAction::Error(WorkerExecutorError::Runtime { .. }) => "retry",
+            StartAction::Error(WorkerExecutorError::RecoveryRequired { .. }) => "recovery",
             _ => "other",
         };
         type MakeError = fn() -> FilesystemError;
-        let errors: [(MakeError, &str); 6] = [
+        let errors: [(MakeError, &str); 7] = [
             (
                 || FilesystemError::InitialFileConflict(Box::new(conflict())),
                 "fail",
             ),
             (|| FilesystemError::AgentQuota(storage()), "suspend"),
             (|| FilesystemError::Sandbox(storage()), "retry"),
+            (
+                || FilesystemError::InitialFileUnavailable(storage()),
+                "recovery",
+            ),
             (|| FilesystemError::PhysicalCapacity(storage()), "retry"),
             (|| FilesystemError::Access(AccessError::Revoked), "retry"),
             (|| FilesystemError::RuntimeInvalidated, "retry"),
@@ -1955,8 +1985,9 @@ mod tests {
         });
     }
 
-    /// A passed error at the update point: an unavailable component service retries as a
-    /// recovery, a full quota suspends, and a permanent error stays as it is.
+    /// A passed error at the update point: an unavailable component service and an unavailable
+    /// initial-file source retry as a recovery, a full quota suspends, and a permanent error
+    /// stays as it is.
     #[test]
     fn the_update_point_retries_only_a_transient_fetch_as_a_recovery() {
         let role = BaselineRole::InitialFiles;
@@ -1973,6 +2004,18 @@ mod tests {
         assert!(matches!(
             passed(&UpdateStateError::Metadata(unavailable_service())),
             WorkerExecutorError::RecoveryRequired { .. }
+        ));
+        assert!(matches!(
+            passed(&UpdateStateError::InitialFiles(
+                FilesystemError::InitialFileUnavailable(storage())
+            )),
+            WorkerExecutorError::RecoveryRequired { .. }
+        ));
+        assert!(matches!(
+            passed(&UpdateStateError::InitialFiles(FilesystemError::Sandbox(
+                storage()
+            ))),
+            WorkerExecutorError::Runtime { .. }
         ));
         assert!(matches!(
             passed(&UpdateStateError::InitialFiles(
@@ -2279,6 +2322,7 @@ mod tests {
         let others = [
             FilesystemError::Access(AccessError::Revoked),
             FilesystemError::Sandbox(storage()),
+            FilesystemError::InitialFileUnavailable(storage()),
             FilesystemError::InitialFileConflict(Box::new(conflict())),
             FilesystemError::PhysicalCapacity(storage()),
             restore(RestoreClass::Transient),

@@ -254,9 +254,6 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
                 }
-                worker_execution_error::Error::InitialAgentFileDownloadFailed(_) => {
-                    "Initial File Download Failed".to_string()
-                }
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()
                 }

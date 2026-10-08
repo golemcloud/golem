@@ -131,11 +131,12 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         AgentFilesystemError::Sandbox(error) => p2_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => ErrorCode::InsufficientSpace.into(),
-        // An install of initial files is not a call of the guest, so a conflict cannot reach a
-        // guest descriptor. It traps with the other internal lifecycle failures.
+        // An install of initial files is not a call of the guest, so a conflict and an
+        // unavailable initial-file source cannot reach a guest descriptor. It traps with the other internal lifecycle failures.
         error @ (AgentFilesystemError::Access(_)
         | AgentFilesystemError::Baseline(_)
         | AgentFilesystemError::InitialFileConflict(_)
+        | AgentFilesystemError::InitialFileUnavailable(_)
         | AgentFilesystemError::RuntimeInvalidated) => {
             FsError::trap(wasmtime::Error::msg(error.to_string()))
         }

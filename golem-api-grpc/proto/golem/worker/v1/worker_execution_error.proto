@@ -34,7 +34,6 @@ message WorkerExecutionError {
     InvalidAccount invalid_account = 22;
     AgentNotFound agent_not_found = 23;
     ShardingNotReady sharding_not_ready = 24;
-    InitialAgentFileDownloadFailed initial_agent_file_download_failed = 25;
     FileSystemError file_system_error = 26;
     InvocationFailed invocation_failed = 27;
     PermissionDenied permission_denied = 28;
@@ -163,11 +162,6 @@ message AgentNotFound {
 }
 
 message ShardingNotReady {}
-
-message InitialAgentFileDownloadFailed {
-  string path = 1;
-  string reason = 2;
-}
 
 message FileSystemError {
   string path = 1;

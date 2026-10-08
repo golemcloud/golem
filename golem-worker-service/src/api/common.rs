@@ -326,9 +326,6 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
             }
-            WorkerExecutorError::InitialAgentFileDownloadFailed { .. } => {
-                Self::internal(api::error_code::INTERNAL_COMPONENT_DOWNLOAD_FAILED, error)
-            }
             WorkerExecutorError::ComponentParseFailed { .. } => {
                 Self::internal(api::error_code::INTERNAL_COMPONENT_PARSE_FAILED, error)
             }

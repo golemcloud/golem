@@ -1335,9 +1335,6 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
-        WorkerExecutorError::InitialAgentFileDownloadFailed { reason, .. } => {
-            format!("Initial File download failed: {}", reason)
-        }
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

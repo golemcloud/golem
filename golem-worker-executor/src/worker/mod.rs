@@ -1223,7 +1223,6 @@ fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
         | WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
         | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
-        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
         | WorkerExecutorError::FileSystemError { .. }
         | WorkerExecutorError::InvalidShardId { .. }
         | WorkerExecutorError::ShardingNotReady => AgentError::Unknown(error.to_string()),
@@ -1253,7 +1252,6 @@ fn is_infrastructure_recovery_error(error: &WorkerExecutorError) -> bool {
         | WorkerExecutorError::ComponentServiceUnavailable { .. }
         | WorkerExecutorError::ComponentServiceRefused { .. }
         | WorkerExecutorError::GetCurrentVersionOfComponentFailed { .. }
-        | WorkerExecutorError::InitialAgentFileDownloadFailed { .. }
         | WorkerExecutorError::FileSystemError { .. }
         | WorkerExecutorError::InvalidShardId { .. }
         | WorkerExecutorError::ShardingNotReady => true,
