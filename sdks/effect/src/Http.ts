@@ -11,6 +11,7 @@ import type {
   EndpointBound,
   EndpointBoundAny,
   HeaderKeysTuple,
+  Invalid,
   ValidEndpointPath,
   ValidMountPath,
 } from "./internal/httpTypes.js"
@@ -454,6 +455,7 @@ export interface MountDef<MountVars extends string, WebhookVars extends string =
   readonly authRequired: boolean
   readonly cors: ReadonlyArray<string>
   readonly phantomAgent: boolean
+  readonly phantomId?: PhantomIdSpec
   readonly webhookSuffix: ReadonlyArray<PathSegment>
   readonly exposeFiles?: readonly FileExposure[]
   readonly fileResponseHeaders?: FileResponseHeaders
@@ -757,7 +759,7 @@ const runParse = <A>(eff: Effect.Effect<A, HttpRouteError>): A => {
  * @since 1.5.0
  * @category models
  */
-export interface MountOptions<W extends string = string> {
+export interface MountOptions<W extends string = string, S extends PhantomIdSpec = PhantomIdSpec> {
   /** Ordered live-file mappings for regular durable non-phantom agents. */
   readonly exposeFiles?: readonly FileExposure[]
   /** Response headers applied by the host when serving mounted files. */
@@ -768,6 +770,7 @@ export interface MountOptions<W extends string = string> {
   readonly cors?: ReadonlyArray<string>
   /** Mark this agent as a phantom agent (one fresh instance per HTTP request). */
   readonly phantomAgent?: boolean
+  readonly phantomId?: S
   /**
    * Optional custom webhook suffix path. Parsed with the same rules as
    * the mount path (no query, no catch-all). Validated at the type
@@ -778,6 +781,37 @@ export interface MountOptions<W extends string = string> {
    */
   readonly webhookSuffix?: string extends W ? string : ValidMountPath<W>
 }
+
+/**
+ * Explicit phantom UUID selection; optional omission selects the original.
+ * @since 1.6.0
+ * @category models
+ */
+export type PhantomIdSpec<N extends string = string> =
+  | { readonly source: "path"; readonly name: N; readonly optional: boolean }
+  | { readonly source: "query"; readonly name: N; readonly optional: boolean }
+
+/**
+ * Select an exact phantom UUID scoped to this agent's constructor.
+ * @since 1.6.0
+ * @category constructors
+ */
+export const phantomId = {
+  path: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
+    ({
+      source: "path",
+      name,
+      optional: options?.optional === undefined ? false : options.optional,
+    }) as const,
+  query: <const N extends string>(name: N, options?: { readonly optional?: boolean }) =>
+    ({
+      source: "query",
+      name,
+      optional: options?.optional === undefined ? false : options.optional,
+    }) as const,
+}
+
+type PhantomPathName<S> = S extends { readonly source: "path"; readonly name: infer N } ? N : never
 
 /**
  * Declare an HTTP mount for an agent. The path may include `{var}` and
@@ -829,11 +863,20 @@ export interface MountOptions<W extends string = string> {
  * @since 1.5.0
  * @category constructors
  */
-export const mount: <const Path extends string, const W extends string = string>(
+export const mount: <
+  const Path extends string,
+  const W extends string = string,
+  const S extends PhantomIdSpec = never,
+>(
   path: ValidMountPath<Path>,
-  opts?: MountOptions<W>,
+  opts?: MountOptions<W, S> &
+    (string extends Path
+      ? unknown
+      : Exclude<PhantomPathName<S>, Exclude<PathVarsOf<Path>, SystemVariableName>> extends never
+        ? unknown
+        : Invalid<"phantom path selector must name a mount capture">),
 ) => MountDef<
-  Exclude<PathVarsOf<Path>, SystemVariableName>,
+  Exclude<PathVarsOf<Path>, SystemVariableName | PhantomPathName<S>>,
   Exclude<PathVarsOf<W>, SystemVariableName>
 > = ((path: string, opts?: MountOptions) => {
   const segments = runParse(parseMountPath(path))
@@ -843,6 +886,7 @@ export const mount: <const Path extends string, const W extends string = string>
     authRequired: opts?.auth ?? false,
     cors: opts?.cors ?? [],
     phantomAgent: opts?.phantomAgent ?? false,
+    phantomId: opts?.phantomId,
     webhookSuffix,
     exposeFiles: opts?.exposeFiles?.map((mapping) => ({ ...mapping })),
     fileResponseHeaders: opts?.fileResponseHeaders ? { ...opts.fileResponseHeaders } : undefined,
@@ -1405,6 +1449,12 @@ export const compileMount = (mountDef: MountDef<string, string>): AgentCommon.Ht
   pathPrefix: mountDef.pathPrefix.map(segmentToWit),
   authDetails: mountDef.authRequired ? { required: true } : undefined,
   phantomAgent: mountDef.phantomAgent,
+  phantomIdBinding: mountDef.phantomId
+    ? {
+        tag: mountDef.phantomId.source,
+        val: { name: mountDef.phantomId.name, optional: mountDef.phantomId.optional },
+      }
+    : undefined,
   corsOptions: { allowedPatterns: [...mountDef.cors] },
   webhookSuffix: mountDef.webhookSuffix.map(segmentToWit),
   staticBindings: [],
@@ -1741,6 +1791,45 @@ const validateMount = (
   Effect.gen(function* () {
     const mountDef = input.mount!
     const ctx = `agent '${input.agentName}' mount`
+    const selector = mountDef.phantomId
+    if (selector) {
+      if (typeof selector.optional !== "boolean") {
+        return yield* Effect.fail(
+          new HttpRouteError(`${ctx}: phantom selector optionality must be a boolean`),
+        )
+      }
+      if (
+        !selector.name ||
+        mountDef.exposeFiles?.length ||
+        (selector.source === "path" &&
+          (input.constructorParamNames.includes(selector.name) ||
+            mountDef.pathPrefix.filter((s) => s._tag === "PathVar" && s.name === selector.name)
+              .length !== 1))
+      ) {
+        return yield* Effect.fail(
+          new HttpRouteError(`${ctx}: invalid phantom selector ownership or file exposure`),
+        )
+      }
+      for (const m of input.methods) {
+        for (const ep of m.endpoints) {
+          if (
+            (selector.source === "path" &&
+              ep.pathSuffix.some(
+                (s) => (s._tag === "PathVar" || s._tag === "RestVar") && s.name === selector.name,
+              )) ||
+            (selector.source === "query" &&
+              (ep.queryVars.some((q) => q.queryParam === selector.name) ||
+                (ep.durableStreams && ["offset", "cursor", "live"].includes(selector.name))))
+          ) {
+            return yield* Effect.fail(
+              new HttpRouteError(
+                `${ctx}: phantom selector conflicts with an endpoint binding or durable-stream control`,
+              ),
+            )
+          }
+        }
+      }
+    }
     const mountVars = new Set<string>()
     for (let i = 0; i < mountDef.pathPrefix.length; i++) {
       const s = mountDef.pathPrefix[i]!
@@ -1756,6 +1845,7 @@ const validateMount = (
         return yield* Effect.fail(new HttpRouteError(`${ctx}: duplicate path variable '${s.name}'`))
       }
       mountVars.add(s.name)
+      if (selector?.source === "path" && selector.name === s.name) continue
       if (!input.constructorParamNames.includes(s.name)) {
         return yield* Effect.fail(
           new HttpRouteError(

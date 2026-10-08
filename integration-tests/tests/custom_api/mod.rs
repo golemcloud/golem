@@ -21,6 +21,7 @@ mod live_files;
 mod mcp;
 mod oidc_pkce;
 mod openapi_generation;
+mod phantom_selection;
 mod raw_http_router;
 mod readonly_http;
 

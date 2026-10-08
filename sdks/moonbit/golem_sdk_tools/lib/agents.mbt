@@ -84,6 +84,7 @@ pub(all) struct HttpMountInfo {
   path : String
   auth : Bool?
   phantom : Bool
+  phantom_id_binding : PhantomIdBindingInfo?
   cors : Array[String]
   webhook_suffix : String?
   router : Bool
@@ -91,6 +92,12 @@ pub(all) struct HttpMountInfo {
   filesystem_bindings : Array[HttpFileMapping]
   file_response_headers : Array[(String, String)]
   openapi_provider_method : String?
+} derive(Debug, Eq)
+
+///|
+pub(all) enum PhantomIdBindingInfo {
+  Path(String, Bool)
+  Query(String, Bool)
 } derive(Debug, Eq)
 
 ///|
@@ -860,6 +867,61 @@ fn extract_mount_phantom(attrs : @list.List[@attribute.Attribute]) -> Bool {
 }
 
 ///|
+fn extract_mount_phantom_id(
+  attrs : @list.List[@attribute.Attribute],
+) -> PhantomIdBindingInfo? raise AgentParseError {
+  let mut result : PhantomIdBindingInfo? = None
+  for attr in attrs {
+    if attr.raw == "#derive.mount_phantom_id" ||
+      attr.raw.has_prefix("#derive.mount_phantom_id(") {
+      if result is Some(_) {
+        http_fail("duplicate mount_phantom_id declaration")
+      }
+      match attr.parsed {
+        Some(Apply({ qual: Some("derive"), name: "mount_phantom_id", }, props)) => {
+          let mut source : (String, String)? = None
+          let mut optional = false
+          let seen : Array[String] = []
+          for prop in props {
+            match prop {
+              Labeled(key, String(name)) if key == "path" || key == "query" => {
+                if source is Some(_) || name.is_empty() {
+                  http_fail(
+                    "declare exactly one nonempty phantom selector source",
+                  )
+                }
+                source = Some((key, name))
+              }
+              Labeled("optional", Bool(value)) => {
+                if seen.contains("optional") {
+                  http_fail("duplicate phantom selector optional flag")
+                }
+                seen.push("optional")
+                optional = value
+              }
+              _ =>
+                http_fail(
+                  "mount_phantom_id requires path/query = string and optional = bool",
+                )
+            }
+          }
+          result = match source {
+            Some(("path", name)) => Some(Path(name, optional))
+            Some((_, name)) => Some(Query(name, optional))
+            None => {
+              http_fail("declare exactly one phantom selector source")
+              None
+            }
+          }
+        }
+        _ => http_fail("invalid mount_phantom_id declaration")
+      }
+    }
+  }
+  result
+}
+
+///|
 let http_methods : Array[String] = [
   "get", "post", "put", "delete", "patch", "head", "options", "trace", "connect",
 ]
@@ -1463,6 +1525,7 @@ pub fn parse_agents(
                 path,
                 auth: extract_mount_auth(type_decl.attrs),
                 phantom: extract_mount_phantom(type_decl.attrs),
+                phantom_id_binding: extract_mount_phantom_id(type_decl.attrs),
                 cors: extract_mount_cors(type_decl.attrs),
                 webhook_suffix: extract_mount_webhook(type_decl.attrs),
                 router,
