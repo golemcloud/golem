@@ -301,21 +301,20 @@ impl StartSelection {
     ) -> Self {
         let filter = exclusions.filter(status, enabled, true);
         let (baseline, replay_revision_without_unavailable) = match frozen_baseline(status) {
-            Ok(baseline) => {
-                let revision = replay_revision(status, &baseline);
-                (baseline, revision)
-            }
+            Ok(baseline) => (baseline, None),
             Err(head) => (
                 filtered_baseline(status, head, filter),
-                replay_revision(
+                Some(replay_revision(
                     status,
                     &filtered_baseline(status, head, exclusions.filter(status, enabled, false)),
-                ),
+                )),
             ),
         };
+        let replay_revision = replay_revision(status, &baseline);
         Self {
-            replay_revision: replay_revision(status, &baseline),
-            replay_revision_without_unavailable,
+            replay_revision,
+            replay_revision_without_unavailable: replay_revision_without_unavailable
+                .unwrap_or(replay_revision),
             baseline,
             candidate: start_candidate(status, filter),
         }
@@ -1380,6 +1379,39 @@ mod tests {
                 OplogIndex::from_u64(5)
             ]))
         );
+    }
+
+    /// A frozen head gives both replay revisions from its own record, also when the start could
+    /// not get a periodic record.
+    #[test]
+    fn a_frozen_head_gives_both_replay_revisions_from_its_record() {
+        let exclusions = SnapshotExclusions::default().with_unavailable(OplogIndex::from_u64(10));
+        [
+            (
+                pending_update(
+                    12,
+                    PendingUpdateKind::SnapshotBased {
+                        filesystem_snapshot: None,
+                    },
+                ),
+                revision(3),
+            ),
+            (assisted_head(record_at(5, None), 0, 4), revision(2)),
+        ]
+        .into_iter()
+        .for_each(|(head, expected)| {
+            let mut status = status(Some(FilesystemSnapshotName::periodic()), true, None);
+            status.pending_updates.push_back(head);
+            let selection = StartSelection::of(&status, &exclusions, true);
+            assert_eq!(
+                (
+                    selection.replay_revision,
+                    selection.replay_revision_without_unavailable
+                ),
+                (expected, expected),
+                "{status:?}"
+            );
+        });
     }
 
     #[test]
