@@ -1982,11 +1982,18 @@ impl CommandRow<'_> {
                 visual,
             ));
         } else {
+            let separator_style = if self.selected {
+                selected_style
+            } else {
+                Style::default()
+            };
             let shortcut_width = usize::from(self.shortcut.is_some()) * 16;
-            let label_width = (available / 3)
+            let separator_width = 1 + usize::from(self.shortcut.is_some());
+            let column_width = available.saturating_sub(separator_width);
+            let label_width = (column_width / 3)
                 .clamp(16, 28)
-                .min(available.saturating_sub(shortcut_width));
-            let description_width = available.saturating_sub(label_width + shortcut_width);
+                .min(column_width.saturating_sub(shortcut_width));
+            let description_width = column_width.saturating_sub(label_width + shortcut_width);
             spans.extend(highlighted_fit(
                 self.label,
                 label_width,
@@ -1995,6 +2002,7 @@ impl CommandRow<'_> {
                 visual,
             ));
             if shortcut_width > 0 {
+                spans.push(Span::styled(" ", separator_style));
                 spans.extend(highlighted_fit(
                     self.shortcut.unwrap_or_default(),
                     shortcut_width,
@@ -2003,6 +2011,7 @@ impl CommandRow<'_> {
                     visual,
                 ));
             }
+            spans.push(Span::styled(" ", separator_style));
             spans.extend(highlighted_fit(
                 self.description,
                 description_width,
@@ -3111,7 +3120,7 @@ mod tests {
         let visual = TuiVisualStyle::production();
         let command = CommandRow {
             category: CommandMarker {
-                glyph: "●",
+                glyph: "⌕",
                 style: Style::default().fg(visual.success),
                 matched: true,
             },
@@ -3134,10 +3143,39 @@ mod tests {
             (0..60).any(|x| buffer[(x, 0)].bg == visual.search_match_background),
             "expected a visible match highlight"
         );
-        assert_eq!(buffer[(2, 0)].symbol(), "●");
+        assert_eq!(buffer[(2, 0)].symbol(), "⌕");
         assert_eq!(buffer[(2, 0)].bg, visual.search_match_background);
         assert_eq!(buffer[(4, 0)].symbol(), " ");
         assert_eq!(buffer[(6, 0)].symbol(), "O");
+    }
+
+    #[test]
+    fn command_rows_keep_a_separator_between_label_and_description() {
+        let visual = TuiVisualStyle::production();
+        let command = CommandRow {
+            category: CommandMarker {
+                glyph: "→",
+                style: Style::default().fg(visual.info),
+                matched: false,
+            },
+            risk: None,
+            label: "1234567890123456",
+            shortcut: None,
+            description: "Description",
+            label_matches: &[],
+            shortcut_matches: &[],
+            description_matches: &[],
+            selected: false,
+            unavailable: false,
+        }
+        .line(40, &visual);
+        let buffer = render(40, 1, |frame| {
+            frame.render_widget(Paragraph::new(command), frame.area());
+        });
+
+        assert_eq!(buffer[(21, 0)].symbol(), "6");
+        assert_eq!(buffer[(22, 0)].symbol(), " ");
+        assert_eq!(buffer[(23, 0)].symbol(), "D");
     }
 
     #[test]

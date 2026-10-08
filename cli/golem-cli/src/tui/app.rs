@@ -11168,8 +11168,22 @@ fn render_quit_blocked(frame: &mut Frame<'_>, app: &TuiApp) {
 
 fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     let matches = app.palette_matches();
-    let area = adaptive_data_popup_rect(frame.area(), 36, 10);
+    let area = palette_popup_rect(frame.area(), app);
     let content = OverlayFrame::content_area(area);
+    let scope_width = content.width / 2;
+    app.geometry.add_region(
+        RegionKind::PaletteAll,
+        Rect::new(content.x, content.y, scope_width, content.height.min(1)),
+    );
+    app.geometry.add_region(
+        RegionKind::PaletteContext,
+        Rect::new(
+            content.x.saturating_add(scope_width),
+            content.y,
+            content.width.saturating_sub(scope_width),
+            content.height.min(1),
+        ),
+    );
     let action_capacity = content.height.saturating_sub(5).max(1) as usize;
     let overflow = matches.len() > action_capacity;
     let content_width = content.width.saturating_sub(u16::from(overflow)) as usize;
@@ -11300,18 +11314,67 @@ fn render_palette(frame: &mut Frame<'_>, app: &TuiApp) {
     }
 }
 
+fn palette_popup_rect(area: Rect, app: &TuiApp) -> Rect {
+    const MINIMUM_WIDTH: usize = 64;
+    const MINIMUM_HEIGHT: usize = 10;
+    const FRAME_WIDTH: usize = 4;
+    const FRAME_HEIGHT: usize = 9;
+    const COMMAND_PREFIX_WIDTH: usize = 6;
+    const MINIMUM_LABEL_WIDTH: usize = 16;
+    const MAXIMUM_LABEL_WIDTH: usize = 28;
+    const SHORTCUT_WIDTH: usize = 16;
+    const COLUMN_GAP_WIDTH: usize = 1;
+    const MAXIMUM_DESCRIPTION_WIDTH: usize = 48;
+
+    let actions = palette_actions(PaletteScope::All, app);
+    let desired_content_width = actions
+        .iter()
+        .map(|action| {
+            let label_width = UnicodeWidthStr::width(action.label)
+                .clamp(MINIMUM_LABEL_WIDTH, MAXIMUM_LABEL_WIDTH);
+            let shortcut_width = usize::from(action.shortcut.is_some()) * SHORTCUT_WIDTH;
+            let gap_width = COLUMN_GAP_WIDTH * (1 + usize::from(action.shortcut.is_some()));
+            let description_width =
+                UnicodeWidthStr::width(palette_action_description(app, action).as_str())
+                    .min(MAXIMUM_DESCRIPTION_WIDTH);
+            COMMAND_PREFIX_WIDTH
+                + gap_width
+                + (label_width * 3).max(MAXIMUM_LABEL_WIDTH + shortcut_width + description_width)
+        })
+        .max()
+        .unwrap_or_default();
+    let desired_width = (desired_content_width + FRAME_WIDTH).max(MINIMUM_WIDTH);
+    let desired_height = (actions.len().max(1) + FRAME_HEIGHT).max(MINIMUM_HEIGHT);
+
+    content_popup_rect(
+        area,
+        adaptive_palette_dimension(area.width, desired_width, MINIMUM_WIDTH),
+        adaptive_palette_dimension(area.height, desired_height, MINIMUM_HEIGHT),
+    )
+}
+
+fn adaptive_palette_dimension(available: u16, desired: usize, minimum: usize) -> u16 {
+    if available <= 2 {
+        return available;
+    }
+    let available = usize::from(available);
+    let margin_cap = available.saturating_sub(2);
+    let percentage_cap = available.saturating_mul(85) / 100;
+    let cap = percentage_cap.max(minimum.min(margin_cap)).min(margin_cap);
+    desired.max(minimum.min(cap)).min(cap) as u16
+}
+
 fn palette_category_marker(
     category: ActionCategory,
     matched: bool,
     visual: &TuiVisualStyle,
 ) -> CommandMarker<'static> {
     let (glyph, color) = match category {
-        ActionCategory::Navigation => ("→", visual.info),
-        ActionCategory::Dev => ("▶", visual.accent),
-        ActionCategory::Ops => ("●", visual.success),
-        ActionCategory::Repl => ("›", visual.input_text),
-        ActionCategory::Settings => ("≡", visual.text_secondary),
-        ActionCategory::System => ("•", visual.text_muted),
+        ActionCategory::GoTo => ("→", visual.info),
+        ActionCategory::Run => ("▶", visual.accent),
+        ActionCategory::View => ("▦", visual.text_secondary),
+        ActionCategory::Explore => ("⌕", visual.success),
+        ActionCategory::Tui => ("•", visual.text_muted),
     };
     CommandMarker {
         glyph,
@@ -11435,34 +11498,52 @@ enum ActionId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionCategory {
-    Navigation,
-    Dev,
-    Ops,
-    Settings,
-    Repl,
-    System,
+    GoTo,
+    Run,
+    View,
+    Explore,
+    Tui,
 }
 
 impl ActionCategory {
     fn label(self) -> &'static str {
         match self {
-            Self::Navigation => "navigation",
-            Self::Dev => "dev",
-            Self::Ops => "ops",
-            Self::Settings => "settings",
-            Self::Repl => "repl",
-            Self::System => "system",
+            Self::GoTo => "go to",
+            Self::Run => "run",
+            Self::View => "view",
+            Self::Explore => "explore",
+            Self::Tui => "tui",
+        }
+    }
+
+    fn order(self) -> u8 {
+        match self {
+            Self::GoTo => 0,
+            Self::Run => 1,
+            Self::View => 2,
+            Self::Explore => 3,
+            Self::Tui => 4,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActionSurface {
+enum PalettePlacement {
+    Context(Workspace),
+    ContextAndGlobal(Workspace),
     Global,
-    Leader,
-    Agents,
-    Repl,
-    System,
+}
+
+impl PalettePlacement {
+    fn visible_in(self, scope: PaletteScope, workspace: Workspace) -> bool {
+        match (scope, self) {
+            (PaletteScope::Context, Self::Context(context))
+            | (PaletteScope::Context, Self::ContextAndGlobal(context)) => context == workspace,
+            (PaletteScope::Context, Self::Global) => false,
+            (PaletteScope::All, Self::Context(context)) => context == workspace,
+            (PaletteScope::All, Self::ContextAndGlobal(_) | Self::Global) => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11488,8 +11569,7 @@ struct ActionDefinition {
     description: &'static str,
     shortcut: Option<&'static str>,
     category: ActionCategory,
-    #[allow(dead_code)]
-    scope: ActionSurface,
+    palette_placement: PalettePlacement,
     #[allow(dead_code)]
     execution_kind: ActionExecution,
     palette_visible: bool,
@@ -11551,8 +11631,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Plan",
         description: "Preview deployment changes",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11561,8 +11641,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Build",
         description: "Build the application",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11571,8 +11651,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Deploy",
         description: "Deploy the application environment",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11581,8 +11661,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Clean",
         description: "Clean application build output",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11591,8 +11671,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Dev / Build & Deploy",
         description: "Show and focus",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Dev),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11601,8 +11681,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Dev / Server",
         description: "Show and focus",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Dev),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11611,8 +11691,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Dev / REPL",
         description: "Show and focus",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Dev),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11621,8 +11701,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Start Server",
         description: "Review and start the local server",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11631,8 +11711,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Stop Server",
         description: "Request a graceful local-server stop",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11641,8 +11721,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Force Stop Server",
         description: "Kill the local server after its graceful-stop window",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11651,8 +11731,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Restart Server",
         description: "Review settings and restart the local server",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11661,8 +11741,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Flip Pane Placement",
         description: "Place secondary panes on the right or bottom",
         shortcut: None,
-        category: ActionCategory::Settings,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11671,8 +11751,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Toggle Build & Deploy View",
         description: "Show or hide",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11681,8 +11761,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Toggle Server View",
         description: "Show or hide",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11691,8 +11771,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Toggle REPL View",
         description: "Show or hide",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11701,8 +11781,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Move Current View to Main",
         description: "Promote without hiding other views",
         shortcut: None,
-        category: ActionCategory::Dev,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11711,8 +11791,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Refresh Agents",
         description: "Refresh the Ops agent list",
         shortcut: Some("ctrl+r"),
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Direct,
         palette_visible: true,
     },
@@ -11721,8 +11801,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Filter Agent Dataset",
         description: "Choose a server-side component or agent-type filter",
         shortcut: Some("ctrl+f"),
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11731,8 +11811,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Configure Agent Columns",
         description: "Choose visible Agent collection columns",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11741,8 +11821,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Include Loaded Matches",
         description: "Include every loaded agent matching the local find",
         shortcut: Some("ctrl+a"),
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11751,8 +11831,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Exclude Loaded Matches",
         description: "Exclude every loaded agent matching the local find",
         shortcut: Some("ctrl+n"),
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11761,8 +11841,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Load Next 200 Agents",
         description: "Fetch one additional batch of up to 200 agents",
         shortcut: Some("ctrl+l"),
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Direct,
         palette_visible: true,
     },
@@ -11771,8 +11851,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Toggle Agent Auto Refresh",
         description: "Toggle automatic agent refresh",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11781,8 +11861,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Cycle Agent Mode",
         description: "Cycle durable, ephemeral, all",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11791,8 +11871,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Toggle Agent Details",
         description: "Show or hide selected agent details",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::View,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11801,8 +11881,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Cycle Ops View",
         description: "Cycle the views available for the current Ops subject",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11811,8 +11891,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Cycle Agent Find Field",
         description: "Search loaded agents by AgentID, component, or agent type",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Agents,
+        category: ActionCategory::Explore,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11821,8 +11901,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Dev",
         description: "Switch workspace",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11831,8 +11911,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Ops",
         description: "Switch workspace",
         shortcut: None,
-        category: ActionCategory::Navigation,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11841,8 +11921,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Ops / Agents",
         description: "Open collection",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11851,8 +11931,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Ops / Deployment",
         description: "Open overview",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11861,8 +11941,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Ops / Environment",
         description: "Open overview",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11871,8 +11951,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Ops / Server",
         description: "Open overview",
         shortcut: None,
-        category: ActionCategory::Ops,
-        scope: ActionSurface::Global,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
         execution_kind: ActionExecution::ViewNavigation,
         palette_visible: true,
     },
@@ -11881,8 +11961,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Start REPL",
         description: "Review settings and start the application REPL",
         shortcut: None,
-        category: ActionCategory::Repl,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11891,8 +11971,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Stop REPL",
         description: "Request a graceful REPL stop",
         shortcut: None,
-        category: ActionCategory::Repl,
-        scope: ActionSurface::Repl,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11901,8 +11981,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Force Stop REPL",
         description: "Kill the REPL after its graceful-stop window",
         shortcut: None,
-        category: ActionCategory::Repl,
-        scope: ActionSurface::Repl,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11911,8 +11991,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Restart REPL",
         description: "Restart the embedded REPL",
         shortcut: None,
-        category: ActionCategory::Repl,
-        scope: ActionSurface::Repl,
+        category: ActionCategory::Run,
+        palette_placement: PalettePlacement::Context(Workspace::Dev),
         execution_kind: ActionExecution::NestedCli,
         palette_visible: true,
     },
@@ -11921,8 +12001,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Open Commands",
         description: "Open the searchable command overlay",
         shortcut: Some("ctrl+p"),
-        category: ActionCategory::System,
-        scope: ActionSurface::System,
+        category: ActionCategory::Tui,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::Internal,
         palette_visible: false,
     },
@@ -11931,8 +12011,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Switch Context",
         description: "Switch selected TUI context",
         shortcut: Some("ctrl+x e"),
-        category: ActionCategory::Settings,
-        scope: ActionSurface::Leader,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11941,8 +12021,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Show Help",
         description: "Show TUI shortcuts",
         shortcut: Some("ctrl+h"),
-        category: ActionCategory::System,
-        scope: ActionSurface::System,
+        category: ActionCategory::Tui,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11951,8 +12031,8 @@ const ACTIONS: &[ActionDefinition] = &[
         label: "Quit",
         description: "Exit the TUI",
         shortcut: Some("ctrl+q"),
-        category: ActionCategory::System,
-        scope: ActionSurface::Global,
+        category: ActionCategory::Tui,
+        palette_placement: PalettePlacement::Global,
         execution_kind: ActionExecution::Internal,
         palette_visible: true,
     },
@@ -11971,7 +12051,11 @@ fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
         .copied()
         .filter(|action| action.palette_visible)
         .filter(|action| action_visible_for_state(action.id, app))
-        .filter(|action| scope == PaletteScope::All || action_relevant_to_context(action, app))
+        .filter(|action| {
+            action
+                .palette_placement
+                .visible_in(scope, app.active_workspace)
+        })
         .collect()
 }
 
@@ -12007,25 +12091,6 @@ fn action_visible_for_state(id: ActionId, app: &TuiApp) -> bool {
     }
 }
 
-fn action_relevant_to_context(action: &ActionDefinition, app: &TuiApp) -> bool {
-    match app.active_workspace {
-        Workspace::Dev => {
-            matches!(
-                action.category,
-                ActionCategory::Dev | ActionCategory::Repl | ActionCategory::Settings
-            ) || matches!(
-                action.id,
-                ActionId::SelectDevBuildDeploy
-                    | ActionId::SelectDevServer
-                    | ActionId::SelectDevRepl
-            )
-        }
-        Workspace::Ops => {
-            action.category == ActionCategory::Ops || matches!(action.id, ActionId::CycleOpsView)
-        }
-    }
-}
-
 const PALETTE_FUZZY_RESULT_LIMIT: usize = 5;
 const PALETTE_FUZZY_EXTRA_SPAN: usize = 3;
 
@@ -12051,7 +12116,7 @@ fn palette_action_description(app: &TuiApp, action: &ActionDefinition) -> String
 fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec<PaletteMatch> {
     let query = query.trim();
     if query.is_empty() {
-        return palette_actions(scope, app)
+        let mut matches = palette_actions(scope, app)
             .into_iter()
             .map(|action| PaletteMatch {
                 action,
@@ -12066,7 +12131,9 @@ fn ranked_palette_actions(query: &str, scope: PaletteScope, app: &TuiApp) -> Vec
                 description_matches: Vec::new(),
                 category_matched: false,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        matches.sort_by_key(|matched| (matched.action.category.order(), matched.registry_index));
+        return matches;
     }
 
     let actions = palette_actions(scope, app);
@@ -12152,7 +12219,7 @@ fn structured_palette_match(
     for token in query_tokens {
         if let Some(indices) = word_prefix_match_indices(action.label, &[token]) {
             matched.label_matches.extend(indices);
-        } else if action.category.label().starts_with(token) {
+        } else if word_prefix_match_indices(action.category.label(), &[token]).is_some() {
             matched.category_matched = true;
         } else if let Some(indices) = searchable_description
             .and_then(|description| word_prefix_match_indices(description, &[token]))
@@ -13021,6 +13088,72 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_size_stays_stable_while_filtering_and_uses_available_space() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
+        let terminal = Rect::new(0, 0, 140, 40);
+        let all = palette_actions(PaletteScope::All, &app);
+        let all_area = palette_popup_rect(terminal, &app);
+
+        app.palette.query = "plan".to_string();
+        let filtered_area = palette_popup_rect(terminal, &app);
+        app.palette.query =
+            "an intentionally very long query that still cannot resize the popup".to_string();
+        app.palette.scope = PaletteScope::Context;
+        let context_area = palette_popup_rect(terminal, &app);
+
+        assert_eq!(filtered_area, all_area);
+        assert_eq!(context_area, all_area);
+        assert_eq!(all_area.height, (all.len() + 9) as u16);
+        assert!(all_area.width <= terminal.width * 85 / 100);
+        assert!(all_area.height <= terminal.height * 85 / 100);
+        assert_eq!(all_area.x, (terminal.width - all_area.width) / 2);
+        assert_eq!(all_area.y, (terminal.height - all_area.height) / 2);
+
+        let short = palette_popup_rect(Rect::new(0, 0, 100, 16), &app);
+        assert_eq!(short.height, 13);
+
+        let compact = palette_popup_rect(Rect::new(0, 0, 40, 12), &app);
+        assert_eq!(compact, Rect::new(1, 1, 38, 10));
+
+        let minimal = palette_popup_rect(Rect::new(0, 0, 1, 1), &app);
+        assert_eq!(minimal, Rect::new(0, 0, 1, 1));
+    }
+
+    #[test]
+    fn palette_category_markers_are_distinct_single_cell_glyphs() {
+        let visual = theme();
+        for (category, glyph, color) in [
+            (ActionCategory::GoTo, "→", visual.info),
+            (ActionCategory::Run, "▶", visual.accent),
+            (ActionCategory::View, "▦", visual.text_secondary),
+            (ActionCategory::Explore, "⌕", visual.success),
+            (ActionCategory::Tui, "•", visual.text_muted),
+        ] {
+            let marker = palette_category_marker(category, false, &visual);
+            assert_eq!(marker.glyph, glyph);
+            assert_eq!(UnicodeWidthStr::width(marker.glyph), 1);
+            assert_eq!(marker.style.fg, Some(color));
+        }
+    }
+
+    #[test]
+    fn palette_uses_five_intent_categories() {
+        let visible_count = |category| {
+            ACTIONS
+                .iter()
+                .filter(|action| action.palette_visible && action.category == category)
+                .count()
+        };
+
+        assert_eq!(visible_count(ActionCategory::GoTo), 11);
+        assert_eq!(visible_count(ActionCategory::Run), 12);
+        assert_eq!(visible_count(ActionCategory::View), 7);
+        assert_eq!(visible_count(ActionCategory::Explore), 8);
+        assert_eq!(visible_count(ActionCategory::Tui), 2);
+    }
+
+    #[test]
     fn visual_preferences_round_trip_without_operational_state() {
         let directory = TempDir::new().unwrap();
         let path = directory.path().join("tui/preferences.json");
@@ -13086,6 +13219,7 @@ mod tests {
     #[test]
     fn remote_dev_mutations_are_discoverable_but_unavailable() {
         let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
         app.selected_target.context.uses_local_server = false;
 
         assert_eq!(
@@ -13157,13 +13291,19 @@ mod tests {
                 .all(|action| action.id != ActionId::OpenPalette)
         );
 
-        let ops_actions = filtered_actions("ops", PaletteScope::All, &app);
+        let explore_actions = filtered_actions("explore", PaletteScope::All, &app);
         assert!(
-            ops_actions
+            explore_actions
                 .iter()
                 .any(|action| action.id == ActionId::RefreshAgents),
-            "{ops_actions:?}"
+            "{explore_actions:?}"
         );
+
+        let go_to_actions = ranked_palette_actions("go to", PaletteScope::All, &app);
+        assert!(!go_to_actions.is_empty());
+        assert!(go_to_actions.iter().all(|matched| {
+            matched.action.category == ActionCategory::GoTo && matched.category_matched
+        }));
 
         assert!(
             filtered_actions("sample-app/local/local", PaletteScope::All, &app).is_empty(),
@@ -13174,8 +13314,97 @@ mod tests {
     }
 
     #[test]
-    fn palette_prefers_structured_matches_before_bounded_label_fallback() {
+    fn all_palette_scope_combines_global_and_current_workspace_actions() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Ops;
+        let ops_all = palette_actions(PaletteScope::All, &app);
+        let ops_context = palette_actions(PaletteScope::Context, &app);
+
+        assert!(
+            ops_context
+                .iter()
+                .all(|context| ops_all.iter().any(|action| action.id == context.id))
+        );
+        assert!(
+            ops_all
+                .iter()
+                .any(|action| action.id == ActionId::RefreshAgents)
+        );
+        assert!(
+            ops_all
+                .iter()
+                .any(|action| action.id == ActionId::SelectDevServer)
+        );
+        assert!(ops_all.iter().any(|action| action.id == ActionId::ShowHelp));
+        assert!(
+            ops_context
+                .iter()
+                .any(|action| action.id == ActionId::SelectOpsAgents)
+        );
+        assert!(
+            ops_context
+                .iter()
+                .all(|action| action.id != ActionId::ShowHelp)
+        );
+        assert!(
+            ops_all
+                .iter()
+                .all(|action| action.id != ActionId::ToggleServerView)
+        );
+        assert!(ops_all.iter().all(|action| action.id != ActionId::Build));
+
+        app.active_workspace = Workspace::Dev;
+        let dev_all = palette_actions(PaletteScope::All, &app);
+        assert!(
+            dev_all
+                .iter()
+                .any(|action| action.id == ActionId::ToggleServerView)
+        );
+        assert!(
+            dev_all
+                .iter()
+                .any(|action| action.id == ActionId::SelectOpsAgents)
+        );
+        assert!(
+            dev_all
+                .iter()
+                .all(|action| action.id != ActionId::RefreshAgents)
+        );
+
+        let dev_context = palette_actions(PaletteScope::Context, &app);
+        assert!(
+            dev_context
+                .iter()
+                .any(|action| action.id == ActionId::SelectDevServer)
+        );
+        assert!(
+            dev_context
+                .iter()
+                .all(|action| action.id != ActionId::SelectOpsAgents)
+        );
+        assert!(
+            dev_context
+                .iter()
+                .all(|action| action.id != ActionId::ShowHelp)
+        );
+    }
+
+    #[test]
+    fn empty_palette_groups_actions_by_intent_category() {
         let app = test_app();
+        let matches = ranked_palette_actions("", PaletteScope::All, &app);
+
+        assert!(
+            matches
+                .windows(2)
+                .all(|pair| { pair[0].action.category.order() <= pair[1].action.category.order() })
+        );
+    }
+
+    #[test]
+    fn palette_prefers_structured_matches_before_bounded_label_fallback() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
         let plan = ranked_palette_actions("plan", PaletteScope::All, &app);
 
         assert_eq!(plan.len(), 1, "{plan:?}");
@@ -13192,18 +13421,12 @@ mod tests {
     #[test]
     fn palette_tokens_can_match_across_visible_fields() {
         let app = test_app();
-        let matches = filtered_actions("ops agent", PaletteScope::All, &app);
+        let matches = filtered_actions("explore agent", PaletteScope::All, &app);
 
         assert!(
             matches
                 .iter()
                 .any(|action| action.id == ActionId::RefreshAgents),
-            "{matches:?}"
-        );
-        assert!(
-            matches
-                .iter()
-                .any(|action| action.id == ActionId::SelectOpsAgents),
             "{matches:?}"
         );
     }
@@ -14977,6 +15200,7 @@ mod tests {
     #[test]
     fn command_palette_uses_compact_visible_metadata() {
         let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
         app.dev_focus = DevView::Server;
         app.open_palette(PaletteScope::All);
 
@@ -15217,6 +15441,7 @@ mod tests {
     #[test]
     fn clean_palette_action_opens_a_review_form() {
         let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
         for character in "clean".chars() {
@@ -16017,6 +16242,7 @@ mod tests {
     #[test]
     fn lifecycle_palette_exposes_only_state_valid_verbs() {
         let mut app = test_app();
+        app.active_workspace = Workspace::Dev;
         let ids = |app: &TuiApp| {
             palette_actions(PaletteScope::All, app)
                 .into_iter()
