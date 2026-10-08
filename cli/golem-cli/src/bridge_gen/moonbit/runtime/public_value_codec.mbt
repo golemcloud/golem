@@ -537,7 +537,7 @@ fn PublicValueCodec::resolved(
   schema : Json,
 ) -> Json raise {
   let mut current = schema
-  let visited : Map[String, Bool] = Map([])
+  let mut visited : Map[String, Bool]? = None
   for ;; {
     let node = pvc_object(current)
     if pvc_string(pvc_field(node, "kind")) != "ref" {
@@ -545,10 +545,18 @@ fn PublicValueCodec::resolved(
     }
     let value = pvc_object(pvc_field(node, "value"))
     let id = pvc_string(pvc_field(value, "id"))
-    if visited.contains(id) {
+    let seen = match visited {
+      Some(seen) => seen
+      None => {
+        let seen : Map[String, Bool] = Map([])
+        visited = Some(seen)
+        seen
+      }
+    }
+    if seen.contains(id) {
       pvc_fail("cyclic schema alias '\{id}'")
     }
-    visited[id] = true
+    seen[id] = true
     current = match self.defs.get(id) {
       Some(body) => body
       None => {

@@ -1,7 +1,112 @@
 ///|
 fn round_trip(v : SchemaValue) -> SchemaValue raise {
   let s = schema_value_to_json(v).stringify()
+  @debug.assert_eq(@json.parse(schema_value_render(v)), @json.parse(s))
   schema_value_from_json(@json.parse(s))
+}
+
+///|
+test "direct writer preserves all optional payloads and numeric tokens" {
+  let cases : Array[SchemaValue] = [
+    F32Value(-0.0),
+    F64Value(-0.0),
+    F32Value(0.1),
+    F32Value(1.0 / 0.0),
+    F64Value(-1.0 / 0.0),
+    F64Value(0.0 / 0.0),
+    StringValue("\"\\\n\t\u0001é😀"),
+    UuidValue("id"),
+    FixedListValue([U8Value(7)]),
+    VariantValue(1, None),
+    VariantValue(0, Some(StringValue("x"))),
+    EnumValue(2),
+    FlagsValue([true, false]),
+    OptionValue(None),
+    OptionValue(Some(BoolValue(false))),
+    ResultValue(ResultOk(None)),
+    ResultValue(ResultErr(Some(S32Value(-3)))),
+    TextValue("text", None),
+    TextValue("text", Some("en")),
+    BinaryValue(b"\x00\xff", None),
+    BinaryValue(b"\x00\xff", Some("image/png")),
+    QuantityValue(-7L, 3, "unit"),
+    StreamReferenceValue(None, None),
+    StreamReferenceValue(Some("p"), None),
+    StreamReferenceValue(None, Some("t")),
+    StreamReferenceValue(Some("p"), Some("t")),
+    UnionValue("tag", ListValue([S32Value(8)])),
+  ]
+  for value in cases {
+    @debug.assert_eq(
+      @json.parse(schema_value_render(value)),
+      @json.parse(schema_value_to_json(value).stringify()),
+    )
+  }
+  assert_eq(
+    schema_value_render(U64Value(18446744073709551615UL)),
+    "{\"kind\":\"u64\",\"value\":\"18446744073709551615\"}",
+  )
+  assert_eq(
+    schema_value_render(F64Value(-0.0)),
+    "{\"kind\":\"f64\",\"value\":-0}",
+  )
+}
+
+///|
+test "direct requests preserve configuration and optional members" {
+  let parameters = RecordValue([StringValue("é😀\n")])
+  let config : Array[AgentConfigEntry] = [
+    {
+      path: ["key"],
+      value: @json.parse("{\"$float\":\"ordinary\",\"x\":null,\"z\":-0}"),
+    },
+  ]
+  for optional in [None, Some("\"\\\n😀")] {
+    @debug.assert_eq(
+      @json.parse(
+        render_create_agent_request(
+          "app", "env", "type", parameters, optional, config,
+        ),
+      ),
+      encode_create_agent_request(
+        "app", "env", "type", parameters, optional, config,
+      ),
+    )
+    for schedule in [None, Some("later")] {
+      for key in [None, Some("key")] {
+        @debug.assert_eq(
+          @json.parse(
+            render_agent_invocation_request(
+              "app",
+              "env",
+              "type",
+              parameters,
+              optional,
+              config,
+              "method",
+              ListValue([U8Value(251)]),
+              "await",
+              schedule,
+              key,
+            ),
+          ),
+          encode_agent_invocation_request(
+            "app",
+            "env",
+            "type",
+            parameters,
+            optional,
+            config,
+            "method",
+            ListValue([U8Value(251)]),
+            "await",
+            schedule,
+            key,
+          ),
+        )
+      }
+    }
+  }
 }
 
 ///|
@@ -258,4 +363,87 @@ test "validation-only calls retain stream registration and reset it between call
     }),
   )
   ignore(codec.encode(value))
+}
+
+///|
+test "schema resolution observes changed definitions and diagnoses aliases afresh" {
+  let codec = public_value_codec(
+    "{\"root\":{\"kind\":\"ref\",\"value\":{\"id\":\"n\"}},\"defs\":[{\"id\":\"n\",\"body\":{\"kind\":\"u8\",\"value\":{}}}]}",
+  )
+  let unrestricted = codec.defs["n"]
+  ignore(codec.encode(U8Value(7)))
+  codec.defs["n"] = @json.parse(
+    "{\"kind\":\"u8\",\"value\":{\"restrictions\":{\"max\":{\"kind\":\"unsigned\",\"value\":\"6\"}}}}",
+  )
+  assert_true(raises(() => ignore(codec.encode(U8Value(7)))))
+  codec.defs["n"] = @json.parse("{\"kind\":\"ref\",\"value\":{\"id\":\"n\"}}")
+  assert_true(raises(() => ignore(codec.encode(U8Value(7)))))
+  codec.defs["n"] = @json.parse(
+    "{\"kind\":\"ref\",\"value\":{\"id\":\"missing\"}}",
+  )
+  assert_true(raises(() => ignore(codec.encode(U8Value(7)))))
+  codec.defs["n"] = unrestricted
+  ignore(codec.encode(U8Value(7)))
+}
+
+///|
+fn encode_create_agent_request(
+  app_name : String,
+  env_name : String,
+  agent_type_name : String,
+  parameters : SchemaValue,
+  phantom_id : String?,
+  config : Array[AgentConfigEntry],
+) -> Json {
+  let fields : Array[(String, Json)] = [
+    ("appName", Json::string(app_name)),
+    ("envName", Json::string(env_name)),
+    ("agentTypeName", Json::string(agent_type_name)),
+    ("parameters", schema_value_to_json(parameters)),
+  ]
+  match phantom_id {
+    Some(id) => fields.push(("phantomId", Json::string(id)))
+    None => ()
+  }
+  fields.push(("config", Json::array(config.map(encode_config_entry))))
+  obj(fields)
+}
+
+///|
+fn encode_agent_invocation_request(
+  app_name : String,
+  env_name : String,
+  agent_type_name : String,
+  parameters : SchemaValue,
+  phantom_id : String?,
+  config : Array[AgentConfigEntry],
+  method_name : String,
+  method_parameters : SchemaValue,
+  mode : String,
+  schedule_at : String?,
+  idempotency_key : String?,
+) -> Json {
+  let fields : Array[(String, Json)] = [
+    ("appName", Json::string(app_name)),
+    ("envName", Json::string(env_name)),
+    ("agentTypeName", Json::string(agent_type_name)),
+    ("parameters", schema_value_to_json(parameters)),
+    ("config", Json::array(config.map(encode_config_entry))),
+    ("methodName", Json::string(method_name)),
+    ("methodParameters", schema_value_to_json(method_parameters)),
+    ("mode", Json::string(mode)),
+  ]
+  match phantom_id {
+    Some(id) => fields.push(("phantomId", Json::string(id)))
+    None => ()
+  }
+  match schedule_at {
+    Some(at) => fields.push(("scheduleAt", Json::string(at)))
+    None => ()
+  }
+  match idempotency_key {
+    Some(k) => fields.push(("idempotencyKey", Json::string(k)))
+    None => ()
+  }
+  obj(fields)
 }
