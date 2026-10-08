@@ -2990,8 +2990,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .set_current_idempotency_key(idempotency_key.clone())
                 .await;
 
-            let component_metadata = self.store.data().component_metadata().metadata.clone();
-
             Self::extend_invocation_context(
                 &mut invocation_context,
                 &idempotency_key,
@@ -3024,7 +3022,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             };
             let lowered = lower_invocation(
                 invocation_for_lowering,
-                &component_metadata,
+                &self.store.data().component_metadata().metadata,
                 self.parent.parsed_agent_id.as_ref(),
             )?;
 
