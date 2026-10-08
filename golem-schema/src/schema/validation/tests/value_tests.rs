@@ -27,12 +27,35 @@ use crate::schema::schema_value::{
     VariantValuePayload,
 };
 use crate::schema::validation::subtyping::is_assignable;
+#[cfg(feature = "regex")]
+use crate::schema::validation::value::PreparedValueValidator;
 use crate::schema::validation::value::{
     ValueError, ValuePathSegment, validate_record_fields, validate_value,
 };
 use chrono::Utc;
 use proptest::prelude::*;
 use test_r::test;
+
+// PROVISIONAL bug_finder reproducer: preparation must not recurse on pure aliases.
+#[test]
+fn bug_finder_long_flat_alias_chain_validates_without_stack_overflow() {
+    let count = 20_000;
+    let graph = SchemaGraph {
+        defs: (0..count)
+            .map(|i| SchemaTypeDef {
+                id: TypeId::new(format!("alias{i}")),
+                name: None,
+                body: if i + 1 == count {
+                    SchemaType::bool()
+                } else {
+                    SchemaType::ref_to(TypeId::new(format!("alias{}", i + 1)))
+                },
+            })
+            .collect(),
+        root: SchemaType::ref_to(TypeId::new("alias0")),
+    };
+    validate_value(&graph, &graph.root, &SchemaValue::Bool(true)).unwrap();
+}
 
 // --- Paired type + value strategy ---
 
@@ -1296,4 +1319,91 @@ fn permission_card_polymorphism_is_validated() {
             ..
         }
     )));
+}
+
+#[cfg(feature = "regex")]
+#[test]
+fn prepared_validation_is_schema_bound_and_has_fresh_diagnostics() {
+    let node_id = TypeId::new("node");
+    let node = SchemaType::record(vec![
+        NamedFieldType {
+            name: "label".into(),
+            body: SchemaType::text(TextRestrictions {
+                regex: Some("^[a-z]+$".into()),
+                ..Default::default()
+            }),
+            metadata: Default::default(),
+        },
+        NamedFieldType {
+            name: "next".into(),
+            body: SchemaType::option(SchemaType::ref_to(node_id.clone())),
+            metadata: Default::default(),
+        },
+    ]);
+    let graph = SchemaGraph {
+        defs: vec![SchemaTypeDef {
+            id: node_id.clone(),
+            name: None,
+            body: node,
+        }],
+        root: SchemaType::ref_to(node_id),
+    };
+    let text = |text: &str| {
+        SchemaValue::Text(TextValuePayload {
+            text: text.into(),
+            language: None,
+        })
+    };
+    let record = |label, next| SchemaValue::Record {
+        fields: vec![label, SchemaValue::Option { inner: next }],
+    };
+    let valid = record(text("outer"), Some(Box::new(record(text("inner"), None))));
+    let invalid = record(text("outer"), Some(Box::new(record(text("UPPER"), None))));
+    let prepared = PreparedValueValidator::new(&graph, &graph.root);
+    prepared.validate(&valid).unwrap();
+    let errors = prepared.validate(&invalid).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        matches!(&errors[0], ValueError::TextRegexMismatch { regex, .. } if regex == "^[a-z]+$")
+    );
+    assert_eq!(
+        errors[0].to_string(),
+        "text value at .field(\"next\").option_inner.field(\"label\") does not match required regex `^[a-z]+$`"
+    );
+    prepared.validate(&valid).unwrap();
+    assert_eq!(prepared.validate(&invalid).unwrap_err(), errors);
+
+    let changed = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+        regex: Some("^[A-Z]+$".into()),
+        ..Default::default()
+    }));
+    let changed_validator = PreparedValueValidator::new(&changed, &changed.root);
+    changed_validator.validate(&text("UPPER")).unwrap();
+    assert!(changed_validator.validate(&text("lower")).is_err());
+
+    let invalid_regex = SchemaGraph::anonymous(SchemaType::text(TextRestrictions {
+        regex: Some("[".into()),
+        ..Default::default()
+    }));
+    // An invalid text restriction regex does not reject the value.
+    PreparedValueValidator::new(&invalid_regex, &invalid_regex.root)
+        .validate(&text("anything"))
+        .unwrap();
+    let union = SchemaGraph::anonymous(SchemaType::union(UnionSpec {
+        branches: vec![UnionBranch {
+            tag: "invalid".into(),
+            body: SchemaType::string(),
+            discriminator: DiscriminatorRule::Regex { regex: "[".into() },
+            metadata: Default::default(),
+        }],
+    }));
+    let errors = PreparedValueValidator::new(&union, &union.root)
+        .validate(&SchemaValue::Union(UnionValuePayload {
+            tag: "invalid".into(),
+            body: Box::new(SchemaValue::String("anything".into())),
+        }))
+        .unwrap_err();
+    assert!(
+        matches!(&errors[0], ValueError::UnionDiscriminatorMismatch { tag, .. } if tag == "invalid")
+    );
 }

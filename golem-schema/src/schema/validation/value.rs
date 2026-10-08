@@ -477,6 +477,133 @@ impl Display for ValueError {
 
 impl Error for ValueError {}
 
+struct ValidationContext<'a> {
+    index: GraphIndex<'a>,
+    #[cfg(feature = "regex")]
+    regexes: std::collections::HashMap<&'a str, Option<regex::Regex>>,
+}
+
+impl<'a> ValidationContext<'a> {
+    fn new(graph: &'a SchemaGraph) -> Self {
+        Self {
+            index: GraphIndex::new(graph),
+            #[cfg(feature = "regex")]
+            regexes: std::collections::HashMap::new(),
+        }
+    }
+
+    fn prepare(&mut self, ty: &'a SchemaType) {
+        #[cfg(feature = "regex")]
+        self.prepare_regexes(ty, &mut std::collections::HashSet::new());
+        #[cfg(not(feature = "regex"))]
+        let _ = ty;
+    }
+
+    #[cfg(feature = "regex")]
+    fn prepare_regexes(
+        &mut self,
+        ty: &'a SchemaType,
+        visited: &mut std::collections::HashSet<&'a TypeId>,
+    ) {
+        match ty {
+            SchemaType::Ref { id, .. } => {
+                if visited.insert(id)
+                    && let Some(def) = self.index.lookup(id)
+                {
+                    self.prepare_regexes(&def.body, visited);
+                }
+            }
+            SchemaType::Record { fields, .. } => {
+                for field in fields {
+                    self.prepare_regexes(&field.body, visited);
+                }
+            }
+            SchemaType::Variant { cases, .. } => {
+                for case in cases {
+                    if let Some(ty) = &case.payload {
+                        self.prepare_regexes(ty, visited);
+                    }
+                }
+            }
+            SchemaType::Tuple { elements, .. } => {
+                for ty in elements {
+                    self.prepare_regexes(ty, visited);
+                }
+            }
+            SchemaType::List { element, .. } | SchemaType::FixedList { element, .. } => {
+                self.prepare_regexes(element, visited)
+            }
+            SchemaType::Map { key, value, .. } => {
+                self.prepare_regexes(key, visited);
+                self.prepare_regexes(value, visited);
+            }
+            SchemaType::Option { inner, .. } => self.prepare_regexes(inner, visited),
+            SchemaType::Result { spec, .. } => {
+                for ty in [spec.ok.as_deref(), spec.err.as_deref()]
+                    .into_iter()
+                    .flatten()
+                {
+                    self.prepare_regexes(ty, visited);
+                }
+            }
+            SchemaType::Text { restrictions, .. } => {
+                if let Some(pattern) = &restrictions.regex {
+                    self.prepare_regex(pattern);
+                }
+            }
+            SchemaType::Union { spec, .. } => {
+                for branch in &spec.branches {
+                    self.prepare_regexes(&branch.body, visited);
+                    if let DiscriminatorRule::Regex { regex } = &branch.discriminator {
+                        self.prepare_regex(regex);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[cfg(feature = "regex")]
+    fn prepare_regex(&mut self, pattern: &'a str) {
+        self.regexes
+            .entry(pattern)
+            .or_insert_with(|| regex::Regex::new(pattern).ok());
+    }
+}
+
+impl<'a> std::ops::Deref for ValidationContext<'a> {
+    type Target = GraphIndex<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.index
+    }
+}
+
+/// Immutable validation preparation bound to one borrowed graph and root type.
+/// Each validation uses fresh error and path state; no invocation state is cached.
+pub struct PreparedValueValidator<'a> {
+    context: ValidationContext<'a>,
+    ty: &'a SchemaType,
+}
+
+impl<'a> PreparedValueValidator<'a> {
+    pub fn new(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Self {
+        let mut context = ValidationContext::new(graph);
+        context.prepare(ty);
+        Self { context, ty }
+    }
+
+    pub fn validate(&self, value: &SchemaValue) -> Result<(), Vec<ValueError>> {
+        let mut errors = Vec::new();
+        let mut path = ValuePath::new();
+        check(&self.context, self.ty, value, &mut path, &mut errors);
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+}
+
 /// Validate that `value` structurally conforms to `ty` (in the context of
 /// `graph`).
 pub fn validate_value(
@@ -484,15 +611,7 @@ pub fn validate_value(
     ty: &SchemaType,
     value: &SchemaValue,
 ) -> Result<(), Vec<ValueError>> {
-    let mut errors = Vec::new();
-    let mut path = ValuePath::new();
-    let index = GraphIndex::new(graph);
-    check(&index, ty, value, &mut path, &mut errors);
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    PreparedValueValidator::new(graph, ty).validate(value)
 }
 
 /// Validate the field values of a record against a set of named field types
@@ -519,7 +638,7 @@ where
 {
     let mut errors = Vec::new();
     let mut path = ValuePath::new();
-    let index = GraphIndex::new(graph);
+    let mut index = ValidationContext::new(graph);
 
     let field_count = fields.clone().count();
     if field_count != values.len() {
@@ -531,6 +650,9 @@ where
         return Err(errors);
     }
 
+    for (_, body) in fields.clone() {
+        index.prepare(body);
+    }
     for ((name, body), v) in fields.zip(values.iter()) {
         path.push(ValuePathSegment::Field(name.to_string()));
         check(&index, body, v, &mut path, &mut errors);
@@ -695,7 +817,7 @@ fn resolve_refs_at_value_node<'a>(
 }
 
 fn check<'a>(
-    index: &GraphIndex<'a>,
+    index: &ValidationContext<'a>,
     ty: &'a SchemaType,
     value: &SchemaValue,
     path: &mut ValuePath,
@@ -806,7 +928,7 @@ fn check<'a>(
         (SchemaType::String { .. }, SchemaValue::String(_)) => {}
 
         (SchemaType::Text { restrictions, .. }, SchemaValue::Text(payload)) => {
-            check_text(restrictions, payload, path, errors);
+            check_text(index, restrictions, payload, path, errors);
         }
         (SchemaType::Binary { restrictions, .. }, SchemaValue::Binary(payload)) => {
             check_binary(restrictions, payload, path, errors);
@@ -1122,6 +1244,7 @@ fn describe_numeric_bound(bound: NumericBound) -> String {
 }
 
 fn check_text(
+    _context: &ValidationContext,
     restrictions: &TextRestrictions,
     payload: &TextValuePayload,
     path: &mut ValuePath,
@@ -1163,7 +1286,7 @@ fn check_text(
     }
     #[cfg(feature = "regex")]
     if let Some(regex) = &restrictions.regex
-        && let Ok(compiled) = regex::Regex::new(regex.as_str())
+        && let Some(Some(compiled)) = _context.regexes.get(regex.as_str())
         && !compiled.is_match(payload.text.as_str())
     {
         errors.push(ValueError::TextRegexMismatch {
@@ -1397,7 +1520,11 @@ fn check_permission_card(
     }
 }
 
-fn discriminator_matches(index: &GraphIndex, branch: &UnionBranch, body: &SchemaValue) -> bool {
+fn discriminator_matches(
+    index: &ValidationContext,
+    branch: &UnionBranch,
+    body: &SchemaValue,
+) -> bool {
     match &branch.discriminator {
         DiscriminatorRule::Prefix { prefix } => string_view(index, &branch.body, body)
             .map(|s| s.starts_with(prefix.as_str()))
@@ -1415,9 +1542,9 @@ fn discriminator_matches(index: &GraphIndex, branch: &UnionBranch, body: &Schema
             let Some(s) = string_view(index, &branch.body, body) else {
                 return false;
             };
-            match regex::Regex::new(regex.as_str()) {
-                Ok(compiled) => compiled.is_match(s),
-                Err(_) => false,
+            match index.regexes.get(regex.as_str()) {
+                Some(Some(compiled)) => compiled.is_match(s),
+                _ => false,
             }
         }
         DiscriminatorRule::FieldEquals(field_disc) => {
