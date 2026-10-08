@@ -4497,12 +4497,7 @@ async fn an_unavailable_component_service_at_a_host_call_update_point_retries_an
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             let metadata = executor.get_worker_metadata(&worker_id).await?;
-            if outage.refused() > 0
-                && metadata
-                    .last_error
-                    .as_deref()
-                    .is_some_and(|error| error.contains("component service is unavailable"))
-            {
+            if outage.refused() > 0 && metadata.last_error_kind == Some(OplogErrorKind::Recovery) {
                 break anyhow::Ok(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -4519,19 +4514,22 @@ async fn an_unavailable_component_service_at_a_host_call_update_point_retries_an
     let result = fiber.await??;
     let metadata = executor.get_worker_metadata(&worker_id).await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-    let invocation_errors = oplog
-        .iter()
-        .filter(|entry| {
-            matches!(
-                &entry.entry,
-                PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Invocation
-            )
-        })
-        .count();
+    let error_count = |kind: OplogErrorKind| {
+        oplog
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry, PublicOplogEntry::Error(params) if params.kind == kind)
+            })
+            .count()
+    };
+    let invocation_errors = error_count(OplogErrorKind::Invocation);
+    let recovery_errors = error_count(OplogErrorKind::Recovery);
 
     drop(executor);
     http_server.abort();
 
+    assert_eq!(during.last_error_kind, Some(OplogErrorKind::Recovery));
+    assert!(recovery_errors > 0);
     assert_eq!(during.component_revision, component.revision);
     assert_eq!(update_counts(&during), (1, 0, 0));
     assert_eq!(invocation_errors, 0);
