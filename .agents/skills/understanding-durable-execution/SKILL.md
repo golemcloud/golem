@@ -697,13 +697,15 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
   any other entry. The pure rule `missing_start_waits_for` decides over the head's parent chain,
   the claim's parent chain and the active-body set: the claim waits for the nearest active body
-  that encloses the head (also through a scope of that body), unless the claim is issued from
-  inside that body or its chain contains a live append. `CursorTx::active_body_owning_head` only
+  that encloses the head (also through a scope of that body), unless that body issued the claim
+  or the claim's chain contains a live append. The issuing body is the nearest active body in
+  the claim's chain, so a call of an entity nested inside the head's body still waits. `CursorTx::active_body_owning_head` only
   reads those chains, down to the earliest active body, and subscribes to the active-body set.
   A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
   change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
   invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
-  at the head, and a claim from inside the owning body stay strict divergence at once. The path
+  at the head, and a claim issued by the body that encloses the head stay strict divergence at
+  once. The path
   where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
