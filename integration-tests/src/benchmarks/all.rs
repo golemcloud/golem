@@ -355,46 +355,6 @@ fn benchmark_registry() -> BenchmarkRegistry {
         }),
     );
     benchmarks_by_name.insert(
-        "conversion-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::conversion::Conversion<false>>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "conversion-large-output",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<benchmarks::conversion::Conversion<true>>(
-                mode,
-                verbosity,
-                item,
-                primary_only,
-                otlp,
-            ))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "conversion-structural-large-input",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::conversion::Conversion<false, true>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
-        "conversion-structural-large-output",
-        Box::new(|mode, verbosity, item, primary_only, otlp| {
-            Box::pin(run_benchmark::<
-                benchmarks::conversion::Conversion<true, true>,
-            >(mode, verbosity, item, primary_only, otlp))
-        }),
-    );
-    benchmarks_by_name.insert(
         "throughput-cpu-intensive",
         Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
@@ -554,16 +514,6 @@ fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
     for benchmark in &suite.benchmarks {
         let names: &[&str] = match benchmark.name.as_str() {
             "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
-            "conversion-large-input" | "conversion-large-output" => &[
-                "conversion_bench_rust_release",
-                "conversion_bench_ts",
-                "conversion_bench_effect",
-                "conversion_bench_scala",
-                "conversion_bench_moonbit",
-            ],
-            "conversion-structural-large-input" | "conversion-structural-large-output" => {
-                &["conversion_bench_ts_structural", "conversion_bench_effect"]
-            }
             "throughput-echo"
             | "throughput-echo-aggregate"
             | "throughput-large-input"

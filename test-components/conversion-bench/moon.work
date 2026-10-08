@@ -1,4 +1,0 @@
-members = [
-  "./moonbit",
-  "../../sdks/moonbit/golem_sdk",
-]
