@@ -175,14 +175,11 @@ impl UpdateQueue {
             OplogEntry::PendingAgentInvocation {
                 timestamp, payload, ..
             } => match manual_update_target_revision_of(payload) {
-                Some(target_revision) => {
-                    self.manual_admissions.push_back(ManualAdmission {
-                        timestamp: *timestamp,
-                        index,
-                        target_revision,
-                    });
-                    UpdateStep::ManualAdmitted(target_revision)
-                }
+                Some(target_revision) => self.admit(ManualAdmission {
+                    timestamp: *timestamp,
+                    index,
+                    target_revision,
+                }),
                 None => UpdateStep::Unchanged,
             },
             OplogEntry::PendingUpdate {
@@ -211,6 +208,14 @@ impl UpdateQueue {
             OplogEntry::SuccessfulUpdate { .. } => UpdateStep::Succeeded(self.pending.pop_front()),
             _ => UpdateStep::Unchanged,
         };
+        (self, step)
+    }
+
+    /// The queue after the manual update invocation of `admission`, for a reader that has
+    /// already classified the invocation, and the step that [`UpdateQueue::after`] gives for its
+    /// entry.
+    pub(crate) fn after_admission(mut self, admission: ManualAdmission) -> (Self, UpdateStep) {
+        let step = self.admit(admission);
         (self, step)
     }
 
@@ -292,6 +297,12 @@ impl UpdateQueue {
                 .and_then(|attempt_index| self.take_manual_admission(attempt_index))
                 .map_or(UpdateStep::FailedQueued(None), UpdateStep::FailedAdmission)
         }
+    }
+
+    fn admit(&mut self, admission: ManualAdmission) -> UpdateStep {
+        let target_revision = admission.target_revision;
+        self.manual_admissions.push_back(admission);
+        UpdateStep::ManualAdmitted(target_revision)
     }
 
     fn take_manual_admission(&mut self, index: OplogIndex) -> Option<ManualAdmission> {

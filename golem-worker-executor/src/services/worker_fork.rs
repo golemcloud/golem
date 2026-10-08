@@ -57,7 +57,7 @@ use crate::services::{HasAgentFilesystemSnapshots, HasRdbmsService, HasWorkerFor
 use crate::worker::start_outcome;
 use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::worker::status::update_queue::{
-    UpdateQueue, UpdateStep, manual_update_target_revision_of,
+    ManualAdmission, UpdateQueue, UpdateStep, manual_update_target_revision_of,
 };
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -75,11 +75,9 @@ use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex, OplogIndexRange,
-    OplogPayload,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentInvocationPayload, AgentMetadata, PendingUpdateKind, PendingUpdateRef,
-    Timestamp,
+    AgentFingerprint, AgentMetadata, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
 use golem_common::model::{AgentId, IdempotencyKey, OwnedAgentId};
 use golem_common::read_only_lock;
@@ -804,7 +802,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let mut pending_invocation_keys: Vec<(IdempotencyKey, OplogIndex)> = Vec::new();
         // The entries that the update queue reads, kept from the copy, so the fold over them
         // after the copy, when the deleted regions are known, reads no entry again.
-        let mut update_entries: Vec<(OplogIndex, OplogEntry)> = Vec::new();
+        let mut update_entries: Vec<(OplogIndex, KeptUpdateEntry)> = Vec::new();
         let mut deleted_regions_builder = DeletedRegionsBuilder::new();
         let mut copied_bytes = initial_size;
         let external_payload_bytes = Arc::new(AtomicU64::new(0));
@@ -900,7 +898,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 }
                 _ => {}
             }
-            if let Some(entry) = ForkUpdates::update_entry(entry, manual_update) {
+            if let Some(entry) = ForkUpdates::update_entry(oplog_index, entry, manual_update) {
                 update_entries.push((oplog_index, entry));
             }
         }
@@ -909,12 +907,12 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // deleted region change only the manual update admissions.
         let deleted_regions = deleted_regions_builder.build();
         let (cancellations, baseline) = update_entries
-            .iter()
+            .into_iter()
             .fold(ForkUpdates::default(), |updates, (oplog_index, entry)| {
-                updates.after(
-                    *oplog_index,
+                updates.after_kept(
+                    oplog_index,
                     entry,
-                    deleted_regions.is_in_deleted_region(*oplog_index),
+                    deleted_regions.is_in_deleted_region(oplog_index),
                 )
             })
             .into_parts();
@@ -1331,41 +1329,29 @@ pub(crate) struct ForkUpdates {
 }
 
 impl ForkUpdates {
-    /// The entry that [`ForkUpdates::after`] reads for `entry`: an update entry as it is, and a
-    /// manual update invocation, whose target `manual_update` gives, with that target as its
-    /// payload, so the fold does not decode the payload again. `None` for every other entry, which
-    /// leaves the updates unchanged.
+    /// The entry that [`ForkUpdates::after_kept`] reads for `entry` at `oplog_index`: an update
+    /// entry as it is, and the admission of a manual update invocation, whose target
+    /// `manual_update` gives, so the fold does not decode the payload again. `None` for every other
+    /// entry, which leaves the updates unchanged.
     pub(crate) fn update_entry(
+        oplog_index: OplogIndex,
         entry: OplogEntry,
         manual_update: Option<ComponentRevision>,
-    ) -> Option<OplogEntry> {
+    ) -> Option<KeptUpdateEntry> {
         match (entry, manual_update) {
-            (
-                OplogEntry::PendingAgentInvocation {
+            (OplogEntry::PendingAgentInvocation { timestamp, .. }, Some(target_revision)) => {
+                Some(KeptUpdateEntry::ManualAdmission(ManualAdmission {
                     timestamp,
-                    idempotency_key,
-                    trace_id,
-                    trace_states,
-                    invocation_context,
-                    ..
-                },
-                Some(target_revision),
-            ) => Some(OplogEntry::PendingAgentInvocation {
-                timestamp,
-                idempotency_key,
-                payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+                    index: oplog_index,
                     target_revision,
-                })),
-                trace_id,
-                trace_states,
-                invocation_context,
-            }),
+                }))
+            }
             (
                 entry @ (OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
                 | OplogEntry::FailedUpdate { .. }),
                 _,
-            ) => Some(entry),
+            ) => Some(KeptUpdateEntry::Update(entry)),
             _ => None,
         }
     }
@@ -1376,6 +1362,32 @@ impl ForkUpdates {
     /// and a successful automatic update keeps the baseline.
     pub(crate) fn after(self, oplog_index: OplogIndex, entry: &OplogEntry, deleted: bool) -> Self {
         let (queue, step) = self.queue.after(oplog_index, entry, deleted);
+        Self::of_step(queue, step, self.baseline)
+    }
+
+    /// The updates after the kept `entry` at `oplog_index`, the same as [`ForkUpdates::after`]
+    /// gives for the entry that it was kept from.
+    pub(crate) fn after_kept(
+        self,
+        oplog_index: OplogIndex,
+        entry: KeptUpdateEntry,
+        deleted: bool,
+    ) -> Self {
+        match entry {
+            KeptUpdateEntry::Update(entry) => self.after(oplog_index, &entry, deleted),
+            KeptUpdateEntry::ManualAdmission(admission) => {
+                let (queue, step) = self.queue.after_admission(admission);
+                Self::of_step(queue, step, self.baseline)
+            }
+        }
+    }
+
+    /// The updates with `queue` after `step`, from the earlier `baseline`.
+    fn of_step(
+        queue: UpdateQueue,
+        step: UpdateStep,
+        baseline: Option<FilesystemSnapshotName>,
+    ) -> Self {
         let baseline = match step {
             UpdateStep::Succeeded(Some(
                 applied @ PendingUpdateRef {
@@ -1385,7 +1397,7 @@ impl ForkUpdates {
                     ..
                 },
             )) => applied.kind.filesystem_snapshot().cloned(),
-            _ => self.baseline,
+            _ => baseline,
         };
         Self { queue, baseline }
     }
@@ -1415,6 +1427,15 @@ impl ForkUpdates {
             self.baseline,
         )
     }
+}
+
+/// An entry of the copied prefix of a fork that [`ForkUpdates::after_kept`] reads.
+#[derive(Debug)]
+pub(crate) enum KeptUpdateEntry {
+    /// A `PendingUpdate`, `SuccessfulUpdate` or `FailedUpdate` entry.
+    Update(OplogEntry),
+    /// The admission of a manual update invocation.
+    ManualAdmission(ManualAdmission),
 }
 
 /// The details of a failed update that a fork writes for an update of its copied prefix.
@@ -1731,7 +1752,8 @@ mod tests {
     }
 
     /// The updates of a prefix with deleted regions are the same when the fold reads only the
-    /// entries that [`ForkUpdates::update_entry`] keeps.
+    /// entries that [`ForkUpdates::update_entry`] keeps, and a kept manual update invocation is
+    /// its admission.
     #[test]
     fn the_updates_of_the_kept_entries_are_the_updates_of_the_whole_prefix() {
         let invocation = OplogEntry::PendingAgentInvocation {
@@ -1763,20 +1785,25 @@ mod tests {
             manual_pending_update(6, Some(FilesystemSnapshotName::update())),
             manual_invocation(7),
         ];
-        let kept = |entries: &[OplogEntry]| {
-            entries
+        let kept_outcome = |entries: &[OplogEntry], deleted: &[u64]| {
+            let (cancellations, baseline) = entries
                 .iter()
-                .map(|entry| {
+                .enumerate()
+                .fold(ForkUpdates::default(), |updates, (position, entry)| {
+                    let at = position as u64 + 2;
                     let manual_update = match entry {
                         OplogEntry::PendingAgentInvocation { payload, .. } => {
                             manual_update_target_revision_of(payload)
                         }
                         _ => None,
                     };
-                    ForkUpdates::update_entry(entry.clone(), manual_update)
-                        .unwrap_or_else(|| OplogEntry::no_op(None))
+                    match ForkUpdates::update_entry(index(at), entry.clone(), manual_update) {
+                        Some(kept) => updates.after_kept(index(at), kept, deleted.contains(&at)),
+                        None => updates,
+                    }
                 })
-                .collect::<Vec<_>>()
+                .into_parts();
+            (failed_updates(&cancellations.collect::<Vec<_>>()), baseline)
         };
 
         let outcome = |entries: &[OplogEntry], deleted: &[u64]| {
@@ -1793,7 +1820,7 @@ mod tests {
         .iter()
         .for_each(|deleted| {
             assert_eq!(
-                outcome(&kept(&entries), deleted),
+                kept_outcome(&entries, deleted),
                 outcome(&entries, deleted),
                 "{deleted:?}"
             )
@@ -1817,11 +1844,12 @@ mod tests {
             invocation_context: Vec::new(),
         };
         assert!(matches!(
-            ForkUpdates::update_entry(stored, Some(revision(4))),
-            Some(OplogEntry::PendingAgentInvocation {
-                payload: OplogPayload::Inline(payload),
+            ForkUpdates::update_entry(index(7), stored, Some(revision(4))),
+            Some(KeptUpdateEntry::ManualAdmission(ManualAdmission {
+                index: admission_index,
+                target_revision,
                 ..
-            }) if *payload == AgentInvocationPayload::ManualUpdate { target_revision: revision(4) }
+            })) if admission_index == index(7) && target_revision == revision(4)
         ));
     }
 
