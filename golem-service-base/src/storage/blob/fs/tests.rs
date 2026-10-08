@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{
-    Commit, CommitGate, FileSystemBlobStorage, STAGING_DIRECTORY, STAGING_FILE_AGE,
+    Commit, CommitGate, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY, STAGING_FILE_AGE,
     absent_on_not_found, add_files, add_names, blob_path_of, copy_staged, encoded_name,
     first_error, listed_entry, remove_unless_dropped, staging_file_is_old, write_if_absent,
     write_staged,
@@ -137,38 +137,6 @@ async fn get_raw_slice_gives_a_range_error_for_a_range_that_is_not_in_the_file()
         outside
             .map(|(_, start, end)| Err(Some(BlobRangeError { start, end })))
             .to_vec()
-    );
-}
-
-#[test]
-async fn get_raw_slice_gives_the_error_of_get_raw_for_a_directory() {
-    let (_root, storage) = storage_with_blobs().await;
-    let io_error_kind = |error: anyhow::Error| {
-        error
-            .downcast_ref::<std::io::Error>()
-            .map(std::io::Error::kind)
-    };
-
-    let slice = storage
-        .get_raw_slice(
-            "test",
-            "get-raw-slice",
-            namespace(),
-            Path::new("ranges"),
-            0,
-            0,
-        )
-        .await;
-    let raw = storage
-        .get_raw("test", "get-raw", namespace(), Path::new("ranges"))
-        .await;
-
-    assert_eq!(
-        (slice.map_err(io_error_kind), raw.map_err(io_error_kind)),
-        (
-            Err(Some(ErrorKind::IsADirectory)),
-            Err(Some(ErrorKind::IsADirectory))
-        )
     );
 }
 
@@ -304,7 +272,7 @@ fn listed_entry_gives_none_only_for_a_missing_entry_or_a_directory_that_became_a
 async fn a_whole_and_a_partial_read_of_a_blob_removed_after_its_metadata_check_give_none() {
     let (_root, storage) = storage_with_blobs().await;
     let blob = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &normalized_blob_path(Path::new("ranges/blob")).unwrap(),
         )
@@ -358,18 +326,22 @@ fn a_read_of_a_blob_deleted_after_its_metadata_gives_none() {
 #[test]
 fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
     let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
-    std::fs::write(on_disk("kept"), b"kept").unwrap();
-    std::fs::write(on_disk("removed"), b"removed").unwrap();
-    std::fs::create_dir(on_disk("gone")).unwrap();
+    let on_disk = |name: &str, entry: PathEntry| {
+        root.path()
+            .join(encoded_name(name, entry).collect::<PathBuf>())
+    };
+    std::fs::write(on_disk("kept", PathEntry::Blob), b"kept").unwrap();
+    std::fs::write(on_disk("removed", PathEntry::Blob), b"removed").unwrap();
+    let gone = on_disk("gone", PathEntry::Directory);
+    std::fs::create_dir(&gone).unwrap();
     std::fs::write(
-        on_disk("gone").join(on_disk("file").file_name().unwrap()),
+        gone.join(on_disk("file", PathEntry::Blob).file_name().unwrap()),
         b"file",
     )
     .unwrap();
     let entries = std::fs::read_dir(root.path()).unwrap().collect::<Vec<_>>();
-    std::fs::remove_file(on_disk("removed")).unwrap();
-    std::fs::remove_dir_all(on_disk("gone")).unwrap();
+    std::fs::remove_file(on_disk("removed", PathEntry::Blob)).unwrap();
+    std::fs::remove_dir_all(&gone).unwrap();
 
     let listed = add_files(
         std::iter::once(Err(not_found())).chain(entries),
@@ -394,7 +366,10 @@ fn a_listing_leaves_out_the_entries_that_a_remove_took_away_and_goes_on() {
 #[cfg(unix)]
 fn listed_after_a_change_of_type(was_directory: bool) -> (bool, Result<Vec<Box<Path>>, ErrorKind>) {
     let root = tempfile::tempdir().unwrap();
-    let on_disk = |name: &str| root.path().join(encoded_name(name).collect::<PathBuf>());
+    let on_disk = |name: &str| {
+        root.path()
+            .join(encoded_name(name, PathEntry::Blob).collect::<PathBuf>())
+    };
     let changed = on_disk("changed");
     std::fs::write(on_disk("sibling"), b"sibling").unwrap();
     let make = |directory: bool| match directory {
@@ -448,12 +423,12 @@ fn a_listing_never_gives_a_directory_that_was_a_file_when_the_walk_saw_it() {
 fn a_listing_of_names_goes_on_when_a_part_directory_becomes_a_file() {
     let root = tempfile::tempdir().unwrap();
     let long = "l".repeat(200);
-    let parts = encoded_name(&long).collect::<Vec<_>>();
+    let parts = encoded_name(&long, PathEntry::Blob).collect::<Vec<_>>();
     let part = root.path().join(&parts[0]);
     std::fs::create_dir(&part).unwrap();
     std::fs::write(
         root.path()
-            .join(encoded_name("sibling").collect::<PathBuf>()),
+            .join(encoded_name("sibling", PathEntry::Blob).collect::<PathBuf>()),
         b"sibling",
     )
     .unwrap();
@@ -609,7 +584,7 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .await
         .unwrap();
     let full = storage
-        .path_of(
+        .blob_of(
             &snapshots(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -624,7 +599,7 @@ async fn a_snapshot_put_replaces_the_blob_whole_with_the_usual_mode() {
         .await
         .unwrap();
     let other = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -650,7 +625,7 @@ async fn a_put_of_another_namespace_writes_in_place() {
     let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
     let blob = Path::new("blob");
     let full = storage
-        .path_of(
+        .blob_of(
             &namespace(),
             &crate::storage::blob::normalized_blob_path(blob).unwrap(),
         )
@@ -908,7 +883,7 @@ async fn a_copy_and_a_move_keep_the_permissions_of_the_source() {
     let storage = FileSystemBlobStorage::new(root.path()).await.unwrap();
     let on_disk = |namespace: BlobStorageNamespace, blob: &str| {
         storage
-            .path_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
+            .blob_of(&namespace, &normalized_blob_path(Path::new(blob)).unwrap())
             .unwrap()
     };
     let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -1010,7 +985,7 @@ fn filesystem_paths_encode_contract_components() {
     let namespace_root = storage.namespace_path(&namespace);
     let physical = |logical: &str| {
         storage
-            .path_of(
+            .blob_of(
                 &namespace,
                 &normalized_blob_path(Path::new(logical)).unwrap(),
             )
@@ -1067,9 +1042,18 @@ fn filesystem_paths_encode_contract_components() {
     );
     assert_eq!(
         storage
-            .path_of(&namespace, &NormalizedBlobPath::root())
+            .directory_of(&namespace, &NormalizedBlobPath::root())
             .unwrap(),
         namespace_root
+    );
+    assert_ne!(
+        storage
+            .directory_of(
+                &namespace,
+                &normalized_blob_path(Path::new("photos")).unwrap()
+            )
+            .unwrap(),
+        physical("photos")
     );
 }
 
@@ -1081,11 +1065,12 @@ fn a_file_name_that_the_codec_does_not_give_is_invalid_data() {
 
     let errors = [
         root.join("plain"),
-        root.join("e-zz"),
+        root.join("e-61"),
+        root.join("b-zz"),
         root.join("c-61"),
-        root.join("e-ff"),
+        root.join("d-ff"),
     ]
     .map(|physical| blob_path_of(&physical, root).map_err(|error| error.kind()));
 
-    assert_eq!(errors, [(); 4].map(|()| Err(ErrorKind::InvalidData)));
+    assert_eq!(errors, [(); 5].map(|()| Err(ErrorKind::InvalidData)));
 }

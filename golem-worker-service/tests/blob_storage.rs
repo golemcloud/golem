@@ -1429,7 +1429,7 @@ async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
 #[test]
 #[tracing::instrument]
 async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     // A blob and a directory that `create_dir` made can hold one path. The in-memory backend
@@ -1465,6 +1465,78 @@ async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
             .await
             .unwrap(),
         vec![PathBuf::from("a")]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_blob_written_over_a_created_directory_is_a_blob_and_the_directory_stays(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_blob_written_over_a_created_directory_is_a_blob_and_the_directory_stays";
+    let path = Path::new("a");
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), path)
+        .await
+        .unwrap();
+    storage
+        .put_raw(label, "put-blob", namespace.clone(), path, b"hello")
+        .await
+        .unwrap();
+
+    let written = (
+        storage
+            .get_raw(label, "get-blob", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .exists(label, "exists-blob", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .get_metadata(label, "metadata-blob", namespace.clone(), path)
+            .await
+            .unwrap()
+            .map(|metadata| metadata.size),
+        sorted_listing(&storage, namespace, "").await,
+    );
+
+    storage
+        .delete(label, "delete-blob", namespace.clone(), path)
+        .await
+        .unwrap();
+
+    let deleted = (
+        storage
+            .get_raw(label, "get-deleted", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .exists(label, "exists-deleted", namespace.clone(), path)
+            .await
+            .unwrap(),
+        storage
+            .get_metadata(label, "metadata-deleted", namespace.clone(), path)
+            .await
+            .unwrap()
+            .map(|metadata| metadata.size),
+        sorted_listing(&storage, namespace, "").await,
+    );
+
+    assert_eq!(
+        (written, deleted),
+        (
+            (
+                Some(b"hello".to_vec()),
+                ExistsResult::File,
+                Some(5),
+                listed_blobs(&[("a", 5)]),
+            ),
+            (None, ExistsResult::Directory, Some(0), Vec::new()),
+        )
     );
 }
 
