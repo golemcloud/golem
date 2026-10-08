@@ -47,6 +47,7 @@ pub trait Clock {
     async fn p2_sleep_during_request(&self, secs: u64) -> String;
     fn p2_poll_duplicate_handles(&self, later_millis: u64, early_millis: u64) -> String;
     fn p2_file_pollables(&self, contents: String) -> String;
+    async fn p2_clock_during_request(&self) -> String;
 }
 
 pub struct ClockImpl {
@@ -100,6 +101,12 @@ impl Clock for ClockImpl {
 
     fn healthcheck(&self) -> bool {
         true
+    }
+
+    async fn p2_clock_during_request(&self) -> String {
+        let clock = async { wasi::clocks::wall_clock::now() };
+        let (response, _) = (send_request(), clock).join().await;
+        response.unwrap()
     }
 
     async fn sleep_during_request(&self, secs: u64) -> String {

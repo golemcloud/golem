@@ -82,6 +82,10 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(
+    #[tagged_as("tool_streaming_effect_caller")]
+    PrecompiledComponent
+);
+inherit_test_dep!(
     #[tagged_as("large_dynamic_memory")]
     PrecompiledComponent
 );
@@ -8182,6 +8186,233 @@ async fn typescript_streaming_guest_abi_e2e(
     assert_eq!(output_values, vec![20, 30]);
     assert_eq!(output_ends, 1);
     assert!(finished_successfully);
+    Ok(())
+}
+
+#[test]
+#[timeout("3 minutes")]
+async fn effect_concurrent_stream_with_pending_websocket_readers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_effect_caller")] effect: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, effect)
+        .store()
+        .await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let (connected_tx, mut connected_rx) = mpsc::unbounded_channel();
+    let (written_tx, mut written_rx) = mpsc::unbounded_channel();
+    let mut peer = tokio::task::JoinSet::<anyhow::Result<()>>::new();
+    peer.spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let (socket, _) = accepted?;
+                    let connected = connected_tx.clone();
+                    let written = written_tx.clone();
+                    connections.spawn(async move {
+                        let mut path = String::new();
+                        let mut socket = tokio_tungstenite::accept_hdr_async(
+                            socket,
+                            |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                                path = request.uri().path().to_string();
+                                Ok(response)
+                            },
+                        ).await?;
+                        if path == "/first" {
+                            socket.send(Message::Text("initial frame".into())).await?;
+                        }
+                        connected.send(path)?;
+                        // Never echo: after the initial frame, guest readers must stay pending.
+                        while let Some(message) = socket.next().await {
+                            match message? {
+                                Message::Binary(bytes) => written.send(bytes.to_vec())?,
+                                Message::Close(_) => break,
+                                _ => {}
+                            }
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    });
+                }
+                completed = connections.join_next(), if !connections.is_empty() => {
+                    completed.expect("connection task")??;
+                }
+            }
+        }
+    });
+
+    // Warm up without readers, then repeat both contended variants with fresh agents.
+    for (readers, runs) in [(0, 1), (1, 10), (2, 20)] {
+        for run in 0..runs {
+            let name = format!("stream-probe-{readers}-{run}");
+            let expected = format!("hello-{readers}-{run}");
+            let agent_id = agent_id!("ConcurrentStreamProbe", name, readers as f64, port as f64);
+            let worker_id = executor.start_agent(&component.id, agent_id).await?;
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
+            let input = golem_schema::proto::golem::schema::SchemaValue {
+                value: Some(schema_value::Value::RecordValue(RecordValue {
+                    fields: vec![golem_schema::proto::golem::schema::SchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id: 1 },
+                        )),
+                    }],
+                })),
+            };
+            let request = InvocationRequest {
+                request: Some(invocation_request::Request::Start(InvocationStart {
+                    agent_id: Some(worker_id.into()),
+                    method_name: Some("echo".to_string()),
+                    input: Some(input),
+                    idempotency_key: Some(IdempotencyKey::fresh().into()),
+                    auth_ctx: Some(executor.auth_ctx().into()),
+                    environment_id: Some(component.environment_id.into()),
+                    component_owner_account_id: Some(component.account_id.into()),
+                    mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                    attempt_id: Some(uuid::Uuid::new_v4().into()),
+                    expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
+                    ..Default::default()
+                })),
+            };
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_trusted_request(&request)
+                .map_err(anyhow::Error::msg)?;
+            let (requests, receiver) = mpsc::channel(8);
+            requests.send(request).await?;
+            let mut responses = executor
+                .client
+                .clone()
+                .invoke_agent_session(ReceiverStream::new(receiver))
+                .await?
+                .into_inner();
+            let budget = Duration::from_secs(if readers == 0 { 60 } else { 10 });
+            tokio::time::timeout(budget, async {
+                let accepted = responses
+                    .message()
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("missing acceptance"))?;
+                state
+                    .validate_response(&accepted)
+                    .map_err(anyhow::Error::msg)?;
+                let Some(invocation_response::Response::Accepted(accepted)) = accepted.response
+                else {
+                    anyhow::bail!("expected acceptance, got {accepted:?}");
+                };
+                let [mapping] = accepted.stream_mappings.as_slice() else {
+                    anyhow::bail!("expected one input stream mapping");
+                };
+                assert_eq!(mapping.transport_stream_id, 1);
+                let stream_id = mapping.handle.as_ref().and_then(|handle| handle.stream_id);
+                assert!(stream_id.is_some());
+                for request in [
+                    invocation_request::Request::InputItem(InputStreamItem {
+                        transport_stream_id: 1,
+                        sequence: 0,
+                        payload: Some(input_stream_item::Payload::Value(
+                            SchemaValue::String(expected.clone())
+                                .try_into()
+                                .map_err(anyhow::Error::msg)?,
+                        )),
+                        durable_stream_id: stream_id,
+                        epoch: accepted.epoch,
+                    }),
+                    invocation_request::Request::InputEnd(InputStreamEnd {
+                        transport_stream_id: 1,
+                        sequence: 1,
+                        durable_stream_id: stream_id,
+                        epoch: accepted.epoch,
+                    }),
+                ] {
+                    let request = InvocationRequest {
+                        request: Some(request),
+                    };
+                    state
+                        .validate_trusted_request(&request)
+                        .map_err(anyhow::Error::msg)?;
+                    requests.send(request).await?;
+                }
+
+                let mut output_stream_id = None;
+                let mut values = Vec::new();
+                let mut ends = 0;
+                let mut finished = false;
+                while let Some(response) = responses.message().await? {
+                    state
+                        .validate_response(&response)
+                        .map_err(anyhow::Error::msg)?;
+                    match response.response {
+                        Some(invocation_response::Response::InputAck(_)) => {}
+                        Some(invocation_response::Response::Result(result)) => {
+                            let Some(invocation_session_result::Result::MethodResult(value)) =
+                                result.result
+                            else {
+                                anyhow::bail!("expected method result");
+                            };
+                            let Some(schema_value::Value::StreamReference(reference)) = value.value
+                            else {
+                                anyhow::bail!("expected output stream");
+                            };
+                            output_stream_id = Some(reference.stream_id);
+                        }
+                        Some(invocation_response::Response::OutputItem(item)) => {
+                            assert_eq!(Some(item.transport_stream_id), output_stream_id);
+                            let Some(schema_value::Value::StringValue(value)) =
+                                item.value.and_then(|value| value.value)
+                            else {
+                                anyhow::bail!("expected string output item");
+                            };
+                            values.push(value);
+                        }
+                        Some(invocation_response::Response::OutputEnd(end)) => {
+                            assert_eq!(Some(end.transport_stream_id), output_stream_id);
+                            ends += 1;
+                        }
+                        Some(invocation_response::Response::Finished(completion)) => {
+                            assert!(matches!(
+                                completion.outcome,
+                                Some(invocation_session_completion::Outcome::Success(_))
+                            ));
+                            finished = true;
+                        }
+                        other => anyhow::bail!("unexpected streaming response: {other:?}"),
+                    }
+                }
+                assert!(state.is_complete());
+                assert!(finished);
+                assert_eq!(values, vec![expected.clone()]);
+                assert_eq!(ends, 1);
+                let mut paths = Vec::new();
+                for _ in 0..readers {
+                    paths.push(connected_rx.recv().await.expect("WebSocket peer stopped"));
+                }
+                paths.sort();
+                assert_eq!(paths, ["/first", "/second"][..readers as usize]);
+                if readers > 0 {
+                    assert_eq!(
+                        written_rx.recv().await.expect("WebSocket peer stopped"),
+                        expected.as_bytes()
+                    );
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("stream stalled with {readers} readers in run {run}"))??;
+        }
+    }
+    if let Some(result) = peer.try_join_next() {
+        result??;
+    }
+    peer.abort_all();
+    while peer.join_next().await.is_some() {}
     Ok(())
 }
 
