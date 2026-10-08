@@ -281,6 +281,21 @@ pub(crate) fn reconstruction_startup_error(error: &FilesystemError) -> WorkerExe
     }
 }
 
+/// The error that ends a start at the update point for the passed error `error`. The update
+/// stays pending and the start runs again. The update point can be inside a host call of a
+/// replayed invocation, where only a required recovery stays off the guest's failure path, so the
+/// cause that the outcome table passes because it is transient, an unavailable component service,
+/// retries as a recovery. Every other error, such as the suspension of a full quota, stays as it
+/// is.
+pub(crate) fn update_point_error(error: WorkerExecutorError) -> WorkerExecutorError {
+    match FetchProblem::of(&error) {
+        FetchProblem::Unavailable => {
+            WorkerExecutorError::recovery_required(format!("the update point failed: {error}"))
+        }
+        FetchProblem::NotFound | FetchProblem::Refused(_) | FetchProblem::Other => error,
+    }
+}
+
 /// The column of the outcome table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Column {
@@ -1938,6 +1953,43 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// A passed error at the update point: an unavailable component service retries as a
+    /// recovery, a full quota suspends, and a permanent error stays as it is.
+    #[test]
+    fn the_update_point_retries_only_a_transient_fetch_as_a_recovery() {
+        let role = BaselineRole::InitialFiles;
+        let head = automatic_head();
+        let passed = |error: &UpdateStateError| match decide_now(
+            &role,
+            Some(&head),
+            RawStartError::UpdateState(error),
+        ) {
+            StartAction::Error(error) => update_point_error(error),
+            other => panic!("expected a passed error, got {other:?}"),
+        };
+
+        assert!(matches!(
+            passed(&UpdateStateError::Metadata(unavailable_service())),
+            WorkerExecutorError::RecoveryRequired { .. }
+        ));
+        assert!(matches!(
+            passed(&UpdateStateError::InitialFiles(
+                FilesystemError::AgentQuota(storage())
+            )),
+            WorkerExecutorError::Interrupted {
+                kind: InterruptKind::Suspend(_)
+            }
+        ));
+        assert!(matches!(
+            update_point_error(not_found()),
+            WorkerExecutorError::ComponentNotFound { .. }
+        ));
+        assert!(matches!(
+            update_point_error(WorkerExecutorError::runtime("a sandbox failure")),
+            WorkerExecutorError::Runtime { .. }
+        ));
     }
 
     /// The answer for a baseline that names a filesystem snapshot on an executor without

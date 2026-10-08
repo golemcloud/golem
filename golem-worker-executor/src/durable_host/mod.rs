@@ -7481,7 +7481,8 @@ fn payload_download_failure(
 /// point consumed the pending update, so a start that runs again starts on the source revision:
 /// a written failed update, a skipped or a rejected record end the start with `Restart`, an
 /// internal retry signal that records no interruption. A failed write ends it with the error of
-/// the write, a lost shard with `ShardLost`, and an error of the table with that error.
+/// the write, a lost shard with `ShardLost`, and an error of the table with the error that
+/// `start_outcome::update_point_error` gives for it.
 pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
     worker: &Arc<Worker<Ctx>>,
     action: start_outcome::StartAction,
@@ -7510,15 +7511,7 @@ pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
             worker.reject_periodic(index);
             restart
         }
-        // A passed error leaves the update pending and retries the start. The update point can be
-        // inside a host call of a replayed invocation, where only a required recovery stays off
-        // the guest's failure path, so the error retries as a recovery.
-        start_outcome::StartAction::Error(error @ WorkerExecutorError::RecoveryRequired { .. }) => {
-            error
-        }
-        start_outcome::StartAction::Error(error) => {
-            WorkerExecutorError::recovery_required(format!("the update point failed: {error}"))
-        }
+        start_outcome::StartAction::Error(error) => start_outcome::update_point_error(error),
         start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
             kind: InterruptKind::ShardLost,
         },
