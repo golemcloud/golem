@@ -106,6 +106,55 @@ impl DurableStreamStore {
             .ok_or_else(|| StreamStoreError::CorruptHistory("registered stream has no role".into()))
     }
 
+    /// External ingress and its nested registrations must keep their owner resident.
+    pub(crate) async fn source_wait_can_suspend(
+        &self,
+        handle: &DurableStreamHandle,
+    ) -> Result<bool, StreamStoreError> {
+        self.validate_handle(handle).await?;
+        let mut stream = handle.stream_id;
+        loop {
+            let index = self
+                .index_for([ProducerMetadataKey::Stream(stream)])
+                .await?;
+            let registration = index.registrations.get(&stream).ok_or_else(|| {
+                StreamStoreError::CorruptHistory("stream source registration is missing".into())
+            })?;
+            match (
+                &registration.record.source_kind,
+                &registration.record.coordinate,
+            ) {
+                (
+                    StreamSourceKind::ExternalInlineInput,
+                    StreamRegistrationRecordCoordinate::Root { .. },
+                ) => return Ok(false),
+                (
+                    StreamSourceKind::AgentHostedInput | StreamSourceKind::InvocationOutput,
+                    StreamRegistrationRecordCoordinate::Root { .. },
+                ) => return Ok(true),
+                (
+                    StreamSourceKind::Nested,
+                    StreamRegistrationRecordCoordinate::Nested {
+                        parent_stream: StreamRecordReference::Local(parent),
+                        ..
+                    },
+                ) if parent.0 < registration.registration_oplog_index => {
+                    stream = qualify_local_stream(
+                        *parent,
+                        self.environment_id,
+                        &self.producer,
+                        self.producer_fingerprint,
+                    )?;
+                }
+                _ => {
+                    return Err(StreamStoreError::CorruptHistory(
+                        "stream source registration has invalid ancestry".into(),
+                    ));
+                }
+            }
+        }
+    }
+
     pub(super) async fn validate_cursor(
         &self,
         stream_id: StreamId,

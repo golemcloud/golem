@@ -30,6 +30,46 @@ use golem_common::model::oplog::{
 use wasmtime_wasi::clocks::WasiClocksView as _;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::Host as WasiMonotonicClockHost;
 
+struct TimerDeadline(std::time::Instant);
+
+#[async_trait::async_trait]
+impl wasmtime_wasi::Pollable for TimerDeadline {
+    async fn ready(&mut self) {
+        if self.0 > std::time::Instant::now() {
+            tokio::time::sleep_until(self.0.into()).await;
+        }
+    }
+}
+
+fn subscribe_timer<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    when: Instant,
+) -> wasmtime::Result<Resource<Pollable>> {
+    let now = {
+        let mut view = ctx.as_wasi_view();
+        block_on(WasiMonotonicClockHost::now(&mut view.clocks()))?
+    };
+    let remaining = std::time::Duration::from_nanos(when.saturating_sub(now));
+    let Some(deadline) = std::time::Instant::now().checked_add(remaining) else {
+        let mut view = ctx.as_wasi_view();
+        return block_on(WasiMonotonicClockHost::subscribe_instant(
+            &mut view.clocks(),
+            when,
+        ));
+    };
+    let parent = ctx.table().push(TimerDeadline(deadline))?;
+    let pollable = wasmtime_wasi::subscribe(ctx.table(), parent, Some(deadline))?;
+    if remaining.is_zero() {
+        ctx.table()
+            .get_mut(&pollable)?
+            .set_yield_on_immediate_return(true);
+    }
+    ctx.state
+        .p2_timer_deadlines
+        .insert(pollable.rep(), deadline);
+    Ok(pollable)
+}
+
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Instant> {
         let handle =
@@ -89,11 +129,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
         Ok(accessor.with(|mut access| {
             let ctx = access.get();
             ctx.observe_function_call("monotonic_clock", "subscribe_instant");
-            let mut view = ctx.as_wasi_view();
-            block_on(WasiMonotonicClockHost::subscribe_instant(
-                &mut view.clocks(),
-                when,
-            ))
+            subscribe_timer(ctx, when)
         })?)
     }
 
@@ -122,13 +158,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
             .commit_oplog_and_update_state(CommitLevel::DurableOnly)
             .await?;
         let when = now.nanos.saturating_add(duration_in_nanos);
-        Ok(accessor.with(|mut access| {
-            let mut view = access.get().as_wasi_view();
-            block_on(WasiMonotonicClockHost::subscribe_instant(
-                &mut view.clocks(),
-                when,
-            ))
-        })?)
+        Ok(accessor.with(|mut access| subscribe_timer(access.get(), when))?)
     }
 }
 
@@ -152,4 +182,39 @@ fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
             .now_or_never()
             .expect("the WASI monotonic clock must be immediately ready")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TimerDeadline;
+    use futures::FutureExt;
+    use std::time::{Duration, Instant};
+    use test_r::test;
+    use wasmtime_wasi::Pollable;
+
+    #[test]
+    async fn past_timer_ready_is_immediate_even_without_cooperative_budget() {
+        tokio::spawn(async {
+            for _ in 0..1024 {
+                if tokio::task::consume_budget().now_or_never().is_none() {
+                    break;
+                }
+            }
+            let now = Instant::now();
+            assert!(
+                tokio::time::sleep_until(now.into())
+                    .now_or_never()
+                    .is_none()
+            );
+            assert!(TimerDeadline(now).ready().now_or_never().is_some());
+            assert!(
+                TimerDeadline(now - Duration::from_secs(1))
+                    .ready()
+                    .now_or_never()
+                    .is_some()
+            );
+        })
+        .await
+        .unwrap();
+    }
 }

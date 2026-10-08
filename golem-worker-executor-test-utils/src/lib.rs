@@ -167,6 +167,7 @@ use golem_worker_executor::services::{
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
+use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
@@ -859,6 +860,12 @@ impl TestWorkerExecutor {
     pub fn native_test_helper_effect_count(&self) -> usize {
         self.additional_test_deps
             .native_test_helper_effects
+            .load(Ordering::SeqCst)
+    }
+
+    pub fn native_test_effect_count(&self) -> usize {
+        self.additional_test_deps
+            .native_test_effects
             .load(Ordering::SeqCst)
     }
 
@@ -2216,6 +2223,9 @@ type WrapKeyValueServiceFn =
 type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> Arc<dyn KeyValueStorage + Send + Sync>
     + Send
     + Sync;
+type WrapSchedulerStorageFn = dyn Fn(Arc<dyn SchedulerStorage + Send + Sync>) -> Arc<dyn SchedulerStorage + Send + Sync>
+    + Send
+    + Sync;
 type WrapBlobStorageFn = dyn Fn(Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> + Send + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
@@ -2237,6 +2247,8 @@ pub struct TestExecutorOverrides {
     /// decorator, so injected failures reach the services as an outage that outlived the retry
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
+    /// Wraps the configured scheduler backend, allowing tests to gate the real persistence call.
+    pub wrap_scheduler_storage: Option<Arc<WrapSchedulerStorageFn>>,
     /// Wraps the blob storage every executor service is built on, so injected failures reach
     /// the services as an outage that outlived the retry budget of the backend would.
     pub wrap_blob_storage: Option<Arc<WrapBlobStorageFn>>,
@@ -3782,6 +3794,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             wrap(key_value_storage)
         } else {
             key_value_storage
+        }
+    }
+
+    fn wrap_scheduler_storage(
+        &self,
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    ) -> Arc<dyn SchedulerStorage + Send + Sync> {
+        if let Some(wrap) = &self.overrides.wrap_scheduler_storage {
+            wrap(scheduler_storage)
+        } else {
+            scheduler_storage
         }
     }
 
