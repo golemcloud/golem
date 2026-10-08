@@ -24,8 +24,6 @@ use std::sync::Arc;
 pub(crate) mod regions;
 pub(crate) mod update_queue;
 
-#[cfg(test)]
-pub(crate) use regions::fold_regions;
 pub(crate) use regions::{
     RegionFold, deleted_regions, fold_regions_from, revert_validation_regions, skipped_regions,
 };

@@ -18,6 +18,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::{HasComponentService, HasConfig, HasOplogService};
 use crate::worker::snapshot_selection::names_in_use;
+use crate::worker::status::{RegionFold, fold_regions_from};
 use crate::worker::status::{
     StatusOplogReader, calculate_last_known_status,
     calculate_last_known_status_for_existing_worker,
@@ -203,6 +204,14 @@ fn update_status_with_new_entries(
 ) -> Option<AgentStatusRecord> {
     super::update_status_with_new_entries(agent_mode, last_known, new_entries, default_retry_policy)
         .unwrap()
+}
+
+/// The region fold of `entries` from `baseline` and its pending updates.
+fn fold_regions(
+    baseline: &AgentStatusRecord,
+    entries: &BTreeMap<OplogIndex, OplogEntry>,
+) -> RegionFold {
+    fold_regions_from(baseline, baseline.pending_updates.clone(), entries)
 }
 
 #[test]
@@ -7159,7 +7168,7 @@ fn update_fields_after_a_successful_snapshot_based_update_clear_the_automatic_sn
             },
         ),
     ]);
-    let regions = super::fold_regions(&AgentStatusRecord::default(), &entries);
+    let regions = fold_regions(&AgentStatusRecord::default(), &entries);
     let fields = super::calculate_update_fields(
         empty_update_fields(),
         &regions.deleted,
@@ -7244,8 +7253,8 @@ fn cancelled_updates(entries: &[OplogEntry]) -> Vec<(ComponentRevision, Option<O
 }
 
 mod region_fold {
+    use super::fold_regions;
     use super::*;
-    use crate::worker::status::fold_regions;
     use crate::worker::status::update_queue::UpdateStep;
     use golem_common::model::oplog::SnapshotFault;
     use golem_common::model::{AgentInvocationPayload, AssistedSelection};
@@ -7939,6 +7948,7 @@ mod invocation_payload_decodes {
 }
 
 mod update_entry_sequences {
+    use super::fold_regions;
     use super::region_fold::{
         assisted_strategy, automatic_admission, failed, fold_status, idx, manual_invocation,
         plain_strategy, revert, revision, succeeded,
@@ -7946,7 +7956,6 @@ mod update_entry_sequences {
     use super::*;
     use crate::services::worker_fork::ForkUpdates;
     use crate::worker::cut_point::validate_snapshot_update_boundaries;
-    use crate::worker::status::fold_regions;
     use crate::worker::status::update_queue::UpdateStep;
     use proptest::prelude::*;
     use test_r::test;

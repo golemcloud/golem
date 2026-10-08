@@ -55,15 +55,6 @@ pub(crate) fn fold_regions_from(
     fold(baseline, pending_updates, entries, None, FoldScope::Status)
 }
 
-/// The fold of [`fold_regions_from`] from the pending updates of `baseline`.
-#[cfg(test)]
-pub(crate) fn fold_regions(
-    baseline: &AgentStatusRecord,
-    entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> RegionFold {
-    fold_regions_from(baseline, baseline.pending_updates.clone(), entries)
-}
-
 /// The skipped regions after `entries`, from an empty status.
 pub(crate) fn skipped_regions(entries: &BTreeMap<OplogIndex, OplogEntry>) -> DeletedRegions {
     fold_skipped_regions(entries, None)
