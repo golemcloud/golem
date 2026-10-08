@@ -231,6 +231,83 @@ async fn blobstore_missing_copy_and_move_return_without_retrying(
     Ok(())
 }
 
+/// A guest writes an object below another object, and an object at the path of a container that
+/// it created. The blob storage of the test executor keeps the two at one path, so each write
+/// passes the first time and no write gives an error that the executor retries.
+#[test]
+#[tracing::instrument]
+async fn blobstore_writes_an_object_below_an_object_and_over_a_container_without_retrying(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("BlobStore", "object-below-object");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for container in ["objects", "objects/made"] {
+        let created = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "blobstore_probe",
+                data_value!("create-container", container, "", "", ""),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(created, Ok(()), "create-container({container})");
+    }
+
+    let objects = [
+        ("upper", b"upper".to_vec()),
+        ("upper/lower", b"lower".to_vec()),
+        ("made", b"made".to_vec()),
+    ];
+    for (object, data) in &objects {
+        let written = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "write_data_result",
+                data_value!("objects", *object, data.clone()),
+            )
+            .await?
+            .into_typed::<Result<(), String>>()?;
+        assert_eq!(written, Ok(()), "write-data({object})");
+    }
+
+    for (object, data) in objects {
+        let read = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "get_data",
+                data_value!("objects", object),
+            )
+            .await?
+            .into_typed::<Vec<u8>>()?;
+        assert_eq!(read, data, "get-data({object})");
+    }
+
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(
+        oplog
+            .iter()
+            .all(|entry| !matches!(entry.entry, PublicOplogEntry::Error(_))),
+        "the writes must pass without a retry: {oplog:?}"
+    );
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 async fn blobstore_write_increments_storage_bytes_written_metric(
