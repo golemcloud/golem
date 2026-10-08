@@ -13111,6 +13111,7 @@ mod tests {
     use super::*;
     use golem_common::model::oplog::AgentError;
     use golem_common::model::{AssistedSelection, UsableAutomaticSnapshot};
+    use golem_common::schema::SchemaValue;
     use test_r::test;
 
     #[test]

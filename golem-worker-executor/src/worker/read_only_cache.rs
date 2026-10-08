@@ -385,7 +385,7 @@ mod tests {
             SchemaValue::String("quotes: \"; nul: \0; unicode: árvíz".to_string()),
             multimodal(vec![
                 ("a", SchemaValue::F64(-0.0)),
-                ("b", SchemaValue::I64(i64::MIN)),
+                ("b", SchemaValue::S64(i64::MIN)),
             ]),
             tuple(vec![SchemaValue::List {
                 elements: (0..10_000)
