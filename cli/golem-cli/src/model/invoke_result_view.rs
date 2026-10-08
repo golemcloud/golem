@@ -95,6 +95,7 @@ impl InvokeResultView {
             SourceLanguage::TypeScript => "TypeScript syntax",
             SourceLanguage::Scala => "Scala syntax",
             SourceLanguage::MoonBit => "MoonBit syntax",
+            SourceLanguage::Go => "Go syntax",
             SourceLanguage::Other(_) => "fallback TypeScript syntax",
         }
         .to_string();

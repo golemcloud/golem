@@ -117,7 +117,7 @@ fn compile_guest_if_enabled(package_dir: &Utf8Path) {
     }
 }
 
-fn doc(summary: &str) -> Doc {
+pub(super) fn doc(summary: &str) -> Doc {
     Doc {
         summary: summary.to_string(),
         description: String::new(),
@@ -125,7 +125,7 @@ fn doc(summary: &str) -> Doc {
     }
 }
 
-fn tool_body() -> CommandBody {
+pub(super) fn tool_body() -> CommandBody {
     CommandBody {
         positionals: Positionals::default(),
         options: vec![],
@@ -140,7 +140,7 @@ fn tool_body() -> CommandBody {
     }
 }
 
-fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
+pub(super) fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
     golem_common::schema::tool::CommandNode {
         name: name.to_string(),
         aliases: vec![],
@@ -151,7 +151,7 @@ fn command_node(name: &str) -> golem_common::schema::tool::CommandNode {
     }
 }
 
-fn positional(name: &str, type_: SchemaType) -> Positional {
+pub(super) fn positional(name: &str, type_: SchemaType) -> Positional {
     Positional {
         name: name.to_string(),
         doc: doc(name),
@@ -163,7 +163,7 @@ fn positional(name: &str, type_: SchemaType) -> Positional {
     }
 }
 
-fn option(long: &str, shape: OptionShape) -> OptionSpec {
+pub(super) fn option(long: &str, shape: OptionShape) -> OptionSpec {
     OptionSpec {
         long: long.to_string(),
         short: None,
@@ -177,7 +177,7 @@ fn option(long: &str, shape: OptionShape) -> OptionSpec {
     }
 }
 
-fn flag(long: &str, shape: FlagShape) -> FlagSpec {
+pub(super) fn flag(long: &str, shape: FlagShape) -> FlagSpec {
     FlagSpec {
         long: long.to_string(),
         short: None,

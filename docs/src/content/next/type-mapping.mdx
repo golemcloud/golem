@@ -11,7 +11,7 @@ When calling the raw invoke endpoints, each argument and result is wrapped as a 
 
 ## Language types to JSON
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The following TypeScript types are supported:
 
@@ -164,6 +164,64 @@ When calling the raw invoke endpoints, each argument and result is wrapped as a 
         | `Unit` | `null` | Unit maps to JSON null |
         | `(T1, T2, T3)` | `["hello", 1234, true]` | Fixed-order JSON array |
     </Tabs.Tab>
+    <Tabs.Tab>
+        The following Go types are supported. Method parameters are the exported fields of the method's input struct, and struct field names map to schema names by lower-casing the first letter (`OrderId` becomes `orderId`).
+
+        | Go type | JSON representation | Remarks
+        | ------- | ------------------- | -------
+        | `string` | `"hello world"` | JSON string |
+        | `bool` | `true`, `false` | JSON boolean |
+        | `float64` | `1234.0` | JSON number |
+        | `float32` | `3.14` | JSON number |
+        | `int8` | `-128`, `0`, `127` | JSON number |
+        | `uint8` | `0`, `255` | JSON number |
+        | `int16` | `-32768`, `0`, `32767` | JSON number |
+        | `uint16` | `0`, `65535` | JSON number |
+        | `int32` | `-2147483648`, `0`, `2147483647` | JSON number |
+        | `uint32` | `0`, `4294967295` | JSON number |
+        | `int64` | `-9223372036854775808`, `0`, `9223372036854775807` | JSON number |
+        | `uint64` | `0`, `18446744073709551615` | JSON number |
+        | `int`, `uint` | — | Rejected: their width is platform-dependent, use a sized integer type |
+        | `[]T` | `[1, 2, 3]` | JSON array; a nil slice is an empty list. `[]byte` is a JSON array of numbers |
+        | `[N]T` | `[1, 2, 3]` | Fixed-length JSON array |
+        | `*T`, `golem.Option[T]` | `42` or `null` | Value or `null` |
+        | `struct { Field1 T1; Field2 T2 }` | `{ "field1": "value", "field2": 42 }` | JSON object; only exported fields are included |
+        | `map[K]V` | `[["key1", 100], ["key2", -2]]` | Array of key-value pairs, **not** a JSON object; `K` must be a primitive type |
+        | Interface registered with `golem.DefineVariant` | `{ "card": { "number": "4242" } }`, `{ "cash": null }` | Single-key JSON object; a case whose type is an empty struct has no payload and uses `null` |
+        | Integer type registered with `golem.DefineEnum` | `"active"` | JSON string |
+        | Bool-field struct registered with `golem.DefineFlags` | `["read", "write"]` | JSON array of the set flag names |
+        | `golem.Tuple2[T1, T2]` … `golem.Tuple8[...]` | `["hello", 1234]` | Fixed-order JSON array |
+        | `golem.Result[Ok, Err]` | `{ "ok": 42 }`, `{ "err": "message" }` | Single-key JSON object |
+        | `golem.Unit` | — | Method input or output with no parameters or no result |
+
+        A variant is a sealed interface plus one Go type per case, and an enum is a named integer type whose constants run from `0`:
+
+        ```go
+        type PaymentMethod interface{ isPaymentMethod() }
+
+        type Card struct{ Number string }
+        type Cash struct{}
+
+        func (Card) isPaymentMethod() {}
+        func (Cash) isPaymentMethod() {}
+
+        var _ = golem.DefineVariant[PaymentMethod](
+            golem.Case[Card]("card"),
+            golem.Case[Cash]("cash"),
+        )
+
+        type Status int32
+
+        const (
+            StatusActive Status = iota
+            StatusClosed
+        )
+
+        var _ = golem.DefineEnum[Status]("active", "closed")
+        ```
+
+        In addition, `time.Time`, `time.Duration` and `golem.UUID` map to the schema's `datetime`, `duration` and `uuid` types, and `golem.Text`, `golem.Binary`, `golem.URL`, `golem.Path` and `golem.Quantity[U]` map to the corresponding restrictable schema types.
+    </Tabs.Tab>
 </Tabs>
 
 There are some special, Golem agent specific types that can be used in the agent constructor and methods as well:
@@ -171,7 +229,7 @@ There are some special, Golem agent specific types that can be used in the agent
 ### Unstructured text
 Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     import { UnstructuredText } from '@golemcloud/golem-ts-sdk';
@@ -293,13 +351,48 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
     The current MoonBit SDK does not yet provide a user-facing unstructured-text wrapper. Use `String` for structured text. The removed `@types.UnstructuredText` wrapper and `#derive.text_languages` annotation are not supported.
     </Tabs.Tab>
 
+    <Tabs.Tab>
+    ```go
+    type EnEsDe struct{}
+
+    func (EnEsDe) Languages() []string { return []string{"en", "es", "de"} }
+
+    type ExampleMethodIn struct {
+        Text golem.UnstructuredText[EnEsDe]
+    }
+
+    var ExampleMethod = Agent.Method[ExampleMethodIn, golem.Unit]("exampleMethod")
+    ```
+
+    The type parameter is a marker type whose `Languages()` method lists the accepted language codes; use
+    `golem.AnyLanguage` for no restrictions.
+
+    The type itself carries either an inline string or a remote reference. A non-empty `URL` is the reference;
+    otherwise `Text` is the content, in `Language` when it is set:
+
+    ```go
+    type Languages interface {
+        Languages() []string
+    }
+
+    type UnstructuredText[L Languages] struct {
+        URL      string
+        Text     string
+        Language string
+    }
+
+    inline := golem.UnstructuredText[EnEsDe]{Text: "hola", Language: "es"}
+    byURL := golem.UnstructuredText[EnEsDe]{URL: "https://example.com/doc.txt"}
+    ```
+    </Tabs.Tab>
+
 </Tabs>
 
 ### Unstructured binary
 Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
 
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     ```typescript
     import {
@@ -407,6 +500,36 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
     <Tabs.Tab>
     The current MoonBit SDK does not yet provide a user-facing unstructured-binary wrapper. Use `Bytes` for structured binary data. The removed `@types.UnstructuredBinary` wrapper and `#derive.mime_types` annotation are not supported.
     </Tabs.Tab>
+    <Tabs.Tab>
+    ```go
+    type JsonOrPng struct{}
+
+    func (JsonOrPng) MimeTypes() []string { return []string{"application/json", "image/png"} }
+
+    type ExampleMethodIn struct {
+        Binary golem.UnstructuredBinary[JsonOrPng]
+    }
+
+    var ExampleMethod = Agent.Method[ExampleMethodIn, golem.Unit]("exampleMethod")
+    ```
+
+    The type parameter is a marker type whose `MimeTypes()` method lists the allowed MIME types; use
+    `golem.AnyMimeType` for no restrictions.
+    The type itself carries either an inline byte array or a remote reference. A non-empty `URL` is the reference;
+    otherwise `Data` is the content, of `MimeType`:
+
+    ```go
+    type MimeTypes interface {
+        MimeTypes() []string
+    }
+
+    type UnstructuredBinary[M MimeTypes] struct {
+        URL      string
+        Data     []byte
+        MimeType string
+    }
+    ```
+    </Tabs.Tab>
 </Tabs>
 
 
@@ -421,7 +544,7 @@ There are three variants of multimodal values supported:
 * `MultimodalCustom<T>`, allowing to pass an arbitrary number of values which is either an unstructured text or binary or a user defined structured type `T`.
 * `MultimodalAdvanced<T>` , allowing to pass an arbitrary number of values of the user defined structured type `T`.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
 
     ```typescript
@@ -626,6 +749,73 @@ There are three variants of multimodal values supported:
     pub(all) struct Multimodal[T] {
       items : Array[T]
     } derive(Show, Eq)
+    ```
+
+    </Tabs.Tab>
+
+    <Tabs.Tab>
+
+    ```go
+    type MyStructuredData struct {
+        Field1 string
+        Field2 uint32
+    }
+
+    // Unstructured text, unstructured binary, or MyStructuredData.
+    type TextBinaryOrCustom interface{ isTextBinaryOrCustom() }
+
+    type TextItem struct{ Value golem.UnstructuredText[golem.AnyLanguage] }
+    type BinaryItem struct{ Value golem.UnstructuredBinary[golem.AnyMimeType] }
+    type CustomItem struct{ Value MyStructuredData }
+
+    func (TextItem) isTextBinaryOrCustom()   {}
+    func (BinaryItem) isTextBinaryOrCustom() {}
+    func (CustomItem) isTextBinaryOrCustom() {}
+
+    var _ = golem.DefineVariant[TextBinaryOrCustom](
+        golem.WrappedCase[TextItem]("text"),
+        golem.WrappedCase[BinaryItem]("binary"),
+        golem.WrappedCase[CustomItem]("custom"),
+    )
+
+    // A fully user-defined set of modalities.
+    type TextOrImage interface{ isTextOrImage() }
+
+    type Text struct{ Value string }
+    type Image struct{ Value []byte }
+
+    func (Text) isTextOrImage()  {}
+    func (Image) isTextOrImage() {}
+
+    var _ = golem.DefineVariant[TextOrImage](
+        golem.WrappedCase[Text]("text"),
+        golem.WrappedCase[Image]("image"),
+    )
+
+    type MultimodalIn struct{ Input golem.Multimodal }
+    type MultimodalCustomIn struct{ Input golem.MultimodalOf[TextBinaryOrCustom] }
+    type MultimodalAdvancedIn struct{ Input golem.MultimodalOf[TextOrImage] }
+
+    var (
+        ExampleMultimodal         = Agent.Method[MultimodalIn, golem.Unit]("exampleMultimodal")
+        ExampleMultimodalCustom   = Agent.Method[MultimodalCustomIn, golem.Unit]("exampleMultimodalCustom")
+        ExampleMultimodalAdvanced = Agent.Method[MultimodalAdvancedIn, golem.Unit]("exampleMultimodalAdvanced")
+    )
+    ```
+
+    The Go SDK has no separate `MultimodalCustom` type: a custom set of modalities, including one that mixes unstructured text and binary with your own type, is a variant registered with `golem.DefineVariant` and used as `T` in `golem.MultimodalOf[T]`.
+
+    Here are the multimodal types in the Go SDK:
+
+    ```go
+    type MultimodalOf[T any] []T
+
+    type Modality interface{ isModality() }
+
+    type TextModality struct{ Value UnstructuredText[AnyLanguage] }
+    type BinaryModality struct{ Value UnstructuredBinary[AnyMimeType] }
+
+    type Multimodal = MultimodalOf[Modality]
     ```
 
     </Tabs.Tab>

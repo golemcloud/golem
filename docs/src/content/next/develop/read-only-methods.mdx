@@ -84,7 +84,7 @@ By default a read-only result is **shared across all callers** — the cache key
 responses are marked `Cache-Control: public` (CDN-friendly).
 
 When the result depends on *who* is calling (for example, an authorization-scoped view), add a `Principal`
-parameter to the method. Rust, Scala, MoonBit, and Effect TypeScript detect it and **automatically** mark the
+parameter to the method. Rust, Scala, MoonBit, Go, and Effect TypeScript detect it and **automatically** mark the
 read-only configuration as principal-dependent (`uses_principal = true`). Plain TypeScript requires
 `readOnly: { usesPrincipal: true }`, as shown below. The calling principal then becomes part of the cache key, so
 each principal gets its own cached entry, and HTTP responses switch to `Cache-Control: private`. The response's
@@ -119,7 +119,7 @@ regular (non-read-only) method instead.
 
 ## Marking a method read-only
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Mark a method read-only by setting `readOnly: true` on its `method(...)` spec:
 
@@ -343,6 +343,63 @@ regular (non-read-only) method instead.
         // Principal-aware: cached per principal (uses_principal auto-derived)
         #derive.read_only
         pub fn CounterAgent::my_visible_items(self: Self, principal: Principal) -> Array[Item] { /* ... */ }
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Pass the `golem.ReadOnly()` option to the method descriptor in the definition package:
+
+        ```go
+        package counter
+
+        import "github.com/golemcloud/golem/sdks/go/golem"
+
+        type ID struct{ Name string }
+
+        var Agent = golem.DefineAgent[ID](golem.Spec{Name: "CounterAgent"})
+
+        var (
+            // Non-read-only: writes shared state
+            Increment = Agent.Method[golem.Unit, uint64]("increment")
+
+            // Read-only: pure read over already-loaded state
+            GetCount = Agent.Method[golem.Unit, uint64]("getCount", golem.ReadOnly())
+        )
+        ```
+
+        The implementation package handles a read-only method like any other method:
+
+        ```go
+        func init() {
+            agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) uint64 {
+                ctx.State.count++
+                return ctx.State.count
+            })
+            agent.Handle(counter.GetCount, func(ctx *golem.Context[state], _ golem.Unit) uint64 {
+                return ctx.State.count
+            })
+        }
+        ```
+
+        Choose a cache policy by passing one to `golem.ReadOnly`; per-principal caching is automatic when the
+        method's input has a `golem.Principal` field:
+
+        ```go
+        import "time"
+
+        type ComputeIn struct{ X, Y uint32 }
+
+        type PrincipalIn struct{ Principal golem.Principal }
+
+        var (
+            RecentSummary = Agent.Method[golem.Unit, Summary]("recentSummary",
+                golem.ReadOnly(golem.CacheFor(30*time.Second)))
+
+            PureCompute = Agent.Method[ComputeIn, uint32]("pureCompute",
+                golem.ReadOnly(golem.NoCache()))
+
+            // Principal-aware: cached per principal
+            MyVisibleItems = Agent.Method[PrincipalIn, []Item]("myVisibleItems", golem.ReadOnly())
+        )
         ```
     </Tabs.Tab>
 </Tabs>

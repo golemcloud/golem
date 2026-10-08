@@ -87,7 +87,7 @@ The `golem` command line interface provides a set of commands to create, build, 
 
 To get started, you create an application and a single component using one of the supported programming languages with the `golem new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   Create a TypeScript agent using the default template:
 
@@ -135,6 +135,16 @@ To get started, you create an application and a single component using one of th
 
     Note: For MoonBit, you need the MoonBit toolchain (`moon`) and `wasm-tools` installed on your system.
     </Tabs.Tab>
+
+    <Tabs.Tab>
+    Create a Go agent using the default template:
+
+    ```shell copy
+    golem new --template go --component-name example:counter --yes agent-examples
+    ```
+
+    Note: For Go, the first `golem build` downloads the Golem Go toolchain; see [Setup Go](/next/develop/setup) for details.
+    </Tabs.Tab>
 </Tabs>
 
 This will generate a new component in a new directory named after the provided application name, and it is ready to be compiled and deployed to Golem.
@@ -149,7 +159,7 @@ This compiles the newly created application, which consists of a _single Golem c
 
 ### Write the code
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 The default template's source code is located in the `src/counter-agent.ts` file, assuming that the `example:counter` name has been used in the `golem new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
 
@@ -341,6 +351,53 @@ fn main {
   ```
 
     </Tabs.Tab>
+  <Tabs.Tab>
+  The default template's source code is located in the component's `module` directory, a Go module of its own: `agents/counter/counter.go` holds the agent's definition, `agents/counter/impl/impl.go` its implementation, and `main.go` imports the `impl` package, which registers the agent. The module is named `example-counter`, assuming that the `example:counter` name has been used in the `golem new` command.
+
+  Let's use the following code snippets for this example:
+
+  `agents/counter/counter.go`
+
+  ```go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name:        "CounterAgent",
+	Description: "A simple durable counter",
+})
+
+var Increment = Agent.Method[golem.Unit, int64]("increment",
+	golem.Desc("Increases the count by one and returns the new value"))
+  ```
+
+  `agents/counter/impl/impl.go`
+
+  ```go
+package impl
+
+import (
+	"example-counter/agents/counter"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+)
+
+type state struct{ value int64 }
+
+var agent = counter.Agent.Implement(func(counter.ID) *state { return &state{} })
+
+func init() {
+	agent.Handle(counter.Increment, func(ctx *golem.Context[state], _ golem.Unit) int64 {
+		ctx.State.value++
+		return ctx.State.value
+	})
+}
+  ```
+
+    </Tabs.Tab>
 </Tabs>
 
 In this simple example we define a very simple agent that is identified by a `name` string, and exposes a single agent method `increment` that increments the count by one and returns the new value.
@@ -397,7 +454,7 @@ Agents can be invoked from other agents, through the REPL or CLI, or Golem's Inv
 
 To finish the Quickstart example with an HTTP POST endpoint for tracking counts, first add a **mount point** and an **endpoint** decorator to the agent code:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
 ```typescript
 import { z } from 'zod';
@@ -547,6 +604,28 @@ pub fn CounterAgent::increment(self : Self) -> UInt64 {
 fn main {
 
 }
+```
+  </Tabs.Tab>
+
+  <Tabs.Tab>
+The mount point goes on the agent's `Spec`, and the endpoint is a method option in `agents/counter/counter.go`. The implementation in `impl.go` does not change:
+
+```go
+package counter
+
+import "github.com/golemcloud/golem/sdks/go/golem"
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name:        "CounterAgent",
+	Description: "A simple durable counter",
+	HTTP:        &golem.Mount{Path: "/counters/{name}"},
+})
+
+var Increment = Agent.Method[golem.Unit, int64]("increment",
+	golem.Desc("Increases the count by one and returns the new value"),
+	golem.HTTP(golem.POST("/increment")))
 ```
   </Tabs.Tab>
 </Tabs>

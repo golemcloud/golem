@@ -58,14 +58,14 @@ impl MyAgent for MyAgentImpl {
     }
 
     fn get_foo(&self) -> i32 {
-        self.config.get().foo
+        self.config.get().expect("config").foo
     }
 }
 ```
 
 - The `#[agent_config]` annotation is **required** on the `Config<T>` parameter.
 - Do not call `Config::new()` yourself in user code. `Config<T>` metadata is discovered from the `#[agent_config]` constructor parameter, and manual construction bypasses that registration path.
-- Config is loaded lazily when `.get()` is called.
+- Config is loaded lazily when `.get()` is called; it returns a `Result`, failing when a value is missing or does not match the schema.
 
 ## 3. Set Config in `golem.yaml`
 

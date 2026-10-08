@@ -1,0 +1,834 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package schema
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"time"
+
+	"github.com/golemcloud/golem/sdks/go/core/values"
+)
+
+// The schema-native wire form.
+//
+// This is how the model itself travels over REST: every node is
+// {"kind": "<case>", "value": <payload>}, with kebab-cased case names and
+// camelCased payload fields. It is the serde shape of the server's Rust
+// SchemaType and SchemaValue, and openapi/golem-service.yaml is generated from
+// those same types.
+//
+// It is not canonical JSON, and confusing the two is the GOL-653 failure mode.
+// Canonical JSON (json.go) renders a value *through its schema* into what an
+// author would write by hand: a record becomes an object with named fields, a
+// s64 becomes a base-10 string, binary becomes base64url. The wire form is
+// structural and schema-free: a record is a positional list of nodes, each
+// still carrying its own kind, and binary is an array of byte numbers. The
+// 64-bit integers travel as canonical decimal strings, so no JSON number
+// precision is lost, and a non-finite float as {"$float": "nan"} and its
+// infinities. Marshal*/Unmarshal* here, Pack*/Unpack* there.
+//
+// Values travel both ways; a type graph only ever arrives, since a caller
+// reads a schema it was given rather than inventing one.
+
+// MarshalWireValue renders a value in the schema-native wire form.
+func MarshalWireValue(v SchemaValue) ([]byte, error) {
+	node, err := valueToWire(v)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(node)
+}
+
+// UnmarshalWireValue reads a value in the schema-native wire form. The result
+// carries no schema, so it is only meaningful beside the type it was built
+// against.
+//
+// The reading is strict, as the public protocol requires: duplicate, unknown
+// or missing members, an explicit null where a member is optional, and a
+// number where a canonical decimal string belongs are all rejected.
+func UnmarshalWireValue(data []byte) (SchemaValue, error) {
+	if err := CheckWireJSON(data); err != nil {
+		return nil, fmt.Errorf("golem: malformed schema value: %w", err)
+	}
+	node, err := strictNode(data)
+	if err != nil {
+		return nil, fmt.Errorf("golem: malformed schema value: %w", err)
+	}
+	return wireToValue(node)
+}
+
+// UnmarshalWireGraph reads a type graph in the schema-native wire form.
+func UnmarshalWireGraph(data []byte) (SchemaGraph, error) {
+	var g wireGraph
+	if err := json.Unmarshal(data, &g); err != nil {
+		return SchemaGraph{}, fmt.Errorf("golem: malformed schema graph: %w", err)
+	}
+	return g.toModel()
+}
+
+// wireNode is the tagged envelope every type and value node travels in.
+type wireNode struct {
+	Kind  string          `json:"kind"`
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// wireValueKinds and wireTypeKinds are how many cases of each sum the wire form
+// knows. A case added to the model without a case here would fall through to an
+// "unsupported" error at runtime rather than failing to compile — Go switches
+// are not exhaustive — so the counts are pinned by tests that enumerate every
+// case.
+const (
+	wireValueKinds = 36
+	wireTypeKinds  = 38
+)
+
+// --- Values, outgoing ----------------------------------------------------
+
+func valueToWire(v SchemaValue) (wireNode, error) {
+	switch n := v.(type) {
+	case BoolValue:
+		return wireScalar("bool", n.Value)
+	case S8Value:
+		return wireScalar("s8", n.Value)
+	case S16Value:
+		return wireScalar("s16", n.Value)
+	case S32Value:
+		return wireScalar("s32", n.Value)
+	case S64Value:
+		return wireScalar("s64", strconv.FormatInt(n.Value, 10))
+	case U8Value:
+		return wireScalar("u8", n.Value)
+	case U16Value:
+		return wireScalar("u16", n.Value)
+	case U32Value:
+		return wireScalar("u32", n.Value)
+	case U64Value:
+		return wireScalar("u64", strconv.FormatUint(n.Value, 10))
+	case F32Value:
+		if isFinite(float64(n.Value)) {
+			return wireScalar("f32", n.Value)
+		}
+		return wireScalar("f32", exceptionalFloat(float64(n.Value)))
+	case F64Value:
+		if isFinite(n.Value) {
+			return wireScalar("f64", n.Value)
+		}
+		return wireScalar("f64", exceptionalFloat(n.Value))
+	case CharValue:
+		if !validCodePoint(n.Value) {
+			return wireNode{}, fmt.Errorf("golem: char %d is not a Unicode scalar value", n.Value)
+		}
+		return wireScalar("char", string(n.Value))
+	case StringValue:
+		return wireScalar("string", n.Value)
+
+	case RecordValue:
+		fields, err := valuesToWire(n.Fields)
+		if err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("record", map[string]any{"fields": fields})
+	case VariantValue:
+		payload := map[string]any{"case": n.Case}
+		if n.Payload != nil {
+			inner, err := valueToWire(*n.Payload)
+			if err != nil {
+				return wireNode{}, err
+			}
+			payload["payload"] = inner
+		}
+		return wireScalar("variant", payload)
+	case EnumValue:
+		return wireScalar("enum", map[string]any{"case": n.Case})
+	case FlagsValue:
+		return wireScalar("flags", map[string]any{"bits": nonNilBools(n.Set)})
+	case TupleValue:
+		elements, err := valuesToWire(n.Elements)
+		if err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("tuple", map[string]any{"elements": elements})
+	case ListValue:
+		items, err := valuesToWire(n.Items)
+		if err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("list", map[string]any{"elements": items})
+	case FixedListValue:
+		items, err := valuesToWire(n.Items)
+		if err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("fixed-list", map[string]any{"elements": items})
+	case MapValue:
+		entries := make([][2]wireNode, 0, len(n.Entries))
+		for _, entry := range n.Entries {
+			key, err := valueToWire(entry.Key)
+			if err != nil {
+				return wireNode{}, err
+			}
+			value, err := valueToWire(entry.Value)
+			if err != nil {
+				return wireNode{}, err
+			}
+			entries = append(entries, [2]wireNode{key, value})
+		}
+		return wireScalar("map", map[string]any{"entries": entries})
+	case OptionValue:
+		payload := map[string]any{"inner": nil}
+		if n.Value != nil {
+			inner, err := valueToWire(*n.Value)
+			if err != nil {
+				return wireNode{}, err
+			}
+			payload["inner"] = inner
+		}
+		return wireScalar("option", payload)
+	case ResultValue:
+		tag := "ok"
+		if n.IsErr {
+			tag = "err"
+		}
+		payload := map[string]any{"tag": tag, "value": nil}
+		if n.Value != nil {
+			inner, err := valueToWire(*n.Value)
+			if err != nil {
+				return wireNode{}, err
+			}
+			payload["value"] = inner
+		}
+		return wireScalar("result", payload)
+
+	case TextValue:
+		payload := map[string]any{"text": n.Text}
+		if n.Language != nil {
+			payload["language"] = *n.Language
+		}
+		return wireScalar("text", payload)
+	case BinaryValue:
+		payload := map[string]any{"bytes": byteNumbers(n.Bytes)}
+		if n.MimeType != nil {
+			payload["mimeType"] = *n.MimeType
+		}
+		return wireScalar("binary", payload)
+	case PathValue:
+		return wireScalar("path", map[string]any{"path": n.Value})
+	case UrlValue:
+		return wireScalar("url", map[string]any{"url": n.Value})
+	case DatetimeValue:
+		instant := time.Unix(n.Seconds, int64(n.Nanoseconds)).UTC()
+		return wireScalar("datetime", map[string]any{"value": instant.Format(time.RFC3339Nano)})
+	case DurationValue:
+		return wireScalar("duration", map[string]any{"nanoseconds": strconv.FormatInt(n.Nanoseconds, 10)})
+	case UUIDValue:
+		return wireScalar("uuid", n.Value.String())
+	case QuantityValueNode:
+		return wireScalar("quantity", map[string]any{
+			"mantissa": strconv.FormatInt(n.Value.Mantissa, 10),
+			"scale":    n.Value.Scale,
+			"unit":     n.Value.Unit,
+		})
+	case UnionValue:
+		body, err := valueToWire(n.Body)
+		if err != nil {
+			return wireNode{}, err
+		}
+		return wireScalar("union", map[string]any{"tag": n.Tag, "body": body})
+
+	case StreamValue:
+		ref, ok := n.Handle.(WireStreamRef)
+		if !ok {
+			return wireNode{}, fmt.Errorf(
+				"golem: a stream travels only as a reference an invocation session assigned, got %T", n.Handle)
+		}
+		if (ref.ProvisionalRef == "") == (ref.StreamToken == "") {
+			return wireNode{}, fmt.Errorf("golem: a stream reference names exactly one of a provisional reference and a stream token")
+		}
+		if ref.ProvisionalRef != "" {
+			return wireScalar("stream", map[string]any{"provisionalRef": ref.ProvisionalRef})
+		}
+		return wireScalar("stream", map[string]any{"streamToken": ref.StreamToken})
+	case SecretValue, QuotaTokenValue, PermissionCardValue:
+		return wireNode{}, fmt.Errorf(
+			"golem: %T is a handle to something the host holds, and does not travel over REST", v)
+	}
+	return wireNode{}, fmt.Errorf("golem: unsupported schema value %T", v)
+}
+
+func wireScalar(kind string, payload any) (wireNode, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return wireNode{}, fmt.Errorf("golem: %s value: %w", kind, err)
+	}
+	return wireNode{Kind: kind, Value: raw}, nil
+}
+
+func valuesToWire(values []SchemaValue) ([]wireNode, error) {
+	out := make([]wireNode, 0, len(values))
+	for _, v := range values {
+		node, err := valueToWire(v)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, node)
+	}
+	return out, nil
+}
+
+// --- Values, incoming ----------------------------------------------------
+
+func wireToValue(node wireValueNode) (SchemaValue, error) {
+	switch node.Kind {
+	case "bool":
+		return readWire(node, func(v bool) SchemaValue { return BoolValue{Value: v} })
+	case "s8":
+		return readWire(node, func(v int8) SchemaValue { return S8Value{Value: v} })
+	case "s16":
+		return readWire(node, func(v int16) SchemaValue { return S16Value{Value: v} })
+	case "s32":
+		return readWire(node, func(v int32) SchemaValue { return S32Value{Value: v} })
+	case "s64":
+		return readWireErr(node, func(v string) (SchemaValue, error) {
+			n, err := parseWireInt(v, "s64")
+			return S64Value{Value: n}, err
+		})
+	case "u8":
+		return readWire(node, func(v uint8) SchemaValue { return U8Value{Value: v} })
+	case "u16":
+		return readWire(node, func(v uint16) SchemaValue { return U16Value{Value: v} })
+	case "u32":
+		return readWire(node, func(v uint32) SchemaValue { return U32Value{Value: v} })
+	case "u64":
+		return readWireErr(node, func(v string) (SchemaValue, error) {
+			if !canonicalUnsigned(v) {
+				return nil, fmt.Errorf("golem: u64 must be a canonical decimal string, got %q", v)
+			}
+			n, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("golem: u64 %q is out of range", v)
+			}
+			return U64Value{Value: n}, nil
+		})
+	case "f32":
+		return readWireErr(node, func(v wireFloat) (SchemaValue, error) {
+			narrowed := float32(v)
+			if math.IsInf(float64(narrowed), 0) && isFinite(float64(v)) {
+				return nil, fmt.Errorf("golem: f32 %v is out of range", float64(v))
+			}
+			return F32Value{Value: narrowed}, nil
+		})
+	case "f64":
+		return readWire(node, func(v wireFloat) SchemaValue { return F64Value{Value: float64(v)} })
+	case "string":
+		return readWire(node, func(v string) SchemaValue { return StringValue{Value: v} })
+
+	case "char":
+		return readWireErr(node, func(s string) (SchemaValue, error) {
+			runes := []rune(s)
+			if len(runes) != 1 || !validCodePoint(runes[0]) {
+				return nil, fmt.Errorf("golem: char must be one Unicode scalar value, got %q", s)
+			}
+			return CharValue{Value: runes[0]}, nil
+		})
+
+	case "record":
+		return readWireErr(node, func(p wireValueFields) (SchemaValue, error) {
+			fields, err := wireToValues(p.Fields)
+			return RecordValue{Fields: fields}, err
+		})
+	case "variant":
+		return readWireErr(node, func(p wireVariantValue) (SchemaValue, error) {
+			payload, err := wireToOptionalValue(p.Payload)
+			return VariantValue{Case: p.Case, Payload: payload}, err
+		})
+	case "enum":
+		return readWire(node, func(p wireCase) SchemaValue { return EnumValue(p) })
+	case "flags":
+		return readWire(node, func(p wireFlagsValue) SchemaValue { return FlagsValue{Set: p.Bits} })
+	case "tuple":
+		return readWireErr(node, func(p wireValueElements) (SchemaValue, error) {
+			elements, err := wireToValues(p.Elements)
+			return TupleValue{Elements: elements}, err
+		})
+	case "list":
+		return readWireErr(node, func(p wireValueElements) (SchemaValue, error) {
+			items, err := wireToValues(p.Elements)
+			return ListValue{Items: items}, err
+		})
+	case "fixed-list":
+		return readWireErr(node, func(p wireValueElements) (SchemaValue, error) {
+			items, err := wireToValues(p.Elements)
+			return FixedListValue{Items: items}, err
+		})
+	case "map":
+		return readWireErr(node, func(p wireMapValue) (SchemaValue, error) {
+			entries := make([]MapEntry, 0, len(p.Entries))
+			for _, pair := range p.Entries {
+				if len(pair) != 2 {
+					return nil, fmt.Errorf(
+						"golem: map entry must be a [key, value] pair, got %d element(s)", len(pair))
+				}
+				key, err := wireToValue(pair[0])
+				if err != nil {
+					return nil, err
+				}
+				value, err := wireToValue(pair[1])
+				if err != nil {
+					return nil, err
+				}
+				entries = append(entries, MapEntry{Key: key, Value: value})
+			}
+			return MapValue{Entries: entries}, nil
+		})
+	case "option":
+		return readWireErr(node, func(p wireOptionValue) (SchemaValue, error) {
+			inner, err := wireToOptionalValue(p.Inner)
+			return OptionValue{Value: inner}, err
+		})
+	case "result":
+		return readWireErr(node, func(p wireResultValue) (SchemaValue, error) {
+			isErr := false
+			switch p.Tag {
+			case "ok":
+			case "err":
+				isErr = true
+			default:
+				return nil, fmt.Errorf("golem: result tag must be ok or err, got %q", p.Tag)
+			}
+			value, err := wireToOptionalValue(p.Value)
+			return ResultValue{IsErr: isErr, Value: value}, err
+		})
+
+	case "text":
+		return readWire(node, func(p wireTextValue) SchemaValue { return TextValue(p) })
+	case "binary":
+		return readWire(node, func(p wireBinaryValue) SchemaValue { return BinaryValue(p) })
+	case "path":
+		return readWire(node, func(p wirePathValue) SchemaValue { return PathValue{Value: p.Path} })
+	case "url":
+		return readWire(node, func(p wireUrlValue) SchemaValue { return UrlValue{Value: p.Url} })
+	case "datetime":
+		return readWireErr(node, func(p wireDatetimeValue) (SchemaValue, error) {
+			instant, err := time.Parse(time.RFC3339Nano, p.Value)
+			if err != nil {
+				return nil, fmt.Errorf("golem: datetime %q: %w", p.Value, err)
+			}
+			return DatetimeValue{
+				Seconds:     instant.Unix(),
+				Nanoseconds: uint32(instant.Nanosecond()),
+			}, nil
+		})
+	case "duration":
+		return readWireErr(node, func(p wireDurationValue) (SchemaValue, error) {
+			n, err := parseWireInt(p.Nanoseconds, "duration nanoseconds")
+			return DurationValue{Nanoseconds: n}, err
+		})
+	case "uuid":
+		return readWireErr(node, func(p string) (SchemaValue, error) {
+			u, err := values.ParseUUID(p)
+			if err == nil && u.String() != p {
+				err = fmt.Errorf("%q is not a canonical lowercase UUID", p)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("golem: uuid value: %w", err)
+			}
+			return UUIDValue{Value: u}, nil
+		})
+	case "quantity":
+		return readWireErr(node, func(p wireQuantityValue) (SchemaValue, error) {
+			mantissa, err := parseWireInt(p.Mantissa, "quantity mantissa")
+			return QuantityValueNode{Value: QuantityValue{Mantissa: mantissa, Scale: p.Scale, Unit: p.Unit}}, err
+		})
+	case "union":
+		return readWireErr(node, func(p wireUnionValue) (SchemaValue, error) {
+			body, err := wireToValue(p.Body)
+			if err != nil {
+				return nil, err
+			}
+			return UnionValue{Tag: p.Tag, Body: body}, nil
+		})
+
+	case "stream":
+		return readWireErr(node, func(p wireStreamValue) (SchemaValue, error) {
+			if (p.ProvisionalRef == nil) == (p.StreamToken == nil) {
+				return nil, fmt.Errorf("golem: a stream reference names exactly one of provisionalRef and streamToken")
+			}
+			ref := WireStreamRef{}
+			if p.ProvisionalRef != nil {
+				ref.ProvisionalRef = *p.ProvisionalRef
+			} else {
+				ref.StreamToken = *p.StreamToken
+			}
+			if ref.ProvisionalRef == "" && ref.StreamToken == "" {
+				return nil, fmt.Errorf("golem: a stream reference is empty")
+			}
+			return StreamValue{Handle: ref}, nil
+		})
+	case "secret", "quota-token", "permission-card":
+		return nil, fmt.Errorf(
+			"golem: a %s is a handle to something the host holds, and cannot be read here", node.Kind)
+	}
+	return nil, fmt.Errorf("golem: unsupported schema value kind %q", node.Kind)
+}
+
+// readWire decodes a node's payload and wraps it; readWireErr does the same for
+// a case that can still reject what it decoded.
+func readWire[T any](node wireValueNode, wrap func(T) SchemaValue) (SchemaValue, error) {
+	return readWireErr(node, func(v T) (SchemaValue, error) { return wrap(v), nil })
+}
+
+func readWireErr[T any](node wireValueNode, wrap func(T) (SchemaValue, error)) (SchemaValue, error) {
+	if err := checkPayloadMembers(node); err != nil {
+		return nil, err
+	}
+	var payload T
+	if err := strictUnmarshal(node.Value, &payload); err != nil {
+		return nil, fmt.Errorf("golem: %s value: %w", node.Kind, err)
+	}
+	return wrap(payload)
+}
+
+// strictUnmarshal decodes JSON, rejecting members the target does not declare.
+func strictUnmarshal(data []byte, target any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
+		return err
+	}
+	if dec.More() {
+		return fmt.Errorf("trailing data after the JSON value")
+	}
+	return nil
+}
+
+// wireValueNode is a value node as it arrives. Unlike a type node it is read
+// strictly; see UnmarshalWireValue.
+type wireValueNode struct {
+	Kind  string
+	Value json.RawMessage
+}
+
+// strictNode reads one {kind, value} envelope, which has exactly those two
+// members.
+func strictNode(data []byte) (wireValueNode, error) {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return wireValueNode{}, err
+	}
+	if len(members) != 2 || members["kind"] == nil || members["value"] == nil {
+		return wireValueNode{}, fmt.Errorf("a schema value node has exactly the members kind and value")
+	}
+	var kind string
+	if err := json.Unmarshal(members["kind"], &kind); err != nil {
+		return wireValueNode{}, fmt.Errorf("kind: %w", err)
+	}
+	return wireValueNode{Kind: kind, Value: members["value"]}, nil
+}
+
+// UnmarshalJSON reads a node strictly; nested nodes are read through it too.
+func (n *wireValueNode) UnmarshalJSON(data []byte) error {
+	node, err := strictNode(data)
+	if err != nil {
+		return err
+	}
+	*n = node
+	return nil
+}
+
+// payloadMembers lists, per object-payload kind, the members it must carry,
+// those it may carry (never as null), and those that must be present but may
+// be null.
+var payloadMembers = map[string]struct{ required, optional, nullable []string }{
+	"record":     {required: []string{"fields"}},
+	"variant":    {required: []string{"case"}, optional: []string{"payload"}},
+	"enum":       {required: []string{"case"}},
+	"flags":      {required: []string{"bits"}},
+	"tuple":      {required: []string{"elements"}},
+	"list":       {required: []string{"elements"}},
+	"fixed-list": {required: []string{"elements"}},
+	"map":        {required: []string{"entries"}},
+	"option":     {nullable: []string{"inner"}},
+	"result":     {required: []string{"tag"}, nullable: []string{"value"}},
+	"text":       {required: []string{"text"}, optional: []string{"language"}},
+	"binary":     {required: []string{"bytes"}, optional: []string{"mimeType"}},
+	"path":       {required: []string{"path"}},
+	"url":        {required: []string{"url"}},
+	"datetime":   {required: []string{"value"}},
+	"duration":   {required: []string{"nanoseconds"}},
+	"quantity":   {required: []string{"mantissa", "scale", "unit"}},
+	"union":      {required: []string{"tag", "body"}},
+	"stream":     {optional: []string{"provisionalRef", "streamToken"}},
+}
+
+func checkPayloadMembers(node wireValueNode) error {
+	rule, ok := payloadMembers[node.Kind]
+	if !ok {
+		return nil
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(node.Value, &members); err != nil || members == nil {
+		return fmt.Errorf("golem: %s value must be an object", node.Kind)
+	}
+	allowed := map[string]bool{}
+	for _, name := range rule.required {
+		allowed[name] = true
+		if raw, present := members[name]; !present || isJSONNull(raw) {
+			return fmt.Errorf("golem: %s value is missing %q", node.Kind, name)
+		}
+	}
+	for _, name := range rule.optional {
+		allowed[name] = true
+		if raw, present := members[name]; present && isJSONNull(raw) {
+			return fmt.Errorf("golem: %s value has %q as null; omit it instead", node.Kind, name)
+		}
+	}
+	for _, name := range rule.nullable {
+		allowed[name] = true
+		if _, present := members[name]; !present {
+			return fmt.Errorf("golem: %s value is missing %q", node.Kind, name)
+		}
+	}
+	for name := range members {
+		if !allowed[name] {
+			return fmt.Errorf("golem: %s value has unknown member %q", node.Kind, name)
+		}
+	}
+	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return string(bytes.TrimSpace(raw)) == "null"
+}
+
+func wireToValues(nodes []wireValueNode) ([]SchemaValue, error) {
+	out := make([]SchemaValue, 0, len(nodes))
+	for _, node := range nodes {
+		v, err := wireToValue(node)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// wireToOptionalValue reads an optional payload, which the wire form spells as
+// null when it is empty.
+func wireToOptionalValue(node *wireValueNode) (*SchemaValue, error) {
+	if node == nil {
+		return nil, nil
+	}
+	v, err := wireToValue(*node)
+	if err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+type wireValueFields struct {
+	Fields []wireValueNode `json:"fields"`
+}
+
+type wireValueElements struct {
+	Elements []wireValueNode `json:"elements"`
+}
+
+type wireVariantValue struct {
+	Case    uint32         `json:"case"`
+	Payload *wireValueNode `json:"payload"`
+}
+
+type wireCase struct {
+	Case uint32 `json:"case"`
+}
+
+type wireFlagsValue struct {
+	Bits []bool `json:"bits"`
+}
+
+type wireMapValue struct {
+	Entries [][]wireValueNode `json:"entries"`
+}
+
+type wireOptionValue struct {
+	Inner *wireValueNode `json:"inner"`
+}
+
+type wireResultValue struct {
+	Tag   string         `json:"tag"`
+	Value *wireValueNode `json:"value"`
+}
+
+type wireTextValue struct {
+	Text     string  `json:"text"`
+	Language *string `json:"language"`
+}
+
+type wireBinaryValue struct {
+	Bytes    []byte  `json:"-"`
+	MimeType *string `json:"mimeType"`
+}
+
+// UnmarshalJSON reads the byte array the server's serde derive emits. Go's
+// encoding/json would otherwise expect a base64 string for a []byte field.
+func (b *wireBinaryValue) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Bytes    []int64 `json:"bytes"`
+		MimeType *string `json:"mimeType"`
+	}
+	if err := strictUnmarshal(data, &raw); err != nil {
+		return err
+	}
+	b.Bytes = make([]byte, len(raw.Bytes))
+	for i, n := range raw.Bytes {
+		if n < 0 || n > 255 {
+			return fmt.Errorf("byte %d is out of range: %d", i, n)
+		}
+		b.Bytes[i] = byte(n)
+	}
+	b.MimeType = raw.MimeType
+	return nil
+}
+
+type wirePathValue struct {
+	Path string `json:"path"`
+}
+
+type wireUrlValue struct {
+	Url string `json:"url"`
+}
+
+type wireDatetimeValue struct {
+	Value string `json:"value"`
+}
+
+type wireDurationValue struct {
+	Nanoseconds string `json:"nanoseconds"`
+}
+
+type wireQuantityValue struct {
+	Mantissa string `json:"mantissa"`
+	Scale    int32  `json:"scale"`
+	Unit     string `json:"unit"`
+}
+
+type wireStreamValue struct {
+	ProvisionalRef *string `json:"provisionalRef"`
+	StreamToken    *string `json:"streamToken"`
+}
+
+type wireUnionValue struct {
+	Tag  string        `json:"tag"`
+	Body wireValueNode `json:"body"`
+}
+
+// byteNumbers renders bytes the way the server's serde derive does: an array
+// of numbers. Go would encode a []byte as base64, which is canonical JSON's
+// form, not the wire form's.
+func byteNumbers(b []byte) []int {
+	out := make([]int, len(b))
+	for i, v := range b {
+		out[i] = int(v)
+	}
+	return out
+}
+
+func nonNilBools(v []bool) []bool {
+	if v == nil {
+		return []bool{}
+	}
+	return v
+}
+
+func validCodePoint(r rune) bool {
+	return r >= 0 && r <= 0x10ffff && (r < 0xd800 || r > 0xdfff)
+}
+
+// exceptionalFloatKey marks a float JSON cannot spell as a number.
+const exceptionalFloatKey = "$float"
+
+func isFinite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
+func exceptionalFloat(f float64) map[string]string {
+	switch {
+	case math.IsNaN(f):
+		return map[string]string{exceptionalFloatKey: "nan"}
+	case math.IsInf(f, 1):
+		return map[string]string{exceptionalFloatKey: "positive-infinity"}
+	default:
+		return map[string]string{exceptionalFloatKey: "negative-infinity"}
+	}
+}
+
+// wireFloat reads a float: a JSON number, or the exceptional-float object.
+type wireFloat float64
+
+func (f *wireFloat) UnmarshalJSON(data []byte) error {
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		*f = wireFloat(number)
+		return nil
+	}
+	var exceptional map[string]string
+	if err := json.Unmarshal(data, &exceptional); err != nil || len(exceptional) != 1 {
+		return fmt.Errorf("golem: a float must be a number or {%q: ...}, got %s", exceptionalFloatKey, data)
+	}
+	switch exceptional[exceptionalFloatKey] {
+	case "nan":
+		*f = wireFloat(math.NaN())
+	case "positive-infinity":
+		*f = wireFloat(math.Inf(1))
+	case "negative-infinity":
+		*f = wireFloat(math.Inf(-1))
+	default:
+		return fmt.Errorf("golem: unknown exceptional float %s", data)
+	}
+	return nil
+}
+
+func canonicalUnsigned(s string) bool {
+	if s == "" || (len(s) > 1 && s[0] == '0') {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseWireInt reads a 64-bit signed integer from its canonical decimal string.
+func parseWireInt(s, what string) (int64, error) {
+	digits := s
+	if len(s) > 1 && s[0] == '-' {
+		digits = s[1:]
+		if digits == "0" {
+			return 0, fmt.Errorf("golem: %s must be a canonical decimal string, got %q", what, s)
+		}
+	}
+	if !canonicalUnsigned(digits) {
+		return 0, fmt.Errorf("golem: %s must be a canonical decimal string, got %q", what, s)
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("golem: %s %q is out of range", what, s)
+	}
+	return n, nil
+}

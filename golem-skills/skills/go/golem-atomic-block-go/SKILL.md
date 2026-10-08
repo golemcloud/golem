@@ -1,0 +1,213 @@
+---
+name: golem-atomic-block-go
+description: "Using atomic regions, custom durable operations (DurableOp), idempotence mode, oplog commit, and durable idempotency keys in a Go Golem project. Use when the user asks about Atomically, DurableOp / custom durability, idempotence mode, oplog commit, or generating an idempotency key in a Go Golem project."
+---
+
+# Atomic Regions and Durability Controls (Go)
+
+## Overview
+
+Golem provides **automatic durable execution** — all agents are durable by
+default. The helpers in this skill are **advanced controls** that most agents
+never need. Reach for them only when you have a specific requirement around
+atomicity, idempotency, or oplog replication.
+
+They live in the `durability` package (`github.com/golemcloud/golem/sdks/go/golem/durability`: `durability.Atomically`, `durability.WithIdempotenceMode`,
+`durability.OplogCommit`, `durability.GenerateIdempotencyKey`)
+and are thin, **fail-loud** wrappers over host functions: on a host failure they
+trap the component — there is no in-band error return.
+
+> **Concurrency note.** These knobs apply at the **worker level**, not per
+> goroutine. Golem runs an agent single-threaded with cooperative task-switching
+> only at await points (RPC, promise, sleep). A scope is safe as long as you don't
+> hold it open across a concurrent await (e.g. a `CallAsync` fan-out); nesting on a
+> single logical flow is fine.
+
+## Atomic Regions
+
+Group **external, observable side effects** (RPC to other agents, and other
+durable host calls) so that on a crash the whole group replays together. If the agent
+fails partway through, recovery re-executes the **entire** region from the start —
+so effects performed before the crash happen again (all-or-nothing).
+
+`durability.Atomically(f func())` runs `f` as one region: on normal return it commits;
+if `f` **panics**, the region stays open and the runtime re-executes the whole
+region on retry. Panicking is therefore the way to abort a region, consistent with
+the fail-loud model.
+
+`f` takes no arguments and returns nothing — **return a value by capturing it in
+an outer variable**:
+
+```go
+// Reserve inventory and charge the customer — if we crash between them, we want
+// recovery to re-run BOTH calls, not skip the reservation.
+var orderID string
+durability.Atomically(func() {
+	reservation := inventory.Reserve.MustCall(invClient, inventory.ReserveIn{Item: item, Qty: qty})
+	charge := payment.Charge.MustCall(payClient, payment.ChargeIn{Customer: cust, Amount: price})
+	orderID = combine(reservation, charge)
+})
+```
+
+> **What this is NOT.** `Atomically` is not an STM/transaction primitive and not
+> for grouping in-memory state mutations. Agents are single-threaded and in-memory
+> state is rebuilt by oplog replay on recovery, so wrapping plain in-memory updates
+> does nothing useful:
+>
+> ```go
+> // DON'T. The oplog already rebuilds these deterministically on replay.
+> durability.Atomically(func() {
+> 	ctx.State.balance -= amount
+> 	ctx.State.lastTx = now
+> })
+> ```
+>
+> It is also **not** how you shrink the oplog or speed up recovery — for that use
+> snapshots (see `golem-configure-durability-go`). Use `Atomically` only when you
+> have **two or more external side effects** that must not be left half-applied
+> across a crash. For compensating multi-step workflows, prefer the saga helpers in
+> `golem-add-transactions-go`, which build on this primitive.
+
+> **Outgoing HTTP inside a region.** Cross-agent RPC works inside `Atomically`, as
+> above. An outgoing HTTP request (`net/http`) does not yet: the region fails to
+> close with *"non-re-executable durable calls initiated in it are still in
+> flight"*. Until that is resolved, make HTTP calls outside the region — or reach
+> for them through RPC to an agent that owns the call.
+
+## Custom Durability for Libraries
+
+The low-level `golem:durability@1.6.0` interface is for **SDK and library authors**,
+not an application tuning knob. It lets a library record several raw host effects
+as one custom durable operation. `durability.Run[In, Out]` owns the live
+invocation: on the live path it runs the body, encodes and persists the typed
+result, and returns it; on replay it returns the recorded result **without
+running the body**.
+
+```go
+result := durability.Run(
+	durability.Spec{
+		Interface: "my-lib",
+		Function:  "fetch",
+		Type:      durability.WriteRemote, // commit/replay policy
+	},
+	request, // recorded alongside the result, so the oplog is self-describing
+	func() FetchResult { // runs only on the live path
+		return doRawSideEffect(request)
+	},
+)
+```
+
+Failure has two distinct channels:
+
+- **Return a value** to record the outcome. If `Out` is a `golem.Result[Ok, Err]`,
+  an `Err` is a *recorded durable failure* — persisted and replayed like any other
+  value, so the operation is **not** retried. There is no separate fallible API:
+  the general schema codec already encodes `golem.Result` as a WIT `result<ok,err>`.
+- **Panic** for a transient defect: the unfinished invocation is dropped without an
+  `End`, so recovery **re-executes** the whole body. Use `panic` / `golem.Must`
+  when the effect should be retried rather than recorded.
+
+`Type` (`durability.FunctionType`) picks the commit/replay policy: `ReadLocal`,
+`WriteLocal`, `ReadRemote`, `WriteRemote` (the usual choice for an external side
+effect), or `WriteRemoteBatched(begin...)` / `WriteRemoteTransaction(begin...)` to
+group writes. Set `DurableSpec.ForcedCommit` to force an efficient oplog commit at
+the end. There is no async variant — a blocking body already suspends the fiber.
+
+Make repeated attempts safe: choose the correct `Type` classification, use external
+idempotency keys, or wrap the work in a transaction (`golem-add-transactions-go`).
+
+## Idempotence Mode
+
+`durability.WithIdempotenceMode(idempotent)` sets the mode and returns a `restore`
+function; scope it with `defer`. The **default is `true`** — side effects are
+treated as idempotent and Golem gives at-least-once semantics:
+
+```go
+// Opt OUT of the default for a specific block — treat the effect as
+// non-idempotent (at-most-once): the agent fails if it is unknown whether the
+// side effect already ran, rather than risk running it twice.
+func() {
+	defer durability.WithIdempotenceMode(false)()
+	// a non-idempotent side effect whose accidental duplication is worse than
+	// missing it entirely
+}()
+```
+
+Use `false` only when accidental duplication of a side effect would be more
+harmful than missing the call.
+
+## Durable Idempotency Key
+
+`durability.GenerateIdempotencyKey()` returns a `golem.UUID` that is **stable across
+replay** — it is persisted and committed, so you can hand it to a third-party
+system (e.g. a payment processor) to make an external call idempotent:
+
+```go
+key := durability.GenerateIdempotencyKey()
+// key.String() is stable across restarts — safe as a payment idempotency key
+resp := payment.Charge.MustCall(client, payment.ChargeIn{Amount: amt, Key: key.String()})
+```
+
+## Oplog Commit
+
+`durability.OplogCommit(replicas uint8)` blocks until the oplog has been written to at
+least the given number of replicas (capped at the maximum available). Use it
+before a critical external effect to bound how much progress a crash could lose:
+
+```go
+durability.OplogCommit(3) // ensure the oplog is replicated to 3 replicas before proceeding
+```
+
+## Checkpoints
+
+A checkpoint is a point in the agent's execution to go back to. Reverting discards everything recorded since and runs again from there, live — the way to retry a side effect whose outcome was not acceptable:
+
+```go
+cp := durability.NewCheckpoint()
+quote := cp.UnwrapOrRevert(fetchQuote()) // fetchQuote() (Quote, error): reverts on an error
+cp.AssertOrRevert(quote.Price < limit)    // reverts unless the condition holds
+
+total := durability.WithCheckpoint(func(cp durability.Checkpoint) (int64, error) {
+	return charge(amount)                 // a returned error reverts to the checkpoint
+})
+```
+
+`cp.RunOrRevert(func() (T, error))` is the function form of `cp.UnwrapOrRevert`, and `cp.Revert()` goes back unconditionally. A revert does not return. `durability.OplogIndex()` / `durability.SetOplogIndex(i)` are the raw operations underneath. A revert rewinds the whole agent, so don't revert while other goroutines are mid-await.
+
+## Retry policy for a block
+
+There is no `WithRetryPolicy` in the `durability` package. To override retry behavior
+for a scope, use the `retry` subpackage — `retry.With(...)` applies a named rule
+for the current call and restores the previous one on return. See
+`golem-retry-policies-go`.
+
+## Not available in the Go SDK
+
+The Rust SDK exposes separate `_async` variants (`atomically_async`,
+`with_idempotence_mode_async`, `with_retry_policy_async`). The Go SDK has **no
+async variants** — Go does not
+split sync/async APIs. `durability.Atomically` takes a plain `func()`, and the
+idempotence scope is `defer`-based; blocking operations (RPC, HTTP, promises)
+already suspend the fiber at their await points, so a single API covers both
+cases.
+
+## Key Constraints
+
+- `durability.Atomically` takes `func()` and returns nothing — capture results in an
+  outer variable; abort by panicking.
+- `WithIdempotenceMode` returns a `restore func()` — call it (usually via
+  `defer`) or the scope never ends.
+- These knobs are **worker-global**, not per-goroutine — don't hold a scope open
+  across a concurrent await.
+- Failures trap the component; there is no error return value.
+- `GenerateIdempotencyKey` is the only helper that returns a value
+  (`golem.UUID`); the rest return nothing or a `restore` closure.
+
+### Related Skills
+
+| Skill | When to Load |
+|-------|--------------|
+| `golem-add-transactions-go` | Multi-step workflows with compensation (saga), built on atomic regions |
+| `golem-retry-policies-go` | Override retry behavior for a scope (`retry.With`) |
+| `golem-configure-durability-go` | Reduce oplog/replay cost with snapshots; choose durable vs ephemeral |
+| `golem-make-http-request-go` | The outgoing calls you typically wrap in an atomic region |

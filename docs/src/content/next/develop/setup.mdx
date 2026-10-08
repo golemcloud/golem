@@ -2,7 +2,7 @@ import { Callout, Tabs } from "nextra/components"
 
 ## Setting up the development environment
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 Golem's TypeScript toolchain uses npm as the underlying build tool.
 Install **Node.js** and **npm** on your system by following the official [instructions](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm).
@@ -80,5 +80,29 @@ Install the latest stable version of the MoonBit toolchain by following the offi
 Install `wasm-tools` by following the [official installation guide](https://github.com/bytecodealliance/wasm-tools?tab=readme-ov-file#installation).
 
 Once `moon` and `wasm-tools` are installed, `golem build` will install the required MoonBit dependencies and drive the full MoonBit-to-WASM build pipeline for MoonBit components.
+</Tabs.Tab>
+
+<Tabs.Tab>
+### Setup Go
+
+Golem 1.5 compiles **Go** agents to WebAssembly components with `componentize-go`, which needs a Go runtime with Golem's patches. Golem maintains this toolchain as a fork of Go at [golemcloud/go](https://github.com/golemcloud/go).
+
+#### The Golem Go toolchain
+
+You do not need to install the Golem Go toolchain yourself. The first `golem build` of a Go component downloads the release pinned by the Golem CLI and builds every Go component with it, independently of the Go installed on your system.
+
+<Callout type="info">
+To build with a toolchain you built from [golemcloud/go](https://github.com/golemcloud/go) yourself, for example on a platform that has no published release, set the `GOLEM_GO_TOOLCHAIN` environment variable to its root directory.
+</Callout>
+
+#### Installing Go
+
+A standard **Go 1.27.1 or newer** installation is not required to build, but it is recommended for development: your IDE, `go test` and `go vet` use it. Install it by following the official [instructions](https://go.dev/dl/).
+
+#### Installing `wasm-tools`
+
+Install `wasm-tools` by following the [official installation guide](https://github.com/bytecodealliance/wasm-tools?tab=readme-ov-file#installation).
+
+Generated Go projects pin `componentize-go` as a `tool` dependency in `go.mod`, so once `wasm-tools` is installed, `golem build` will install the Golem Go toolchain and drive the full Go-to-WASM build pipeline for Go components.
 </Tabs.Tab>
 </Tabs>

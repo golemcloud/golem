@@ -19,7 +19,7 @@ During recovery, Golem replays the oplog and reuses results already recorded for
 
 The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each agent.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         The `@golemcloud/golem-ts-sdk` package exports the `withRetryPolicy` function to temporarily install a named retry policy for a block of code:
 
@@ -255,6 +255,32 @@ The retry policy which controls the maximum number of retries and the exponentia
           error => raise error
         }
         ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The `github.com/golemcloud/golem/sdks/go/golem/retry` package provides a typed retry-policy builder and `retry.With`, which installs a named policy and returns a function that restores the previous policy with the same name, or removes the temporary policy if none existed. Use it with `defer` to scope the policy to a block of code:
+
+        ```go
+        import (
+            "time"
+
+            "github.com/golemcloud/golem/sdks/go/golem/retry"
+        )
+
+        policy := retry.Named(
+            "temporary-policy",
+            retry.Exponential(100*time.Millisecond, 1.5).
+                Clamp(100*time.Millisecond, 2*time.Second).
+                MaxRetries(3),
+        ).WithPriority(1000)
+
+        result := func() string {
+            defer retry.With(policy)()
+            // this function runs with the custom retry policy
+            return "hello"
+        }()
+        ```
+
+        Use `retry.Set(policy)` instead when the policy should remain installed on the durable agent until it is overwritten or removed with `retry.Remove`. `retry.With` and `retry.Set` panic on an invalid policy; `policy.Validate()` reports the problem as an error instead.
     </Tabs.Tab>
 </Tabs>
 

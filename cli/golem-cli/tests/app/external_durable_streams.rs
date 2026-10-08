@@ -200,6 +200,16 @@ async fn invoke<T: FromSchema>(
 }
 
 async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values: Vec<Value>) -> T {
+    invoke_template_raw(ctx, method, values.iter().map(Value::to_string).collect()).await
+}
+
+/// Invokes the template agent with arguments already written in its source
+/// language's syntax.
+async fn invoke_template_raw<T: FromSchema>(
+    ctx: &TestContext,
+    method: &str,
+    values: Vec<String>,
+) -> T {
     let mut args = vec![
         flag::YES.to_owned(),
         cmd::AGENT.to_owned(),
@@ -207,7 +217,7 @@ async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values:
         "StreamingAgent(\"external\")".to_owned(),
         method.to_owned(),
     ];
-    args.extend(values.iter().map(Value::to_string));
+    args.extend(values);
     args.extend([
         "--no-stream".to_owned(),
         flag::FORMAT.to_owned(),
@@ -331,27 +341,39 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
 
     let server = ReferenceServer::start().await;
     let external = server.create("/template", "application/json").await;
-    let append_args = vec![
-        json!(external),
-        json!("stable-template-producer"),
-        json!(["once"]),
-        json!(false),
-    ];
-    let first: Option<String> = invoke_template(&ctx, append, append_args.clone()).await;
-    assert!(first.is_some());
-    let duplicate: Option<String> = invoke_template(&ctx, append, append_args).await;
-    assert_eq!(duplicate, None);
-    let _: Option<String> = invoke_template(
+    // Arguments are written in the template's source language: Go spells a
+    // list `{…}`, the others as JSON.
+    let list = |item: &str| {
+        if language == "go" {
+            format!("{{{}}}", json!(item))
+        } else {
+            json!([item]).to_string()
+        }
+    };
+    let append_args = |producer: &str, item: &str, close: bool| {
+        vec![
+            json!(external).to_string(),
+            json!(producer).to_string(),
+            list(item),
+            close.to_string(),
+        ]
+    };
+    let first: Option<String> = invoke_template_raw(
         &ctx,
         append,
-        vec![
-            json!(external),
-            json!("closer"),
-            json!(["tail"]),
-            json!(true),
-        ],
+        append_args("stable-template-producer", "once", false),
     )
     .await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template_raw(
+        &ctx,
+        append,
+        append_args("stable-template-producer", "once", false),
+    )
+    .await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> =
+        invoke_template_raw(&ctx, append, append_args("closer", "tail", true)).await;
     let values: Vec<String> = invoke_template(&ctx, read, vec![json!(external)]).await;
     assert_eq!(values, ["once", "tail"]);
     let requests = server.requests().await;
@@ -377,9 +399,99 @@ async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
         ("effect", "appendExternal", "readExternal"),
         ("scala", "appendExternal", "readExternal"),
         ("moonbit", "append_external", "read_external"),
+        ("go", "appendExternal", "readExternal"),
     ] {
         streaming_template_walkthrough(language, append, read).await;
     }
+}
+
+/// A Go agent appends to and reads from an external Durable Stream, with its
+/// bearer token held as a config secret, as the streaming templates do.
+#[test]
+#[timeout("20 minutes")]
+async fn go_external_durable_streams_e2e() {
+    let mut ctx = TestContext::new();
+    fs::create_dir_all(ctx.cwd_path_join("go-durable-streams")).unwrap();
+    ctx.cd("go-durable-streams");
+    assert!(
+        ctx.cli([flag::YES, cmd::NEW, ".", flag::TEMPLATE, "go"])
+            .await
+            .success_or_dump()
+    );
+    let component = std::fs::read_dir(ctx.cwd_path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .chain(std::iter::once(ctx.cwd_path().to_path_buf()))
+        .find(|path| path.join("go.mod").exists())
+        .expect("the Go component directory");
+    let module = fs::read_to_string(component.join("go.mod"))
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("module ").map(|m| m.trim().to_string()))
+        .unwrap();
+    fs::remove(component.join("agents")).unwrap();
+    fs::write_str(
+        component.join("streaming/streaming.go"),
+        include_str!("go_durable_streams.go"),
+    )
+    .unwrap();
+    fs::write_str(
+        component.join("main.go"),
+        format!("package main\n\nimport _ \"{module}/streaming\"\n\nfunc main() {{}}\n"),
+    )
+    .unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let original = fs::read_to_string(&manifest).unwrap();
+    let body = original.split("\nhttpApi:").next().unwrap().to_string();
+    fs::write_str(
+        &manifest,
+        format!("{body}\nsecretDefaults:\n  local:\n    externalAuth: \"{TEST_TOKEN}\"\n"),
+    )
+    .unwrap();
+    ctx.start_server().await;
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let server = ReferenceServer::start().await;
+    let external = server.create("/go", "application/json").await;
+    // Go agents read their arguments in Go syntax: a list is `{…}`.
+    let url = json!(external).to_string();
+    let append_args = vec![
+        url.clone(),
+        r#""stable-go-producer""#.to_string(),
+        r#"{"once"}"#.to_string(),
+        "false".to_string(),
+    ];
+    let first: Option<String> =
+        invoke_template_raw(&ctx, "appendExternal", append_args.clone()).await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template_raw(&ctx, "appendExternal", append_args).await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> = invoke_template_raw(
+        &ctx,
+        "appendExternal",
+        vec![
+            url.clone(),
+            r#""closer""#.to_string(),
+            r#"{"tail"}"#.to_string(),
+            "true".to_string(),
+        ],
+    )
+    .await;
+    let values: Vec<String> = invoke_template(&ctx, "readExternal", vec![json!(external)]).await;
+    assert_eq!(values, ["once", "tail"]);
+    let requests = server.requests().await;
+    assert!(
+        requests
+            .iter()
+            .any(|r| r["producerId"] == "stable-go-producer")
+    );
+    for method in ["GET", "POST"] {
+        assert!(requests.iter().any(|r| {
+            r["path"] == "/go" && r["method"] == method && r["authenticated"] == true
+        }));
+    }
+    server.stop().await;
 }
 
 #[test]

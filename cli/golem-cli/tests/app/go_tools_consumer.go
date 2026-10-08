@@ -1,0 +1,84 @@
+// Package user is the Go tool consumer driven by go_tools.rs: it calls the
+// provider's tool through the generated guest tool client.
+package user
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	vcs "golem.local/bridge/vcs-tool-guest-client"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+	"github.com/golemcloud/golem/sdks/go/golem/tool"
+)
+
+type ID struct{ Name string }
+
+var Agent = golem.DefineAgent[ID](golem.Spec{Name: "VcsUser"})
+
+var Run = Agent.Method[golem.Unit, string]("run")
+
+type state struct{}
+
+func check(ok bool, format string, args ...any) {
+	if !ok {
+		panic(fmt.Sprintf(format, args...))
+	}
+}
+
+func init() {
+	agent := Agent.Implement(func(ID) *state { return &state{} })
+	agent.Handle(Run, func(_ *golem.Context[state], _ golem.Unit) string {
+		res, err := vcs.Commit.Call(func(a *vcs.CommitArgs) {
+			a.Message = "fix"
+			a.Paths = []string{"a.go", "b.go"}
+			a.Author = golem.Some("ada")
+		})
+		check(err == nil, "commit: %v", err)
+		check(res.Files == 2, "files: %d", res.Files)
+
+		// A restricted argument is checked before the command runs.
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) {
+			a.Message = "fix"
+			a.Paths = []string{"x"}
+			a.Priority = golem.Some[uint32](9)
+		})
+		check(err != nil && strings.Contains(err.Error(), "maximum 5"),
+			"a priority above its maximum was accepted: %v", err)
+
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "secret"; a.Paths = []string{"x"} })
+		var policy *tool.CallError
+		check(errors.As(err, &policy) && policy.Kind == tool.CallConstraintViolation &&
+			strings.Contains(policy.Message, "forbidden by policy"),
+			"the policy middleware let a forbidden commit through: %v", err)
+
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "audited"; a.Paths = []string{"x"} })
+		var audit *tool.CallError
+		check(errors.As(err, &audit) && strings.Contains(audit.Message, "blocked by the environment audit"),
+			"the environment audit middleware let a blocked commit through: %v", err)
+
+		_, err = vcs.Commit.Call(func(a *vcs.CommitArgs) { a.Message = "empty" })
+		_, nothing := vcs.ErrNothingToCommit.Match(err)
+		check(nothing, "an empty commit gave %v", err)
+
+		inv, err := vcs.RemotePush.Call(func(a *vcs.RemotePushArgs) {
+			a.Name = "origin"
+			a.Stdin = strings.NewReader("hello tools")
+		})
+		check(err == nil, "push: %v", err)
+		out := inv.Collect()
+		check(out.Err == nil && out.StdoutErr == nil && out.StderrErr == nil,
+			"push output: %v, %v, %v", out.Err, out.StdoutErr, out.StderrErr)
+		check(string(out.Stdout) == "HELLO TOOLS" && out.Result == 11, "push gave %q and %d", out.Stdout, out.Result)
+		check(string(out.Stderr) == "pushing origin", "push reported %q on stderr", out.Stderr)
+
+		inv, err = vcs.RemotePush.Call(func(a *vcs.RemotePushArgs) { a.Name = "forbidden" })
+		check(err == nil, "push: %v", err)
+		_, err = inv.Wait() // drains the untaken stdout and stderr
+		rejected, ok := vcs.ErrRejected.Match(err)
+		check(ok, "a forbidden push gave %v", err)
+
+		return fmt.Sprintf("ok:%s:%s", res.Summary, rejected.Reason)
+	})
+}

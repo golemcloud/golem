@@ -5,7 +5,7 @@ import { Tabs } from "nextra/components"
 Golem agents use **WASI HTTP** for outgoing HTTP requests, but WASI HTTP does not support WebSocket upgrades.
 Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) that complements WASI HTTP and allows agents to open WebSocket connections, send and receive messages, and handle connection lifecycle events.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
     The Golem TypeScript SDK provides a WebSocket client API. `connectWebsocket` opens a
     connection and returns a `WebSocketHandle` with `send`, `receive`, `receiveWithTimeout`, and
@@ -158,6 +158,69 @@ Golem 1.5 introduces a dedicated WebSocket client API (`golem:websocket@1.5.0`) 
     }
     ```
 
+</Tabs.Tab>
+
+<Tabs.Tab>
+    The Golem Go SDK provides a WebSocket client in the `github.com/golemcloud/golem/sdks/go/golem/websocket`
+    package. `websocket.Connect` opens a connection and returns a `*websocket.Conn` with `Send`, `SendText`,
+    `SendBinary`, `Receive`, `ReceiveWithTimeout`, and `Close` methods. A received `websocket.Message` is either a
+    text or a binary frame, and a graceful close surfaces as a `*websocket.Error` whose `IsClosed()` is true,
+    carrying `CloseCode` and `CloseReason`. `websocket.MustConnect`, `MustSend`, `MustSendText`, and `MustSendBinary`
+    panic on the error instead of returning it.
+
+    ```go
+    // Definition package (agents/example/example.go)
+    package example
+
+    import "github.com/golemcloud/golem/sdks/go/golem"
+
+    type ID struct{ Name string }
+
+    var Agent = golem.DefineAgent[ID](golem.Spec{Name: "ExampleAgent"})
+
+    var Run = Agent.Method[golem.Unit, golem.Unit]("run")
+    ```
+
+    ```go
+    // Implementation package (agents/example/impl/impl.go)
+    package impl
+
+    import (
+        "errors"
+        "log/slog"
+
+        "myapp/agents/example"
+
+        "github.com/golemcloud/golem/sdks/go/golem"
+        "github.com/golemcloud/golem/sdks/go/golem/websocket"
+    )
+
+    type state struct{}
+
+    var agent = example.Agent.Implement(func(example.ID) *state { return &state{} })
+
+    func init() {
+        agent.Handle(example.Run, func(_ *golem.Context[state], _ golem.Unit) golem.Unit {
+            conn := websocket.MustConnect("wss://example.com/chat")
+            slog.Info("Connected")
+            conn.MustSendText("Hello, server!")
+            for {
+                msg, err := conn.Receive()
+                var wsErr *websocket.Error
+                if errors.As(err, &wsErr) && wsErr.IsClosed() {
+                    slog.Info("Closed", "code", wsErr.CloseCode, "reason", wsErr.CloseReason)
+                    return golem.Unit{}
+                }
+                golem.Must0(err)
+                if msg.IsText() {
+                    slog.Info("Text", "text", msg.Text())
+                } else {
+                    slog.Info("Binary", "bytes", msg.Bytes())
+                }
+            }
+        })
+    }
+    ```
 </Tabs.Tab>
 </Tabs>
 

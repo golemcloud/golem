@@ -15,7 +15,7 @@ service must own the data, or when the data can exceed one agent's resource limi
 
 SQLite can run in memory or store a database in the agent's isolated filesystem.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
     TypeScript agents have `node:sqlite` built in. Do not install a native npm SQLite package.
 
@@ -81,6 +81,11 @@ SQLite can run in memory or store a database in the agent's isolated filesystem.
 
     See [Using Embedded SQLite from Rust](/next/how-to-guides/rust/golem-add-sqlite-rust) for the
     full setup.
+  </Tabs.Tab>
+  <Tabs.Tab>
+    The Go SDK has no supported embedded SQLite integration. Go agents that need SQL use
+    [Golem's relational database API](/next/develop/rdbms) through the
+    `github.com/golemcloud/golem/sdks/go/golem/rdbms` package.
   </Tabs.Tab>
 </Tabs>
 

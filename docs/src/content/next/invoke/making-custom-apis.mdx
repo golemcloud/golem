@@ -15,7 +15,7 @@ Complete code-first endpoints take precedence over those mounted fallback behavi
 
 Every agent that wants to expose HTTP endpoints must first define a **mount point** — the base URL prefix under which all its endpoints are available. The mount path can contain placeholders like `{name}` that map to the agent's constructor parameters.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const Tasks = defineAgent({
@@ -67,6 +67,18 @@ pub(all) struct Tasks {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type ID struct{ Name string } // bound by {name} in the mount path
+
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "Tasks",
+	HTTP: &golem.Mount{Path: "/task-agents/{name}"},
+})
+```
+
+Mount path variables bind the `ID` fields by their lower-first name (`Name` is `{name}`).
+</Tabs.Tab>
 </Tabs>
 
 If there are multiple agent constructor parameters, they all have to be mapped in the mount path.
@@ -75,7 +87,7 @@ If there are multiple agent constructor parameters, they all have to be mapped i
 
 Once the mount is defined, individual agent methods can be exposed as HTTP **endpoints**. Each endpoint specifies an HTTP method and a path suffix relative to the mount point. Path placeholders are mapped to method parameters. Parameters not mapped through the path or headers are taken from the request body.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 createTask: method({
@@ -152,15 +164,32 @@ pub fn Tasks::complete_task(self : Self, id : UInt32) -> Option[Task] {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type CreateTaskIn struct{ Request CreateTaskRequest }
+
+type CompleteTaskIn struct{ Id uint32 }
+
+var (
+	CreateTask = Agent.Method[CreateTaskIn, Task]("createTask", golem.HTTP(golem.POST("/tasks")))
+
+	GetTasks = Agent.Method[golem.Unit, []Task]("getTasks", golem.HTTP(golem.GET("/tasks")))
+
+	CompleteTask = Agent.Method[CompleteTaskIn, *Task]("completeTask", golem.HTTP(golem.POST("/tasks/{id}/complete")))
+)
+```
+
+Path variables bind input-struct fields by their lower-first name (`Id` is `{id}`). The handlers registered with `impl.Handle` contain nothing HTTP-specific. Verb constructors are `golem.GET`, `golem.HEAD`, `golem.POST`, `golem.PUT`, `golem.DELETE`, `golem.PATCH`, `golem.OPTIONS`, `golem.CONNECT`, `golem.TRACE`, and `golem.Custom("VERB", path)`.
+</Tabs.Tab>
 </Tabs>
 
-Supported HTTP methods: `get`, `post`, `put`, `delete`, `patch`, `head`, `options`, `connect`, `trace`, and `custom` (for arbitrary method strings, TypeScript only).
+Supported HTTP methods: `get`, `post`, `put`, `delete`, `patch`, `head`, `options`, `connect`, `trace`, and `custom` (for arbitrary method strings, in TypeScript and as `golem.Custom` in Go).
 
 ### Query Parameters
 
 Query parameters can be bound to method parameters using standard HTTP query syntax in the endpoint path:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 search: method({
@@ -199,13 +228,27 @@ pub fn MyAgent::search(self : Self, category : String, limit : UInt64, offset : 
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type SearchIn struct {
+	Category string
+	Limit    uint64
+	Offset   uint64
+}
+
+var Search = Agent.Method[SearchIn, []Item]("search",
+	golem.HTTP(golem.GET("/search/{category}?limit={limit}&offset={offset}")))
+```
+
+When the query parameter name differs from the field name, bind it with `golem.Query(wire, field)` instead, e.g. `golem.GET("/search", golem.Query("q", "query"))`.
+</Tabs.Tab>
 </Tabs>
 
 ### Header Mapping
 
 Custom HTTP headers can be mapped to function parameters:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 example: method({
@@ -250,13 +293,24 @@ pub fn ExampleAgent::example(self : Self, location : String, name : String) -> S
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type ExampleIn struct {
+	Location string
+	Name     string
+}
+
+var Example = Agent.Method[ExampleIn, string]("example",
+	golem.HTTP(golem.GET("/example", golem.Header("X-Foo", "location"), golem.Header("X-Bar", "name"))))
+```
+</Tabs.Tab>
 </Tabs>
 
 ### Catch-all Path Segments
 
 The `{*variable}` syntax captures all remaining path segments. It must be the last segment in the path:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 serveFile: method({
@@ -295,6 +349,13 @@ pub fn MyAgent::serve_file(self : Self, path : String) -> FileData {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type ServeFileIn struct{ Path string }
+
+var ServeFile = Agent.Method[ServeFileIn, FileData]("serveFile", golem.HTTP(golem.GET("/files/{*path}")))
+```
+</Tabs.Tab>
 </Tabs>
 
 ### Response Conventions
@@ -312,7 +373,7 @@ Return types control the HTTP response:
 
 Use the `UnstructuredBinary` type to receive raw binary data in the request body:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 upload: method({
@@ -349,13 +410,24 @@ The current Scala SDK does not expose the removed `UnstructuredBinary`/`BinarySe
 <Tabs.Tab>
 The current MoonBit SDK does not yet expose a user-facing unstructured-binary wrapper. `Bytes` is structured binary data and does not opt an endpoint into the raw unstructured-binary body mapping.
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+type UploadIn struct {
+	File golem.UnstructuredBinary[golem.AnyMimeType]
+}
+
+var Upload = Agent.Method[UploadIn, uint64]("upload", golem.HTTP(golem.POST("/upload")))
+```
+
+The handler reads the body from `in.File.Data` and its media type from `in.File.MimeType`. `golem.AnyMimeType` accepts any MIME type; use a marker type whose `MimeTypes()` method returns the allowed types to restrict accepted values.
+</Tabs.Tab>
 </Tabs>
 
 ## CORS
 
 CORS can be configured at the **mount level** (applies to all endpoints) and optionally overridden per **endpoint**:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const MyAgent = defineAgent({
@@ -430,6 +502,19 @@ pub fn MyAgent::get_public(self : Self) -> Data {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "MyAgent",
+	// All endpoints inherit the mount-level CORS setting
+	HTTP: &golem.Mount{Path: "/api/{name}", CORS: []string{"https://app.example.com"}},
+})
+
+// This endpoint adds additional allowed origins
+var GetPublic = Agent.Method[golem.Unit, Data]("getPublic",
+	golem.HTTP(golem.GET("/public", golem.EndpointCORS("*"))))
+```
+</Tabs.Tab>
 </Tabs>
 
 Per-endpoint CORS settings are unioned with the mount-level settings.
@@ -438,7 +523,7 @@ Per-endpoint CORS settings are unioned with the mount-level settings.
 
 Golem API gateway has built-in authentication support. Authentication can be enabled at the mount level or per endpoint using `auth = true`. See [the API authentication page](/next/invoke/making-custom-apis/authentication) for setup details.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const SecureAgent = defineAgent({
@@ -523,6 +608,25 @@ pub fn SecureAgent::admin_only(self : Self, principal : Principal) -> AdminData 
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+// Mount-level: all endpoints require auth
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "SecureAgent",
+	HTTP: &golem.Mount{Path: "/secure/{name}", Auth: true},
+})
+
+// Or per-endpoint:
+type AdminOnlyIn struct {
+	Principal golem.Principal // contains the authenticated user's identity
+}
+
+var AdminOnly = Agent.Method[AdminOnlyIn, AdminData]("adminOnly",
+	golem.HTTP(golem.GET("/admin", golem.EndpointAuth(true))))
+```
+
+The host fills a `golem.Principal` input field; it is never bound from the path, query, headers, or body. `golem.EndpointAuth(false)` opens a single endpoint on an otherwise protected mount.
+</Tabs.Tab>
 </Tabs>
 
 When authentication is enabled, agent constructors and methods can optionally receive a `Principal` parameter containing information about the authenticated caller.
@@ -531,7 +635,7 @@ When authentication is enabled, agent constructors and methods can optionally re
 
 Endpoints can be served by **phantom agents** — ephemeral, stateless agents that are created for each request and discarded afterward. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 export const Gateway = defineAgent({
@@ -583,6 +687,15 @@ pub(all) struct Gateway {
 }
 ```
 </Tabs.Tab>
+<Tabs.Tab>
+```go
+var Agent = golem.DefineAgent[ID](golem.Spec{
+	Name: "Gateway",
+	// A new instance is created per request
+	HTTP: &golem.Mount{Path: "/gateway/{name}", PhantomAgent: true},
+})
+```
+</Tabs.Tab>
 </Tabs>
 
 ## Customizing Durable Stream Routes
@@ -618,7 +731,7 @@ Only `$result` has an implicit canonical name. Other slot selectors must identif
 
 The same route customization looks like this in each SDK:
 
-<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-durable-stream-route-customization">
+<Tabs items={["TypeScript", "Effect", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-durable-stream-route-customization">
 <Tabs.Tab>
 ```typescript
 http: http.post('/events', {
@@ -733,6 +846,27 @@ pub fn MyAgent::events(
   // ...
 }
 ```
+</Tabs.Tab>
+<Tabs.Tab>
+```go
+type EventsIn struct {
+	Input golem.AgentStream[byte]
+}
+
+var Events = Agent.Method[EventsIn, golem.AgentStream[byte]]("events",
+	golem.HTTP(golem.POST("/events", golem.DurableStreams(golem.StreamRoute{
+		Slots: []golem.StreamSlot{
+			{Input: "input", Name: "uploads"},
+			{Result: true, Name: "events", ContentType: "application/vnd.example.events"},
+		},
+		NoStreamDelete:      true,
+		NoInvocationDelete:  true,
+		MaxReadersPerStream: 8,
+		MaxAppendsPerSecond: 25,
+	}))))
+```
+
+External writes stay enabled unless `NoExternalWrites` is set.
 </Tabs.Tab>
 </Tabs>
 

@@ -9,7 +9,7 @@ There is no way for an agent to access files outside its own filesystem.
 
 ## Accessing the filesystem
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     For TypeScript agents, use [`node:fs`](https://nodejs.org/api/fs.html) or [`node:fs/promises`](https://nodejs.org/api/fs.html#promises-api) to work with files.
 
@@ -32,6 +32,11 @@ There is no way for an agent to access files outside its own filesystem.
     For MoonBit agents, add `"golemcloud/golem_sdk/filesystem" @fs` to the `import` block in your component's `moon.pkg`.
 
     Its async helpers include `read_bytes`, `write_bytes`, and `list_directory`. Obtain the root directory descriptor with `@fs.get_root_dir()` and handle its optional result before passing the descriptor to these helpers.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    For Go agents, use the standard [`os`](https://pkg.go.dev/os) and [`io`](https://pkg.go.dev/io) packages to work with files.
+
+    Golem Go agents compile to WASI, so standard filesystem operations such as `os.ReadFile`, `os.WriteFile`, `os.Open`, `os.MkdirAll`, and `os.ReadDir` work out of the box.
     </Tabs.Tab>
 </Tabs>
 

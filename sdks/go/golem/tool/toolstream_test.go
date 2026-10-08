@@ -1,0 +1,481 @@
+// Copyright 2024-2026 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package tool
+
+import (
+	"errors"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/golemcloud/golem/sdks/go/golem"
+	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
+	toolCommon "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_common"
+	streams "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_tool_streams"
+	witTypes "go.bytecodealliance.org/pkg/wit/types"
+)
+
+type streamItem = witTypes.Result[[]uint8, streams.ByteStreamFailure]
+
+func chunk(s string) streamItem {
+	return witTypes.Ok[[]uint8, streams.ByteStreamFailure]([]uint8(s))
+}
+
+func failure(f OutputFailure) streamItem {
+	return witTypes.Err[[]uint8](f.wit)
+}
+
+// fakeSource replays a scripted sequence of stream items, then reports the
+// writer as dropped — which is how a clean end of input arrives on the wire.
+type fakeSource struct {
+	items []streamItem
+	at    int
+}
+
+func (f *fakeSource) Read(dst []streamItem) uint32 {
+	if f.at >= len(f.items) {
+		return 0
+	}
+	dst[0] = f.items[f.at]
+	f.at++
+	return 1
+}
+
+func (f *fakeSource) WriterDropped() bool { return f.at >= len(f.items) }
+
+// fakeSink records what a handler wrote and which terminal it selected.
+type fakeSink struct {
+	written   []byte
+	finished  bool
+	failed    *OutputFailure
+	writeErr  *streams.StreamWriteError
+	finishErr *streams.StreamWriteError
+}
+
+func (f *fakeSink) Write(b []uint8) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	if f.writeErr != nil {
+		return witTypes.Err[witTypes.Unit](*f.writeErr)
+	}
+	f.written = append(f.written, b...)
+	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
+}
+
+func (f *fakeSink) Finish() witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	if f.finishErr != nil {
+		return witTypes.Err[witTypes.Unit](*f.finishErr)
+	}
+	f.finished = true
+	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
+}
+
+func (f *fakeSink) Fail(reason streams.ByteStreamFailure) witTypes.Result[witTypes.Unit, streams.StreamWriteError] {
+	f.failed = &OutputFailure{reason}
+	return witTypes.Ok[witTypes.Unit, streams.StreamWriteError](witTypes.Unit{})
+}
+
+func TestStdinReadsChunksAndEndsWithEOF(t *testing.T) {
+	r := &byteReader{src: &fakeSource{items: []streamItem{chunk("hello, "), chunk("world")}}}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if string(got) != "hello, world" {
+		t.Errorf("read %q, want %q", got, "hello, world")
+	}
+}
+
+// TestStdinSplitsChunksAcrossReads — the wire delivers whole chunks, but a
+// caller's buffer may be smaller, so the remainder has to survive to the next
+// Read rather than being dropped.
+func TestStdinSplitsChunksAcrossReads(t *testing.T) {
+	r := &byteReader{src: &fakeSource{items: []streamItem{chunk("abcdef")}}}
+	buf := make([]byte, 4)
+
+	n, err := r.Read(buf)
+	if err != nil || n != 4 || string(buf[:n]) != "abcd" {
+		t.Fatalf("first read: %q, %d, %v", buf[:n], n, err)
+	}
+	n, err = r.Read(buf)
+	if err != nil || string(buf[:n]) != "ef" {
+		t.Fatalf("second read: %q, %d, %v", buf[:n], n, err)
+	}
+	if _, err := r.Read(buf); !errors.Is(err, io.EOF) {
+		t.Errorf("third read returned %v, want io.EOF", err)
+	}
+}
+
+// TestStdinReportsAFailureItemAsAnError — a failure arrives as a stream value,
+// so it must be distinguishable from the clean end of input.
+func TestStdinReportsAFailureItemAsAnError(t *testing.T) {
+	r := &byteReader{src: &fakeSource{items: []streamItem{
+		chunk("partial"), failure(OutputResourceExhausted()),
+	}}}
+	_, err := io.ReadAll(r)
+	if err == nil {
+		t.Fatal("a failure item ended the stream cleanly")
+	}
+	var se *OutputError
+	if !errors.As(err, &se) {
+		t.Fatalf("error is %v, want a StreamError", err)
+	}
+	if se.Failure.String() != "resource exhausted" {
+		t.Errorf("failure is %q, want resource exhausted", se.Failure)
+	}
+}
+
+func TestStdinFailureReasonsRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		f    OutputFailure
+		want string
+	}{
+		{OutputCancelled(), "cancelled"},
+		{OutputAbandoned(), "abandoned"},
+		{OutputResourceExhausted(), "resource exhausted"},
+		{OutputFailed("disk gone"), "failed: disk gone"},
+	} {
+		r := &byteReader{src: &fakeSource{items: []streamItem{failure(tc.f)}}}
+		_, err := io.ReadAll(r)
+		var se *OutputError
+		if !errors.As(err, &se) {
+			t.Fatalf("%s: error is %v, want a StreamError", tc.want, err)
+		}
+		if got := se.Failure.String(); got != tc.want {
+			t.Errorf("failure rendered as %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// TestAbsentStreamsExplainThemselves — a command invoked without a stdin gets
+// a reader that says so, rather than a nil dereference; an output the caller
+// did not take discards what is written.
+func TestAbsentStreamsExplainThemselves(t *testing.T) {
+	r := &byteReader{absent: absentStdin}
+	if _, err := r.Read(make([]byte, 4)); err == nil || !strings.Contains(err.Error(), "without a stdin stream") {
+		t.Errorf("reading an absent stdin gave %v", err)
+	}
+	w := newToolOutput("stdout", nil)
+	if n, err := w.Write([]byte("x")); n != 1 || err != nil || w.Attached() {
+		t.Errorf("writing an untaken stdout gave %d, %v; attached=%v", n, err, w.Attached())
+	}
+	// Finishing one that was never supplied is not an error: the dispatcher
+	// finishes unconditionally.
+	if err := w.finish(); err != nil {
+		t.Errorf("finishing an untaken stdout gave %v", err)
+	}
+}
+
+func TestStdoutWritesAndFinishes(t *testing.T) {
+	sink := &fakeSink{}
+	w := newToolOutput("stdout", sink)
+	if _, err := io.WriteString(w, "output"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := w.finish(); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if string(sink.written) != "output" || !sink.finished {
+		t.Errorf("sink is %q finished=%v, want output/true", sink.written, sink.finished)
+	}
+}
+
+// TestStdoutFirstTerminalWins — the wire accepts exactly one terminal, so a
+// handler that failed the stream must not then have it finished underneath it.
+func TestStdoutFirstTerminalWins(t *testing.T) {
+	sink := &fakeSink{}
+	w := newToolOutput("stdout", sink)
+	if err := w.Fail(OutputCancelled()); err != nil {
+		t.Fatalf("fail: %v", err)
+	}
+	if err := w.finish(); err != nil {
+		t.Fatalf("finish after fail: %v", err)
+	}
+	if sink.finished {
+		t.Error("finish overrode the failure terminal")
+	}
+	if sink.failed == nil || sink.failed.String() != "cancelled" {
+		t.Errorf("failure is %v, want cancelled", sink.failed)
+	}
+	if _, err := w.Write([]byte("late")); err == nil {
+		t.Error("writing after a terminal succeeded")
+	}
+}
+
+func TestStdoutSurfacesWriteErrors(t *testing.T) {
+	closed := streams.MakeStreamWriteErrorClosed(
+		streams.MakeByteStreamCloseCauseFailed(OutputFailed("consumer died").wit))
+	w := newToolOutput("stdout", &fakeSink{writeErr: &closed})
+	_, err := w.Write([]byte("x"))
+	var se *OutputError
+	if !errors.As(err, &se) {
+		t.Fatalf("error is %v, want a StreamError", err)
+	}
+	if se.Failure.String() != "failed: consumer died" {
+		t.Errorf("failure is %q", se.Failure)
+	}
+
+	concurrent := streams.MakeStreamWriteErrorConcurrentOperation()
+	w = newToolOutput("stdout", &fakeSink{writeErr: &concurrent})
+	if _, err := w.Write([]byte("x")); err == nil || !strings.Contains(err.Error(), "concurrent operation") {
+		t.Errorf("concurrent write gave %v", err)
+	}
+}
+
+// invokeWithStreams runs a command against scripted streams, the way a host
+// would for a body that declared both.
+func invokeWithStreams(
+	t *testing.T, d *definitions, e *toolEntry, input types.TypedSchemaValue,
+	in []streamItem, sink *fakeSink,
+) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	t.Helper()
+	return d.invokeCommand(e, nil, input,
+		&byteReader{src: &fakeSource{items: in}}, hostOutputs{stdout: sink}, nil)
+}
+
+type Pipe struct{}
+
+type PipeArgs struct {
+	Mode string
+	In   io.Reader
+}
+
+// declarePipe registers a command that copies stdin to stdout and reacts to the
+// mode it is given, mirroring the tool-streaming test components.
+func declarePipe(r *toolRegistry, d *definitions) {
+	def := defineToolInto[Pipe](r, d, "pipe", Spec{Version: "0.1.0"}, false)
+	cmd := def.OutputBody[PipeArgs, uint64](func(a *PipeArgs, s *CommandSpec) {
+		s.Positional(&a.Mode)
+		s.Stdin(&a.In)
+		s.Stdout()
+	})
+	_ = cmd.Handle(func(ctx *OutputContext, in PipeArgs) (uint64, error) {
+		switch in.Mode {
+		case "resource-exhausted":
+			return 0, ctx.Stdout().Fail(OutputResourceExhausted())
+		case "panic":
+			panic("handler gave up")
+		}
+		n, err := io.Copy(ctx.Stdout(), in.In)
+		return uint64(n), err
+	})
+}
+
+// pipeInput encodes the pipe's single positional.
+func pipeInput(t *testing.T, r *toolRegistry, mode string) (*toolEntry, types.TypedSchemaValue) {
+	t.Helper()
+	e, _ := r.get("pipe")
+	return e, encodeArgs(t, e.root.body, func(a *PipeArgs) { a.Mode = mode })
+}
+
+// TestCommandStreamsCopyAndFinish — returning from the handler selects the
+// clean terminal, so an author never writes a finish call.
+func TestCommandStreamsCopyAndFinish(t *testing.T) {
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "echo")
+	sink := &fakeSink{}
+
+	got := invokeWithStreams(t, d, e, input, []streamItem{chunk("abc"), chunk("de")}, sink)
+	if got.Tag() != witTypes.ResultErr {
+		if string(sink.written) != "abcde" {
+			t.Errorf("stdout got %q, want abcde", sink.written)
+		}
+		if !sink.finished {
+			t.Error("returning from the handler did not finish the stream")
+		}
+		if sink.failed != nil {
+			t.Errorf("stream was failed with %v", sink.failed)
+		}
+	} else {
+		t.Fatalf("invoke failed: %+v", got.Err())
+	}
+
+	typed := got.Ok().Result.Some()
+	out, err := typedValue(typed).JSON()
+	if err != nil {
+		t.Fatalf("result is not readable: %v", err)
+	}
+	// u64 travels as a canonical base-10 string.
+	if out != "5" {
+		t.Errorf("byte count %v, want \"5\"", out)
+	}
+}
+
+// TestCommandStreamsRespectAnExplicitFailure — a handler that failed the stream
+// itself keeps that terminal, and still returns a result.
+func TestCommandStreamsRespectAnExplicitFailure(t *testing.T) {
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "resource-exhausted")
+	sink := &fakeSink{}
+
+	if got := invokeWithStreams(t, d, e, input, nil, sink); got.Tag() != witTypes.ResultOk {
+		t.Fatalf("invoke failed: %+v", got.Err())
+	}
+	if sink.finished {
+		t.Error("an explicitly failed stream was finished anyway")
+	}
+	if sink.failed == nil || sink.failed.String() != "resource exhausted" {
+		t.Errorf("failure is %v, want resource exhausted", sink.failed)
+	}
+}
+
+// TestCommandStreamsFailOnPanic — a dropped writer reads as `abandoned` on the
+// wire, which would make a crashed handler look like a lost connection. The
+// dispatcher fails the stream with the panic's message instead.
+func TestCommandStreamsFailOnPanic(t *testing.T) {
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "panic")
+	sink := &fakeSink{}
+
+	func() {
+		defer func() { _ = recover() }()
+		invokeWithStreams(t, d, e, input, nil, sink)
+	}()
+
+	if sink.finished {
+		t.Error("a panicking handler finished the stream cleanly")
+	}
+	if sink.failed == nil {
+		t.Fatal("a panicking handler left the stream without a terminal")
+	}
+	if got := sink.failed.String(); got != "failed: command <root> panicked: handler gave up" {
+		t.Errorf("failure is %q, want the panic message", got)
+	}
+}
+
+type Gate struct{}
+
+type GateArgs struct{ Mode string }
+
+// declareGate registers a command with both outputs and a declared error, to
+// observe which terminal each output gets for each outcome.
+func declareGate(r *toolRegistry, d *definitions) {
+	def := defineToolInto[Gate](r, d, "gate", Spec{Version: "0.1.0"}, false)
+	rejected := DefineToolError[golem.Unit](def, "rejected", ErrorSpec{Kind: UsageError})
+	cmd := def.OutputBody[GateArgs, string](func(a *GateArgs, s *CommandSpec) {
+		s.Positional(&a.Mode)
+		s.Stdout()
+		s.Stderr()
+		s.Raises(rejected)
+	})
+	_ = cmd.Handle(func(ctx *OutputContext, in GateArgs) (string, error) {
+		_, _ = io.WriteString(ctx.Stdout(), "partial")
+		if in.Mode == "reject" {
+			return "", rejected.New(golem.Unit{})
+		}
+		return "passed", nil
+	})
+}
+
+func invokeGate(t *testing.T, mode string, stdout, stderr *fakeSink) witTypes.Result[toolCommon.InvocationResult, types.ToolError] {
+	t.Helper()
+	_, r, d := buildToolFor(t, declareGate)
+	e, _ := r.get("gate")
+	input := encodeArgs(t, e.root.body, func(a *GateArgs) { a.Mode = mode })
+	return d.invokeCommand(e, nil, input, &byteReader{absent: absentStdin}, hostOutputs{stdout: stdout, stderr: stderr}, nil)
+}
+
+// TestDeclaredErrorEndsOutputsNormally — a declared error is an ordinary
+// outcome of the command, so what it wrote ends cleanly beside it.
+func TestDeclaredErrorEndsOutputsNormally(t *testing.T) {
+	stdout, stderr := &fakeSink{}, &fakeSink{}
+	res := invokeGate(t, "reject", stdout, stderr)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError || res.Err().CustomError().Name != "rejected" {
+		t.Fatalf("result %+v, want the declared error", res)
+	}
+	if string(stdout.written) != "partial" || !stdout.finished || stdout.failed != nil {
+		t.Errorf("stdout %q finished=%v failed=%v", stdout.written, stdout.finished, stdout.failed)
+	}
+	if !stderr.finished || stderr.failed != nil {
+		t.Errorf("stderr finished=%v failed=%v", stderr.finished, stderr.failed)
+	}
+}
+
+// TestEveryOutputGetsATerminal — one output failing to finish neither leaves
+// the other without a terminal nor hides a declared error.
+func TestEveryOutputGetsATerminal(t *testing.T) {
+	closed := streams.MakeStreamWriteErrorClosed(streams.MakeByteStreamCloseCauseConsumerCancelled())
+
+	stdout, stderr := &fakeSink{finishErr: &closed}, &fakeSink{}
+	res := invokeGate(t, "pass", stdout, stderr)
+	if res.IsOk() {
+		t.Error("a successful result survived its stdout failing to finish")
+	}
+	if !stderr.finished {
+		t.Error("stderr was left without a terminal")
+	}
+
+	stdout, stderr = &fakeSink{finishErr: &closed}, &fakeSink{}
+	res = invokeGate(t, "reject", stdout, stderr)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorCustomError {
+		t.Errorf("result %+v, want the declared error kept", res)
+	}
+	if !stderr.finished {
+		t.Error("stderr was left without a terminal")
+	}
+}
+
+// TestEmptyStdinChunkIsInvalidInput — an empty chunk breaks the stream
+// protocol, so the invocation is rejected however the handler reacted.
+func TestEmptyStdinChunkIsInvalidInput(t *testing.T) {
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "echo")
+	sink := &fakeSink{}
+	res := invokeWithStreams(t, d, e, input, []streamItem{chunk("ab"), chunk(""), chunk("c")}, sink)
+	if res.IsOk() || res.Err().Tag() != types.ToolErrorInvalidInput || res.Err().InvalidInput() != "stdin yielded an empty chunk" {
+		t.Fatalf("result %+v, want invalid-input", res)
+	}
+	if sink.finished || sink.failed == nil {
+		t.Errorf("stdout finished=%v failed=%v, want failed", sink.finished, sink.failed)
+	}
+}
+
+func TestEmptyChunkOfACalledToolsOutputIsAnError(t *testing.T) {
+	r := &byteReader{name: "stdout", src: &fakeSource{items: []streamItem{chunk("a"), chunk("")}}}
+	got, err := io.ReadAll(r)
+	if string(got) != "a" || err == nil || err.Error() != "stdout yielded an empty chunk" {
+		t.Errorf("read %q, %v", got, err)
+	}
+}
+
+// TestStdinIsReleasedExactlyOnce — the provider owns the stdin the host
+// supplied, read to the end, read partly, or not declared at all.
+func TestStdinIsReleasedExactlyOnce(t *testing.T) {
+	counting := func(items ...streamItem) (*byteReader, *int) {
+		n := 0
+		return &byteReader{src: &fakeSource{items: items}, release: func() { n++ }}, &n
+	}
+
+	_, r, d := buildToolFor(t, declarePipe)
+	e, input := pipeInput(t, r, "echo")
+	in, released := counting(chunk("abc"))
+	d.invokeCommand(e, nil, input, in, hostOutputs{stdout: &fakeSink{}}, nil)
+	if *released != 1 {
+		t.Errorf("a stdin read to the end was released %d times", *released)
+	}
+
+	e, input = pipeInput(t, r, "resource-exhausted")
+	in, released = counting(chunk("abc"))
+	d.invokeCommand(e, nil, input, in, hostOutputs{stdout: &fakeSink{}}, nil)
+	if *released != 1 {
+		t.Errorf("an unread stdin was released %d times", *released)
+	}
+
+	_, r, d = buildToolFor(t, declareGate)
+	e, _ = r.get("gate")
+	in, released = counting(chunk("abc"))
+	d.invokeCommand(e, nil, encodeArgs(t, e.root.body, func(a *GateArgs) { a.Mode = "pass" }), in, hostOutputs{}, nil)
+	if *released != 1 {
+		t.Errorf("a stdin the command does not declare was released %d times", *released)
+	}
+}

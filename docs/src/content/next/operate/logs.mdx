@@ -72,7 +72,7 @@ For both `file` and `stdout` logging, a set of boolean flags control the format 
 
 ## Golem agent logs
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     In TypeScript agents, use the standard `console` API to log messages. `console.log` writes to the agent's standard output,
     `console.error` writes to standard error, while `console.debug`, `console.info`, `console.warn`, etc. write log entries with the corresponding log level.
@@ -119,6 +119,25 @@ For both `file` and `stdout` logging, a set of boolean flags control the format 
 
     ```moonbit
     @logging.info("my_message")
+    ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+    In Go agents, anything written to the agent's standard output and error channels, for example with `fmt.Println`, is logged.
+
+    The recommended way is to use the standard `log/slog` package. The agent runtime installs a Golem handler as the default `slog` handler on startup, so log levels and attributes are written as WASI logging entries without any setup:
+
+    ```go
+    import "log/slog"
+
+    slog.Info("my_message", "operation", "example")
+    ```
+
+    The `github.com/golemcloud/golem/sdks/go/golem/logging` package can change the default level and context with `logging.SetDefault`, or write a single log entry directly:
+
+    ```go
+    import "github.com/golemcloud/golem/sdks/go/golem/logging"
+
+    logging.Log(logging.Info, "my_context", "my_message")
     ```
     </Tabs.Tab>
 </Tabs>

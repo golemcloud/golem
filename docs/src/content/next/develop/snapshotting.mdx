@@ -14,7 +14,7 @@ Snapshotting also enables **manual agent updates** between incompatible versions
 
 Each language SDK can generate JSON saving and loading when the complete agent state has an explicit JSON-deserialization contract. Automatic loading is not generated for arbitrary state: use custom snapshotting when your SDK cannot deserialize the complete state.
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Provide a state schema in the snapshotting configuration and **do not** provide a custom `snapshot: { save, load }` block. The SDK serializes and restores the schema-defined state as JSON:
 
@@ -49,13 +49,22 @@ Each language SDK can generate JSON saving and loading when the complete agent s
     <Tabs.Tab>
         If your agent struct derives `ToJson` and `@json.FromJson`, the SDK auto-generates JSON saving and a restoration factory.
     </Tabs.Tab>
+    <Tabs.Tab>
+        If the state type **does not** implement `golem.Snapshotter`, the SDK saves the state's exported fields as JSON and restores them with `encoding/json`. Unexported fields are not visible to it, so keep the state you need in exported fields or use custom snapshotting:
+
+        ```go
+        type state struct {
+            Value int64 `json:"value"`
+        }
+        ```
+    </Tabs.Tab>
 </Tabs>
 
 ## Custom snapshotting
 
 You can implement custom saving and restoration to control exactly how agent state is serialized. Saving runs on the live instance. Loading is a separate factory that returns the complete state or instance; the SDK never runs the normal agent initialization path first and then hands that instance to the loader. The following example shows a counter agent that saves its count as raw bytes:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Provide a `snapshot: { save, load }` block on `.implement(...)`. `save()` has the agent state as `this`. `load(bytes, context)` has no `this` and returns a complete fresh state object:
 
@@ -206,6 +215,25 @@ You can implement custom saving and restoration to control exactly how agent sta
         }
         ```
     </Tabs.Tab>
+    <Tabs.Tab>
+        Implement `golem.Snapshotter` (`Save() ([]byte, error)` and `Load([]byte) error`) on the state type. Unlike the other SDKs, loading is not a separate factory: the SDK first builds the state with the constructor passed to `Implement`, from the agent's ID, and then calls `Load` on it:
+
+        ```go
+        type state struct{ value int64 }
+
+        func (s *state) Save() ([]byte, error) {
+            return binary.BigEndian.AppendUint64(nil, uint64(s.value)), nil
+        }
+
+        func (s *state) Load(data []byte) error {
+            if len(data) != 8 {
+                return errors.New("expected an 8-byte snapshot")
+            }
+            s.value = int64(binary.BigEndian.Uint64(data))
+            return nil
+        }
+        ```
+    </Tabs.Tab>
 </Tabs>
 
 ## How snapshot restoration runs
@@ -225,7 +253,7 @@ If loading fails, partial state is discarded:
 
 To enable snapshotting, add a `snapshotting` option to your agent definition:
 
-<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
         Pass the `snapshotting` option to `defineAgent(...)`:
 
@@ -266,6 +294,16 @@ To enable snapshotting, add a `snapshotting` option to your agent definition:
     <Tabs.Tab>
         ```moonbit
         #derive.agent(snapshotting="every_n(5)")
+        ```
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Set `Snapshot` on the agent's `Spec` to one of `golem.SnapshotDisabled`, `golem.SnapshotDefault`, `golem.SnapshotEveryN(n)` or `golem.SnapshotPeriodic(d)`:
+
+        ```go
+        var Agent = golem.DefineAgent[ID](golem.Spec{
+            Name:     "Counter",
+            Snapshot: golem.SnapshotPeriodic(5 * time.Second),
+        })
         ```
     </Tabs.Tab>
 </Tabs>

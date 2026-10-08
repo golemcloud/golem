@@ -18,6 +18,7 @@ pub mod sdk {
     pub const EFFECT_GOLEM: &str = "2.0.0-rc1";
     pub const SCALA: &str = "2.0.0-RC1";
     pub const MOONBIT: &str = "0.6.0-rc3";
+    pub const GO: &str = "0.1.0";
     pub const MANIFEST: &str = "1.6.0";
 
     #[macro_export]
@@ -37,6 +38,41 @@ pub mod build_tool {
     pub const MOON_MIN: &str = "0.1.20260827";
     pub const JAVA_MIN: &str = "17.0.0";
     pub const WASM_TOOLS_MIN: &str = "1.227.1";
+    pub const GO_MIN: &str = "1.27.1";
+}
+
+// The Go toolchain the CLI builds Go components with.
+//
+// Go components need a Go runtime patched with `runtime.wasiOnIdle` (async
+// components deadlock without it) and `runtime.wasiIdleTimer` (Go timers fire
+// while a component waits on the host, with the async runtime fork below) and,
+// for durable replay, without the goroutine scheduling-latency sampler, whose
+// clock reads depend on execution history. Golem maintains that toolchain as a fork of Go and releases the
+// bootstrap trees componentize-go expects; the CLI installs the pinned release
+// into componentize-go's own toolchain directory and puts it on PATH for every
+// Go command, so builds never depend on which Go the developer has installed.
+//
+// Bump TAG to adopt a new release; the CLI replaces an installed toolchain
+// whose recorded tag differs.
+pub mod go_toolchain {
+    pub const REPO: &str = "golemcloud/go";
+    pub const TAG: &str = "go1.27.1-golem.4";
+}
+
+// Keep this aligned with the Go component template's `tool` directive.
+//
+// componentize-go must be pinned to a concrete version, never `latest`: below
+// v0.4.0 the Go wrapper resolves its Rust binary from a *canary* channel and
+// silently ignores the pin.
+pub mod go_dep {
+    pub const COMPONENTIZE_GO: &str = "v0.4.3";
+
+    // The async runtime the Go bindings run on. Golem's fork resumes a task when
+    // a Go timer is due (it pairs with the toolchain fork above); every Go
+    // component replaces the upstream module with it, since a `replace` in the
+    // SDK's own go.mod does not reach the components that depend on it.
+    pub const GO_PKG_MODULE: &str = "go.bytecodealliance.org/pkg";
+    pub const GO_PKG_FORK: &str = "github.com/golemcloud/go-pkg v0.2.3-golem.1";
 }
 
 pub mod effect_dep {
