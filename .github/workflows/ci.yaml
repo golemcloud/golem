@@ -156,23 +156,16 @@ jobs:
 
   builtin-artifacts:
     runs-on: blacksmith
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.value }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - name: Compute built-in artifact cache key
-        id: cache-key
-        env:
-          LOCK_HASH: ${{ hashFiles('builtin-artifacts.lock.json') }}
-        run: echo "value=golem-builtin-artifacts-${LOCK_HASH}" >> "$GITHUB_OUTPUT"
       - name: Restore or prepare built-in artifact cache
         id: cache
         uses: actions/cache@v5
         with:
           path: tmp/builtin-artifacts
-          key: ${{ steps.cache-key.outputs.value }}
+          key: golem-builtin-artifacts-${{ hashFiles('builtin-artifacts.lock.json') }}
       - name: Install cargo-make
         if: steps.cache.outputs.cache-hit != 'true'
         uses: taiki-e/install-action@v2
@@ -192,6 +185,11 @@ jobs:
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+      - name: Upload prepared built-in artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: builtin-artifacts
+          path: tmp/builtin-artifacts/*.wasm
 
   worker-tests:
     env:
@@ -233,7 +231,7 @@ jobs:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+          run-id: ${{ github.run_id }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -269,7 +267,7 @@ jobs:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+          run-id: ${{ github.run_id }}
       - name: Set up Lima
         id: lima
         env:
@@ -404,7 +402,7 @@ jobs:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+          run-id: ${{ github.run_id }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -573,7 +571,7 @@ jobs:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+          run-id: ${{ github.run_id }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -683,7 +681,7 @@ jobs:
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts
         with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
+          run-id: ${{ github.run_id }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8

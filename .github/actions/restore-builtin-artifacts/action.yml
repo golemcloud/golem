@@ -1,18 +1,18 @@
 name: 'Restore Built-in Artifacts'
-description: 'Restore checksum-pinned built-in artifact WASMs from cache and install them'
+description: 'Download checksum-pinned built-in artifact WASMs and install them'
 inputs:
-  cache-key:
-    description: 'Built-in artifact cache key'
+  run-id:
+    description: 'GitHub run ID that produced the built-in artifacts'
     required: true
 runs:
   using: 'composite'
   steps:
-    - name: Restore built-in artifact WASMs
-      uses: actions/cache/restore@v5
+    - name: Download built-in artifact WASMs
+      uses: actions/download-artifact@v8
       with:
+        name: builtin-artifacts
         path: tmp/builtin-artifacts
-        key: ${{ inputs.cache-key }}
-        fail-on-cache-miss: true
+        run-id: ${{ inputs.run-id }}
     - name: Install built-in artifact WASMs
       shell: bash
       run: |
