@@ -119,8 +119,12 @@ fn measure<T>(
 
 fn main() {
     // Asymmetric bytes catch corruption that an all-zero list would hide.
+    // The opt-in zero case reproduces the original regression payload.
+    let zero = std::env::args().any(|argument| argument == "--zero");
     for length in [100, 10_000] {
-        let bytes: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
+        let bytes: Vec<u8> = (0..length)
+            .map(|i| if zero { 0 } else { (i % 251) as u8 })
+            .collect();
         let typed: TypedSchemaValue = data_value!(bytes.clone());
         let external = ExternalSchemaValue::try_from(typed.value().clone()).unwrap();
         let external_typed = ExternalTypedSchemaValue::try_from(typed.clone()).unwrap();
@@ -148,6 +152,9 @@ fn main() {
         });
         measure("external-decode-bytes", length, encoded.len(), || {
             serde_json::from_slice::<ExternalSchemaValue>(&encoded).unwrap()
+        });
+        measure("json-dom-parse-only", length, encoded.len(), || {
+            serde_json::from_slice::<serde_json::Value>(&encoded).unwrap()
         });
         measure(
             "external-decode-dom-including-parse",
@@ -180,5 +187,43 @@ fn main() {
             encoded.len(),
             || typed.clone().into_parts().1,
         );
+        #[cfg(feature = "transports")]
+        transport_measurements(length, &typed);
     }
+}
+
+#[cfg(feature = "transports")]
+fn transport_measurements(length: usize, typed: &TypedSchemaValue) {
+    use golem_schema::proto::golem::schema::SchemaValue as ProtoValue;
+    use prost::Message;
+
+    let proto = ProtoValue::try_from(typed.value().clone()).unwrap();
+    let bytes = proto.encode_to_vec();
+    let decoded = ProtoValue::decode(bytes.as_slice()).unwrap();
+    assert_eq!(
+        &golem_common::schema::SchemaValue::try_from(decoded).unwrap(),
+        typed.value()
+    );
+    measure(
+        "native-clone-and-protobuf-lower",
+        length,
+        bytes.len(),
+        || ProtoValue::try_from(typed.value().clone()).unwrap(),
+    );
+    measure("protobuf-clone", length, bytes.len(), || proto.clone());
+    measure("protobuf-encoded-len", length, bytes.len(), || {
+        proto.encoded_len()
+    });
+    measure("protobuf-encode-bytes", length, bytes.len(), || {
+        proto.encode_to_vec()
+    });
+    measure("protobuf-decode-bytes", length, bytes.len(), || {
+        ProtoValue::decode(bytes.as_slice()).unwrap()
+    });
+    measure(
+        "protobuf-clone-and-native-lift",
+        length,
+        bytes.len(),
+        || golem_common::schema::SchemaValue::try_from(proto.clone()).unwrap(),
+    );
 }
