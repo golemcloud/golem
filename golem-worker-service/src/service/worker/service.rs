@@ -2892,16 +2892,16 @@ impl WorkerService {
         Ok(output)
     }
 
-    async fn component_for_invocation(
+    async fn component_for_invocation<'a>(
         &self,
-        fallback: &Component,
+        fallback: &'a Component,
         agent_id: &AgentId,
         environment_id: EnvironmentId,
         auth_ctx: &AuthCtx,
         freshness_disposition: InvocationFreshnessDisposition,
-    ) -> WorkerResult<Component> {
+    ) -> WorkerResult<std::borrow::Cow<'a, Component>> {
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-            return Ok(fallback.clone());
+            return Ok(std::borrow::Cow::Borrowed(fallback));
         }
 
         let component_revision = match self
@@ -2912,18 +2912,19 @@ impl WorkerService {
             Ok(metadata) => metadata.component_revision,
             Err(WorkerServiceError::AgentNotFound(_))
             | Err(WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { .. })) => {
-                return Ok(fallback.clone());
+                return Ok(std::borrow::Cow::Borrowed(fallback));
             }
             Err(error) => return Err(error),
         };
 
         if component_revision == fallback.revision {
-            Ok(fallback.clone())
+            Ok(std::borrow::Cow::Borrowed(fallback))
         } else {
-            Ok(self
-                .component_service
-                .get_revision(fallback.id, component_revision)
-                .await?)
+            Ok(std::borrow::Cow::Owned(
+                self.component_service
+                    .get_revision(fallback.id, component_revision)
+                    .await?,
+            ))
         }
     }
 
@@ -6211,6 +6212,83 @@ mod tests {
         }
 
         assert_eq!(harness.worker_client.invocations().len(), 3);
+    }
+
+    #[test]
+    async fn one_shot_native_and_protobuf_inputs_validate_before_dispatch() {
+        let harness = RestHarness::new_with_input(
+            AgentMode::Durable,
+            InputSchema::Parameters(vec![NamedField::user_supplied(
+                "bytes",
+                SchemaType::list(SchemaType::u8()),
+            )]),
+        );
+        let agent_id = AgentId {
+            component_id: harness.component_id,
+            agent_id: "weather-agent()".to_string(),
+        };
+        for mode in [AgentInvocationMode::Await, AgentInvocationMode::Schedule] {
+            let mut request = harness.invoke_request();
+            request.mode = mode;
+            request.method_parameters =
+                golem_common::schema::ExternalSchemaValue::try_from(SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::U8(3), SchemaValue::String("bad".into())],
+                    }],
+                })
+                .unwrap();
+            let error = harness
+                .worker_service
+                .invoke_agent_rest(request, AuthCtx::system())
+                .await
+                .expect_err("a malformed native input must not be dispatched");
+            assert!(
+                error.to_string().contains("bytes"),
+                "unexpected error: {error}"
+            );
+        }
+        for (input, valid) in [
+            (
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: (0..10_000)
+                            .map(|i| SchemaValue::U8((i % 251) as u8))
+                            .collect(),
+                    }],
+                },
+                true,
+            ),
+            (
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::List {
+                        elements: vec![SchemaValue::U8(3), SchemaValue::String("bad".into())],
+                    }],
+                },
+                false,
+            ),
+        ] {
+            let result = harness
+                .worker_service
+                .invoke_agent(
+                    &agent_id,
+                    Some("run".to_string()),
+                    Some(input.try_into().unwrap()),
+                    golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
+                    None,
+                    Some(IdempotencyKey::fresh()),
+                    None,
+                    false,
+                    InvocationFreshnessDisposition::MayExist,
+                    Vec::new(),
+                    AuthCtx::system(),
+                    Principal::anonymous().into(),
+                    None,
+                    None,
+                )
+                .await;
+            assert_eq!(result.is_ok(), valid, "unexpected result: {result:?}");
+        }
+        assert_eq!(harness.worker_client.invocations().len(), 1);
     }
 
     #[test]
