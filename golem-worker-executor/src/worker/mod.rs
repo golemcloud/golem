@@ -904,6 +904,7 @@ impl InvocationOutcomeWrite {
 }
 
 struct StopPublication {
+    release_scope: crate::metrics::resource_release::ReleaseScope,
     cause: std::sync::OnceLock<PendingWorkerInterrupt>,
     receipt: Arc<tokio::sync::broadcast::Sender<()>>,
     signal: Option<Arc<tokio::sync::broadcast::Sender<InterruptKind>>>,
@@ -915,6 +916,7 @@ type StopProgress = Arc<StdMutex<StopProgressState>>;
 
 #[derive(Default)]
 struct StopProgressState {
+    release_scope: crate::metrics::resource_release::ReleaseScope,
     tasks: Vec<StopCompletion>,
     // New drivers belong to the successor and cannot touch the resident runtime until
     // the preceding permit owner has physically finished. Errors remain retained here.
@@ -4055,7 +4057,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     fn mark_as_loading(&self, start_attempt: Uuid) {
         self.startup_attempt.begin(Some(start_attempt));
         self.monthly_stop.lock().unwrap().take();
-        self.stop_progress.lock().unwrap().publication = None;
+        {
+            let mut progress = self.stop_progress.lock().unwrap();
+            progress.publication = None;
+            progress.release_scope = Default::default();
+        }
         let mut execution_status = self.execution_status.write().unwrap();
         *execution_status = ExecutionStatus::loading(execution_status.agent_mode());
     }
@@ -4409,6 +4415,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         if let Some(pending) = interrupts.freeze() {
             publication.cause.set(pending).expect("one stop cause");
+            self.freeze_release_cause(publication, pending);
             pending.kind
         } else {
             kind
@@ -4444,6 +4451,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Some((publication, completion)) => (publication.clone(), Some(completion.clone())),
             None => (
                 Arc::new(StopPublication {
+                    release_scope: admission.release_scope.clone(),
                     cause: std::sync::OnceLock::new(),
                     receipt: Arc::new(tokio::sync::broadcast::channel(1).0),
                     signal: match &*self.execution_status.read().unwrap() {
@@ -4467,6 +4475,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .then(|| publication.receipt.subscribe());
         let driver_publication = publication.clone();
         let is_leader = leader.is_none();
+        let release_scope = publication.release_scope.clone();
+        let driver_receipt = release_scope.accepted_driver();
+        let waiting_receipt = was_waiting.then(|| release_scope.accepted_join());
+        let drain_scope = release_scope.clone();
+        let was_running = matches!(lifecycle.deletion_runtime(), WorkerInstance::Running(_));
         #[cfg(feature = "test-utils")]
         let gate = admission.driver_gates.pop_front();
         let progress = tokio::spawn(async move {
@@ -4506,6 +4519,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 WorkerExecutorError::runtime("Accepted stop lost its pending cause")
                             })?;
                             publication.cause.set(pending).expect("one stop cause");
+                            worker.freeze_release_cause(&publication, pending);
                             pending
                         }
                     };
@@ -4585,7 +4599,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
             let waiting_stop = if let Some((attempt, task)) = waiting {
-                worker.finish_waiting_stop(attempt, task).await?
+                worker
+                    .finish_waiting_stop(attempt, task, &release_scope, waiting_receipt.unwrap())
+                    .await?
             } else {
                 None
             };
@@ -4616,9 +4632,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             Ok(restart)
         });
         let progress = async move {
-            progress.await.map_err(|error| {
-                WorkerExecutorError::runtime(format!("Stop cleanup failed: {error}"))
-            })?
+            use crate::metrics::resource_release::{Failure, Stage};
+            let joined = progress.await;
+            let joined_at = drain_scope.now();
+            let result = match joined {
+                Ok(result) => {
+                    if result.is_err() {
+                        drain_scope.fail(Stage::EndToEnd, Failure::StopDriver);
+                    }
+                    result
+                }
+                Err(error) => {
+                    drain_scope.fail(
+                        Stage::EndToEnd,
+                        if error.is_panic() {
+                            Failure::Panic
+                        } else {
+                            Failure::ObserverLost
+                        },
+                    );
+                    Err(WorkerExecutorError::runtime(format!(
+                        "Stop cleanup failed: {error}"
+                    )))
+                }
+            };
+            if !was_running {
+                drain_scope.seal();
+            }
+            driver_receipt.complete_at(joined_at);
+            result
         }
         .boxed()
         .shared();
@@ -4647,12 +4689,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         attempt: Uuid,
         task: JoinHandle<()>,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+        waiting_receipt: crate::metrics::resource_release::ReleaseReceipt,
     ) -> Result<
         Option<(Uuid, InterruptKind, Arc<tokio::sync::broadcast::Sender<()>>)>,
         WorkerExecutorError,
     > {
         task.abort();
-        if let Err(error) = task.await
+        let joined = task.await;
+        let joined_at = scope.now();
+        use crate::metrics::resource_release::{Failure, Stage};
+        if let Err(error) = &joined
+            && !error.is_cancelled()
+        {
+            scope.fail(
+                Stage::EndToEnd,
+                if error.is_panic() {
+                    Failure::Panic
+                } else {
+                    Failure::Other
+                },
+            );
+        }
+        if ![
+            Stage::PrimaryStoreDrop,
+            Stage::FilesystemDeleted,
+            Stage::PermitReleased,
+        ]
+        .into_iter()
+        .any(|stage| scope.has_receipt(stage))
+        {
+            scope
+                .receipt(Stage::PermitWaitJoined)
+                .complete_at(joined_at);
+        }
+        waiting_receipt.complete_at(joined_at);
+        if let Err(error) = joined
             && !error.is_cancelled()
         {
             return Err(WorkerExecutorError::runtime(format!(
@@ -4709,6 +4781,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(Some((attempt, kind, receipt)))
     }
 
+    fn freeze_release_cause(&self, publication: &StopPublication, pending: PendingWorkerInterrupt) {
+        use crate::metrics::resource_release::Cause;
+        use crate::services::resource_limits::MonthlyResourceExhaustion;
+        let monthly = self
+            .monthly_stop
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(kind, _)| *kind == pending.kind)
+            .map(|(_, resource)| *resource);
+        let cause = match monthly {
+            Some(MonthlyResourceExhaustion::Compute) => Cause::MonthlyCompute,
+            Some(MonthlyResourceExhaustion::Memory) => Cause::MonthlyMemory,
+            Some(MonthlyResourceExhaustion::DurableStorage) => Cause::MonthlyDurableStorage,
+            Some(MonthlyResourceExhaustion::EphemeralStorage) => Cause::MonthlyEphemeralStorage,
+            None if pending.kind == InterruptKind::Jump => Cause::Jump,
+            None => pending.unload_request.reason.release_cause(),
+        };
+        publication.release_scope.freeze_cause(cause);
+    }
+
     async fn join_stop_progress(&self) -> Result<(), WorkerExecutorError> {
         join_accepted_stops(&self.stop_progress).await
     }
@@ -4754,9 +4847,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ));
                 };
                 self.owner_execution.begin_generation()?;
+                let mut progress = self.stop_progress.lock().unwrap();
+                if running.owner_generation_started {
+                    progress.release_scope = Default::default();
+                }
                 running.owner_generation_started = true;
                 self.resident_generation.fetch_add(1, Ordering::AcqRel);
-                self.stop_progress.lock().unwrap().publication = None;
+                progress.publication = None;
                 return Ok(true);
             }
             drop(lifecycle);
@@ -6503,6 +6600,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             receiver
         };
         receiver.await.unwrap_or(Ok(()))
+    }
+
+    pub(crate) fn release_scope(&self) -> crate::metrics::resource_release::ReleaseScope {
+        self.stop_progress.lock().unwrap().release_scope.clone()
     }
 
     pub(crate) fn linear_memory_grant(&self) -> Arc<StdMutex<MemoryGrant>> {
@@ -11396,6 +11497,7 @@ impl WaitingWorker {
     ) -> Self {
         let worker_trace = parent.trace(TraceOrigin::capture_current());
 
+        let release_scope = parent.release_scope();
         let handle = tokio::task::spawn(async move {
             let agent_id = parent.owned_agent_id.agent_id();
             let registered_concurrent_account = parent.registered_concurrent_account.clone();
@@ -11437,7 +11539,7 @@ impl WaitingWorker {
             );
 
             let phase_start = std::time::Instant::now();
-            let concurrent_agent_permit = registered_concurrent_account
+            let mut concurrent_agent_permit = registered_concurrent_account
                 .acquire(agent_id.clone())
                 .instrument(related_span!(
                     worker_trace.startup_origin,
@@ -11447,6 +11549,7 @@ impl WaitingWorker {
                     agent_type = %worker_trace.agent_type
                 ))
                 .await;
+            concurrent_agent_permit.observe_release(&release_scope);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::ConcurrencySlot,
                 phase_start.elapsed(),
@@ -11467,7 +11570,7 @@ impl WaitingWorker {
             // Not spanned, for the same reason as the charge resolution above:
             // `acquire_memory` retries on the same 500ms delay and logs once per
             // attempt. Its duration is recorded as a metric instead.
-            let (memory_grant, component_charge) = parent
+            let (mut memory_grant, component_charge) = parent
                 .active_agents()
                 .acquire_with_component_charge(
                     memory_requirement,
@@ -11476,6 +11579,7 @@ impl WaitingWorker {
                     requirement.module_bytes,
                 )
                 .await;
+            memory_grant.observe_release(&release_scope);
             crate::metrics::workers::record_worker_admission_wait(
                 AdmissionPhase::Memory,
                 phase_start.elapsed(),
@@ -11616,6 +11720,26 @@ pub(crate) enum UnloadReason {
 }
 
 impl UnloadReason {
+    fn release_cause(self) -> crate::metrics::resource_release::Cause {
+        use crate::metrics::resource_release::Cause;
+        match self {
+            Self::Deleting => Cause::Deleting,
+            Self::ExplicitStop => Cause::ExplicitStop,
+            Self::Failure => Cause::Failure,
+            Self::FilesystemLimit => Cause::FilesystemLimit,
+            Self::FilesystemPressure => Cause::FilesystemPressure,
+            Self::Idle => Cause::Idle,
+            Self::Interrupt => Cause::Interrupt,
+            Self::MemoryLimit => Cause::MemoryLimit,
+            Self::MemoryPressure => Cause::MemoryPressure,
+            Self::OutOfMemory => Cause::OutOfMemory,
+            Self::Panic => Cause::Panic,
+            Self::Restart => Cause::Restart,
+            Self::ShardLost => Cause::ShardLost,
+            Self::Suspend => Cause::Suspend,
+        }
+    }
+
     fn from_interrupt(kind: InterruptKind) -> Self {
         match kind {
             InterruptKind::Restart | InterruptKind::Jump => Self::Restart,
@@ -11779,7 +11903,72 @@ struct RunningAgent<Runtime, Adapter: SandboxFilesystemAdapter = SandboxFilesyst
 
 struct RunningAgentRuntime<Ctx: WorkerCtx> {
     instance: Instance,
-    store: async_lock::Mutex<Store<Ctx>>,
+    store: ObservedPrimaryStore<async_lock::Mutex<Store<Ctx>>>,
+}
+
+pub(crate) struct ObservedPrimaryStore<T> {
+    store: Option<T>,
+    receipts: Option<(
+        crate::metrics::resource_release::ReleaseReceipt,
+        crate::metrics::resource_release::ReleaseReceipt,
+    )>,
+}
+
+impl<Ctx: 'static> ObservedPrimaryStore<Store<Ctx>> {
+    fn new(
+        engine: &wasmtime::Engine,
+        context: Ctx,
+        scope: Option<&crate::metrics::resource_release::ReleaseScope>,
+    ) -> Self {
+        use crate::metrics::resource_release::Stage;
+        Self {
+            store: Some(Store::new(engine, context)),
+            receipts: scope.map(|scope| {
+                (
+                    scope.receipt(Stage::PrimaryExecutionQuiesced),
+                    scope.receipt(Stage::PrimaryStoreDrop),
+                )
+            }),
+        }
+    }
+}
+
+impl<T> ObservedPrimaryStore<T> {
+    fn map<U>(mut self, transform: impl FnOnce(T) -> U) -> ObservedPrimaryStore<U> {
+        ObservedPrimaryStore {
+            store: Some(transform(self.store.take().unwrap())),
+            receipts: self.receipts.take(),
+        }
+    }
+
+    fn quiesced(&self) {
+        if let Some((quiesced, _)) = &self.receipts {
+            quiesced.complete();
+        }
+    }
+}
+
+impl<T> std::ops::Deref for ObservedPrimaryStore<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.store.as_ref().unwrap()
+    }
+}
+impl<T> std::ops::DerefMut for ObservedPrimaryStore<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.store.as_mut().unwrap()
+    }
+}
+impl<T> Drop for ObservedPrimaryStore<T> {
+    fn drop(&mut self) {
+        if let Some(store) = self.store.take() {
+            self.quiesced();
+            drop(store);
+            if let Some((_, released)) = &self.receipts {
+                released.complete();
+            }
+        }
+    }
 }
 
 type WorkerRunningAgent<Ctx> = RunningAgent<RunningAgentRuntime<Ctx>>;
@@ -12357,6 +12546,7 @@ impl RunningWorker {
                     ))
                 }),
             })?;
+        created.observe_release(&parent.release_scope());
         let retained_memory_grant = parent.linear_memory_grant();
         let admitted_startup_bytes = retained_memory_grant.lock().unwrap().bytes();
         // The tracker starts in replay mode so the admitted startup reservation stays protected
@@ -12717,7 +12907,7 @@ impl RunningWorker {
             RunningAgent {
                 runtime: RunningAgentRuntime {
                     instance,
-                    store: async_lock::Mutex::new(store),
+                    store: store.map(async_lock::Mutex::new),
                 },
                 filesystem,
             },
@@ -12747,6 +12937,7 @@ impl RunningWorker {
         {
             parent.stop_progress.lock().unwrap().permit_acquisitions += 1;
         }
+        let release_scope = parent.release_scope();
         let mut invocation_loop = InvocationLoop {
             receiver,
             active,
@@ -12758,7 +12949,8 @@ impl RunningWorker {
             permit_state: ConcurrentAgentPermitState::new(
                 Some(concurrent_agent_permit.track_held(Arc::clone(&concurrent_agent_permit_held))),
                 concurrent_agent_permit_held,
-            ),
+            )
+            .with_release_scope(release_scope),
             filesystem_activity,
             unload_request,
             idle_since_millis,
@@ -15905,4 +16097,49 @@ enum StopResult {
         run_loop_handle: JoinHandle<()>,
         notify: OneShotEvent,
     },
+}
+
+#[cfg(test)]
+mod resource_release_tests {
+    use super::ObservedPrimaryStore;
+    use crate::metrics::resource_release::{Cause, Origin, tests::TestMetrics};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use test_r::test;
+
+    #[test]
+    fn primary_store_receipt_follows_actual_store_destruction() {
+        struct StoreData(Arc<AtomicBool>);
+        impl Drop for StoreData {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let dropped = Arc::new(AtomicBool::new(false));
+        let engine = wasmtime::Engine::default();
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        let store = ObservedPrimaryStore::new(&engine, StoreData(dropped.clone()), Some(&scope));
+        let store = store.map(async_lock::Mutex::new);
+        scope.start(Origin::AcceptedStop, Cause::Interrupt);
+        scope.seal();
+        assert!(!dropped.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
+        metrics.advance(1000);
+        store.quiesced();
+        assert!(!dropped.load(Ordering::Acquire));
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            1.0
+        );
+        drop(store);
+        assert!(dropped.load(Ordering::Acquire));
+        metrics.assert_finished("accepted_stop", "released");
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_store_drop", "released"),
+            1.0
+        );
+    }
 }

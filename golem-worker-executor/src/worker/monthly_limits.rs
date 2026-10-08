@@ -72,6 +72,7 @@ pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
     stop_progress: super::StopProgress,
+    pub(super) release_scope: crate::metrics::resource_release::ReleaseScope,
 }
 
 struct MonthlyMonitor {
@@ -83,26 +84,40 @@ struct MonthlyMonitor {
 impl ExecutionWindow {
     #[cfg(test)]
     pub(super) fn unmonitored(window: ResourceUsageMeteringWindow) -> Self {
+        Self::unmonitored_with_scope(window, Default::default())
+    }
+
+    #[cfg(test)]
+    pub(super) fn unmonitored_with_scope(
+        mut window: ResourceUsageMeteringWindow,
+        release_scope: crate::metrics::resource_release::ReleaseScope,
+    ) -> Self {
+        window.observe_permit_release(&release_scope);
         Self {
             window: Some(window),
             monitor: None,
             stop_progress: Arc::default(),
+            release_scope,
         }
     }
 
     pub(super) async fn new<Ctx: WorkerCtx>(
         worker: &Arc<Worker<Ctx>>,
-        window: ResourceUsageMeteringWindow,
+        mut window: ResourceUsageMeteringWindow,
         start_attempt: uuid::Uuid,
     ) -> Self {
+        let release_scope = worker.release_scope();
+        window.observe_permit_release(&release_scope);
         if !worker.resource_entry.monthly_metering_enabled() {
             return Self {
                 window: Some(window),
                 monitor: None,
                 stop_progress: worker.stop_progress.clone(),
+                release_scope,
             };
         }
         let monitor = worker.resource_entry.monthly_metering_enabled().then(|| {
+            let monitor_release = release_scope.clone();
             if let Some(flusher) = window.usage_flusher() {
                 worker
                     .owner_runtime_resources
@@ -159,6 +174,7 @@ impl ExecutionWindow {
                             biased;
                             _ = stop.cancelled() => break,
                             _ = actor.monthly_delivery_closed() => {
+                                monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
                                 return Err(WorkerExecutorError::runtime("Monthly monitor lost the lifecycle actor"));
                             },
                             _ = async {
@@ -170,6 +186,7 @@ impl ExecutionWindow {
                             _ = tick => {},
                             update = updates.changed() => {
                                 if update.is_err() {
+                                    monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::MonitorJoin);
                                     return Err(WorkerExecutorError::runtime("Monthly monitor lost capacity updates"));
                                 }
                             },
@@ -197,6 +214,7 @@ impl ExecutionWindow {
                 .catch_unwind()
                 .await
                 .unwrap_or_else(|panic| {
+                    monitor_release.fail(crate::metrics::resource_release::Stage::WindowPrepared, crate::metrics::resource_release::Failure::Panic);
                     let message = panic.downcast_ref::<&str>().copied()
                         .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
                         .unwrap_or("unknown panic");
@@ -219,6 +237,7 @@ impl ExecutionWindow {
             window: Some(window),
             monitor,
             stop_progress: worker.stop_progress.clone(),
+            release_scope,
         }
     }
 
@@ -229,18 +248,33 @@ impl ExecutionWindow {
         Option<WorkerExecutorError>,
         super::StopAdmissionSeal,
     ) {
+        use crate::metrics::resource_release::{Failure, Stage};
+        let prepared = self.release_scope.receipt(Stage::WindowPrepared);
         let mut seal = super::StopAdmissionSeal::new(&self.stop_progress);
         let monitor = self.monitor.take();
         stop_monitor(&monitor);
         let result = join_monitor(monitor).await;
+        if result.is_err() {
+            self.release_scope
+                .fail(Stage::WindowPrepared, Failure::MonitorJoin);
+        }
         let stopped = seal.join().await;
+        if stopped.is_err() {
+            self.release_scope
+                .fail(Stage::WindowPrepared, Failure::StopDriver);
+        }
         let mut window = self.window.take().unwrap();
         let frozen = window
             .freeze_allocation()
             .await
+            .inspect_err(|error| {
+                self.release_scope
+                    .fail(Stage::WindowPrepared, error.release_failure())
+            })
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()));
         let error = result.and(stopped).and(frozen).err();
         seal.health = error.clone().map_or(Ok(()), Err);
+        prepared.complete();
         (window, error, seal)
     }
 
@@ -260,6 +294,7 @@ impl ExecutionWindow {
             self.window.take().unwrap(),
             self.monitor.take(),
             self.stop_progress.clone(),
+            self.release_scope.clone(),
             deadline,
         )
     }
@@ -272,6 +307,7 @@ impl Drop for ExecutionWindow {
                 window,
                 self.monitor.take(),
                 self.stop_progress.clone(),
+                self.release_scope.clone(),
                 Instant::now() + Duration::from_secs(30),
             ));
         }
@@ -282,21 +318,41 @@ fn close_owned_window(
     window: ResourceUsageMeteringWindow,
     monitor: Option<MonthlyMonitor>,
     progress: super::StopProgress,
+    release_scope: crate::metrics::resource_release::ReleaseScope,
     deadline: Instant,
 ) -> impl Future<Output = Result<ResourceUsageSettlement, WorkerExecutorError>> + Send + 'static {
     let mut seal = super::StopAdmissionSeal::new(&progress);
     stop_monitor(&monitor);
     let unmonitored = monitor.is_none();
+    let closing_scope = release_scope.clone();
+    let closed = release_scope.completion_barrier();
+    let closed_in_task = closed.clone();
     let mut closing = Box::pin(async move {
+        use crate::metrics::resource_release::{Failure, Stage};
+        let mut observation = crate::metrics::resource_release::CleanupObservation::new(
+            &closing_scope,
+            Stage::EndToEnd,
+        );
         let monitor_result = join_monitor(monitor).await;
+        if monitor_result.is_err() {
+            closing_scope.fail(Stage::EndToEnd, Failure::MonitorJoin);
+        }
         let stopped = seal.join().await;
+        if stopped.is_err() {
+            closing_scope.fail(Stage::EndToEnd, Failure::StopDriver);
+        }
         let (settlement, permit) =
             resource_usage_metering::close_window_retaining_permit(window, deadline).await;
+        if let Err(error) = &settlement {
+            closing_scope.fail(Stage::EndToEnd, error.release_failure());
+        }
         let result = monitor_result
             .and(stopped)
             .and(settlement.map_err(|error| WorkerExecutorError::runtime(error.to_string())));
         drop(permit);
         seal.complete(result.as_ref().map(|_| ()).map_err(Clone::clone));
+        observation.returned();
+        closed_in_task.complete();
         result
     });
     // Poll by mutable pin so pending cleanup keeps its permit and seal when moved to the task.
@@ -308,6 +364,11 @@ fn close_owned_window(
             Ok(Some(result)) => return futures::future::Either::Left(std::future::ready(result)),
             Ok(None) => {}
             Err(panic) => {
+                release_scope.fail(
+                    crate::metrics::resource_release::Stage::EndToEnd,
+                    crate::metrics::resource_release::Failure::Panic,
+                );
+                closed.complete();
                 let message = panic
                     .downcast_ref::<&str>()
                     .copied()
@@ -328,6 +389,15 @@ fn close_owned_window(
     let task = tokio::spawn(closing);
     futures::future::Either::Right(async move {
         task.await.unwrap_or_else(|error| {
+            release_scope.fail(
+                crate::metrics::resource_release::Stage::EndToEnd,
+                if error.is_panic() {
+                    crate::metrics::resource_release::Failure::Panic
+                } else {
+                    crate::metrics::resource_release::Failure::ObserverLost
+                },
+            );
+            closed.complete();
             Err(WorkerExecutorError::runtime(format!(
                 "Execution window cleanup failed: {error}"
             )))

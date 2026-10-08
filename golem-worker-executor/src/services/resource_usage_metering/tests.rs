@@ -18,6 +18,25 @@ mod monthly;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
+#[test]
+fn window_open_failures_keep_bounded_typed_reasons() {
+    use crate::metrics::resource_release::Failure;
+    for (error, expected) in [
+        (MeteringOpenError::AlreadyOpen, Failure::MeterFault),
+        (MeteringOpenError::MemoryMeterStopped, Failure::MeterFault),
+        (MeteringOpenError::OpeningCancelled, Failure::Other),
+        (
+            MeteringOpenError::FilesystemObservation(FilesystemStorageError::verification(
+                "opening observation",
+                Path::new("unused"),
+            )),
+            Failure::FilesystemObservation,
+        ),
+    ] {
+        assert_eq!(error.release_failure(), expected);
+    }
+}
+
 fn ordinary_utc() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2030, 6, 15, 12, 0, 0)
         .single()

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::Worker;
 use super::entity_slot::{EntitySlot, EntitySlotRegistration};
 use super::invocation::fuel_exhaustion_error;
 use super::owner_lane::OwnerLane;
 use super::state_actor::OwnerCommitController;
+use super::{ObservedPrimaryStore, Worker};
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::tool::operation::{DeferredAdmissionTable, OwnerToolOperations};
 use crate::model::ExecutionStatus;
@@ -70,11 +70,11 @@ pub(super) fn allocated_linear_memory_bytes<T>(
 }
 
 struct StoreFuelGuard<Ctx: crate::workerctx::FuelManagement + 'static> {
-    store: Option<Store<Ctx>>,
+    store: Option<ObservedPrimaryStore<Store<Ctx>>>,
 }
 
 impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
-    fn new(store: Store<Ctx>) -> Self {
+    fn new(store: ObservedPrimaryStore<Store<Ctx>>) -> Self {
         Self { store: Some(store) }
     }
 
@@ -86,7 +86,7 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> StoreFuelGuard<Ctx> {
         }
     }
 
-    fn into_inner(mut self) -> Store<Ctx> {
+    fn into_inner(mut self) -> ObservedPrimaryStore<Store<Ctx>> {
         self.settle();
         self.store.take().unwrap()
     }
@@ -656,6 +656,7 @@ pub struct InstanceHost<Ctx: WorkerCtx> {
     slot: Option<Arc<EntitySlot>>,
     activation: Option<Arc<EntityActivation>>,
     owner_component_metadata: Option<Arc<ComponentMetadata>>,
+    release_scope: Option<crate::metrics::resource_release::ReleaseScope>,
 }
 
 impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
@@ -685,6 +686,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             slot: None,
             activation: None,
             owner_component_metadata: None,
+            release_scope: Some(owner.release_scope()),
         })
     }
 
@@ -715,6 +717,7 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             slot: Some(slot),
             activation: Some(Arc::new(activation.clone())),
             owner_component_metadata: Some(owner_component_metadata),
+            release_scope: None,
         })
     }
 
@@ -765,10 +768,13 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             .await
     }
 
-    pub(crate) fn create_store(&self, context: Ctx) -> Result<Store<Ctx>, WorkerExecutorError> {
+    pub(crate) fn create_store(
+        &self,
+        context: Ctx,
+    ) -> Result<ObservedPrimaryStore<Store<Ctx>>, WorkerExecutorError> {
         let owner = self.owner()?;
         let engine = owner.engine();
-        let mut store = Store::new(&engine, context);
+        let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
@@ -1051,7 +1057,7 @@ where
 }
 
 impl<Ctx: WorkerCtx> HostedInstance<Ctx> {
-    pub(crate) fn into_parts(self) -> (Instance, Store<Ctx>) {
+    pub(crate) fn into_parts(self) -> (Instance, ObservedPrimaryStore<Store<Ctx>>) {
         (self.instance, self.store.into_inner())
     }
 
@@ -1247,17 +1253,27 @@ mod monthly_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::StoreFuelGuard;
+    use super::{ObservedPrimaryStore, StoreFuelGuard};
+    use crate::metrics::resource_release::{Cause, tests::TestMetrics};
     use crate::workerctx::FuelManagement;
+    use futures::FutureExt;
     use golem_common::model::oplog::AgentError;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    use test_r::test;
-    use wasmtime::{Config, Engine, Store};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use test_r::{test, timeout};
+    use wasmtime::component::{Component, Linker};
+    use wasmtime::{Config, Engine};
 
     struct FuelTestContext {
         borrowed: bool,
         returned_at: Arc<AtomicU64>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for FuelTestContext {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
     }
 
     impl FuelManagement for FuelTestContext {
@@ -1287,12 +1303,15 @@ mod tests {
         config.consume_fuel(true);
         let engine = Engine::new(&config)?;
         let returned_at = Arc::new(AtomicU64::new(0));
-        let mut store = Store::new(
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut store = ObservedPrimaryStore::new(
             &engine,
             FuelTestContext {
                 borrowed: false,
                 returned_at: returned_at.clone(),
+                dropped: dropped.clone(),
             },
+            None,
         );
         store.set_fuel(123)?;
         store
@@ -1303,6 +1322,137 @@ mod tests {
         drop(StoreFuelGuard::new(store));
 
         assert_eq!(returned_at.load(Ordering::Acquire), 123);
+        assert!(dropped.load(Ordering::Acquire));
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn primary_store_release_observes_core_initialization_trap() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init unreachable) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        let driver = scope.accepted_driver();
+        scope.freeze_cause(Cause::Interrupt);
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let result = async {
+            let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+                &engine,
+                FuelTestContext {
+                    borrowed: true,
+                    returned_at: returned_at.clone(),
+                    dropped: dropped.clone(),
+                },
+                Some(&scope),
+            ));
+            store.set_fuel(123)?;
+            store.set_epoch_deadline(1);
+            scope.seal();
+            assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
+            metrics.advance(2000);
+            Linker::new(&engine)
+                .instantiate_pre(&component)?
+                .instantiate_async(&mut *store)
+                .await
+        }
+        .await;
+        assert_eq!(
+            result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::UnreachableCodeReached)
+        );
+        assert!(dropped.load(Ordering::Acquire));
+        assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_store_drop", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "end_to_end", "released"),
+            0.0
+        );
+        driver.complete();
+        metrics.assert_finished("accepted_stop", "released");
+        Ok(())
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn primary_store_release_observes_cancelled_core_initialization() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let component = Component::new(
+            &engine,
+            r#"(component
+                (core module $m (func $init (loop br 0)) (start $init))
+                (core instance (instantiate $m)))"#,
+        )?;
+        let metrics = TestMetrics::new();
+        let scope = metrics.scope();
+        let returned_at = Arc::new(AtomicU64::new(u64::MAX));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_callback = entered.clone();
+        let mut initializing = Box::pin(async {
+            let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
+                &engine,
+                FuelTestContext {
+                    borrowed: true,
+                    returned_at: returned_at.clone(),
+                    dropped: dropped.clone(),
+                },
+                Some(&scope),
+            ));
+            store.set_fuel(123)?;
+            store.set_epoch_deadline(0);
+            store.epoch_deadline_callback(move |_| {
+                entered_callback.store(true, Ordering::Release);
+                Ok(wasmtime::UpdateDeadline::YieldCustom(
+                    1,
+                    futures::future::pending().boxed(),
+                ))
+            });
+            Linker::new(&engine)
+                .instantiate_pre(&component)?
+                .instantiate_async(&mut *store)
+                .await
+        });
+        assert!(futures::poll!(initializing.as_mut()).is_pending());
+        assert!(entered.load(Ordering::Acquire));
+        let driver = scope.accepted_driver();
+        scope.freeze_cause(Cause::Interrupt);
+        scope.seal();
+        assert_eq!(metrics.pending("accepted_stop", "primary_store_drop"), 1.0);
+        assert!(!dropped.load(Ordering::Acquire));
+        metrics.advance(2000);
+        drop(initializing);
+        assert!(dropped.load(Ordering::Acquire));
+        assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_execution_quiesced", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "primary_store_drop", "released"),
+            1.0
+        );
+        assert_eq!(
+            metrics.count("accepted_stop", "end_to_end", "released"),
+            0.0
+        );
+        driver.complete();
+        metrics.assert_finished("accepted_stop", "released");
         Ok(())
     }
 }

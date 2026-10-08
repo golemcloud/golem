@@ -16,6 +16,8 @@
 // Collecting them in one place makes it easier to look them up and to share
 // common metrics between different layers of the application.
 
+pub(crate) mod resource_release;
+
 use golem_common::golem_version;
 use lazy_static::lazy_static;
 use prometheus::*;
@@ -497,13 +499,6 @@ pub mod workers {
             "Foreign durable-stream accesses rejected because the current fingerprint differs"
         )
         .unwrap();
-        static ref AGENT_FILESYSTEM_LIFECYCLE_SECONDS: HistogramVec = register_histogram_vec!(
-            "golem_agent_filesystem_lifecycle_seconds",
-            "Time spent creating or deleting an agent runtime filesystem, labelled by operation and outcome",
-            &["operation", "outcome"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
     }
 
     pub fn record_worker_call(api_name: &'static str) {
@@ -604,16 +599,6 @@ pub mod workers {
 
     pub fn record_foreign_stream_fingerprint_mismatch() {
         FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL.inc();
-    }
-
-    pub fn record_agent_filesystem_lifecycle(
-        operation: &'static str,
-        success: bool,
-        elapsed: Duration,
-    ) {
-        AGENT_FILESYSTEM_LIFECYCLE_SECONDS
-            .with_label_values(&[operation, if success { "success" } else { "failure" }])
-            .observe(elapsed.as_secs_f64());
     }
 
     pub fn set_worker_count_by_status(status: &'static str, count: f64) {

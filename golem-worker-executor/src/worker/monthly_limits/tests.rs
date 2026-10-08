@@ -11,7 +11,11 @@ use golem_common::model::component::ComponentId;
 use std::sync::atomic::{AtomicBool, Ordering};
 use test_r::{test, timeout};
 
-async fn unmetered_window() -> (ExecutionWindow, Arc<AtomicBool>) {
+async fn unmetered_window() -> (
+    ExecutionWindow,
+    Arc<AtomicBool>,
+    crate::metrics::resource_release::tests::TestMetrics,
+) {
     let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
     let memory = LinearMemoryTracker::new_with_metering(
         0,
@@ -49,13 +53,21 @@ async fn unmetered_window() -> (ExecutionWindow, Arc<AtomicBool>) {
     let held = Arc::new(AtomicBool::new(false));
     window.track_permit_for_test(held.clone());
     assert!(held.load(Ordering::Acquire));
-    (ExecutionWindow::unmonitored(window), held)
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+    let scope = metrics.scope();
+    let window = ExecutionWindow::unmonitored_with_scope(window, scope.clone());
+    scope.start(
+        crate::metrics::resource_release::Origin::AcceptedStop,
+        crate::metrics::resource_release::Cause::Interrupt,
+    );
+    scope.seal();
+    (window, held, metrics)
 }
 
 #[test]
 #[timeout("5s")]
 async fn all_off_ready_close_spawns_no_task_and_completes_its_seal() {
-    let (window, held) = unmetered_window().await;
+    let (window, held, metrics) = unmetered_window().await;
     let progress = window.stop_progress.clone();
     let closing = window.close(Instant::now() + Duration::from_secs(1));
     assert_eq!(progress.lock().unwrap().window_close_tasks, 0);
@@ -72,12 +84,17 @@ async fn all_off_ready_close_spawns_no_task_and_completes_its_seal() {
             .unwrap()
             .is_ok()
     );
+    metrics.assert_finished("accepted_stop", "released");
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released"),
+        1.0
+    );
 }
 
 #[test]
 #[timeout("5s")]
 async fn all_off_pending_close_retains_task_and_permit_after_observer_drop() {
-    let (window, held) = unmetered_window().await;
+    let (window, held, metrics) = unmetered_window().await;
     let progress = window.stop_progress.clone();
     let (release, wait) = tokio::sync::oneshot::channel();
     progress
@@ -91,15 +108,26 @@ async fn all_off_pending_close_retains_task_and_permit_after_observer_drop() {
     drop(closing);
     assert!(held.load(Ordering::Acquire));
     assert!(successor.clone().now_or_never().is_none());
+    assert_eq!(metrics.pending("accepted_stop", "permit_released"), 1.0);
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released"),
+        0.0
+    );
+    metrics.advance(2000);
     release.send(Ok(())).unwrap();
     successor.await.unwrap();
     assert!(!held.load(Ordering::Acquire));
+    metrics.assert_finished("accepted_stop", "released");
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released"),
+        1.0
+    );
 }
 
 #[test]
 #[timeout("5s")]
 async fn stopping_instance_reports_real_permit_release_before_state_transition() {
-    let (window, held) = unmetered_window().await;
+    let (window, held, metrics) = unmetered_window().await;
     let instance = WorkerInstance::Stopping(super::super::StoppingWorker {
         notify: golem_common::one_shot::OneShotEvent::new(),
         final_state: super::super::FinalWorkerState::Unloaded {
@@ -120,18 +148,29 @@ async fn stopping_instance_reports_real_permit_release_before_state_transition()
     assert!(held.load(Ordering::Acquire));
     assert!(instance.concurrent_agent_permit_is_held());
     assert!(successor.clone().now_or_never().is_none());
+    assert_eq!(metrics.pending("accepted_stop", "permit_released"), 1.0);
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released"),
+        0.0
+    );
+    metrics.advance(2000);
     release.send(Ok(())).unwrap();
     successor.await.unwrap();
     closing.await.unwrap();
     assert!(matches!(instance, WorkerInstance::Stopping(_)));
     assert!(!held.load(Ordering::Acquire));
     assert!(!instance.concurrent_agent_permit_is_held());
+    metrics.assert_finished("accepted_stop", "released");
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released"),
+        1.0
+    );
 }
 
 #[test]
 #[timeout("5s")]
 async fn all_off_ready_close_converts_panic_and_keeps_the_failed_seal() {
-    let (window, held) = unmetered_window().await;
+    let (window, held, metrics) = unmetered_window().await;
     let progress = window.stop_progress.clone();
     progress.lock().unwrap().tasks.push(
         async { panic!("injected unmetered stop cleanup panic") }
@@ -160,12 +199,17 @@ async fn all_off_ready_close_converts_panic_and_keeps_the_failed_seal() {
             .unwrap()
             .is_err()
     );
+    metrics.assert_finished("accepted_stop", "released_with_failure");
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released_with_failure"),
+        1.0
+    );
 }
 
 #[test]
 #[timeout("5s")]
 async fn all_off_ready_close_retains_prior_cleanup_error() {
-    let (window, held) = unmetered_window().await;
+    let (window, held, metrics) = unmetered_window().await;
     let progress = window.stop_progress.clone();
     let error = WorkerExecutorError::runtime("prior stop cleanup failed");
     progress
@@ -188,5 +232,10 @@ async fn all_off_ready_close_retains_prior_cleanup_error() {
             .unwrap()
             .unwrap_err(),
         error
+    );
+    metrics.assert_finished("accepted_stop", "released_with_failure");
+    assert_eq!(
+        metrics.count("accepted_stop", "permit_released", "released_with_failure"),
+        1.0
     );
 }

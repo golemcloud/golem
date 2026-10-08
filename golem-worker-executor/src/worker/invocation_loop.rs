@@ -129,6 +129,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
 impl<Ctx: WorkerCtx> Drop for InvocationLoop<Ctx> {
     fn drop(&mut self) {
         self.permit_state.release();
+        self.permit_state.release_scope.seal();
     }
 }
 
@@ -772,6 +773,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                                 failure,
                                 suspend,
                             } => {
+                                store.quiesced();
                                 store
                                     .lock()
                                     .await
@@ -867,6 +869,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
 
+            agent.runtime.store.quiesced();
             let delayed_retry_commands = matches!(final_decision, Some(RetryDecision::Delayed(_)))
                 .then(|| {
                     let prefix_len = self.receiver.len();
@@ -1520,9 +1523,10 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     /// Create the worker instance and publish an event about it
     async fn create_instance(
-        &self,
-        permit: crate::services::active_agents::ConcurrentAgentPermit,
+        &mut self,
+        mut permit: crate::services::active_agents::ConcurrentAgentPermit,
     ) -> CreateInstanceResult<Ctx> {
+        let phase = agent_phase_span!(self, "create_instance");
         async {
             debug!("Creating the worker instance");
             match self
@@ -1546,6 +1550,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     return CreateInstanceResult::Failed;
                 }
             }
+            self.permit_state.release_scope = self.parent.release_scope();
+            permit.observe_release(&self.permit_state.release_scope);
+            self.parent
+                .linear_memory_grant()
+                .lock()
+                .unwrap()
+                .observe_release(&self.permit_state.release_scope);
             self.parent.unload_cleanup.lock().unwrap().take();
             match monthly_resource_admission(&self.parent.resource_entry, self.parent.agent_mode())
             {
@@ -1610,7 +1621,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.parent
                         .complete_startup(self.start_attempt, Err(err.clone()));
                     let final_state = if let Some(failure) = filesystem_cleanup_failure {
-                        let (cleanup, sender) = UnloadCleanup::new();
+                        let (cleanup, sender) =
+                            UnloadCleanup::new(Some(self.permit_state.release_scope.clone()));
                         let _ = sender.send(Err(failure));
                         *self.parent.unload_cleanup.lock().unwrap() = Some(cleanup);
                         FinalWorkerState::CleanupFailed(err.clone())
@@ -1632,7 +1644,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 }
             }
         }
-        .instrument(agent_phase_span!(self, "create_instance"))
+        .instrument(phase)
         .await
     }
 
@@ -1737,11 +1749,22 @@ where
     Runtime: Send + 'static,
     Adapter: SandboxFilesystemAdapter,
 {
+    use crate::metrics::resource_release::{Failure, Stage};
+    let scope = permit_state.release_scope.clone();
+    let cleanup_receipt = scope.unload(reason.release_cause());
+    ownership.filesystem.observe_release(&scope);
+    ownership.filesystem.accept_deletion_observation();
+    let drained = scope.receipt(Stage::FilesystemDrained);
     let window = permit_state.take_window();
-    let permit = permit_state.take_permit();
+    let mut permit = permit_state.take_permit();
+    if let Some(permit) = &mut permit {
+        permit.observe_release(&scope);
+    }
+    scope.seal();
     let permit_held = Arc::clone(&permit_state.held);
     filesystem_activity.lock().unwrap().take();
-    spawn_module_owned_unload_continuation(move |completion| async move {
+    let cleanup_scope = scope.clone();
+    spawn_module_owned_unload_continuation(Some(cleanup_scope), move |completion| async move {
         let SealedAgentOwnership {
             runtime,
             filesystem,
@@ -1754,6 +1777,7 @@ where
         let (window, close_error, stop_seal) = {
             let preparation = async {
                 drain_sealed_filesystem(&filesystem).await;
+                drained.complete();
                 match window {
                     Some(window) => {
                         let (window, error, seal) = window.prepare_disposal().await;
@@ -1766,6 +1790,7 @@ where
             tokio::select! {
                 prepared = &mut preparation => prepared,
                 _ = &mut deadline_sleep => {
+                    scope.fail(Stage::EndToEnd, Failure::Deadline);
                     completion.complete(Some(unload_deadline_error(reason)));
                     preparation.await
                 }
@@ -1776,6 +1801,8 @@ where
             permit,
             permit_held,
             stop_seal,
+            release_scope: scope.clone(),
+            cleanup_receipt,
         };
 
         if let Some(error) = &close_error {
@@ -1792,6 +1819,7 @@ where
         let result = tokio::select! {
             result = &mut deletion => result,
             _ = &mut deadline_sleep => {
+                scope.fail(Stage::EndToEnd, Failure::Deadline);
                 completion.complete(Some(unload_deadline_error(reason)));
                 deletion.await
             }
@@ -2306,6 +2334,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                     ExecutionWindow::new(&self.parent, window, self.start_attempt).await,
                 ),
                 Err(error) => {
+                    self.permit_state.release_scope.fail(
+                        crate::metrics::resource_release::Stage::EndToEnd,
+                        error.release_failure(),
+                    );
                     self.permit_state.mark_released();
                     return Err(WorkerExecutorError::runtime(error.to_string()));
                 }
@@ -2632,6 +2664,7 @@ struct UnloadObserver {
 #[derive(Clone, Debug)]
 pub(super) struct UnloadCleanup {
     completion: Shared<BoxFuture<'static, Result<(), UnloadCleanupFailure>>>,
+    release_scope: Option<crate::metrics::resource_release::ReleaseScope>,
 }
 
 pub(crate) struct DisposalAccounting {
@@ -2639,6 +2672,8 @@ pub(crate) struct DisposalAccounting {
     permit: Option<crate::services::active_agents::ConcurrentAgentPermit>,
     permit_held: Arc<AtomicBool>,
     stop_seal: Option<super::StopAdmissionSeal>,
+    release_scope: crate::metrics::resource_release::ReleaseScope,
+    cleanup_receipt: crate::metrics::resource_release::ReleaseReceipt,
 }
 
 impl std::fmt::Debug for DisposalAccounting {
@@ -2656,6 +2691,12 @@ impl DisposalAccounting {
             )
             .await
             .map(|_| ())
+            .inspect_err(|error| {
+                self.release_scope.fail(
+                    crate::metrics::resource_release::Stage::PermitReleased,
+                    error.release_failure(),
+                )
+            })
             .map_err(|error| WorkerExecutorError::runtime(error.to_string())),
             None => Ok(()),
         };
@@ -2664,6 +2705,7 @@ impl DisposalAccounting {
         if let Some(seal) = self.stop_seal {
             seal.complete(result.clone());
         }
+        self.cleanup_receipt.complete();
         result
     }
 }
@@ -2695,7 +2737,9 @@ impl UnloadCleanupFailure {
 }
 
 impl UnloadCleanup {
-    fn new() -> (Self, Sender<Result<(), UnloadCleanupFailure>>) {
+    fn new(
+        release_scope: Option<crate::metrics::resource_release::ReleaseScope>,
+    ) -> (Self, Sender<Result<(), UnloadCleanupFailure>>) {
         let (sender, receiver) = oneshot::channel();
         let completion = async move {
             receiver.await.unwrap_or_else(|_| {
@@ -2706,12 +2750,19 @@ impl UnloadCleanup {
         }
         .boxed()
         .shared();
-        (Self { completion }, sender)
+        (
+            Self {
+                completion,
+                release_scope,
+            },
+            sender,
+        )
     }
 
     fn with_failure(&self, error: WorkerExecutorError) -> Self {
         let completion = self.completion.clone();
         Self {
+            release_scope: self.release_scope.clone(),
             completion: async move {
                 Err(match completion.await {
                     Err(UnloadCleanupFailure::Filesystem {
@@ -2745,7 +2796,8 @@ impl UnloadCleanup {
     /// this observer is dropped. The worker serializes explicit deletion attempts.
     pub(super) fn retry(&self) -> Self {
         let previous = self.completion.clone();
-        let (cleanup, sender) = Self::new();
+        let (cleanup, sender) = Self::new(self.release_scope.clone());
+        let scope = self.release_scope.clone();
         tokio::spawn(async move {
             let result = AssertUnwindSafe(async move {
                 match previous.await {
@@ -2778,6 +2830,12 @@ impl UnloadCleanup {
             .catch_unwind()
             .await
             .unwrap_or_else(|_| {
+                if let Some(scope) = &scope {
+                    scope.fail(
+                        crate::metrics::resource_release::Stage::EndToEnd,
+                        crate::metrics::resource_release::Failure::Panic,
+                    );
+                }
                 Err(UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
                     "module-owned agent cleanup retry panicked",
                 )))
@@ -2824,13 +2882,16 @@ impl Future for UnloadObserver {
 fn spawn_module_owned_unload(
     task: impl Future<Output = Option<WorkerExecutorError>> + Send + 'static,
 ) -> UnloadObserver {
-    spawn_module_owned_unload_continuation(move |_completion| async move {
+    spawn_module_owned_unload_continuation(None, move |_completion| async move {
         task.await
             .map_or(Ok(()), |error| Err(UnloadCleanupFailure::Other(error)))
     })
 }
 
-fn spawn_module_owned_unload_continuation<Task, TaskFuture>(task: Task) -> UnloadObserver
+fn spawn_module_owned_unload_continuation<Task, TaskFuture>(
+    scope: Option<crate::metrics::resource_release::ReleaseScope>,
+    task: Task,
+) -> UnloadObserver
 where
     Task: FnOnce(UnloadCompletion) -> TaskFuture + Send + 'static,
     TaskFuture: Future<Output = Result<(), UnloadCleanupFailure>> + Send + 'static,
@@ -2840,12 +2901,18 @@ where
         sender: Arc::new(StdMutex::new(Some(sender))),
     };
     let completion_after_task = completion.clone();
-    let (cleanup, final_sender) = UnloadCleanup::new();
+    let (cleanup, final_sender) = UnloadCleanup::new(scope.clone());
     tokio::spawn(async move {
         let result = std::panic::AssertUnwindSafe(async move { task(completion).await })
             .catch_unwind()
             .await
             .unwrap_or_else(|_| {
+                if let Some(scope) = &scope {
+                    scope.fail(
+                        crate::metrics::resource_release::Stage::EndToEnd,
+                        crate::metrics::resource_release::Failure::Panic,
+                    );
+                }
                 let error = WorkerExecutorError::runtime("module-owned agent unload task panicked");
                 error!(error = %error, "Module-owned agent unload task panicked");
                 Err(UnloadCleanupFailure::Other(error))
@@ -2857,6 +2924,7 @@ where
 }
 
 pub(super) struct ConcurrentAgentPermitState<T> {
+    release_scope: crate::metrics::resource_release::ReleaseScope,
     permit: Option<T>,
     window: Option<ExecutionWindow>,
     held: Arc<AtomicBool>,
@@ -2869,7 +2937,16 @@ impl<T> ConcurrentAgentPermitState<T> {
             permit,
             window: None,
             held,
+            release_scope: Default::default(),
         }
+    }
+
+    pub(super) fn with_release_scope(
+        mut self,
+        scope: crate::metrics::resource_release::ReleaseScope,
+    ) -> Self {
+        self.release_scope = scope;
+        self
     }
 
     fn is_some(&self) -> bool {
@@ -2893,6 +2970,7 @@ impl<T> ConcurrentAgentPermitState<T> {
     fn install_window(&mut self, window: ExecutionWindow) {
         debug_assert!(self.permit.is_none());
         debug_assert!(self.window.is_none());
+        self.release_scope = window.release_scope.clone();
         self.window = Some(window);
         self.held.store(true, Ordering::Release);
     }
@@ -4743,15 +4821,21 @@ mod tests {
     #[test]
     #[timeout("5s")]
     async fn concrete_unload_running_agent_publishes_only_after_verified_deletion() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
         let store_dropped = Arc::new(AtomicBool::new(false));
 
@@ -4791,23 +4875,72 @@ mod tests {
         close.wait_started().await;
         assert!(store_dropped.load(Ordering::Acquire));
         assert!(held.load(Ordering::Acquire));
+        metrics.advance(1000);
         close.release();
 
         deletion.wait_started().await;
         assert!(held.load(Ordering::Acquire));
         tokio::task::yield_now().await;
         assert!(!publication.is_finished());
+        assert_eq!(metrics.pending("unload", "filesystem_deleted"), 1.0);
+        metrics.advance(2000);
+        let driver = scope.accepted_driver();
+        let follower = scope.accepted_driver();
+        scope.freeze_cause(crate::metrics::resource_release::Cause::Interrupt);
+        follower.complete();
+        assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
+        assert_eq!(
+            metrics.count("accepted_stop", "filesystem_drained", "released"),
+            0.0
+        );
+        metrics.advance(4000);
         deletion.release();
         let instance = publication.await.unwrap();
         assert!(matches!(instance, WorkerInstance::Unloaded { .. }));
         assert!(!held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("accepted_stop", "end_to_end"), 1.0);
+        assert_eq!(
+            metrics.count("accepted_stop", "end_to_end", "released"),
+            0.0
+        );
+        metrics.advance(1000);
+        driver.complete();
+        metrics.assert_finished("accepted_stop", "released");
+        assert!(metrics.export().contains(
+            "cause=\"explicit_stop\",origin=\"unload\",outcome=\"released\",stage=\"end_to_end\"} 7"
+        ));
+        assert_eq!(
+            metrics.count("accepted_stop", "window_prepared", "released"),
+            0.0
+        );
+        assert_eq!(
+            control
+                .calls()
+                .iter()
+                .filter(|call| call.starts_with("delete_and_verify("))
+                .count(),
+            1
+        );
+        let export = metrics.export();
+        assert!(export.contains("cause=\"interrupt\",origin=\"accepted_stop\",outcome=\"released\",stage=\"end_to_end\"} 5"), "{export}");
+        metrics.assert_finished("unload", "released");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn concrete_unload_deletion_failure_publishes_cleanup_failed() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         control.push_delete_and_verify(Err(FilesystemStorageError::verification(
             "injected verified deletion failure",
@@ -4815,7 +4948,10 @@ mod tests {
         )));
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
         let observer = InvocationLoop::<Context>::unload_running_agent(
@@ -4860,20 +4996,34 @@ mod tests {
         )
         .await;
         assert!(matches!(instance, WorkerInstance::CleanupFailed(_)));
+        metrics.assert_finished("unload", "released_with_failure");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn dropped_production_unload_observer_does_not_cancel_owned_cleanup() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
         let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
@@ -4890,20 +5040,34 @@ mod tests {
             &activity,
             None,
         );
+        let cleanup = observer.cleanup.clone();
         drop(observer);
 
         close.wait_started().await;
         close.release();
         deletion.wait_started().await;
         assert!(held.load(Ordering::Acquire));
+        assert_eq!(metrics.pending("unload", "end_to_end"), 1.0);
         deletion.release();
+        cleanup.wait().await.unwrap();
+        metrics.assert_finished("unload", "released");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn production_unload_starts_final_observation_after_native_close_drains() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         let close = control.block("close");
         control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
@@ -4916,7 +5080,10 @@ mod tests {
         let settled = window.settlement_observer();
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
         let observer = unload_resident_agent_ownership::<_, ScriptedSandboxFilesystem>(
@@ -4954,13 +5121,24 @@ mod tests {
         assert!(observer.await.is_none());
         assert!(settled());
         assert!(!held.load(Ordering::Acquire));
+        metrics.assert_finished("unload", "released");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn startup_disposal_retains_permit_and_billing_through_failed_deletion_and_repair() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, mut window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         control.push_observe_allocation(Ok(crate::sandbox_filesystem::FilesystemAllocation {
             allocated_bytes: 100,
@@ -4974,7 +5152,7 @@ mod tests {
         let settled = window.settlement_observer();
         let held = Arc::new(AtomicBool::new(false));
         window.track_permit_for_test(held.clone());
-        let window = super::ExecutionWindow::unmonitored(window);
+        let window = super::ExecutionWindow::unmonitored_with_scope(window, scope.clone());
         drop(node);
         let task = tokio::spawn(super::cleanup_startup_filesystem(
             seal(filesystem),
@@ -4995,7 +5173,7 @@ mod tests {
                 .contains("startup deletion failure")
         );
         assert!(!settled());
-        let (cleanup, sender) = super::UnloadCleanup::new();
+        let (cleanup, sender) = super::UnloadCleanup::new(None);
         sender
             .send(Err(failed.filesystem_cleanup_failure.unwrap()))
             .unwrap();
@@ -5011,13 +5189,24 @@ mod tests {
         assert!(settled());
         assert!(!held.load(Ordering::Acquire));
         assert_eq!(cleanup.wait().await.unwrap_err(), original);
+        metrics.assert_finished("unload", "released_with_failure");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn final_allocation_failure_remains_failed_after_successful_physical_deletion() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         control.push_observe_allocation(Err(FilesystemStorageError::verification(
             "final allocation observation failed",
@@ -5027,7 +5216,10 @@ mod tests {
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
         let observer = unload_resident_agent_ownership(
             ResidentAgentOwnership {
@@ -5056,20 +5248,34 @@ mod tests {
         assert_eq!(cleanup.wait().await.unwrap_err(), error);
         assert!(!held.load(Ordering::Acquire));
         assert_eq!(cleanup.retry().wait().await.unwrap_err(), error);
+        metrics.assert_finished("unload", "released_with_failure");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn concrete_unload_deadline_publishes_cleanup_failed_and_cleanup_continues() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control, window, _generation_handle, node) =
             metered_resident_with_open_node_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_close(Ok(()));
         let close = control.block("close");
         control.push_delete_and_verify(Ok(()));
         let deletion = control.block("delete_and_verify");
         let held = Arc::new(AtomicBool::new(false));
         let mut permit_state = ConcurrentAgentPermitState::new(None, Arc::clone(&held));
-        permit_state.install_window(super::ExecutionWindow::unmonitored(window));
+        permit_state.install_window(super::ExecutionWindow::unmonitored_with_scope(
+            window,
+            scope.clone(),
+        ));
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
 
         let observer = InvocationLoop::<Context>::unload_running_agent(
@@ -5095,6 +5301,20 @@ mod tests {
             .expect("deadline must report cleanup failure");
         assert!(cleanup_error.to_string().contains("unload deadline"));
         assert!(held.load(Ordering::Acquire));
+        let failure_count = metrics.value("golem_agent_resource_cleanup_failures_total", &[]);
+        let retained = cleanup.with_failure(cleanup_error.clone());
+        let retained_again = cleanup.with_failure(cleanup_error.clone());
+        assert_eq!(
+            metrics.value("golem_agent_resource_cleanup_failures_total", &[]),
+            failure_count
+        );
+        assert_eq!(
+            metrics.value(
+                "golem_agent_resource_cleanup_failures_total",
+                &[("stage", "end_to_end"), ("reason", "deadline")]
+            ),
+            1.0
+        );
 
         let instance = publish_unload_outcome(
             Some(cleanup_error.clone()),
@@ -5124,6 +5344,22 @@ mod tests {
         deletion.wait_completed().await;
         retry_wait.await.unwrap();
         cleanup.wait().await.unwrap();
+        assert_eq!(retained.wait().await.unwrap_err(), cleanup_error);
+        assert_eq!(retained_again.wait().await.unwrap_err(), cleanup_error);
+        assert_eq!(
+            metrics.value(
+                "golem_agent_resource_cleanup_failures_total",
+                &[("reason", "other")]
+            ),
+            0.0
+        );
+        assert_eq!(
+            metrics.value(
+                "golem_agent_resource_cleanup_failures_total",
+                &[("stage", "end_to_end"), ("reason", "deadline")]
+            ),
+            1.0
+        );
         assert!(matches!(instance, WorkerInstance::CleanupFailed(error) if error == cleanup_error));
         assert_eq!(
             control
@@ -5133,17 +5369,29 @@ mod tests {
                 .count(),
             1
         );
+        metrics.assert_finished("unload", "released_with_failure");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
     #[timeout("5s")]
     async fn concrete_failed_unload_retains_retry_owner_and_immutable_results() {
+        let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+        let scope = metrics.scope();
         let (filesystem, control) = resident_for_unload_test().await;
+        filesystem.set_release_metrics_for_test(metrics.scope());
         control.push_delete_and_verify(Err(FilesystemStorageError::verification(
             "first cleanup failure",
             Path::new("<unload-retry>"),
         )));
         let mut permits = ConcurrentAgentPermitState::new(None, Arc::new(AtomicBool::new(false)));
+        permits.release_scope = scope.clone();
         let activity = Arc::new(Mutex::new(Some(filesystem_activity(&filesystem))));
         let observer = unload_resident_agent_ownership(
             ResidentAgentOwnership {
@@ -5197,6 +5445,14 @@ mod tests {
                 .count(),
             3
         );
+        metrics.assert_finished("unload", "released_with_failure");
+        assert_eq!(
+            metrics.value(
+                "golem_agent_filesystem_lifecycle_seconds",
+                &[("operation", "delete")]
+            ),
+            1.0
+        );
     }
 
     #[test]
@@ -5206,7 +5462,9 @@ mod tests {
             None,
             Some(WorkerExecutorError::runtime("unverified metering close")),
         ] {
+            let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
             let (filesystem, control) = resident_for_unload_test().await;
+            filesystem.set_release_metrics_for_test(metrics.scope());
             control.push_delete_and_verify(Err(FilesystemStorageError::verification(
                 "startup cleanup failure",
                 Path::new("<startup-retry>"),
@@ -5224,13 +5482,28 @@ mod tests {
                     .to_string()
                     .contains("startup cleanup failure")
             );
-            let (cleanup, sender) = super::UnloadCleanup::new();
+            let (cleanup, sender) = super::UnloadCleanup::new(None);
             sender
                 .send(Err(failure.filesystem_cleanup_failure.unwrap()))
                 .unwrap();
+            assert_eq!(
+                metrics.pending("filesystem_delete", "filesystem_deleted"),
+                1.0
+            );
             control.push_delete_and_verify(Ok(()));
             let retry = cleanup.retry();
             assert_eq!(retry.wait().await, close_error.map_or(Ok(()), Err));
+            assert_eq!(
+                metrics.value(
+                    "golem_agent_filesystem_lifecycle_seconds",
+                    &[("outcome", "success_after_failure")]
+                ),
+                1.0
+            );
+            assert_eq!(
+                metrics.pending("filesystem_delete", "filesystem_deleted"),
+                0.0
+            );
             assert!(
                 cleanup
                     .wait()

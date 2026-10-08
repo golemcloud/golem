@@ -259,6 +259,15 @@ pub struct ResourceUsageMeteringWindow {
 }
 
 impl ResourceUsageMeteringWindow {
+    pub(crate) fn observe_permit_release(
+        &mut self,
+        scope: &crate::metrics::resource_release::ReleaseScope,
+    ) {
+        if let Some(permit) = &mut self.permit {
+            permit.observe_release(scope);
+        }
+    }
+
     #[cfg(feature = "test-utils")]
     pub(crate) fn lose_settlement_observer_for_test(&mut self) {
         self.lose_settlement_observer = true;
@@ -447,6 +456,17 @@ pub enum MeteringOpenError {
     OpeningCancelled,
 }
 
+impl MeteringOpenError {
+    pub(crate) fn release_failure(&self) -> crate::metrics::resource_release::Failure {
+        use crate::metrics::resource_release::Failure;
+        match self {
+            Self::FilesystemObservation(_) => Failure::FilesystemObservation,
+            Self::AlreadyOpen | Self::MemoryMeterStopped => Failure::MeterFault,
+            Self::OpeningCancelled => Failure::Other,
+        }
+    }
+}
+
 impl Display for MeteringOpenError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -473,6 +493,18 @@ pub enum MeteringCloseError {
     FilesystemObservation(FilesystemStorageError),
     Faulted(String),
     ObserverLost,
+}
+
+impl MeteringCloseError {
+    pub(crate) fn release_failure(&self) -> crate::metrics::resource_release::Failure {
+        use crate::metrics::resource_release::Failure;
+        match self {
+            Self::Deadline => Failure::Deadline,
+            Self::FilesystemObservation(_) => Failure::FilesystemObservation,
+            Self::Faulted(_) => Failure::MeterFault,
+            Self::ObserverLost => Failure::ObserverLost,
+        }
+    }
 }
 
 impl Display for MeteringCloseError {
@@ -740,8 +772,12 @@ pub(crate) fn close_window_retaining_permit(
     let (sender, receiver) = tokio::sync::oneshot::channel();
     spawn_metering_task(async move {
         let result = Arc::clone(&shared).complete_close(deadline).await;
+        if let Err(error) = &result {
+            permit.release_failed(error.release_failure());
+        }
         #[cfg(feature = "test-utils")]
         if lose_observer {
+            permit.release_failed(crate::metrics::resource_release::Failure::ObserverLost);
             drop((permit, retained_meter));
             drop(sender);
             return;

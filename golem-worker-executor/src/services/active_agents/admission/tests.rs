@@ -274,29 +274,69 @@ impl MemoryProbe for ZeroUsageProbe {
 
 #[test]
 async fn shrinking_a_reconciled_grant_returns_excess_headroom() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+    let scope = metrics.scope();
     let controller = Arc::new(AdmissionController::new(
         Box::new(ZeroUsageProbe { limit: 1024 }),
         AdmissionPolicy { usable_ratio: 1.0 },
     ));
     let mut grant = controller.admit(400, &NoEvictionSource).await.unwrap();
+    grant.observe_release(&scope);
+    scope.start(
+        crate::metrics::resource_release::Origin::Unload,
+        crate::metrics::resource_release::Cause::MemoryPressure,
+    );
+    scope.seal();
     assert_eq!(controller.headroom_bytes(), 624);
 
     grant.shrink_to(100);
 
     assert_eq!(grant.bytes(), 100);
     assert_eq!(controller.headroom_bytes(), 924);
+    assert_eq!(metrics.pending("unload", "memory_grant_release"), 1.0);
+    let grant = Arc::new(std::sync::Mutex::new(grant));
+    let retained = grant.clone();
+    drop(grant);
+    assert_eq!(metrics.pending("unload", "memory_grant_release"), 1.0);
+    assert_eq!(
+        metrics.count("unload", "memory_grant_release", "released"),
+        0.0
+    );
+    metrics.advance(5000);
+    drop(retained);
+    assert_eq!(controller.headroom_bytes(), 1024);
+    metrics.assert_finished("unload", "released");
 }
 
 #[test]
 async fn inert_grant_adopts_a_tracked_reservation_on_merge() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+    let scope = metrics.scope();
     let controller = Arc::new(AdmissionController::new(
         Box::new(ZeroUsageProbe { limit: 100 }),
         AdmissionPolicy { usable_ratio: 1.0 },
     ));
-    let tracked = controller.admit(20, &NoEvictionSource).await.unwrap();
+    let mut empty = controller.admit(0, &NoEvictionSource).await.unwrap();
+    empty.observe_release(&scope);
+    assert!(!scope.has_receipt(crate::metrics::resource_release::Stage::MemoryGrantRelease));
+    drop(empty);
+    let mut tracked = controller.admit(20, &NoEvictionSource).await.unwrap();
     let mut grant = MemoryGrant::inert(40);
 
+    grant.observe_release(&scope);
+    assert!(!scope.has_receipt(crate::metrics::resource_release::Stage::MemoryGrantRelease));
+    tracked.observe_release(&scope);
+    scope.start(
+        crate::metrics::resource_release::Origin::Unload,
+        crate::metrics::resource_release::Cause::MemoryPressure,
+    );
+    scope.seal();
     grant.merge(tracked);
+    assert_eq!(metrics.pending("unload", "memory_grant_release"), 1.0);
+    assert_eq!(
+        metrics.count("unload", "memory_grant_release", "released"),
+        0.0
+    );
 
     assert_eq!(grant.bytes(), 60);
     assert!(grant.is_tracked());
@@ -307,6 +347,7 @@ async fn inert_grant_adopts_a_tracked_reservation_on_merge() {
         100,
         "dropping the merged owner must return the absorbed tracked reservation"
     );
+    metrics.assert_finished("unload", "released");
 }
 
 /// Concurrent admissions must never grant more than the ceiling allows.
@@ -1108,4 +1149,37 @@ mod grow_lock_ordering {
             "grows with ample headroom should not scan and should not deadlock"
         );
     }
+}
+
+#[test]
+async fn merged_tracked_grants_keep_each_physical_release_receipt() {
+    let controller = Arc::new(AdmissionController::new(
+        Box::new(ZeroUsageProbe { limit: 100 }),
+        AdmissionPolicy { usable_ratio: 1.0 },
+    ));
+    let mut first = controller.admit(20, &NoEvictionSource).await.unwrap();
+    let mut second = controller.admit(30, &NoEvictionSource).await.unwrap();
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
+    let scope = metrics.scope();
+    first.observe_release(&scope);
+    second.observe_release(&scope);
+    scope.start(
+        crate::metrics::resource_release::Origin::Unload,
+        crate::metrics::resource_release::Cause::MemoryPressure,
+    );
+    scope.seal();
+    first.merge(second);
+    assert_eq!(controller.headroom_bytes(), 50);
+    assert_eq!(metrics.pending("unload", "memory_grant_release"), 2.0);
+    assert_eq!(
+        metrics.count("unload", "memory_grant_release", "released"),
+        0.0
+    );
+    drop(first);
+    assert_eq!(controller.headroom_bytes(), 100);
+    assert_eq!(
+        metrics.count("unload", "memory_grant_release", "released"),
+        2.0
+    );
+    metrics.assert_finished("unload", "released");
 }

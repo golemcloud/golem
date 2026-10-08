@@ -6645,18 +6645,27 @@ async fn dropped_write_observer_keeps_recovery_without_billing_close_coupling() 
 }
 
 #[test]
+#[timeout("5s")]
 async fn dropping_delete_observer_keeps_verified_deletion_module_owned() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let generation_handle = resident_generation_handle(&filesystem);
     let file = open_file(&generation_handle, &control, 19).await;
     control.push_close(Ok(()));
     control.push_delete_and_verify(Ok(()));
     let close_gate = control.block("close");
+    let deletion_gate = control.block("delete_and_verify");
     drop(close(OpenNode::File(file)));
     close_gate.wait_started().await;
 
     drop(delete(seal(filesystem)));
     assert!(!has_call(&control, "delete_and_verify("));
+    metrics.advance(2500);
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        1.0
+    );
     close_gate.release();
     tokio::time::timeout(Duration::from_secs(1), async {
         while !has_call(&control, "delete_and_verify(") {
@@ -6665,6 +6674,23 @@ async fn dropping_delete_observer_keeps_verified_deletion_module_owned() {
     })
     .await
     .unwrap();
+    deletion_gate.wait_started().await;
+    deletion_gate.release();
+    deletion_gate.wait_completed().await;
+    // Adapter completion precedes the owner's verified-deletion receipt; wait for that receipt.
+    loop {
+        if metrics.pending("filesystem_delete", "filesystem_deleted") == 0.0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success")]
+        ),
+        1.0
+    );
 }
 
 #[test]
@@ -6683,7 +6709,9 @@ async fn delete_observer_waits_for_sandbox_verification() {
 #[test]
 #[timeout("5s")]
 async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let generation = filesystem.generation.as_ref().unwrap().clone();
     control.push_delete_and_verify(Err(sandbox_error(
         "first deletion",
@@ -6722,12 +6750,34 @@ async fn failed_deletion_retains_cleanup_ownership_until_verified_retry() {
             .count(),
         3
     );
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        0.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success_after_failure")]
+        ),
+        1.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_resource_cleanup_failures_total",
+            &[
+                ("stage", "filesystem_deleted"),
+                ("reason", "filesystem_delete")
+            ]
+        ),
+        1.0
+    );
 }
 
 #[cfg(unix)]
 #[test]
 #[timeout("10s")]
 async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
+    let metrics = crate::metrics::resource_release::tests::TestMetrics::new();
     let parent = tempfile::tempdir().unwrap();
     let provisioning = SandboxFilesystemProvisioning::new(
         Some(parent.path().to_path_buf()),
@@ -6746,6 +6796,7 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
     )
     .await
     .unwrap();
+    filesystem.set_release_metrics_for_test(metrics.scope());
     let root = filesystem
         .generation
         .as_ref()
@@ -6788,6 +6839,27 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
         b"new generation"
     );
     delete_created(replacement).await.unwrap();
+    assert_eq!(
+        metrics.pending("filesystem_delete", "filesystem_deleted"),
+        0.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_filesystem_lifecycle_seconds",
+            &[("outcome", "success_after_failure")]
+        ),
+        1.0
+    );
+    assert_eq!(
+        metrics.value(
+            "golem_agent_resource_cleanup_failures_total",
+            &[
+                ("stage", "filesystem_deleted"),
+                ("reason", "filesystem_delete")
+            ]
+        ),
+        1.0
+    );
 }
 
 #[test]
