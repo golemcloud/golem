@@ -782,6 +782,17 @@ result and waits for the commit receipt before waiters are notified. Durable age
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+
+The live loop hydrates an ordinary invocation from its committed Pending entry into an
+executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
+cached serialized bytes, instead of serializing and uploading the payload again. Lowering uses
+a separate invocation clone and cannot replace the retained original payload. This does not
+reuse the Pending context or wallet pins: the start hook checks current authority, records the
+executing context and current wallet pin, and commits Started with `CommitLevel::Always` before
+guest execution. `ManualUpdate` takes its separate snapshot path and does not pass its Pending
+payload to this hook. Fork rehomes both references into the target owner; archive and revert do
+not individually delete a referenced payload blob.
+
 During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still

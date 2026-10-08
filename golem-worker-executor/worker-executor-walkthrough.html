@@ -718,8 +718,8 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
         <thead><tr><th scope="col">#</th><th scope="col">Entry</th><th scope="col">Effect on the record</th></tr></thead>
         <tbody>
           <tr data-i="0"><td>1</td><td><code>Create</code> <span class="muted">rev 1, 2 MiB</span></td><td>Status <b>Idle</b>; component revision 1; linear memory 2 MiB.</td></tr>
-          <tr data-i="1"><td>2</td><td><code>PendingAgentInvocation</code> <span class="muted">k1 place-order</span> <span class="pill hint">hint</span></td><td>k1 joins the pending queue. Status unchanged.</td></tr>
-          <tr data-i="2"><td>3</td><td><code>AgentInvocationStarted</code> <span class="muted">k1</span></td><td>Status <b>Running</b>; k1 leaves the queue and becomes the current invocation; retry state cleared.</td></tr>
+          <tr data-i="1"><td>2</td><td><code>PendingAgentInvocation</code> <span class="muted">k1 place-order, payload P1</span> <span class="pill hint">hint</span></td><td>k1 joins the pending queue. Status unchanged.</td></tr>
+          <tr data-i="2"><td>3</td><td><code>AgentInvocationStarted</code> <span class="muted">k1, payload P1</span></td><td>Status <b>Running</b>; k1 leaves the queue and becomes the current invocation; retry state cleared. Reuses P1 with fresh executing context and wallet pin.</td></tr>
           <tr data-i="3"><td>4</td><td><code>GrowMemory</code> <span class="muted">+1 MiB</span></td><td>Linear memory 3 MiB. Status unchanged.</td></tr>
           <tr data-i="4"><td>5</td><td><code>Start</code> <span class="muted">keyvalue/set, WriteRemote</span></td><td>Status Running (a host call is in flight).</td></tr>
           <tr data-i="5"><td>6</td><td><code>End</code> <span class="muted">keyvalue/set → ok</span></td><td>Status Running.</td></tr>
@@ -1165,6 +1165,11 @@ mark { background: var(--warn-soft); color: inherit; padding: 0 .15em; border-ra
 
 <h3>Acceptance</h3>
 <p><code>enqueue_worker_invocation_with_effect</code> (<code>worker/mod.rs</code>) first looks the idempotency key up (<code>lookup_invocation_result</code>). Anything other than <code>LookupResult::New</code> — <code>Pending</code>, <code>Interrupted</code>, or <code>Complete(result)</code> — returns the existing invocation without appending anything. Only for a new key does it append <code>PendingAgentInvocation</code> and <em>commit</em>; the caller learns "accepted" only after that commit. This ordering is what lets a caller that never heard back simply retry with the same key.</p>
+
+<h3 id="invocation-payload-reuse">Payload reference and start authority</h3>
+<p>The live loop hydrates an ordinary invocation from the committed Pending entry into an executor-local <code>HydratedInvocation</code>. <code>AgentInvocationStarted</code> reuses that exact payload reference, including cached serialized bytes, without a second serialization or upload. Lowering transforms a separate invocation clone; the retained original payload stays unchanged.</p>
+<p><strong>Only the payload is reused.</strong> The start hook checks current authority and records the executing context and current wallet pin, not the Pending context or pins. It still commits Started with <code>CommitLevel::Always</code> before guest execution, and a refused shard-epoch fence still stops execution. <code>ManualUpdate</code> takes its separate snapshot path and never passes its Pending payload to the normal start hook.</p>
+<p>A fork rehomes both references into the target owner. Archive and revert do not individually delete a referenced payload blob, so retaining both entries does not shorten the payload lifetime.</p>
 
 <h3 id="native-external-tools">Native external tools share the invocation queue</h3>
 <p><code>AgentInvocation::ExternalTool</code> carries a tool name, command path, typed input and pinned activation, rather than pretending to be a guest method. Admission fences the existing owner's fingerprint and selects the activation using its oplog-folded component revision. The accepted payload pins that deployment's binding: same-key retries attach before resolving current deployment state, and an update queued ahead of the tool does not replace the accepted binding.</p>
