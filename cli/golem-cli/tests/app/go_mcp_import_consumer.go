@@ -53,7 +53,7 @@ func init() {
 			if res.Structured.Answer != "stream-answer" || res.Structured.Score != 7 {
 				return "bad-structured"
 			}
-			streamed, ok := res.Content.(lookup.ContentFieldStreamed)
+			streamed, ok := res.Content.(lookup.ContentStreamed)
 			if !ok || streamed.Value.MimeType != "text/plain; charset=utf-8" {
 				return "bad-stream-metadata"
 			}
@@ -65,12 +65,12 @@ func init() {
 			if res.Structured.Answer != "blocks-answer" || res.Structured.Score != 11 {
 				return "bad-structured"
 			}
-			blocks, ok := res.Content.(lookup.ContentFieldBlocks)
+			blocks, ok := res.Content.(lookup.ContentBlocks)
 			if !ok || len(blocks.Value) != 2 {
 				return "bad-blocks"
 			}
-			left, lok := blocks.Value[0].(lookup.BlocksFieldText)
-			right, rok := blocks.Value[1].(lookup.BlocksFieldText)
+			left, lok := blocks.Value[0].(lookup.BlocksText)
+			right, rok := blocks.Value[1].(lookup.BlocksText)
 			if !lok || !rok || left.Value.Text != "left" || right.Value.Text != "right" {
 				return "bad-blocks"
 			}

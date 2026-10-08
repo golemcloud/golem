@@ -81,11 +81,18 @@ impl TypeName for GoTypeName {
         segments: impl IntoIterator<Item = impl AsRef<str>>,
         _same_language: bool,
     ) -> Self {
-        segments
+        // An empty segment contributes nothing; converting it on its own would
+        // insert the placeholder identifier into the middle of the name.
+        let name = segments
             .into_iter()
+            .filter(|segment| !segment.as_ref().is_empty())
             .map(|segment| to_exported_ident(segment.as_ref()))
-            .join("")
-            .into()
+            .join("");
+        if name.is_empty() {
+            to_exported_ident("").into()
+        } else {
+            name.into()
+        }
     }
 
     /// Which schema types become a named Go declaration.
