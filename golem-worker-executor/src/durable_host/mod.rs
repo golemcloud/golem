@@ -4148,13 +4148,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 if let Err(result) =
                     Self::load_manual_update_snapshot(instance, store, description).await
                 {
-                    match store.as_context().data().durable_ctx().start_action(
+                    let action = store.as_context().data().durable_ctx().start_action(
                         Some(&reference),
                         start_outcome::RawStartError::ManualLoad(&result),
-                    ) {
-                        start_outcome::StartAction::Succeed => {}
-                        action => return Self::perform_start_action(store, action).await,
-                    }
+                    );
+                    return Self::perform_start_action(store, action).await;
                 }
                 let component_metadata = store.as_context().data().component_metadata().clone();
                 let agent_type_provision_config = store
@@ -4187,7 +4185,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Loads the application snapshot of the pending snapshot-based update `description`. An
-    /// interrupted load and an exited guest give `ManualLoadResult::Interrupted`.
+    /// interrupted load gives `ManualLoadResult::Interrupted` with its interrupt kind, and an
+    /// exited guest gives `ManualLoadResult::Exited`.
     async fn load_manual_update_snapshot(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
@@ -4307,9 +4306,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     "Unexpected result value from the snapshot load function".to_string(),
                 )),
             },
-            Ok(InvokeResult::Interrupted { .. } | InvokeResult::Exited { .. }) => {
-                Err(ManualLoadResult::Interrupted)
+            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                Err(ManualLoadResult::Interrupted(interrupt_kind))
             }
+            Ok(InvokeResult::Exited { .. }) => Err(ManualLoadResult::Exited),
         }
     }
 
@@ -4378,7 +4378,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             }
             start_outcome::StartAction::Error(error) => Err(error),
             start_outcome::StartAction::Retry(decision) => Ok(Some(decision)),
-            start_outcome::StartAction::Succeed => Ok(None),
             start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
                 kind: InterruptKind::ShardLost,
             }),
@@ -7519,9 +7518,6 @@ pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
         start_outcome::StartAction::Retry(decision) => WorkerExecutorError::runtime(format!(
             "the update point has no snapshot load to retry ({decision:?})"
         )),
-        start_outcome::StartAction::Succeed => {
-            WorkerExecutorError::runtime("the update point cannot apply an update that failed")
-        }
     }
 }
 
