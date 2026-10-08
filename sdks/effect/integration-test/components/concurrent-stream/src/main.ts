@@ -4,8 +4,8 @@ import { defineAgent, Http, method, Websocket, WitTypes } from "@golemcloud/effe
 
 defineAgent({
   name: "ConcurrentStreamProbe",
-  id: { name: Schema.String, readers: Schema.Int },
-  http: Http.mount("/stream-probe/{name}/{readers}"),
+  id: { name: Schema.String, readers: Schema.Int, peerPort: Schema.Int },
+  http: Http.mount("/stream-probe/{name}/{readers}/{peerPort}"),
   methods: {
     echo: method({
       input: { input: WitTypes.AgentStream(Schema.String) },
@@ -24,19 +24,19 @@ defineAgent({
     }),
   },
 }).implement({
-  init: ({ readers }) => Effect.succeed(readers),
-  methods: (readers) => ({
+  init: ({ readers, peerPort }) => Effect.succeed({ readers, peerPort }),
+  methods: ({ readers, peerPort }) => ({
     echo: ({ input }) =>
       Effect.gen(function* () {
         const stream = Stream.unwrap(
           Effect.gen(function* () {
             if (readers === 0) return input
-            const first = yield* Websocket.connect("ws://127.0.0.1:19110/first")
+            const first = yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/first`)
             const firstPull = yield* Socket.readerString(first)
             const write = yield* first.writer
             const secondPull =
               readers === 2
-                ? yield* Websocket.connect("ws://127.0.0.1:19110/second").pipe(
+                ? yield* Websocket.connect(`ws://127.0.0.1:${peerPort}/second`).pipe(
                     Effect.flatMap(Socket.readerString),
                   )
                 : undefined
