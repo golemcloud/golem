@@ -1,26 +1,14 @@
 import { Effect, Schema, Stream } from "effect"
 import { Socket } from "effect/socket"
-import { defineAgent, Http, method, Websocket, WitTypes } from "@golemcloud/effect-golem"
+import { defineAgent, method, Websocket, WitTypes } from "@golemcloud/effect-golem"
 
 defineAgent({
   name: "ConcurrentStreamProbe",
   id: { name: Schema.String, readers: Schema.Int, peerPort: Schema.Int },
-  http: Http.mount("/stream-probe/{name}/{readers}/{peerPort}"),
   methods: {
     echo: method({
       input: { input: WitTypes.AgentStream(Schema.String) },
       success: WitTypes.AgentStream(Schema.String),
-      http: [
-        Http.put("/echo", {
-          durableStreams: {
-            slots: [
-              { source: "input", slot: "input" },
-              { source: "output", slot: "$result" },
-            ],
-            allowExternalWrites: true,
-          },
-        }),
-      ],
     }),
   },
 }).implement({
