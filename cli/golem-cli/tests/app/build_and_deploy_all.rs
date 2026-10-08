@@ -64,6 +64,16 @@ async fn build_and_deploy_all_templates_for_moonbit() {
 }
 
 #[test]
+async fn build_and_deploy_all_templates_for_go() {
+    build_and_deploy_all_templates_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
+async fn go_streaming_template_builds() {
+    streaming_template_builds_for_lang(GuestLanguage::Go).await;
+}
+
+#[test]
 async fn rust_streaming_template_builds() {
     streaming_template_builds_for_lang(GuestLanguage::Rust).await;
 }

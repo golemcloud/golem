@@ -1,0 +1,4 @@
+{
+  "type": "agent",
+  "description": "A task manager agent with JSON object I/O and HTTP endpoints"
+}

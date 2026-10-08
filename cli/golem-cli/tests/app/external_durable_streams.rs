@@ -341,27 +341,39 @@ async fn streaming_template_walkthrough(language: &str, append: &str, read: &str
 
     let server = ReferenceServer::start().await;
     let external = server.create("/template", "application/json").await;
-    let append_args = vec![
-        json!(external),
-        json!("stable-template-producer"),
-        json!(["once"]),
-        json!(false),
-    ];
-    let first: Option<String> = invoke_template(&ctx, append, append_args.clone()).await;
-    assert!(first.is_some());
-    let duplicate: Option<String> = invoke_template(&ctx, append, append_args).await;
-    assert_eq!(duplicate, None);
-    let _: Option<String> = invoke_template(
+    // Arguments are written in the template's source language: Go spells a
+    // list `{…}`, the others as JSON.
+    let list = |item: &str| {
+        if language == "go" {
+            format!("{{{}}}", json!(item))
+        } else {
+            json!([item]).to_string()
+        }
+    };
+    let append_args = |producer: &str, item: &str, close: bool| {
+        vec![
+            json!(external).to_string(),
+            json!(producer).to_string(),
+            list(item),
+            close.to_string(),
+        ]
+    };
+    let first: Option<String> = invoke_template_raw(
         &ctx,
         append,
-        vec![
-            json!(external),
-            json!("closer"),
-            json!(["tail"]),
-            json!(true),
-        ],
+        append_args("stable-template-producer", "once", false),
     )
     .await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template_raw(
+        &ctx,
+        append,
+        append_args("stable-template-producer", "once", false),
+    )
+    .await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> =
+        invoke_template_raw(&ctx, append, append_args("closer", "tail", true)).await;
     let values: Vec<String> = invoke_template(&ctx, read, vec![json!(external)]).await;
     assert_eq!(values, ["once", "tail"]);
     let requests = server.requests().await;
@@ -387,6 +399,7 @@ async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
         ("effect", "appendExternal", "readExternal"),
         ("scala", "appendExternal", "readExternal"),
         ("moonbit", "append_external", "read_external"),
+        ("go", "appendExternal", "readExternal"),
     ] {
         streaming_template_walkthrough(language, append, read).await;
     }
