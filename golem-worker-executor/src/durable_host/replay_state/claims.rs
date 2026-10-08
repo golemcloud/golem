@@ -471,8 +471,10 @@ impl ReplayState {
     }
 
     /// Claims a recorded `Start`, reports that the same cursor transaction observed replay already
-    /// ended, or identifies a matching `Start` removed by a replay jump. Every other missing match
-    /// while replay is active remains strict divergence.
+    /// ended, or identifies a matching `Start` removed by a replay jump. A missing match while an
+    /// active entity body owns the cursor head waits for that body or for cursor progress (see
+    /// [`CursorTx::active_body_owning_head`]); every other missing match while replay is active
+    /// remains strict divergence.
     pub(crate) async fn claim_start_or_replay_end(
         &self,
         claim: StartClaim,
@@ -516,32 +518,35 @@ impl ReplayState {
 
             let owned_claim = claim.clone();
             let on_claim = on_claim.clone();
-            let (claimed, blocked_on_completion_delivery, missing) = self
+            let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| match tx.claim_start(&owned_claim).await {
                             Ok(StartClaimAttempt::Claimed(handle, entry)) => {
                                 on_claim(handle.start_idx(), &entry);
-                                Ok((Some((handle, entry)), false, None))
+                                Ok((Some((handle, entry)), None, None))
                             }
-                            Ok(StartClaimAttempt::Blocked) => {
-                                Ok((None, tx.blocked_on_completion_delivery, None))
-                            }
+                            Ok(StartClaimAttempt::Blocked(on)) => Ok((None, Some(on), None)),
                             Ok(StartClaimAttempt::Missing) if tx.cursor.is_live() => {
-                                Ok((None, false, Some(Missing::ReplayEnded)))
+                                Ok((None, None, Some(Missing::ReplayEnded)))
                             }
                             Ok(StartClaimAttempt::Missing) if store_live => {
-                                Ok((None, false, Some(Missing::StoreAlreadyLive)))
+                                Ok((None, None, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
+                                if let Some(bodies) =
+                                    tx.active_body_owning_head(&owned_claim).await
+                                {
+                                    return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
+                                }
                                 match tx.deleted_region_contains_start(&owned_claim).await? {
                                     Some(index) if index > tx.cursor.last_replayed_index() => {
                                         // The entity's atomic mask is installed before its body
                                         // starts. A host subtask must not publish local liveness
                                         // before the guest consumes the retained atomic Begin.
-                                        Ok((None, true, None))
+                                        Ok((None, Some(BlockedOn::CursorProgress), None))
                                     }
-                                    Some(_) => Ok((None, false, Some(Missing::DeletedRegion))),
+                                    Some(_) => Ok((None, None, Some(Missing::DeletedRegion))),
                                     None => Err(WorkerExecutorError::unexpected_oplog_entry(
                                         owned_claim.expected_description(),
                                         "no matching Start between the replay cursor and the replay target"
@@ -571,8 +576,10 @@ impl ReplayState {
                 }
                 None => {}
             }
-            debug_assert!(blocked_on_completion_delivery);
-            progress.await;
+            blocked
+                .expect("an undecided Start claim is blocked")
+                .wait(progress)
+                .await;
         }
     }
 
@@ -785,20 +792,17 @@ impl ReplayState {
             progress.as_mut().enable();
 
             let owned_claim = claim.clone();
-            let (outcome, blocked_on_completion_delivery) = self
+            let outcome = self
                 .run_owned_cursor_op(move |state| async move {
-                    let result = state
+                    state
                         .with_tx(async |tx| {
-                            let outcome = tx
-                                .claim_scope_start_with_missing_recovery(
-                                    &owned_claim,
-                                    recover_missing,
-                                )
-                                .await?;
-                            Ok((outcome, tx.blocked_on_completion_delivery))
+                            tx.claim_scope_start_with_missing_recovery(
+                                &owned_claim,
+                                recover_missing,
+                            )
+                            .await
                         })
-                        .await?;
-                    Ok(result)
+                        .await
                 })
                 .await?;
 
@@ -817,10 +821,7 @@ impl ReplayState {
                     debug_assert!(recover_missing);
                     return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
-                StartClaimAttempt::Blocked => {
-                    debug_assert!(blocked_on_completion_delivery);
-                    progress.await;
-                }
+                StartClaimAttempt::Blocked(on) => on.wait(progress).await,
             }
         }
     }
@@ -917,7 +918,7 @@ impl ReplayState {
             let expected_function_name = expected_function_name.clone();
             let expected_function_type = expected_function_type.clone();
             let expected_request = expected_request.clone();
-            let (claimed, blocked_on_completion_delivery, missing) = self
+            let (claimed, blocked, missing) = self
                 .run_owned_cursor_op(move |state| async move {
                     state
                         .with_tx(async |tx| {
@@ -1069,10 +1070,10 @@ impl ReplayState {
                                 )
                                     .await?
                                 {
-                                    StartClaimAttempt::Claimed(handle, entry) => {
-                                        Some((handle, entry))
+                                    StartClaimAttempt::Claimed(handle, entry) => (handle, entry),
+                                    StartClaimAttempt::Blocked(on) => {
+                                        return Ok((None, Some(on), None));
                                     }
-                                    StartClaimAttempt::Blocked => None,
                                     StartClaimAttempt::Missing => {
                                         return Err(WorkerExecutorError::unexpected_oplog_entry(
                                             format!(
@@ -1088,10 +1089,10 @@ impl ReplayState {
                                 }
                             }
                             OplogEntryLookupResult::NotFound { .. } if tx.cursor.is_live() => {
-                                return Ok((None, false, Some(Missing::ReplayEnded)));
+                                return Ok((None, None, Some(Missing::ReplayEnded)));
                             }
                             OplogEntryLookupResult::NotFound { .. } if store_live => {
-                                return Ok((None, false, Some(Missing::StoreAlreadyLive)));
+                                return Ok((None, None, Some(Missing::StoreAlreadyLive)));
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
@@ -1103,14 +1104,11 @@ impl ReplayState {
                                 ));
                             }
                         };
-                        if let Some(result) = &result {
-                            tx.st
-                                .claimed_custom_invocation_ids
-                                .insert(expected_invocation_id);
-                            let root = result.0.start_idx();
-                            tx.register_custom_subtree_root(root);
-                        }
-                        Ok((result, tx.blocked_on_completion_delivery, None))
+                        tx.st
+                            .claimed_custom_invocation_ids
+                            .insert(expected_invocation_id);
+                        tx.register_custom_subtree_root(result.0.start_idx());
+                        Ok((Some(result), None, None))
                     })
                     .await
             })
@@ -1125,8 +1123,10 @@ impl ReplayState {
                 }
                 None => {}
             }
-            debug_assert!(blocked_on_completion_delivery);
-            progress.await;
+            blocked
+                .expect("an undecided custom Start claim is blocked")
+                .wait(progress)
+                .await;
         };
         let OplogEntry::Start {
             timestamp,

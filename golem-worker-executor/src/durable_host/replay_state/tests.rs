@@ -8584,3 +8584,205 @@ async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
         "unexpected error: {error}"
     );
 }
+
+#[test]
+fn head_owner_names_the_store_that_consumes_the_head() {
+    use super::cursor::{HeadOwner, head_owner};
+
+    let body = OplogIndex::from_u64(2);
+    assert_eq!(head_owner(&start_now()), HeadOwner::Unattributed);
+    assert_eq!(
+        head_owner(&start_with_parent(2)),
+        HeadOwner::ParentStart(body)
+    );
+    assert_eq!(head_owner(&noop()), HeadOwner::Agent);
+    assert_eq!(head_owner(&anchored_noop(2)), HeadOwner::EntityBody(body));
+    assert_eq!(head_owner(&end_for(2, 1)), HeadOwner::Unattributed);
+    assert_eq!(head_owner(&delivered_for(2)), HeadOwner::Unattributed);
+}
+
+/// Replays `[NoOp(1), entity Start(2), body entries..]` up to the state of a tool call whose
+/// completed reconstruction is claimed while its supervisor has not drained the cursor yet: the
+/// entity `Start` is claimed ahead of the cursor, nothing drained it yet, and the body is active.
+async fn replay_with_undrained_reconstruction(
+    body_entries: Vec<OplogEntry>,
+) -> (
+    ReplayState,
+    ReplayCallHandle,
+    crate::durable_host::concurrent::HistoricalReconstruction,
+) {
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let mut entries = vec![noop(), entity_start];
+    entries.extend(body_entries);
+    let rs = replay_state_over(entries).await;
+    let mut handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+    (rs, handle, reconstruction)
+}
+
+fn spawn_primary_clock_claim(
+    rs: &ReplayState,
+    claim: StartClaim,
+) -> tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>> {
+    let rs = rs.clone();
+    tokio::spawn(async move { rs.claim_start_or_replay_end(claim).await })
+}
+
+async fn assert_claim_parked(
+    claim: &mut tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>>,
+) {
+    if let Ok(outcome) = tokio::time::timeout(Duration::from_millis(50), &mut *claim).await {
+        match outcome.unwrap() {
+            Err(error) => panic!("the missing Start was decided too early: {error}"),
+            Ok(_) => panic!("the missing Start was decided too early"),
+        }
+    }
+}
+
+async fn finished_claim(
+    claim: tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>>,
+) -> Result<ReplayStartClaimOutcome, WorkerExecutorError> {
+    tokio::time::timeout(Duration::from_secs(5), claim)
+        .await
+        .expect("the blocked claim was not woken")
+        .unwrap()
+}
+
+#[test]
+async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
+    // [NoOp(1), Start(entity=2), Start(3, parent 2), End(3→4), End(2→5)] — the primary claims
+    // a clock call that was never recorded. Its head path consumes the claimed entity Start and
+    // stops at the body's Start(3). The body is active, so the claim waits, and after the
+    // reconstruction drained the cursor it reports the end of replay.
+    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
+    let mut claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_request_claim_waits_while_an_active_body_owns_the_head_entry() {
+    // [NoOp(1), Start(entity=2), NoOp(3, entity 2), End(2→4)] — the head is a positional entry
+    // of the active body. The request-matching claim waits until the body consumed it, then the
+    // entity terminal drains and the claim reports the end of replay.
+    let (rs, handle, mut reconstruction) =
+        replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
+    let mut claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::unowned_matching_request(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+            &HostRequest::NoInput(HostRequestNoInput {}),
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+
+    let (idx, _) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(2)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_consuming_it() {
+    let (rs, _handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
+    let mut claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+
+    reconstruction.body_settled();
+    let error = match finished_claim(claim).await {
+        Err(error) => error,
+        Ok(_) => panic!("a settled body's unconsumed head must not hide the missing Start"),
+    };
+    assert!(
+        format!("{error}").contains("no matching Start"),
+        "missing replay claim must be strict divergence: {error}"
+    );
+}
+
+#[test]
+async fn missing_start_claim_is_divergence_with_a_top_level_sibling_start_at_the_head() {
+    // [NoOp(1), Start(entity=2), Start(3, top level), ..] — an active body exists, but the head
+    // is another top-level call of the primary, so the missing Start is decided at once.
+    let (rs, _handle, mut reconstruction) =
+        replay_with_undrained_reconstruction(vec![start_now(), end_for(3, 1), end_for(2, 2)]).await;
+    let claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    );
+    assert!(
+        finished_claim(claim).await.is_err(),
+        "a top-level sibling Start at the head must stay strict divergence"
+    );
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() {
+    // The body itself claims a call that it never recorded while its own entry is at the head.
+    // Nothing but the body can consume that entry, so the claim is decided at once.
+    let (rs, _handle, mut reconstruction) =
+        replay_with_undrained_reconstruction(vec![anchored_noop(2), end_for(2, 2)]).await;
+    let claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::owned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        ),
+    );
+    assert!(
+        finished_claim(claim).await.is_err(),
+        "a body must not wait for itself to consume its own head"
+    );
+    reconstruction.body_settled();
+}
