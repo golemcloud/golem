@@ -1345,6 +1345,9 @@ jobs:
           ls -1 tmp/test-components-wasm/*.wasm | sort
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Total: $count WASM files"
+          unique_update_hashes=$(sha256sum tmp/test-components-wasm/it_agent_update_v{3,4}_release.wasm | cut -d' ' -f1 | sort -u | wc -l)
+          echo "Distinct v3/v4 update fixture hashes: $unique_update_hashes"
+          test "$unique_update_hashes" -eq 2
 
       - name: Upload merged WASMs
         uses: actions/upload-artifact@v6
