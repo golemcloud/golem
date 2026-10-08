@@ -1,0 +1,13 @@
+# Keep the all-five typed-array marker series unchanged.
+name: TypeScript and Effect structural invocation conversion
+benchmarks:
+  - name: conversion-structural-large-input
+    iterations: 3
+    clusterSize: [1]
+    size: [1]
+    length: [100, 10000]
+  - name: conversion-structural-large-output
+    iterations: 3
+    clusterSize: [1]
+    size: [1]
+    length: [100, 10000]

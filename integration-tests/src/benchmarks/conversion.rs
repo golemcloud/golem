@@ -33,7 +33,16 @@ pub const FIXTURES: [(&str, &str, &str); 5] = [
     ),
 ];
 
-pub struct Conversion<const OUTPUT: bool> {
+const STRUCTURAL_FIXTURES: [(&str, &str, &str); 2] = [
+    (
+        "ts-structural",
+        "conversion_bench_ts_structural",
+        "ConversionBenchTsStructural",
+    ),
+    ("effect", "conversion_bench_effect", "ConversionBenchEffect"),
+];
+
+pub struct Conversion<const OUTPUT: bool, const STRUCTURAL: bool = false> {
     config: RunConfig,
 }
 
@@ -69,20 +78,25 @@ fn expected<const OUTPUT: bool>(length: usize) -> Vec<SchemaValue> {
 }
 
 #[async_trait]
-impl<const OUTPUT: bool> Benchmark for Conversion<OUTPUT> {
+impl<const OUTPUT: bool, const STRUCTURAL: bool> Benchmark for Conversion<OUTPUT, STRUCTURAL> {
     type BenchmarkContext = BenchmarkTestDependencies;
     type IterationContext = Iteration;
 
     fn name() -> &'static str {
-        if OUTPUT {
-            "conversion-large-output"
-        } else {
-            "conversion-large-input"
+        match (STRUCTURAL, OUTPUT) {
+            (false, false) => "conversion-large-input",
+            (false, true) => "conversion-large-output",
+            (true, false) => "conversion-structural-large-input",
+            (true, true) => "conversion-structural-large-output",
         }
     }
 
     fn description() -> &'static str {
-        "Opt-in all-five-SDK REST invocation. Independent List<U8> input/checksum and U32 input/List<U8> output; 3 warmups, 9 calls per worker. Total client time includes native preparation and existing invocation retry/JSON work. SDKs run sequentially; size workers run concurrently."
+        if STRUCTURAL {
+            "Opt-in TS structural number[] and Effect REST invocation, separate from typed-array marker cases. Independent List<U8> input/checksum and U32 input/List<U8> output; 3 warmups, 9 calls per worker. Client total retains preparation/retry/transport/decoding."
+        } else {
+            "Opt-in all-five-SDK REST invocation. Independent List<U8> input/checksum and U32 input/List<U8> output; 3 warmups, 9 calls per worker. Total client time includes native preparation and existing invocation retry/JSON work. SDKs run sequentially; size workers run concurrently."
+        }
     }
 
     async fn create_benchmark_context(
@@ -119,7 +133,12 @@ impl<const OUTPUT: bool> Benchmark for Conversion<OUTPUT> {
         let user = deps.user().await.unwrap();
         let (_, env) = user.app_and_env().await.unwrap();
         let mut components = Vec::new();
-        for (language, artifact, agent_type) in FIXTURES {
+        let fixtures: &[_] = if STRUCTURAL {
+            &STRUCTURAL_FIXTURES
+        } else {
+            &FIXTURES
+        };
+        for &(language, artifact, agent_type) in fixtures {
             let component = user
                 .component(&env.id, artifact)
                 .name(&format!("conversion-bench:{language}"))

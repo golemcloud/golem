@@ -47,6 +47,9 @@ components:
   conversion-bench:ts:
     dir: ts
     templates: ts, ts-test-component
+  conversion-bench:ts-structural:
+    dir: ts-structural
+    templates: ts, ts-test-component
   conversion-bench:effect:
     dir: effect
     templates: effect, effect-test-component

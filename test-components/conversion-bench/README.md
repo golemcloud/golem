@@ -49,6 +49,14 @@ decoding. Recovered calls are separate and failures remain visible. Do not remov
 client work from this series or compare it to historical per-invocation numbers.
 The historical Rust/TS REST, mapped HTTP and local/remote RPC suites remain separate.
 
+The separate `conversion-structural.yaml` suite uses TS `z.array(s.u8())` and
+JavaScript `number[]` values, plus the Effect scalar-list fixture. The five-SDK
+suite retains `s.uint8Array()`, whose
+marker codec does not use the structural invocation path. Both are List<U8> on
+the wire. Compare baseline/current structural guests against identical service
+binaries to isolate SDK changes from shared server gains. Keep those results
+separate from the full integrated matrix and from codec-only measurements.
+
 The test-framework owned-value consumption change is harness-only. Keep it
 identical on both sides of production comparisons and report it separately.
 These REST cases do not measure generated external Effect wrapper costs; run the
