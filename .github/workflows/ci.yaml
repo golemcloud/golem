@@ -1300,7 +1300,11 @@ jobs:
         env:
           GOLEM_TS_PRESET: quick
           GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem
-        run: ./build-components.sh ${{ matrix.chunk.name }}
+        run: |
+          if [[ '${{ matrix.chunk.name }}' == rust-* ]]; then
+            export CARGO_TARGET_DIR="${{ github.workspace }}/tmp/rust-fixture-target"
+          fi
+          ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
         env:
