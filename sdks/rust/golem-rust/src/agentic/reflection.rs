@@ -102,6 +102,14 @@ impl SchemaRef {
     #[cfg(feature = "json")]
     pub fn unpack_json(&self, value: &SchemaValue) -> Result<serde_json::Value, GolemReflectError> {
         self.validate_value(value)?;
+        self.unpack_checked_json(value)
+    }
+
+    #[cfg(feature = "json")]
+    pub(crate) fn unpack_checked_json(
+        &self,
+        value: &SchemaValue,
+    ) -> Result<serde_json::Value, GolemReflectError> {
         Ok(to_json_value(&self.graph, &self.root, value)?)
     }
 
@@ -1016,6 +1024,13 @@ impl ReflectedAgentMethod {
         input: SchemaValue,
     ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
         self.definition.input.validate_value(&input)?;
+        self.invoke_checked_value(input).await
+    }
+
+    async fn invoke_checked_value(
+        &self,
+        input: SchemaValue,
+    ) -> Result<Invocation<Option<SchemaValue>>, GolemReflectError> {
         let invocation = self
             .transport
             .invoke_and_await(&self.definition.raw.name, input)
@@ -1034,12 +1049,12 @@ impl ReflectedAgentMethod {
         input: &serde_json::Value,
     ) -> Result<Invocation<Option<serde_json::Value>>, GolemReflectError> {
         let invocation = self
-            .invoke_value(self.definition.input.pack_json(input)?)
+            .invoke_checked_value(self.definition.input.pack_json(input)?)
             .await?;
         let value = match (&self.definition.output, invocation.value) {
             (Some(schema), Some(value)) => Some(
                 schema
-                    .unpack_json(&value)
+                    .unpack_checked_json(&value)
                     .map_err(|error| GolemReflectError::MalformedRemoteOutput(error.to_string()))?,
             ),
             _ => None,
@@ -2237,7 +2252,105 @@ mod tests {
                 GolemReflectError::MalformedRemoteOutput(_)
             ));
             assert_eq!(awaited.to_string(), pending.to_string());
+            let json_error = method.invoke_json(&json!({})).await.unwrap_err();
+            assert!(matches!(
+                json_error,
+                GolemReflectError::MalformedRemoteOutput(_)
+            ));
+            assert_eq!(awaited.to_string(), json_error.to_string());
         }
+    }
+
+    #[test]
+    async fn reflected_json_invocation_keeps_input_and_output_restrictions() {
+        let constrained = conformance_schema("constrained-u32", "");
+        let mut method = ReflectedAgentMethod {
+            definition: AgentMethod {
+                agent_type_name: "Restricted".to_string(),
+                raw: wire_common::AgentMethod {
+                    name: "read".to_string(),
+                    description: String::new(),
+                    http_endpoint: vec![],
+                    prompt_hint: None,
+                    input_schema: wire_common::InputSchema::Parameters(vec![]),
+                    output_schema: wire_common::OutputSchema::Single(0),
+                    read_only: None,
+                },
+                input: constrained.clone(),
+                output: Some(constrained.clone()),
+            },
+            transport: ReflectedTransport::Test(Rc::new(TestReflectedTransport {
+                value: Some(SchemaValue::U32(7)),
+            })),
+        };
+        for invalid in [json!(1), json!(11)] {
+            assert!(matches!(
+                method.invoke_json(&invalid).await,
+                Err(GolemReflectError::InvalidSchemaValue { .. })
+            ));
+        }
+        assert!(matches!(
+            method.invoke_value(SchemaValue::U32(1)).await,
+            Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+        assert!(matches!(
+            method.invoke_json(&json!("wrong shape")).await,
+            Err(GolemReflectError::SchemaRender(_))
+        ));
+        assert!(matches!(
+            constrained.unpack_json(&SchemaValue::U32(11)),
+            Err(GolemReflectError::InvalidSchemaValue { .. })
+        ));
+        assert_eq!(
+            method.invoke_json(&json!(2)).await.unwrap().value,
+            Some(json!(7))
+        );
+        method.transport = ReflectedTransport::Test(Rc::new(TestReflectedTransport {
+            value: Some(SchemaValue::U32(11)),
+        }));
+        assert!(matches!(
+            method.invoke_json(&json!(10)).await,
+            Err(GolemReflectError::MalformedRemoteOutput(_))
+        ));
+
+        method.definition.output = None;
+        method.transport =
+            ReflectedTransport::Test(Rc::new(TestReflectedTransport { value: None }));
+        assert_eq!(method.invoke_json(&json!(2)).await.unwrap().value, None);
+
+        let optional_secret = SchemaRef::new(SchemaGraph::anonymous(SchemaType::option(
+            SchemaType::secret(Default::default()),
+        )));
+        method.definition.input = optional_secret.clone();
+        method.definition.output = Some(optional_secret);
+        method.transport = ReflectedTransport::Test(Rc::new(TestReflectedTransport {
+            value: Some(SchemaValue::Option { inner: None }),
+        }));
+        assert_eq!(
+            method.invoke_json(&json!(null)).await.unwrap().value,
+            Some(json!(null))
+        );
+        assert!(matches!(
+            method
+                .invoke_json(&json!({ "secretId": "untrusted" }))
+                .await,
+            Err(GolemReflectError::SchemaRender(_))
+        ));
+
+        use crate::schema::wit::{GuestSecretHandle, wire};
+        let secret = GuestSecretHandle::new(unsafe { wire::Secret::from_handle(71) });
+        method.definition.input = constrained;
+        method.transport = ReflectedTransport::Test(Rc::new(TestReflectedTransport {
+            value: Some(SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::Secret(secret.clone()))),
+            }),
+        }));
+        assert!(matches!(
+            method.invoke_json(&json!(2)).await,
+            Err(GolemReflectError::MalformedRemoteOutput(_))
+        ));
+        assert!(secret.is_present());
+        assert_eq!(secret.take().unwrap().take_handle(), 71);
     }
 
     #[test]
