@@ -164,6 +164,9 @@ type Spec struct {
 	Name string
 	// Description is surfaced in the agent type metadata.
 	Description string
+	// PromptHint tells AI callers when to create this agent, surfaced with its
+	// constructor in the agent type metadata.
+	PromptHint string
 	// Mode defaults to Durable.
 	Mode Mode
 	// HTTP, when set, mounts the agent's methods under an HTTP path prefix so the
@@ -250,6 +253,8 @@ type MethodDef[Id any, In any, Out any] struct {
 	name          string
 	desc          string
 	descCount     int // how many times Desc was set; validated at Implement time
+	hint          string
+	hintCount     int // how many times PromptHint was set
 	endpoints     []Endpoint
 	readOnly      *readOnlyConfig // non-nil => method is read-only; validated at Implement
 	readOnlyCount int             // how many times ReadOnly was set
@@ -265,6 +270,8 @@ type MethodOpt func(*methodOpts)
 type methodOpts struct {
 	desc          string
 	descCount     int
+	hint          string
+	hintCount     int
 	endpoints     []Endpoint
 	readOnly      *readOnlyConfig
 	readOnlyCount int
@@ -276,6 +283,12 @@ type methodOpts struct {
 // overwrite.
 func Desc(s string) MethodOpt {
 	return func(o *methodOpts) { o.desc = s; o.descCount++ }
+}
+
+// PromptHint sets a method's hint for AI callers deciding when to use it,
+// surfaced in the agent type metadata. Like [Desc], it is set at most once.
+func PromptHint(s string) MethodOpt {
+	return func(o *methodOpts) { o.hint = s; o.hintCount++ }
 }
 
 // HTTP exposes a method over HTTP at one or more routes (the agent must also

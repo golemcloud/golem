@@ -27,6 +27,7 @@ import (
 type methodEntry struct {
 	name      string
 	desc      string
+	hint      string
 	inFields  []engine.Field
 	endpoints []Endpoint      // HTTP routes, if any
 	readOnly  *readOnlyConfig // non-nil => read-only method with a cache policy
@@ -44,6 +45,7 @@ type agentEntry struct {
 	// and never claims an Id type.
 	remote   bool
 	desc     string
+	hint     string
 	mode     common.AgentMode
 	mount    *Mount         // HTTP mount, if any
 	snapshot SnapshotPolicy // snapshot cadence
@@ -151,6 +153,7 @@ func defineAgentInto[Id any, Cfg any](d *definitions, spec Spec) *AgentDefinitio
 		name:     spec.Name,
 		deps:     dependencyNames(spec.Dependencies),
 		desc:     spec.Description,
+		hint:     spec.PromptHint,
 		mode:     spec.Mode.toWit(),
 		mount:    spec.HTTP,
 		snapshot: spec.Snapshot,
@@ -197,7 +200,7 @@ func newMethodDef[Id any, In any, Out any](name string, opts []MethodOpt) Method
 		f(&o)
 	}
 	return MethodDef[Id, In, Out]{
-		name: name, desc: o.desc, descCount: o.descCount, endpoints: o.endpoints,
+		name: name, desc: o.desc, descCount: o.descCount, hint: o.hint, hintCount: o.hintCount, endpoints: o.endpoints,
 		readOnly: o.readOnly, readOnlyCount: o.readOnlyCount, cacheCount: o.cacheCount,
 	}
 }
@@ -324,6 +327,9 @@ func bindMethodInto[Id any, S any, In any, Out any](
 		d.RecordErr(e.name, m.name, "Handle requires a non-nil handler")
 		return
 	}
+	if m.hintCount > 1 {
+		d.RecordErr(e.name, m.name, "method %q: PromptHint set %d times (a method has one prompt hint)", m.name, m.hintCount)
+	}
 	if m.descCount > 1 {
 		d.RecordErr(e.name, m.name, "method %q: Desc set %d times (a method has one description)", m.name, m.descCount)
 	}
@@ -352,7 +358,7 @@ func bindMethodInto[Id any, S any, In any, Out any](
 	if problem := paramsTypeProblem(inType); problem != "" {
 		d.RecordErr(e.name, m.name, "method %q: %s", m.name, problem)
 	}
-	me := &methodEntry{name: m.name, desc: m.desc, inFields: d.StructFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
+	me := &methodEntry{name: m.name, desc: m.desc, hint: m.hint, inFields: d.StructFields(inType), endpoints: m.endpoints, readOnly: m.readOnly}
 	if outType != reflect.TypeFor[Unit]() {
 		me.outCodec = d.Compile(outType)
 		me.outType = outType

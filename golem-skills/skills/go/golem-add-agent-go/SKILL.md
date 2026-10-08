@@ -55,6 +55,8 @@ var (
 
 `golem.Unit` is the empty parameter/result placeholder (a method with no input or no output).
 
+`golem.Desc(...)` describes a method and `golem.PromptHint(...)` tells AI callers when to use it; `Spec.PromptHint` does the same for creating the agent.
+
 `Spec.Dependencies` lists other agents of the same component this one calls (`Dependencies: []golem.AgentDependency{billing.Agent}`); they are published with the agent's metadata.
 
 ## Implementation (`agents/counter/impl/impl.go`)

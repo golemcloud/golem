@@ -85,7 +85,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 			Description:  m.desc,
 			InputSchema:  common.MakeInputSchemaParameters(in),
 			OutputSchema: out,
-			PromptHint:   witTypes.None[string](),
+			PromptHint:   someIfSet(m.hint),
 			ReadOnly:     readOnly,
 		})
 	}
@@ -103,7 +103,7 @@ func (d *definitions) buildAgentType(e *agentEntry) (common.AgentType, map[refle
 		Constructor: common.AgentConstructor{
 			Name:        witTypes.None[string](),
 			Description: e.desc,
-			PromptHint:  witTypes.None[string](),
+			PromptHint:  someIfSet(e.hint),
 			InputSchema: common.MakeInputSchemaParameters(ctorFields),
 		},
 		Methods:      methods,

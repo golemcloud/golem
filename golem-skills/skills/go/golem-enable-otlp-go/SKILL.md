@@ -50,7 +50,23 @@ Spans are created automatically for:
 
 Trace and span IDs propagate from inbound HTTP requests (via code-first routes) and are included in outgoing HTTP request headers automatically.
 
-> **Custom spans:** the Rust SDK exposes a `golem::api::context` API (`start_span`, attributes, `current_context`) for creating your own spans in guest code. **The Go SDK does not currently expose a public wrapper for this** — the underlying `golem:api/context` bindings exist internally but are not part of the public Go API. Go agents get the automatic invocation/RPC/HTTP spans above; hand-authored custom spans are not available from Go yet.
+## Custom spans
+
+The `github.com/golemcloud/golem/sdks/go/golem/invocation` package starts your own spans and reads the invocation context:
+
+```go
+span := invocation.StartSpan("charge")
+defer span.Finish()
+span.SetAttribute("order", orderID)
+
+ctx := invocation.CurrentContext()
+slog.Info("charging", "trace", ctx.TraceID(), "span", ctx.SpanID())
+```
+
+- A custom span is a child of the current context; RPC and HTTP calls made while it is open inherit it.
+- `ctx.Attribute(key, inherited)`, `Attributes`, `AttributeChain`, `AttributeChains` and `Parent` read the span stack; `TraceContextHeaders()` returns the W3C headers as an `http.Header`.
+- `invocation.AllowForwardingTraceContextHeaders(false)` stops adding trace headers to outgoing HTTP requests and returns the previous setting.
+- A span that is never finished ends when it is garbage collected; natively (in `go test`) the context is empty and spans record nothing.
 
 ### Logs
 

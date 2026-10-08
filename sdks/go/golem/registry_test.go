@@ -129,3 +129,36 @@ func TestRegistrationErrorsAreRecorded(t *testing.T) {
 		mustDefErr(t, d, "unknown agent")
 	})
 }
+
+func TestPromptHintsArePublished(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "Hinted", PromptHint: "create one per user"})
+		m := def.Method[Unit, Unit]("m", PromptHint("call when the user asks"))
+		plain := def.Method[Unit, Unit]("plain")
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
+		impl.Handle(plain, func(*Context[St], Unit) Unit { return Unit{} })
+		types, errs := d.discover()
+		if len(errs) != 0 || len(types) != 1 {
+			t.Fatalf("types=%d errs=%v", len(types), errs)
+		}
+		at := types[0]
+		if at.Constructor.PromptHint.IsNone() || at.Constructor.PromptHint.Some() != "create one per user" {
+			t.Errorf("constructor hint %+v", at.Constructor.PromptHint)
+		}
+		for _, method := range at.Methods {
+			switch method.Name {
+			case "m":
+				if method.PromptHint.IsNone() || method.PromptHint.Some() != "call when the user asks" {
+					t.Errorf("method hint %+v", method.PromptHint)
+				}
+			case "plain":
+				if method.PromptHint.IsSome() {
+					t.Errorf("an unset hint was published: %+v", method.PromptHint)
+				}
+			}
+		}
+	})
+}

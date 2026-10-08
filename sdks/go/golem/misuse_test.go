@@ -207,3 +207,15 @@ func TestMisuseDuplicateCaseType(t *testing.T) {
 		mustDefErr(t, d, "case type")
 	})
 }
+
+func TestMisuseRepeatedPromptHint(t *testing.T) {
+	type Id struct{ Name string }
+	type St struct{}
+	withDefs(t, func(d *definitions) {
+		def := defineAgentInto[Id, NoConfig](d, Spec{Name: "A"})
+		m := def.Method[Unit, Unit]("m", PromptHint("a"), PromptHint("b"))
+		impl := implementInto[Id, St, NoConfig](d, def, simpleNewState[Id, St](func(Id) *St { return &St{} }), false)
+		impl.Handle(m, func(*Context[St], Unit) Unit { return Unit{} })
+		mustDefErr(t, d, "PromptHint set 2 times")
+	})
+}
