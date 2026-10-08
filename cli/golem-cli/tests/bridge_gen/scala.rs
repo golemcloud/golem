@@ -404,6 +404,33 @@ package golem.bridge.runtime
 
 class StreamRuntimeTest extends munit.FunSuite {
   import SchemaValue.*
+  test("direct tagged writer matches every node shape and exact scalar tokens") {
+    val scalar = List[SchemaValue](BoolValue(true), S8Value(-128), S16Value(-32768), S32Value(Int.MinValue), S64Value(Long.MinValue), U8Value(255), U16Value(65535), U32Value(4294967295L), U64Value(-1L), CharValue(0x1f600), StringValue("\"\\\b\f\n\r\tárvíz😀"), UuidValue(Uuid.fromStandardString("00112233-4455-6677-8899-aabbccddeeff").toOption.get))
+    val floats = List(-0.0, 0.0, 0.1, Double.MinPositiveValue, Double.MaxValue, Double.NaN, Double.PositiveInfinity, Double.NegativeInfinity).map(F64Value.apply) ++ List(-0.0f, 0.0f, 0.1f, Float.MinPositiveValue, Float.MaxValue, Float.NaN, Float.PositiveInfinity, Float.NegativeInfinity).map(F32Value.apply)
+    val containers = List[SchemaValue](RecordValue(scalar), RecordValue(Nil), TupleValue(floats), TupleValue(Nil), ListValue(scalar), ListValue(Nil), FixedListValue(List(U8Value(1))), FixedListValue(Nil), VariantValue(3, Some(ListValue(scalar))), VariantValue(0, None), EnumValue(2), FlagsValue(List(true, false, true)), FlagsValue(Nil), MapValue(List(SchemaMapEntry(StringValue("key"), OptionValue(Some(S64Value(Long.MaxValue)))))), MapValue(Nil), OptionValue(None), ResultValue(SchemaResult.Ok(None)), ResultValue(SchemaResult.Err(Some(U64Value(-1L)))), TextValue("árvíz", Some("hu")), TextValue("", None), BinaryValue(Vector(0, -1, 127).map(_.toByte), Some("application/octet-stream")), BinaryValue(Vector.empty, None), PathValue("/a\""), UrlValue("https://example.com/a?q=😀"), DatetimeValue("2026-01-01T00:00:00.123Z"), DurationValue(Long.MinValue), QuantityValue(Long.MaxValue, -9, "m/s"), StreamReferenceValue(Some("00112233-4455-4677-8899-aabbccddeeff"), None), StreamReferenceValue(None, Some("token\"😀")), UnionValue("branch\"", RecordValue(scalar)))
+    for (value <- scalar ++ floats ++ containers) assertEquals(SchemaValueCodec.render(value), SchemaValueCodec.toJson(value).render)
+    assertEquals(SchemaValueCodec.render(U64Value(-1L)), """{"kind":"u64","value":"18446744073709551615"}""")
+    assertEquals(SchemaValueCodec.render(F32Value(-0.0f)), """{"kind":"f32","value":-0}""")
+    for (invalid <- List(CharValue(-1), CharValue(0xd800), CharValue(0x110000), StreamReferenceValue(None, None), StreamReferenceValue(Some("a"), Some("b")))) {
+      val oldError = intercept[BridgeException](SchemaValueCodec.toJson(invalid)).getMessage
+      assertEquals(intercept[BridgeException](SchemaValueCodec.render(invalid)).getMessage, oldError)
+    }
+  }
+  test("direct protocol writer preserves optional fields and application config JSON") {
+    val config = List(AgentConfigEntry(List("nested", "\"😀"), golem.bridge.runtime.json.Json.parse("""{"zero":-0,"value":null}""").toOption.get))
+    for (phantom <- List(None, Some("phantom\"😀")); schedule <- List(None, Some("2026-01-01T00:00:00Z")); key <- List(None, Some("key\n"))) {
+      val request = AgentInvocationRequest("app", "env", "type", RecordValue(Nil), phantom, config, "method", RecordValue(List(ListValue(List(U8Value(0), U8Value(251))))), "await", schedule, key)
+      val body = BridgeProtocol.renderAgentInvocationRequest(request)
+      assertEquals(body, BridgeProtocol.encodeAgentInvocationRequest(request).render)
+      assertEquals(body.contains("\"phantomId\":"), phantom.isDefined)
+      assertEquals(body.contains("\"scheduleAt\":"), schedule.isDefined)
+      assertEquals(body.contains("\"idempotencyKey\":"), key.isDefined)
+      assert(body.contains("\"methodParameters\":{\"kind\":\"record\""))
+      assert(body.contains("\"zero\":-0,\"value\":null"))
+      val create = CreateAgentRequest("app", "env", "type", request.methodParameters, phantom, config)
+      assertEquals(BridgeProtocol.renderCreateAgentRequest(create), BridgeProtocol.encodeCreateAgentRequest(create).render)
+    }
+  }
   test("buffered JSON rendering preserves escaping, order and nested signed zero") {
     val json = golem.bridge.runtime.json.Json.parse("""{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""").toOption.get
     assertEquals(json.render, """{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""")
