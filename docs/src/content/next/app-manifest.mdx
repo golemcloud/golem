@@ -335,9 +335,9 @@ Completed results and typed errors are durable and replay without another HTTP r
 
 ### Default tools
 
-`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the tool reads the config keys and secrets that its agent reads. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
+`golem deploy` automatically adds the built-in `bash` tool to every deployment. It selects the release `bash@0.2.1` of `builtin-tool-owner@golem.cloud`, grants it to the environment, and binds it to every agent type with `filesystemAccess: allowed` and no `configKeysReadable`, `secretKeysReadable` or `secretKeysRevealable` scope, so the binding does not limit the agent's config keys and secrets. The `bash` tool reads neither today: it works with the agent's files and environment variables. [`golem ssh`](/next/cli/agents#shell-access-golem-ssh) connects to this tool.
 
-With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it, and those commands can read and change the agent's files. The binding does not limit the agent's config keys and secrets for the tool. To turn the default tools off for an environment, set `defaultTools` to an empty list:
+With the default tools on, everyone who may invoke an agent of the environment can run shell commands on it. Those commands can read and change the agent's files, and they can read all environment variables of the agent, also a secret that is kept in one. A key scope of a binding does not hide an environment variable. To turn the default tools off for an environment, set `defaultTools` to an empty list:
 
 ```yaml
 environments:
@@ -365,13 +365,13 @@ environments:
         filesystemAccess: denied
 ```
 
-Such a binding also sets how much of the agent's config and secrets `bash` reads. Each of the scopes `configKeysReadable`, `secretKeysReadable` and `secretKeysRevealable` has three forms:
+Such a binding can also set the key scopes `configKeysReadable`, `secretKeysReadable` and `secretKeysRevealable`. A key scope limits what a tool reads from the agent's config and secrets. The `bash` tool reads neither today, so a key scope changes nothing for it now. Each scope has three forms:
 
-- No text, or `"*"`: the tool reads what its agent reads. This is the default.
-- `[]`: the tool reads no key of that scope.
-- A list of paths: the tool reads only those keys.
+- No text, or `"*"`: no limit on that scope. This is the default.
+- `[]`: no key of that scope.
+- A list of paths: only those keys.
 
-To keep all config keys and secrets from `bash` in one environment:
+To allow no config key and no secret for `bash` in one environment:
 
 ```yaml
 environments:
@@ -384,7 +384,7 @@ environments:
         secretKeysRevealable: []
 ```
 
-To let `bash` read one secret only, while its config keys stay without a limit:
+To allow one secret only, while the config keys stay without a limit:
 
 ```yaml
 environments:

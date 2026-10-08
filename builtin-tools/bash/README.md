@@ -9,11 +9,12 @@ captured stdout, captured stderr, the exit code and the directory the script end
 
 `golem deploy` automatically adds this tool to every deployment as a default tool: it selects the
 release, grants it to the environment and binds it to every agent type with
-`filesystemAccess: allowed` and no key scope, so the tool reads the config keys and secrets that
-its agent reads.
+`filesystemAccess: allowed` and no key scope. The tool reads no config key and no secret today: it
+works with the agent's files and environment variables.
 
 With this default, everyone who may invoke an agent of the environment can run shell commands on
-it, and those commands can read and change the agent's files. To turn the default tools off for an
+it. Those commands can read and change the agent's files, and they can read all environment
+variables of the agent, also a secret that is kept in one. To turn the default tools off for an
 environment:
 
 ```yaml
@@ -25,8 +26,9 @@ environments:
 `defaultTools` is `"*"` for all default tools, which is also the default, or a list of their names.
 
 A binding for `bash` under an environment merges with the default and applies to every agent type
-of that environment. A key scope in the binding limits the config keys and secrets that `bash`
-reads: `[]` for none, or a list of paths for some. A binding under one agent type is optional and
+of that environment. A key scope in the binding (`[]` for none, or a list of paths for some) limits
+config keys and secrets, which this tool does not read today; it does not hide an environment
+variable. A binding under one agent type is optional and
 can only narrow the environment binding: `golem deploy` warns about a key that it lists and the
 environment binding does not allow. For file access `denied` wins:
 
