@@ -1180,6 +1180,18 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-make: 'false'
           install-cargo-binstall: 'true'
+      - name: Identify fixture compiler
+        if: startsWith(matrix.chunk.name, 'rust-')
+        id: fixture-compiler
+        run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Cache Rust fixture compilation
+        if: startsWith(matrix.chunk.name, 'rust-')
+        uses: actions/cache@v5
+        with:
+          path: tmp/rust-fixture-target
+          key: rust-fixtures-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture-compiler.outputs.hash }}-${{ matrix.chunk.name }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'test-components/**/Cargo.toml', 'test-components/**/Cargo.lock', 'test-components/**/.cargo/**', 'sdks/rust/**/Cargo.toml', 'sdks/rust/Cargo.lock', 'sdks/rust/.cargo/**') }}-${{ github.sha }}
+          restore-keys: |
+            rust-fixtures-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture-compiler.outputs.hash }}-${{ matrix.chunk.name }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'test-components/**/Cargo.toml', 'test-components/**/Cargo.lock', 'test-components/**/.cargo/**', 'sdks/rust/**/Cargo.toml', 'sdks/rust/Cargo.lock', 'sdks/rust/.cargo/**') }}-
       - name: Restore CLI test binaries
         uses: actions/download-artifact@v8
         with:
