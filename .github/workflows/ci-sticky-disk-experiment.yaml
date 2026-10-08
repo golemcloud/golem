@@ -1,0 +1,162 @@
+# Isolated transfer experiment using a fixed native archive and no fallback.
+# Docs: https://docs.blacksmith.sh/blacksmith-caching/dependencies-sticky-disks
+# Each job uses one isolated clone. Publication happens at VM teardown AFTER
+# the action post-step, not when the producer's final shell step succeeds.
+# Cancellation can skip cleanup; seven days of inactivity is the eviction backstop.
+name: CI sticky disk experiment
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ci-sticky-disk-experiment.yaml
+
+permissions:
+  actions: read
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  SOURCE_RUN_ID: '37833073282'
+  SOURCE_SHA: fea6ba617992ecb30dc210ec3bcc432b0f0368a4
+  DISK_KEY: ${{ github.repository }}-sticky-experiment-${{ github.run_id }}-${{ github.run_attempt }}-golem-binaries
+  DISK_PATH: ${{ github.workspace }}/tmp/sticky-native
+
+jobs:
+  producer:
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 20
+    steps:
+      - name: Download fixed benchmark archive
+        uses: actions/download-artifact@v8
+        with:
+          name: golem-binaries
+          path: tmp/source
+          repository: golemcloud/golem
+          run-id: '37833073282'
+          github-token: ${{ github.token }}
+      - name: Mount producer disk (duration in GitHub step timings)
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ env.DISK_KEY }}
+          path: ${{ env.DISK_PATH }}
+          commit: 'true'
+      - name: Publish archive and manifest last
+        run: |
+          set -euo pipefail
+          mountpoint -q "$DISK_PATH" || { echo '::error::Sticky disk is not a mountpoint'; exit 1; }
+          echo '::notice::PR branch protection may silently discard this snapshot at VM teardown. Producer success is not publication proof; missing consumer manifest must fail. No settings will be changed.'
+          test ! -e "$DISK_PATH/publication.json"
+          test -s tmp/source/golem-binaries.tar.zst
+          start=$SECONDS
+          date -u +'%FT%TZ publish start'
+          cp tmp/source/golem-binaries.tar.zst "$DISK_PATH/golem-binaries.tar.zst"
+          (cd "$DISK_PATH" && sha256sum golem-binaries.tar.zst > SHA256SUMS)
+          stat -c 'archive_bytes=%s' "$DISK_PATH/golem-binaries.tar.zst"
+          df -h "$DISK_PATH"
+          jq -n --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg sha "$SOURCE_SHA" --arg source "$SOURCE_RUN_ID" \
+            '{experimentRunID:$run,experimentRunAttempt:$attempt,sourceSHA:$sha,sourceRunID:$source,artifactKind:"golem-binaries"}' \
+            > "$DISK_PATH/publication.json"
+          echo "publish_seconds=$((SECONDS-start))"
+          date -u +'%FT%TZ publish end'
+
+  consumers:
+    needs: producer
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - blacksmith-8vcpu-ubuntu-2204
+          - blacksmith-32vcpu-ubuntu-2204
+          - blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Mount consumer disk (duration in GitHub step timings)
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ env.DISK_KEY }}
+          path: ${{ env.DISK_PATH }}
+          commit: 'false'
+      - name: Validate publication and measure native archive access
+        run: |
+          set -euo pipefail
+          mountpoint -q "$DISK_PATH" || { echo '::error::Sticky disk is not a mountpoint'; exit 1; }
+          test -s "$DISK_PATH/publication.json" || { echo '::error::Missing publication manifest: snapshot was not published (PR branch protection may discard writes)'; exit 1; }
+          jq -e --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg sha "$SOURCE_SHA" --arg source "$SOURCE_RUN_ID" \
+            '. == {experimentRunID:$run,experimentRunAttempt:$attempt,sourceSHA:$sha,sourceRunID:$source,artifactKind:"golem-binaries"}' \
+            "$DISK_PATH/publication.json"
+          test ! -e "$DISK_PATH/consumer-marker"
+          test -s "$DISK_PATH/golem-binaries.tar.zst"
+          grep -Eq '^[0-9a-f]{64}  golem-binaries\.tar\.zst$' "$DISK_PATH/SHA256SUMS"
+          test "$(wc -l < "$DISK_PATH/SHA256SUMS")" -eq 1
+          start=$SECONDS
+          date -u +'%FT%TZ checksum start'
+          (cd "$DISK_PATH" && sha256sum --strict -c SHA256SUMS)
+          echo "checksum_seconds=$((SECONDS-start))"
+          stat -c 'archive_bytes=%s' "$DISK_PATH/golem-binaries.tar.zst"
+          df -h "$DISK_PATH"
+          mkdir -p tmp/probe-extracted
+          start=$SECONDS
+          date -u +'%FT%TZ extraction start'
+          tar --zstd -xf "$DISK_PATH/golem-binaries.tar.zst" -C tmp/probe-extracted
+          echo "extraction_seconds=$((SECONDS-start))"
+          date -u +'%FT%TZ extraction end'
+          root=tmp/probe-extracted
+          test -s "$root/target/nextest/binaries-metadata.json"
+          test -s "$root/target/nextest/cargo-metadata.json"
+          jq -e '."rust-binaries" | length > 0' "$root/target/nextest/binaries-metadata.json"
+          jq -e '.packages | length > 0' "$root/target/nextest/cargo-metadata.json"
+          test -d "$root/target/dev-ci/deps"
+          test -n "$(find "$root/target/dev-ci/deps" -maxdepth 1 -type f -executable -print -quit)"
+          du -sh "$root"
+          printf '%s\n' "$RUNNER_NAME" > "$DISK_PATH/consumer-marker"
+
+  late-consumer:
+    needs: [producer, consumers]
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 10
+    steps:
+      - name: Mount repeat hydration disk (duration in GitHub step timings)
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ env.DISK_KEY }}
+          path: ${{ env.DISK_PATH }}
+          commit: 'false'
+      - name: Validate repeat hydration and absence of consumer writes
+        run: |
+          set -euo pipefail
+          mountpoint -q "$DISK_PATH" || { echo '::error::Sticky disk is not a mountpoint'; exit 1; }
+          test -s "$DISK_PATH/publication.json" || { echo '::error::Missing publication manifest: snapshot was not published (PR branch protection may discard writes)'; exit 1; }
+          jq -e --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg sha "$SOURCE_SHA" --arg source "$SOURCE_RUN_ID" \
+            '. == {experimentRunID:$run,experimentRunAttempt:$attempt,sourceSHA:$sha,sourceRunID:$source,artifactKind:"golem-binaries"}' \
+            "$DISK_PATH/publication.json"
+          test ! -e "$DISK_PATH/consumer-marker" || { echo '::error::Consumer writes leaked into the published snapshot'; exit 1; }
+          test -s "$DISK_PATH/golem-binaries.tar.zst"
+          grep -Eq '^[0-9a-f]{64}  golem-binaries\.tar\.zst$' "$DISK_PATH/SHA256SUMS"
+          test "$(wc -l < "$DISK_PATH/SHA256SUMS")" -eq 1
+          start=$SECONDS
+          date -u +'%FT%TZ repeat checksum start'
+          (cd "$DISK_PATH" && sha256sum --strict -c SHA256SUMS)
+          echo "checksum_seconds=$((SECONDS-start))"
+          date -u +'%FT%TZ repeat checksum end'
+          stat -c 'archive_bytes=%s' "$DISK_PATH/golem-binaries.tar.zst"
+          df -h "$DISK_PATH"
+          printf '%s\n' "$RUNNER_NAME" > "$DISK_PATH/consumer-marker"
+
+  cleanup:
+    # Wait for all consumer jobs and their posts before deleting only this run's disk.
+    needs: [producer, consumers, late-consumer]
+    if: always()
+    # Same x86_64 runner fleet/region as the producer; no region override.
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 5
+    steps:
+      - name: Delete disposable experiment disk
+        uses: useblacksmith/stickydisk-delete@v1
+        with:
+          delete-key: ${{ env.DISK_KEY }}
