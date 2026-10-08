@@ -201,6 +201,7 @@ test "router metadata is preserved exactly" {
       Subtree({ public_prefix: ["files"], filesystem_root: "/data", }),
       Exact({ public_path: ["health"], file_path: "/data/health", }),
     ],
+    file_response_headers: [],
     openapi_provider_method: Some("provider text"),
     phantom_id_binding: None,
   }

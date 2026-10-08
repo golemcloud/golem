@@ -27,9 +27,9 @@ use crate::services::oplog::{
     CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
     OplogAddReceipt, OplogCloseCompletion, OplogConstructor, OplogError, OplogFence,
     OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
-    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, decode_scan_cursor,
-    next_scan_cursor, record_epoch_verdict, record_owning_epoch, refuse_if_fenced,
-    retry_scan_storage_op,
+    RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, StagePublication,
+    decode_scan_cursor, next_scan_cursor, record_epoch_verdict, record_owning_epoch,
+    refuse_if_fenced, retry_scan_storage_op,
 };
 use crate::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
@@ -773,10 +773,11 @@ impl OplogService for PrimaryOplogService {
         &self,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
-        stage_id: uuid::Uuid,
+        publication: StagePublication,
         expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         record_oplog_call("publish_staged");
+        let stage_id = publication.stage_id();
         if agent_mode != AgentMode::Durable {
             return Err("Only durable agents can publish staged oplogs".into());
         }

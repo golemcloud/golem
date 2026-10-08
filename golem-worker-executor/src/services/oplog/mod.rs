@@ -39,8 +39,9 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableStreamEventSummary, HostRequest, HostResponse, OplogEntry,
-    OplogIndex, OplogPayload, PayloadId, RawOplogPayload, UpdateDescription,
+    DurableFunctionType, DurableStreamEventSummary, FilesystemSnapshotName, HostRequest,
+    HostResponse, OplogEntry, OplogIndex, OplogPayload, PayloadId, RawOplogPayload,
+    UpdateDescription,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
@@ -67,6 +68,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 mod blob;
 mod compressed;
 mod ephemeral;
+mod fenced_stream;
 mod multilayer;
 pub mod plugin;
 mod primary;
@@ -82,6 +84,35 @@ pub(crate) use reader::{OplogReadSource, checked_range_end, exact_from_source, f
 
 #[cfg(test)]
 pub mod tests;
+
+/// The permission to publish one staged oplog as the target of a fork. It is used once: a
+/// publication takes it by value, and it can be neither cloned nor copied. Only the filesystem
+/// snapshot service makes one, so each publication of a fork goes through the decision of that
+/// service about the snapshots of the stage.
+pub struct StagePublication {
+    stage_id: uuid::Uuid,
+}
+
+impl StagePublication {
+    /// The permission to publish the stage `stage_id`.
+    pub(crate) fn new(
+        stage_id: uuid::Uuid,
+        _key: crate::services::agent_filesystem_snapshots::PublicationKey,
+    ) -> Self {
+        Self { stage_id }
+    }
+
+    /// The stage that the permission publishes.
+    pub(crate) fn stage_id(&self) -> uuid::Uuid {
+        self.stage_id
+    }
+
+    /// The permission to publish the stage `stage_id`, for the tests of the oplog.
+    #[cfg(test)]
+    pub(crate) fn for_tests(stage_id: uuid::Uuid) -> Self {
+        Self { stage_id }
+    }
+}
 
 /// Whether an archive step returns once its transfer is queued or once the transfer has finished.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,14 +173,15 @@ pub trait OplogService: Debug + Send + Sync {
         stage_id: uuid::Uuid,
     ) -> Result<bool, String>;
 
-    /// Publishes a fully committed stage if no primary oplog exists. The caller must stop
-    /// and drop its staged writer first. `false` means a competing target exists; errors may
-    /// have indeterminate outcomes and must be reconciled using the target's fork provenance.
+    /// Publishes a fully committed stage, the stage of `publication`, if no primary oplog exists.
+    /// The caller must stop and drop its staged writer first. `false` means a competing target
+    /// exists; errors may have indeterminate outcomes and must be reconciled using the target's
+    /// fork provenance.
     async fn publish_staged(
         &self,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
-        _stage_id: uuid::Uuid,
+        _publication: StagePublication,
         _expected_last_index: OplogIndex,
     ) -> Result<bool, String> {
         Err("staged oplogs are unsupported by this oplog service".to_string())
@@ -539,6 +571,7 @@ pub(crate) async fn record_owning_epoch(
 ) -> Option<OplogFence> {
     let (svc_name, metric_op) = match namespace {
         IndexedStorageNamespace::CompressedOpLog { .. } => ("compressed_oplog", "archive_record"),
+        IndexedStorageNamespace::BlobOplogManifest { .. } => ("blob_oplog", "archive_record"),
         _ => ("oplog", "record"),
     };
     let outcome = retry_storage_op_fenceable(retry_config, "set_key_epoch", key, || {
@@ -1599,12 +1632,14 @@ pub trait OplogOps: Oplog {
         target_revision: ComponentRevision,
         payload: Vec<u8>,
         mime_type: String,
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
     ) -> Result<UpdateDescription, String> {
         let payload = self.upload_payload_owned(payload).await?;
         Ok(UpdateDescription::SnapshotBased {
             target_revision,
             payload,
             mime_type,
+            filesystem_snapshot,
         })
     }
 

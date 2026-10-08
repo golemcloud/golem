@@ -111,6 +111,8 @@ interface common {
     webhook-suffix: list<path-segment>,
     static-bindings: list<file-mapping>,
     filesystem-bindings: list<file-mapping>,
+    /// Additional response headers for files served by static-bindings or filesystem-bindings.
+    file-response-headers: list<file-response-header>,
     /// The name of a parameterless router method that returns the OpenAPI document as a string.
     openapi-provider-method: option<string>,
   }
@@ -123,6 +125,11 @@ interface common {
   record phantom-id-binding-details {
     name: string,
     optional: bool,
+  }
+
+  record file-response-header {
+    name: string,
+    value: string,
   }
 
   variant file-mapping {

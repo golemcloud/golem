@@ -16,6 +16,9 @@ pub mod bootstrap;
 pub mod config;
 pub mod durable_host;
 pub(crate) mod filesystem_pressure;
+pub(crate) mod filesystem_snapshot;
+#[cfg(feature = "test-utils")]
+pub mod filesystem_snapshot_testing;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
@@ -64,6 +67,9 @@ use self::services::worker_fork::DefaultWorkerFork;
 use self::wasi_host::create_linker;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_agents::{ActiveAgents, InvocationLoops};
+use crate::services::agent_filesystem_snapshots::{
+    AgentFilesystemSnapshots, StoreSource, VolumeRoom,
+};
 use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::card::{CardService, CardServiceDefault};
@@ -181,6 +187,58 @@ impl Drop for RunDetails {
     }
 }
 
+/// Binds the service of the filesystem snapshots to the configuration, with the store `given`
+/// when a bootstrap gives one, and otherwise the configured store on `blob_storage`. The service
+/// stops its jobs and its store when the executor shuts down.
+fn bind_agent_filesystem_snapshots<Ctx: WorkerCtx>(
+    golem_config: &GolemConfig,
+    given: Option<StoreSource>,
+    blob_storage: Arc<dyn BlobStorage>,
+    active_agents: &Arc<ActiveAgents<Ctx>>,
+    shutdown: &services::shutdown::Shutdown,
+) -> anyhow::Result<Arc<AgentFilesystemSnapshots>> {
+    let filesystems = active_agents.agent_filesystems();
+    let source = given.unwrap_or_else(|| {
+        StoreSource::configured(
+            blob_storage,
+            VolumeRoom::Pressure {
+                volume: filesystems.volume().clone(),
+                pressure: filesystems.pressure_policy().clone(),
+            },
+        )
+    });
+    AgentFilesystemSnapshots::bind(
+        &golem_config.filesystem_snapshots,
+        source,
+        filesystems.volume().copies_on_write(),
+        shutdown,
+    )
+    .map_err(|error| anyhow!(error))
+}
+
+/// Clears the owner write bit of the file mode creation mask of the process, and then starts the
+/// active agents of the executor, with the agent filesystem service in them.
+///
+/// On a Unix platform it clears bit 0o200 of the mask and keeps the other bits, so each file that
+/// an agent creates has write permission for its owner. Other platforms have no such mask, and
+/// there the function only starts the active agents. On Windows a file is read-only only when its
+/// read-only attribute is set, and an agent cannot set that attribute.
+async fn start_active_agents<
+    Ctx: WorkerCtx,
+    BootstrapImpl: Bootstrap<Ctx> + ?Sized + Send + Sync,
+>(
+    bootstrap: &BootstrapImpl,
+    golem_config: &GolemConfig,
+    initial_files_service: Arc<InitialAgentFilesService>,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
+    #[cfg(unix)]
+    services::agent_filesystem::keep_owner_write_permission();
+    bootstrap
+        .create_active_agents(golem_config, initial_files_service, shutdown_token)
+        .await
+}
+
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.
 /// With a valid `Bootstrap` implementation, the service can be started with the `run` method.
@@ -202,18 +260,27 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// (cgroup/process/override). The in-process test harness overrides this to
     /// inject a probe with a pinned limit and usage so the gate is deterministic
     /// and isolated from the shared test process's RSS.
-    fn create_active_agents(
+    ///
+    /// The file loader of the agent filesystems keeps the downloads of initial files from
+    /// `initial_files_service`. On a Unix platform, the owner write bit of the file mode creation
+    /// mask of the process is already clear when this method runs.
+    async fn create_active_agents(
         &self,
         golem_config: &GolemConfig,
+        initial_files_service: Arc<InitialAgentFilesService>,
         shutdown_token: tokio_util::sync::CancellationToken,
     ) -> anyhow::Result<Arc<ActiveAgents<Ctx>>> {
-        Ok(Arc::new(ActiveAgents::<Ctx>::new(
-            &golem_config.active_agents,
-            &golem_config.memory,
-            &golem_config.filesystem_storage,
-            &golem_config.agent_status_flush,
-            shutdown_token,
-        )?))
+        Ok(Arc::new(
+            ActiveAgents::<Ctx>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                initial_files_service,
+                &golem_config.agent_status_flush,
+                shutdown_token,
+            )
+            .await?,
+        ))
     }
 
     /// Takes the whole [`services::shutdown::Shutdown`] rather than just its
@@ -328,6 +395,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Arc::new(DefaultKeyValueService::new(key_value_storage.clone()))
     }
 
+    /// Wraps the blob storage every service is built on. The default is the identity. The
+    /// in-process test harness uses it to inject blob storage failures above the retry budget of
+    /// the backend, standing in for an outage that outlived it.
+    fn wrap_blob_storage(&self, blob_storage: Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> {
+        blob_storage
+    }
+
     fn create_blob_store_service(
         &self,
         blob_storage: &Arc<dyn BlobStorage>,
@@ -361,6 +435,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         rpc: Arc<dyn crate::services::rpc::Rpc>,
     ) -> Arc<dyn crate::services::rpc::Rpc> {
         rpc
+    }
+
+    /// Gives a store of the filesystem snapshots that replaces the store that the configuration
+    /// names. The default gives none.
+    fn filesystem_snapshot_store(&self) -> Option<StoreSource> {
+        None
     }
 
     fn wrap_worker_enumeration_service(
@@ -398,6 +478,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_types_service: Arc<dyn AgentTypesService>,
         environment_state_service: Arc<dyn EnvironmentStateService>,
+        agent_filesystem_snapshots: Arc<AgentFilesystemSnapshots>,
         agent_webhooks_service: Arc<AgentWebhooksService>,
         resource_limits: Arc<dyn ResourceLimits>,
         quota_service: Arc<dyn QuotaService>,
@@ -443,6 +524,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -488,6 +570,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             resource_limits.clone(),
             shutdown_token.clone(),
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog.clone(),
             agent_types_service.clone(),
             agent_webhooks_service.clone(),
@@ -536,6 +619,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             websocket_connection_pool.clone(),
             mcp_transport,
             environment_state_service.clone(),
+            agent_filesystem_snapshots.clone(),
             native_tool_catalog,
             additional_deps,
             leak_sentinel,
@@ -808,6 +892,7 @@ pub async fn create_worker_executor_impl<
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
     };
+    let blob_storage = bootstrap.wrap_blob_storage(blob_storage);
 
     let initial_files_service = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
 
@@ -872,8 +957,12 @@ pub async fn create_worker_executor_impl<
         oplog_archives.push(svc);
     }
     for idx in 0..golem_config.oplog.blob_storage_layers {
-        let svc: Arc<dyn OplogArchiveService> =
-            Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), idx));
+        let svc: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+            blob_storage.clone(),
+            indexed_storage.clone(),
+            idx,
+            golem_config.indexed_storage_retry.clone(),
+        ));
         oplog_archives.push(svc);
     }
     // The sweeper is built further down, once the worker activator exists.
@@ -907,16 +996,21 @@ pub async fn create_worker_executor_impl<
         }
     };
 
-    let active_agents = bootstrap.create_active_agents(&golem_config, shutdown_token.clone())?;
-
-    let initial_file_cache_root = active_agents
-        .agent_filesystems()
-        .initial_file_cache_root()
-        .map(|path| path.to_path_buf());
-    let file_loader = Arc::new(FileLoader::new(
+    let active_agents = start_active_agents(
+        bootstrap,
+        &golem_config,
         initial_files_service.clone(),
-        initial_file_cache_root.as_deref(),
-    )?);
+        shutdown_token.clone(),
+    )
+    .await?;
+
+    services::resource_usage_metering::check_filesystem_metering(
+        golem_config.resource_usage_metering,
+        active_agents.agent_filesystems().agent_accounting(),
+    )
+    .map_err(|error| anyhow!(error))?;
+
+    let file_loader = active_agents.agent_filesystems().file_loader();
 
     let running_worker_enumeration_service = Arc::new(RunningWorkerEnumerationServiceDefault::new(
         active_agents.clone(),
@@ -1052,6 +1146,14 @@ pub async fn create_worker_executor_impl<
 
     let additional_deps = bootstrap.create_additional_deps(registry_service.clone());
 
+    let agent_filesystem_snapshots = bind_agent_filesystem_snapshots(
+        &golem_config,
+        bootstrap.filesystem_snapshot_store(),
+        blob_storage.clone(),
+        &active_agents,
+        &shutdown,
+    )?;
+
     let direct_invocation_auth_service =
         bootstrap.create_direct_invocation_auth_service(registry_service.clone(), &golem_config);
 
@@ -1087,6 +1189,7 @@ pub async fn create_worker_executor_impl<
             oplog_processor_plugin,
             agent_type_service,
             environment_state_service,
+            agent_filesystem_snapshots,
             agent_webhooks_service,
             resource_limits,
             quota_service,
@@ -1237,7 +1340,6 @@ pub async fn bootstrap_and_run_worker_executor<
     let http_port = golem_service_base::observability::start_health_and_metrics_server(
         golem_config.http_addr()?,
         prometheus_registry,
-        golem_config.runtime_metrics_sampling_interval,
         "Worker executor is running",
         join_set,
     )
@@ -1279,11 +1381,13 @@ pub async fn run_grpc_server<Ctx: WorkerCtx>(
         .initialize(grpc_port)
         .await;
 
-    let worker_impl = WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
+    // The start of the service recovers the agents, and its future is large. It lives on the
+    // heap, so the stack of the caller stays small.
+    let worker_impl = Box::pin(WorkerExecutorImpl::<Ctx, All<Ctx>>::new(
         service_dependencies,
         lazy_worker_activator,
         grpc_port,
-    )
+    ))
     .await?;
 
     let service = WorkerExecutorServer::new(worker_impl)
@@ -1369,5 +1473,139 @@ async fn build_inner_key_value_storage(
                 ));
             Ok((None, None, key_value_storage))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(target_os = "linux")]
+    use crate::services::NoAdditionalDeps;
+    #[cfg(target_os = "linux")]
+    use crate::services::agent_filesystem::file_creation_mask_for_test::{
+        thread_file_creation_mask, with_private_file_creation_mask,
+    };
+    use crate::services::golem_config::FilesystemStorageMode;
+    use crate::workerctx::default::Context;
+    use test_r::test;
+
+    /// Records the file mode creation mask of the thread when bootstrap starts the active agents,
+    /// and starts none.
+    #[cfg(target_os = "linux")]
+    #[derive(Default)]
+    struct MaskRecordingBootstrap {
+        mask: std::sync::Mutex<Option<libc::mode_t>>,
+    }
+
+    #[cfg(target_os = "linux")]
+    #[async_trait]
+    impl Bootstrap<Context> for MaskRecordingBootstrap {
+        fn create_additional_deps(
+            &self,
+            _registry_service: Arc<dyn RegistryService>,
+        ) -> NoAdditionalDeps {
+            NoAdditionalDeps {}
+        }
+
+        async fn create_active_agents(
+            &self,
+            _golem_config: &GolemConfig,
+            _initial_files_service: Arc<InitialAgentFilesService>,
+            _shutdown_token: tokio_util::sync::CancellationToken,
+        ) -> anyhow::Result<Arc<ActiveAgents<Context>>> {
+            *self.mask.lock().unwrap() = Some(thread_file_creation_mask());
+            Err(anyhow!("the test starts no active agents"))
+        }
+    }
+
+    fn in_memory_initial_files_service() -> Arc<InitialAgentFilesService> {
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        )))
+    }
+
+    /// The snapshot service gets the storage mode of the agent filesystems: on storage without
+    /// copy-on-write copies it refuses managed snapshots.
+    #[test]
+    async fn the_snapshot_service_refuses_managed_snapshots_on_storage_without_copy_on_write() {
+        let root = tempfile::tempdir().unwrap();
+        let key: Box<str> = "00".repeat(64).into_boxed_str();
+        let mut golem_config = GolemConfig::default();
+        golem_config.filesystem_storage.mode = FilesystemStorageMode::Directory {
+            root: root.path().into(),
+        };
+        golem_config.filesystem_snapshots =
+            services::golem_config::FilesystemSnapshotsConfig::Managed(Box::new(
+                services::golem_config::FilesystemSnapshotStoreConfig::new(
+                    &key,
+                    std::time::Duration::from_secs(60),
+                    1,
+                    1,
+                )
+                .unwrap(),
+            ));
+        let shutdown = services::shutdown::Shutdown::new();
+        let active_agents = Arc::new(
+            ActiveAgents::<Context>::new(
+                &golem_config.active_agents,
+                &golem_config.memory,
+                &golem_config.filesystem_storage,
+                in_memory_initial_files_service(),
+                &golem_config.agent_status_flush,
+                shutdown.token(),
+            )
+            .await
+            .unwrap(),
+        );
+
+        let bound = bind_agent_filesystem_snapshots(
+            &golem_config,
+            None,
+            Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new()),
+            &active_agents,
+            &shutdown,
+        );
+
+        let error = bound
+            .err()
+            .expect("managed snapshots on storage without copy-on-write must be refused");
+        assert!(
+            format!("{error:#}").contains(
+                "filesystem snapshots require storage with copy-on-write copies (XFS with reflink)"
+            ),
+            "{error:#}"
+        );
+        shutdown.token().cancel();
+    }
+
+    /// Bootstrap runs on a thread with its own filesystem attributes and the mask 0o227. The mask
+    /// must be 0o027 when the active agents start, and stay 0o027 after.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn executor_bootstrap_clears_only_bit_0o200_before_the_agent_filesystems_start() {
+        let (started, recorded, after) = with_private_file_creation_mask(0o227, || {
+            let bootstrap = MaskRecordingBootstrap::default();
+            let started = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(start_active_agents(
+                    &bootstrap,
+                    &GolemConfig::default(),
+                    in_memory_initial_files_service(),
+                    tokio_util::sync::CancellationToken::new(),
+                ))
+                .is_ok();
+            let recorded = *bootstrap.mask.lock().unwrap();
+            (started, recorded, thread_file_creation_mask())
+        });
+
+        assert!(!started, "the recording bootstrap starts no active agents");
+        assert_eq!(
+            recorded,
+            Some(0o027),
+            "the mask 227 must be 27 when the agent filesystems start"
+        );
+        assert_eq!(after, 0o027, "the mask must stay 27, and it is {after:o}");
     }
 }

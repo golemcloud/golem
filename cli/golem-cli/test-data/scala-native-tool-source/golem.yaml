@@ -1,0 +1,57 @@
+manifestVersion: 1.6.0
+
+app: scala-native-tool-source
+
+version: v0.0.0
+
+environments:
+  local:
+    server: local
+    version: v0.0.0
+    componentPresets: quick
+    tools:
+      middleware:
+        - name: scala-native-source-middleware
+          filesystemAccess: allowed
+
+components:
+  scala-native-tool-source:consumer:
+    dir: .
+    templates: scala
+    dependencies:
+      tools: [native-conformance]
+
+tools:
+  middleware:
+    scala-native-source-middleware:
+      component: scala-native-tool-source:consumer
+
+agents:
+  ScalaNativeToolSourceAgent:
+    tools:
+      native-conformance: {}
+  UnauthorizedScalaNativeToolSourceAgent:
+    initialCard:
+      lowerBound:
+        positive:
+          - "filesystem(?agent) @ ?agent : * : /**"
+          - "network() @ ?agent : * : *"
+          - "env(?agent) @ ?agent : * : *"
+          - "oplog(?agent) @ ?agent : * : *"
+          - "config(?agent) @ ?agent : * : *"
+          - "secret(?env) @ ?agent : * : *"
+          - "agent(?env/*/*) @ ?agent : * : *"
+          - "environment(?env) @ ?agent : * : *"
+          - "component(?component) @ ?agent : * : *"
+          - "kv(?env) @ ?agent : * : *.**"
+          - "blob(?env) @ ?agent : * : *.**"
+          - "rdbms(?env) @ ?agent : * : *.*.*"
+          - "card(?account) @ ?agent : * : *"
+        negative:
+          - "tool(?env/*/*) @ ?agent : * : *"
+      upperBound: { positive: [], negative: [] }
+
+bridge:
+  scala:
+    internal:
+      tools: [native-conformance]

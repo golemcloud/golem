@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::base_model::agent::Principal;
+use crate::model::card::StoredCard;
 use crate::model::component::{ComponentId, ComponentRevision};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::oplog::OplogIndex;
@@ -837,7 +838,6 @@ pub struct NamedToolErrorSchema {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityInvocationRequestIdentity {
     pub entity: AgentEntity,
-    pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
     pub operation: EntityInvocationDescriptorIdentity,
     pub plan_position: Option<EntityInvocationPlanPositionIdentity>,
@@ -903,7 +903,6 @@ pub struct ToolInvocationRejectedIdentity {
 impl EntityInvocationRequestIdentity {
     pub fn matches(&self, request: &EntityInvocationRequest, input: &TypedSchemaValue) -> bool {
         self.entity == request.entity
-            && self.calling_principal == request.calling_principal
             && self.call_mode == request.call_mode
             && self.operation == (&request.operation).into()
             && self.plan_position
@@ -943,16 +942,17 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
+/// The calling principal is the owner agent and is derived from the execution context.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
-    pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
     pub operation: EntityInvocationDescriptor,
     pub principal: Principal,
     pub plan: EntityInvocationPlanReference,
     pub assume_idempotence: bool,
+    pub authority_wallet: Vec<StoredCard>,
 }
 
 pub type CallingAgentPrincipal = Principal;
@@ -980,6 +980,9 @@ pub struct EntityInvocationScope {
     assume_idempotence: bool,
     logical_key_positions: bool,
     stream_session_idempotency_key: IdempotencyKey,
+    /// Wallet snapshot pinned in the immutable entity invocation `Start`.
+    #[serde(skip)]
+    authority_wallet: Vec<StoredCard>,
     /// Resident tracing context restored from the immutable entity invocation `Start`.
     #[serde(skip)]
     span_started: Option<ResidentEntitySpan>,
@@ -1037,8 +1040,18 @@ impl EntityInvocationScope {
             assume_idempotence,
             logical_key_positions,
             stream_session_idempotency_key,
+            authority_wallet: Vec::new(),
             span_started: None,
         })
+    }
+
+    pub fn with_authority_wallet(mut self, authority_wallet: Vec<StoredCard>) -> Self {
+        self.authority_wallet = authority_wallet;
+        self
+    }
+
+    pub fn authority_wallet(&self) -> &[StoredCard] {
+        &self.authority_wallet
     }
 
     pub fn owner_id(&self) -> &OwnedAgentId {

@@ -35,8 +35,8 @@ use crate::base_model::agent::{
     CachePolicyTtl, CorsOptions, CustomHttpMethod, DurableStreamInputSlotSource,
     DurableStreamOutputSlotSource, DurableStreamRouteLoadOptions, DurableStreamRouteOptions,
     DurableStreamSlotOptions, DurableStreamSlotSource, ExactFileMapping, FileMapping,
-    GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod, HttpMountDetails,
-    LiteralSegment, OidcPrincipal, PathSegment, PathVariable, PhantomIdBinding,
+    FileResponseHeader, GolemUserPrincipal, HeaderVariable, HttpEndpointDetails, HttpMethod,
+    HttpMountDetails, LiteralSegment, OidcPrincipal, PathSegment, PathVariable, PhantomIdBinding,
     PhantomIdBindingDetails, Principal, QueryVariable, ReadOnlyConfig, Snapshotting,
     SnapshottingConfig, SnapshottingEveryNInvocation, SnapshottingPeriodic, SubtreeFileMapping,
     SystemVariable, SystemVariableSegment,
@@ -641,6 +641,11 @@ impl From<HttpMountDetails> for wire::HttpMountDetails {
                 .into_iter()
                 .map(Into::into)
                 .collect(),
+            file_response_headers: value
+                .file_response_headers
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             openapi_provider_method: value.openapi_provider_method,
         }
     }
@@ -658,6 +663,11 @@ impl From<wire::HttpMountDetails> for HttpMountDetails {
             static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
             filesystem_bindings: value
                 .filesystem_bindings
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            file_response_headers: value
+                .file_response_headers
                 .into_iter()
                 .map(Into::into)
                 .collect(),
@@ -681,6 +691,15 @@ impl From<PhantomIdBinding> for wire::PhantomIdBinding {
     }
 }
 
+impl From<FileResponseHeader> for wire::FileResponseHeader {
+    fn from(value: FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
+        }
+    }
+}
+
 impl From<wire::PhantomIdBinding> for PhantomIdBinding {
     fn from(value: wire::PhantomIdBinding) -> Self {
         match value {
@@ -692,6 +711,15 @@ impl From<wire::PhantomIdBinding> for PhantomIdBinding {
                 name: value.name,
                 optional: value.optional,
             }),
+        }
+    }
+}
+
+impl From<wire::FileResponseHeader> for FileResponseHeader {
+    fn from(value: wire::FileResponseHeader) -> Self {
+        Self {
+            name: value.name,
+            value: value.value,
         }
     }
 }
@@ -1349,6 +1377,16 @@ mod tests {
                     public_path: vec!["report".into()],
                     file_path: "/data/report.txt".into(),
                 })],
+                file_response_headers: vec![
+                    FileResponseHeader {
+                        name: "Content-Security-Policy".into(),
+                        value: "default-src 'none'".into(),
+                    },
+                    FileResponseHeader {
+                        name: "Referrer-Policy".into(),
+                        value: "no-referrer".into(),
+                    },
+                ],
                 openapi_provider_method: Some("describe-site".into()),
             });
             // Transport round trips preserve metadata independently of role validation.
@@ -1399,6 +1437,10 @@ mod tests {
                     webhook_suffix: vec![],
                     static_bindings: vec![],
                     filesystem_bindings: vec![],
+                    file_response_headers: vec![FileResponseHeader {
+                        name: "Referrer-Policy".into(),
+                        value: "no-referrer".into(),
+                    }],
                     openapi_provider_method: None,
                 });
                 let wire = encode_agent_type(&original).unwrap();

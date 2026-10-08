@@ -438,6 +438,9 @@ impl TextOutput for PublicOplogEntry {
                             "{pad}snapshot:          {}",
                             BASE64_STANDARD.encode(&inner_params.payload),
                         ));
+                        if let Some(name) = &inner_params.filesystem_snapshot {
+                            logln(format!("{pad}filesystem:        {}", format_id(name)));
+                        }
                     }
                 }
             }
@@ -503,15 +506,10 @@ impl TextOutput for PublicOplogEntry {
                         "{pad}revision start:    {}",
                         format_id(&details.source_revision_start_index)
                     ));
-                    if let Some(snapshot_index) = details.snapshot_index {
-                        logln(format!(
-                            "{pad}snapshot index:   {}",
-                            format_id(&snapshot_index)
-                        ));
-                    }
-                    if let Some(reason) = &details.ineligibility_reason {
-                        logln(format!("{pad}ineligible:        {reason}"));
-                    }
+                    logln(format!(
+                        "{pad}snapshot index:   {}",
+                        format_id(&details.snapshot_index)
+                    ));
                 }
             }
             PublicOplogEntry::GrowMemory(params) => {
@@ -674,7 +672,21 @@ impl TextOutput for PublicOplogEntry {
                     "{pad}at:                {}",
                     format_id(&params.timestamp)
                 ));
+                if let Some(name) = &params.filesystem_snapshot {
+                    logln(format!("{pad}filesystem:        {}", format_id(name)));
+                }
                 log_snapshot_data(pad, &params.data);
+            }
+            PublicOplogEntry::SnapshotConfirmed(params) => {
+                logln(format_message_highlight("SNAPSHOT CONFIRMED"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}filesystem:        {}",
+                    format_id(&params.filesystem_snapshot)
+                ));
             }
             PublicOplogEntry::OplogProcessorCheckpoint(params) => {
                 logln(format_message_highlight("OPLOG PROCESSOR CHECKPOINT"));

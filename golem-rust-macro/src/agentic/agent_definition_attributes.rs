@@ -61,6 +61,7 @@ pub fn parse_agent_definition_attributes(
         webhook_suffix: None,
         static_files: vec![],
         filesystem_bindings: vec![],
+        file_response_headers: vec![],
         openapi_provider_method: None,
     };
 
@@ -217,6 +218,17 @@ pub fn parse_agent_definition_attributes(
             "static_files and openapi_provider_method require an HTTP router",
         ));
     }
+    if !http.file_response_headers.is_empty()
+        && match definition_kind {
+            AgentDefinitionKind::Regular => http.filesystem_bindings.is_empty(),
+            AgentDefinitionKind::HttpRouter => http.static_files.is_empty(),
+        }
+    {
+        return Err(Error::new(
+            proc_macro2::Span::call_site(),
+            "file_response_headers require filesystem_bindings on an agent or static_files on an HTTP router",
+        ));
+    }
     if (has_filesystem || !http.static_files.is_empty() || http.openapi_provider_method.is_some())
         && http.mount.is_none()
     {
@@ -267,6 +279,7 @@ pub fn parse_agent_definition_attributes(
         let exposure_path = exposure_path.map(|path| quote! { mount.path_prefix = #path; });
         let static_files = http.static_files;
         let filesystem_bindings = http.filesystem_bindings;
+        let file_response_headers = http.file_response_headers;
         let provider = match http.openapi_provider_method {
             Some(name) => quote! { Some(#name.to_string()) },
             None => quote! { None },
@@ -292,6 +305,7 @@ pub fn parse_agent_definition_attributes(
             mount.phantom_id_binding = #phantom_id_binding;
             mount.static_bindings = vec![#(#static_files),*];
             mount.filesystem_bindings = vec![#(#filesystem_bindings),*];
+            mount.file_response_headers = vec![#(#file_response_headers),*];
             mount.openapi_provider_method = #provider;
             mount
             }
@@ -319,6 +333,7 @@ struct ParsedHttpMount {
     webhook_suffix: Option<syn::LitStr>,
     static_files: Vec<TokenStream>,
     filesystem_bindings: Vec<TokenStream>,
+    file_response_headers: Vec<TokenStream>,
     openapi_provider_method: Option<syn::LitStr>,
 }
 
@@ -406,6 +421,10 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
             }
             "filesystem_bindings" => {
                 out.filesystem_bindings = parse_file_mappings(&assign.right)?;
+                return Ok(());
+            }
+            "file_response_headers" => {
+                out.file_response_headers = parse_file_response_headers(&assign.right)?;
                 return Ok(());
             }
             "openapi_provider_method" => {
@@ -506,8 +525,48 @@ fn parse_http_expr(expr: &Expr, out: &mut ParsedHttpMount) -> Result<(), Error> 
 
     Err(Error::new_spanned(
         expr,
-        "Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, openapi_provider_method",
+        "Unknown agent_definition parameter. Valid parameters are: name, mode, snapshotting, mount, auth, phantom_agent, cors, webhook_suffix, static_files, filesystem_bindings, file_response_headers, openapi_provider_method",
     ))
+}
+
+fn parse_file_response_headers(expr: &Expr) -> Result<Vec<TokenStream>, Error> {
+    let Expr::Array(array) = expr else {
+        return Err(Error::new_spanned(
+            expr,
+            "file_response_headers must be an array of (name, value) string pairs",
+        ));
+    };
+    array
+        .elems
+        .iter()
+        .map(|entry| {
+            let Expr::Tuple(pair) = entry else {
+                return Err(Error::new_spanned(entry, "expected (name, value)"));
+            };
+            if pair.elems.len() != 2 {
+                return Err(Error::new_spanned(
+                    entry,
+                    "expected exactly two strings: (name, value)",
+                ));
+            }
+            let mut values = pair.elems.iter().map(|value| match value {
+                Expr::Lit(ExprLit {
+                    lit: Lit::Str(lit), ..
+                }) => Ok(lit),
+                _ => Err(Error::new_spanned(
+                    value,
+                    "header names and values must be string literals",
+                )),
+            });
+            let name = values.next().unwrap()?;
+            let value = values.next().unwrap()?;
+            Ok(quote! {
+                golem_rust::golem_agentic::golem::agent::common::FileResponseHeader {
+                    name: #name.to_string(), value: #value.to_string(),
+                }
+            })
+        })
+        .collect()
 }
 
 fn compile_exposure_mount(mount: &syn::LitStr, variables: bool) -> Result<TokenStream, Error> {
@@ -821,5 +880,33 @@ mod tests {
                 .to_string()
                 .contains("Unknown agent_definition parameter")
         );
+    }
+
+    #[test]
+    fn file_response_headers_are_ordered_string_pairs() {
+        let expression: Expr = syn::parse_quote!([
+            ("content-security-policy", "default-src 'self'"),
+            ("referrer-policy", "same-origin")
+        ]);
+        let headers = parse_file_response_headers(&expression).unwrap();
+        assert_eq!(headers.len(), 2);
+        assert!(
+            headers[0]
+                .to_string()
+                .contains("\"content-security-policy\"")
+        );
+        assert!(headers[0].to_string().contains("\"default-src 'self'\""));
+        assert!(headers[1].to_string().contains("\"referrer-policy\""));
+        assert!(headers[1].to_string().contains("\"same-origin\""));
+
+        for invalid in [
+            quote! { file_response_headers = ["content-security-policy"] },
+            quote! { file_response_headers = [("content-security-policy", 1)] },
+            quote! { file_response_headers = [("content-security-policy", "default-src 'self'")] },
+        ] {
+            assert!(
+                parse_agent_definition_attributes(invalid, AgentDefinitionKind::Regular).is_err()
+            );
+        }
     }
 }

@@ -164,6 +164,7 @@ impl WireTypeRef {
         direction: Option<golem_schema::schema::PathDirection>,
         kind: Option<golem_schema::schema::PathKind>,
         mime: Option<Vec<String>>,
+        extensions: Option<Vec<String>>,
     ) -> Result<Self, ToolBuildError> {
         self.refined(|body| {
             let wire::SchemaTypeBody::PathType(spec) = body else {
@@ -185,6 +186,9 @@ impl WireTypeRef {
             }
             if mime.is_some() {
                 spec.allowed_mime_types = mime;
+            }
+            if extensions.is_some() {
+                spec.allowed_extensions = extensions;
             }
             Ok(())
         })

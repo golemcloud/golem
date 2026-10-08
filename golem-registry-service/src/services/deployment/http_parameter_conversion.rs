@@ -461,6 +461,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
@@ -500,6 +501,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![PathSegment::Literal(LiteralSegment {
                 value: "agents".into(),
@@ -527,6 +529,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![PathSegment::RemainingPathVariable(PathVariable {
                 variable_name: "rest".into(),
@@ -554,6 +557,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![PathSegment::PathVariable(PathVariable {
                 variable_name: "agent_id".into(),
@@ -711,6 +715,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
@@ -750,6 +755,7 @@ mod test {
         let mount = HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![
                 PathSegment::Literal(LiteralSegment {
@@ -938,6 +944,7 @@ mod test {
         HttpMountDetails {
             static_bindings: vec![],
             filesystem_bindings: vec![],
+            file_response_headers: vec![],
             openapi_provider_method: None,
             path_prefix: vec![],
             auth_details: None,

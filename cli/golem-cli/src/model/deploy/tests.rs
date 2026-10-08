@@ -42,6 +42,7 @@ fn deploy_display_preserves_phantom_selector() {
                 webhook_suffix: vec![],
                 static_bindings: vec![],
                 filesystem_bindings: vec![],
+                file_response_headers: vec![],
                 openapi_provider_method: None,
             };
             let value = serde_json::to_value(display_http_mount(&mount)).unwrap();

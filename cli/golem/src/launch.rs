@@ -39,8 +39,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -171,9 +171,15 @@ async fn start_components(
     args: &LaunchArgs,
     join_set: &mut JoinSet<anyhow::Result<()>>,
 ) -> Result<StartedComponents, anyhow::Error> {
+    let component_compilation_service_config = component_compilation_service_config(args);
+    golem_service_base::observability::install_runtime_metrics(
+        Handle::current(),
+        prometheus::default_registry().clone(),
+        component_compilation_service_config.runtime_metrics_sampling_interval,
+        join_set,
+    );
     let component_compilation_service =
-        run_component_compilation_service(component_compilation_service_config(args), join_set)
-            .await?;
+        run_component_compilation_service(component_compilation_service_config, join_set).await?;
 
     let registry_service = run_registry_service(
         registry_service_config(args, &component_compilation_service)?,
@@ -441,7 +447,12 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            deterministic_root_dir: args.agent_filesystem_root.clone(),
+            mode: args
+                .agent_filesystem_root
+                .clone()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                }),
             ..Default::default()
         },
         ..Default::default()

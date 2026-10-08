@@ -26,7 +26,9 @@ import type {
   TypedSchemaValue as WireTypedSchemaValue,
 } from 'golem:tool/common@0.1.0';
 import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import { SchemaValueStream } from 'golem:core/types@2.0.0';
 import {
+  deferredStartedToolInvocation,
   mapSettledToolResult,
   resultFromSettledToolResult,
   startedToolInvocation,
@@ -63,10 +65,9 @@ import {
   validateToolIdentifier,
 } from './internal/tool';
 import {
-  deepEqual,
   preflightWitTypedSchemaValue,
   schemaGraphFromWit,
-  schemaShapesMatch,
+  schemaGraphsEquivalent,
   t,
   typedSchemaValueFromWit,
   type TypedSchemaValue,
@@ -79,7 +80,11 @@ import {
 } from './internal/registry/toolMiddlewareRegistry';
 import { closeAsyncIterable, isAsyncIterable } from './internal/tool/asyncIterable';
 import { compileSchema } from './schema/adapter';
-import { directSchemaValueFromWit, type SchemaCodec } from './schema/codec';
+import {
+  directSchemaValueFromWit,
+  relinquishSchemaValueCapabilities,
+  type SchemaCodec,
+} from './schema/codec';
 import type { StandardSchemaV1 } from './schema/standardSchema';
 
 export type { ToolInputStream } from './internal/tool/startedToolInvocation';
@@ -1884,35 +1889,89 @@ function createToolClientMethod(
 
   return (args: Record<string, unknown>): unknown => {
     if (!commandBody.stdout && !commandBody.stderr) {
-      return Promise.resolve().then(() => startToolClientCall());
+      return Promise.resolve()
+        .then(() => prepareInput(true))
+        .then(({ input, stdin }) => startToolClientCall(input, stdin))
+        .catch((error) => {
+          throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+        });
     }
-    return startToolClientCall();
+    const prepared = prepareStartedInput();
+    if (prepared instanceof Promise) {
+      return deferredStartedToolInvocation(
+        prepared.then(({ input, stdin }) => startToolClientCall(input, stdin)) as Promise<
+          StartedToolInvocation<unknown>
+        >,
+        commandBody.stdout !== undefined,
+        commandBody.stderr !== undefined,
+      );
+    }
+    return startToolClientCall(prepared.input, prepared.stdin);
 
-    function startToolClientCall(): unknown {
-      let input: WireTypedSchemaValue;
-      let stdin: ToolInputStream | undefined;
+    function prepareStartedInput():
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
       try {
-        if (!isImplementationObject(args)) {
-          throw new Error('tool client arguments must be an object');
-        }
-        const canonicalInput = Object.fromEntries(
-          inputModel.fields.map((field) => {
-            const projectedName = camelCase(field.name);
-            return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
-          }),
-        );
-        input = inputModel.encodeWire(canonicalInput);
-        stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
-        if (stdin !== undefined && !isReadableStream(stdin)) {
-          throw new Error('stdin must be a readable stream');
-        }
-        if (commandBody.stdin?.required && stdin === undefined) {
-          throw new Error('required stdin stream is missing');
-        }
+        const { canonicalInput, stdin } = canonicalizeInput();
+        const input = inputModel.encodeWireForStartedInvocation(canonicalInput);
+        return input instanceof Promise
+          ? input
+              .then((value) => ({ input: value, stdin }))
+              .catch((error) => {
+                throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+              })
+          : { input, stdin };
       } catch (error) {
         throw mapFailure(error, { phase: 'input', body: commandBody, callName });
       }
+    }
 
+    function prepareInput(
+      asynchronous: true,
+    ): Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }>;
+    function prepareInput(asynchronous: false): {
+      input: WireTypedSchemaValue;
+      stdin?: ToolInputStream;
+    };
+    function prepareInput(
+      asynchronous: boolean,
+    ):
+      | { input: WireTypedSchemaValue; stdin?: ToolInputStream }
+      | Promise<{ input: WireTypedSchemaValue; stdin?: ToolInputStream }> {
+      try {
+        const { canonicalInput, stdin } = canonicalizeInput();
+        return asynchronous
+          ? inputModel.encodeWireAsync(canonicalInput).then((input) => ({ input, stdin }))
+          : { input: inputModel.encodeWire(canonicalInput), stdin };
+      } catch (error) {
+        throw mapFailure(error, { phase: 'input', body: commandBody, callName });
+      }
+    }
+
+    function canonicalizeInput() {
+      if (!isImplementationObject(args)) {
+        throw new Error('tool client arguments must be an object');
+      }
+      const canonicalInput = Object.fromEntries(
+        inputModel.fields.map((field) => {
+          const projectedName = camelCase(field.name);
+          return [field.name, hasOwn(args, projectedName) ? args[projectedName] : undefined];
+        }),
+      );
+      const stdin = commandBody.stdin ? (args.stdin as ToolInputStream | undefined) : undefined;
+      if (stdin !== undefined && !isReadableStream(stdin)) {
+        throw new Error('stdin must be a readable stream');
+      }
+      if (commandBody.stdin?.required && stdin === undefined) {
+        throw new Error('required stdin stream is missing');
+      }
+      return { canonicalInput, stdin };
+    }
+
+    function startToolClientCall(
+      input: WireTypedSchemaValue,
+      stdin: ToolInputStream | undefined,
+    ): unknown {
       let invocation: ToolClientInvocationResult;
       try {
         invocation = transport.start(
@@ -1923,16 +1982,26 @@ function createToolClientMethod(
           commandBody.stderr !== undefined,
         );
       } catch (error) {
-        throw mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        const failure = mapFailure(error, { phase: 'invoke', body: commandBody, callName });
+        if (failure instanceof Promise) {
+          const settled = failure.then(
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+            (reason): SettledToolResult<never> => ({ status: 'rejected', reason }),
+          );
+          return commandBody.stdout || commandBody.stderr
+            ? startedToolInvocation(undefined, undefined, settled, () => {})
+            : resultFromSettledToolResult(settled);
+        }
+        throw failure;
       }
 
       const settledResult = mapSettledToolResult(
         invocation.settledResult,
-        (terminal) => {
+        async (terminal) => {
           try {
-            return decodeToolClientResult(commandBody, terminal, callName);
+            return await decodeToolClientResult(commandBody, terminal, callName);
           } catch (error) {
-            throw mapFailure(error, { phase: 'result', body: commandBody, callName });
+            throw await mapFailure(error, { phase: 'result', body: commandBody, callName });
           }
         },
         (error) => mapFailure(error, { phase: 'result', body: commandBody, callName }),
@@ -1987,7 +2056,9 @@ function decodeToolClientResult(
   const hasResult = invocation.result !== undefined;
 
   if (!body.result && hasResult) {
-    throw new Error('unit command returned an unexpected result');
+    return withWireValueOwnership(invocation.result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   }
   if (body.result && !hasResult) {
     throw new Error('structured command result is missing');
@@ -2099,7 +2170,7 @@ function createToolUnderlyingMethod(
     try {
       invocation = await transport.invoke(commandPath, input, stdin);
     } catch (error) {
-      throw mapFailure(error, { phase: 'invoke', body, callName });
+      throw await mapFailure(error, { phase: 'invoke', body, callName });
     }
 
     try {
@@ -2111,14 +2182,16 @@ function createToolUnderlyingMethod(
         cancel: () => invocation.cancel(),
         get result() {
           return (result ??= invocation.result.then(
-            (result) => {
+            async (result) => {
               try {
-                return decodeToolUnderlyingResult(body, result, callName);
+                return await decodeToolUnderlyingResult(body, result, callName);
               } catch (error) {
-                throw mapFailure(error, { phase: 'result', body, callName });
+                throw await mapFailure(error, { phase: 'result', body, callName });
               }
             },
-            (error) => Promise.reject(mapFailure(error, { phase: 'result', body, callName })),
+            async (error) => {
+              throw await mapFailure(error, { phase: 'result', body, callName });
+            },
           ));
         },
       };
@@ -2127,7 +2200,7 @@ function createToolUnderlyingMethod(
         closeAsyncIterable(invocation.stdout),
         closeAsyncIterable(invocation.stderr),
       ]);
-      throw mapFailure(error, { phase: 'result', body, callName });
+      throw await mapFailure(error, { phase: 'result', body, callName });
     }
   };
   const invoke = async (args: Record<string, unknown>): Promise<unknown> => {
@@ -2180,7 +2253,10 @@ function decodeToolUnderlyingResult(
   callName: string,
 ): unknown {
   const hasResult = result !== undefined;
-  if (!body.result && hasResult) throw new Error('unit command returned an unexpected result');
+  if (!body.result && hasResult)
+    return withWireValueOwnership(result!, () => {
+      throw new Error('unit command returned an unexpected result');
+    });
   if (body.result && !hasResult) throw new Error('structured command result is missing');
 
   return body.result
@@ -2201,6 +2277,7 @@ export function decodeDeclaredToolError(
   wireError: Extract<WireToolError, { readonly tag: 'custom-error' }>['val'],
   callName: string,
 ):
+  | Promise<never>
   | ToolErr<string, unknown>
   | ToolErr<string>
   | {
@@ -2208,30 +2285,33 @@ export function decodeDeclaredToolError(
       readonly name: string;
       readonly payload: WireTypedSchemaValue;
     } {
-  const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
-  if (!errorCase) {
-    preflightWitTypedSchemaValue(wireError.payload);
-    return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
-  }
-
-  validateWireSchema(
-    errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
-    wireError.payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  const payload = typedSchemaValueFromWit(wireError.payload);
-  if (!errorCase.payloadCodec) {
-    if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
-      throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+  return withWireValueOwnership(wireError.payload, (lift) => {
+    if (typeof wireError.name !== 'string') throw new Error('custom error name must be a string');
+    const errorCase = body.errors.find((candidate) => candidate.name === wireError.name);
+    if (!errorCase) {
+      preflightWitTypedSchemaValue(wireError.payload);
+      return { tag: 'unknown-error', name: wireError.name, payload: wireError.payload };
     }
-    return err(errorCase.name);
-  }
-  const decoded = decodeTypedValue(
-    errorCase.payloadCodec,
-    payload,
-    `${callName} custom error "${errorCase.name}"`,
-  );
-  return err(errorCase.name, decoded);
+
+    validateWireSchema(
+      errorCase.payloadCodec?.graph ?? { defs: new Map(), root: t.tuple([]) },
+      wireError.payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    const payload = lift();
+    if (!errorCase.payloadCodec) {
+      if (payload.value.tag !== 'tuple' || payload.value.elements.length !== 0) {
+        throw new Error(`remote custom error "${errorCase.name}" has a non-unit payload`);
+      }
+      return err(errorCase.name);
+    }
+    const decoded = decodeTypedValue(
+      errorCase.payloadCodec,
+      payload,
+      `${callName} custom error "${errorCase.name}"`,
+    );
+    return err(errorCase.name, decoded);
+  });
 }
 
 function decodeWireValue(
@@ -2239,17 +2319,75 @@ function decodeWireValue(
   wire: WireTypedSchemaValue,
   position: string,
 ): unknown {
-  if (codec.direct) {
-    try {
-      return directSchemaValueFromWit(codec, wire.value);
-    } catch (error) {
-      throw new Error(
-        `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
-      );
+  return withWireValueOwnership(wire, (lift) => {
+    if (codec.direct) {
+      try {
+        return directSchemaValueFromWit(codec, wire.value);
+      } catch (error) {
+        throw new Error(
+          `${position} does not conform to the local definition: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    validateWireSchema(codec.graph, wire, position);
+    return decodeTypedValue(codec, lift(), position);
+  });
+}
+
+/** @internal Own wire endpoints until synchronous validation and conversion succeed. */
+export function withWireValueOwnership<T>(
+  wire: WireTypedSchemaValue,
+  decode: (lift: () => TypedSchemaValue) => T,
+): T | Promise<never> {
+  const resources = new Map<object, Array<{ val: unknown }>>();
+  const streams = new Set<SchemaValueStream>();
+  const nodes = wire?.value?.valueNodes;
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (
+      (node?.tag === 'secret-value' ||
+        node?.tag === 'quota-token-handle' ||
+        node?.tag === 'permission-card-handle' ||
+        node?.tag === 'stream-value') &&
+      node.val !== undefined
+    ) {
+      const aliases = resources.get(node.val) ?? [];
+      aliases.push(node);
+      resources.set(node.val, aliases);
+      if (node.tag === 'stream-value') streams.add(node.val);
     }
   }
-  validateWireSchema(codec.graph, wire, position);
-  return decodeTypedValue(codec, typedSchemaValueFromWit(wire), position);
+  let typed: TypedSchemaValue | undefined;
+  try {
+    return decode(() => (typed = typedSchemaValueFromWit(wire)));
+  } catch (error) {
+    if (typed !== undefined) relinquishSchemaValueCapabilities(typed.value);
+    const dispose = (): never => {
+      for (const [raw, nodes] of resources) {
+        for (const node of nodes) node.val = undefined;
+        try {
+          (raw as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+        } catch {
+          // Preserve the decoding failure while attempting every resource disposal.
+        }
+      }
+      throw error;
+    };
+    if (streams.size === 0) return dispose();
+    return (async () => {
+      // Start every cancellation before joining shared producer finalizers.
+      await Promise.all(
+        [...streams].map(async (stream) => {
+          try {
+            const source = await SchemaValueStream.unwrap(stream);
+            await source[Symbol.asyncIterator]().return?.();
+          } catch {
+            // Preserve the decoding failure while closing every rejected endpoint.
+          }
+        }),
+      );
+      return dispose();
+    })();
+  }
 }
 
 function validateWireSchema(
@@ -2258,15 +2396,12 @@ function validateWireSchema(
   position: string,
 ): void {
   preflightWitTypedSchemaValue(wire);
-  if (!schemaShapesMatch(schemaGraphFromWit(wire.graph), expected)) {
+  if (!schemaGraphsEquivalent(schemaGraphFromWit(wire.graph), expected)) {
     throw new Error(`${position} schema does not match the local definition`);
   }
 }
 
 function decodeTypedValue(codec: SchemaCodec, typed: TypedSchemaValue, position: string): unknown {
-  if (!deepEqual(typed.graph, codec.graph)) {
-    throw new Error(`${position} schema does not match the local definition`);
-  }
   if (!schemaValueConforms(codec.graph, codec.graph.root, typed.value)) {
     throw new Error(`${position} does not conform to the local definition`);
   }
@@ -2680,35 +2815,6 @@ function bindToolImplementation(
 
 function pathsEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((segment, index) => segment === right[index]);
-}
-
-/** @internal Bind a compiler-emitted path without reconstructing its descriptor. */
-export function bindConcreteToolCommand(
-  implementation: object,
-  toolName: string,
-  path: readonly string[],
-  nested: boolean,
-): { handler: (input: unknown, context: unknown) => unknown; receiver: object } {
-  let receiver = implementation;
-  let value: unknown = implementation;
-  const segments = path.length ? path : [toolName];
-  for (const [index, segment] of segments.entries()) {
-    if (!isImplementationObject(value)) throw new Error(`missing implementation for ${segment}`);
-    const property = getImplementationProperty(value, segment);
-    if (!property.found) throw new Error(`missing implementation for ${segment}`);
-    receiver = property.receiver ?? value;
-    value = property.value;
-    if (index < segments.length - 1 && !isNestedCommandImplementation(value))
-      throw new Error(`tool dispatcher ${segment} requires command(...)`);
-  }
-  if (path.length && nested) {
-    if (!isNestedCommandImplementation(value))
-      throw new Error(`tool command ${path.join(' ')} requires command(...)`);
-    receiver = value[COMMAND_IMPLEMENTATION].receiver;
-    value = value[COMMAND_IMPLEMENTATION].body;
-  }
-  if (typeof value !== 'function') throw new Error(`missing handler for ${segments.join(' ')}`);
-  return { handler: value as (input: unknown, context: unknown) => unknown, receiver };
 }
 
 function isImplementationObject(value: unknown): value is Record<PropertyKey, unknown> {

@@ -43,15 +43,21 @@ agents:
   ScalaToolStreamingCaller:
     tools:
       scala-streaming: { }
+      matrix-core: { }
   ScalaToolReflectionCaller:
     tools:
       scala-reflection-test: { }
+  ScalaGol40ReflectionAcceptance:
+    tools:
+      scala-gol40-reflection-acceptance: { }
 
 tools:
   git: { }
   grep: { }
   scala-streaming: { }
   scala-reflection-test: { }
+  matrix-core: { }
+  scala-gol40-reflection-acceptance: { }
   tool-demo: { }
   middleware:
     middleware-fixture-transparent: { }

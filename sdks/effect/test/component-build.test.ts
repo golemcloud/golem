@@ -37,6 +37,10 @@ const sourcePlugin = () => ({
   name: "sdk-test-sources",
   resolveId(id: string, importer?: string) {
     if (importer?.startsWith(sdk) && id.startsWith(".")) return resolve(dirname(importer), id)
+    if (importer?.startsWith(resolve(root, "test/fixtures/") + "/") && id.startsWith(".")) {
+      const source = resolve(dirname(importer), id).replace(/\.js$/, ".ts")
+      if (existsSync(source)) return source
+    }
     return null
   },
   load(id: string) {
@@ -147,18 +151,68 @@ describe("capability-sensitive component exports", () => {
     30000,
   )
 
-  it("does not rewrite a shadowed local DSL function", async () => {
-    const { runtime } = await build("shadowed-dsl")
-    expect(runtime.golemAgent200Guest).toBeDefined()
-  })
+  it("evaluates computed metadata only at runtime, with imported config and pattern snapshots", async () => {
+    const evaluated = vi.fn()
+    vi.stubGlobal("__metadataEvaluated", evaluated)
+    try {
+      const { instantiate, capabilities } = await build("runtime-metadata", false)
+      expect(evaluated).not.toHaveBeenCalled()
+      expect(capabilities.agents).toBe(true)
+      const runtime = instantiate()
+      expect(evaluated).toHaveBeenCalledTimes(1)
+      const descriptor = runtime.golemAgent200Guest.discoverAgentTypes()[0]
+      expect(descriptor.typeName).toBe("RuntimeMetadata")
+      const principal = { tag: "anonymous" }
+      const path = "revisions/release-17/file.txt"
+      const input = schemaValueToWit(v.record([v.string(path)]))
+      await runtime.golemAgent200Guest.initialize("RuntimeMetadata", input, principal)
+      __setGetConfigValueImpl((configPath, graph) => {
+        if (configPath.join("/") === "apiUrl")
+          return schemaValueToWit(v.string("https://example.test/api"))
+        expect(configPath).toEqual(["apiKey"])
+        expect(graph.typeNodes[graph.root].body.tag).toBe("secret-type")
+        return { root: 0, valueNodes: [{ tag: "secret-value", val: {} }] }
+      })
+      expect(
+        schemaValueFromWit(
+          await runtime.golemAgent200Guest.invoke(
+            "configured",
+            schemaValueToWit(v.record([])),
+            principal,
+          ),
+        ),
+      ).toEqual(v.record([v.string("https://example.test/api"), v.bool(true)]))
+      const snapshot = await runtime.saveSnapshot.save()
+      __setEnvironment([["GOLEM_AGENT_ID", `RuntimeMetadata(${JSON.stringify(path)})`]])
+      __setParseAgentIdImpl(() => ["RuntimeMetadata", { value: input }, undefined])
+      const restored = instantiate()
+      await restored.loadSnapshot.load(snapshot)
+      expect(
+        schemaValueFromWit(
+          await restored.golemAgent200Guest.invoke(
+            "path",
+            schemaValueToWit(v.record([])),
+            principal,
+          ),
+        ),
+      ).toEqual(v.string(path))
+      for (const invalid of ["workspace/", "other/file.txt"]) {
+        const rejected = instantiate()
+        await rejected.golemAgent200Guest.initialize(
+          "RuntimeMetadata",
+          schemaValueToWit(v.record([v.string(invalid)])),
+          principal,
+        )
+        await expect(rejected.saveSnapshot.save()).rejects.toBeDefined()
+      }
+    } finally {
+      __resetGetConfigValueImpl()
+      vi.unstubAllGlobals()
+    }
+  }, 30000)
 
-  it("uses concrete nested codecs and transformed stream items without retaining the model", async () => {
-    const { runtime, modules } = await build("concrete")
-    expect(
-      modules.filter((id) =>
-        /internal\/schema-model\/(model|validation|builder|wit)\.js$/.test(id),
-      ),
-    ).toEqual([])
+  it("compiles nested schemas and transformed stream items at runtime", async () => {
+    const { runtime } = await build("concrete")
     const principal = { tag: "anonymous" }
     const payload = v.record([
       v.variant(1, v.record([v.list([v.f64(3), v.f64(11)])])),
@@ -414,20 +468,6 @@ describe("capability-sensitive component exports", () => {
       expect(modules.includes("internal/tool/runtime.js")).toBe(tools)
       expect(modules.includes("internal/tool/registry.js")).toBe(tools)
       expect(modules.includes("internal/tool/middleware.js")).toBe(middleware)
-      expect(modules.includes("Reflection.js")).toBe(false)
-      expect(modules.includes("DynamicClient.js")).toBe(false)
-      expect(modules.includes("SchemaRef.js")).toBe(false)
-      expect(modules.some((id) => id.startsWith("internal/reflection/"))).toBe(false)
-      if (!middleware) {
-        expect(
-          modules.filter((id) =>
-            /internal\/schema-model\/(model|validation|builder|wit)\.js$/.test(id),
-          ),
-        ).toEqual([])
-        expect(chunk.code).not.toMatch(
-          /decodeCanonicalInputRecord|validateSchemaGraph|schemaValueConforms/,
-        )
-      }
       if (!agents)
         expect(modules.some((id) => /^(Sqlite|Postgres|Mysql|Ignite)\//.test(id))).toBe(false)
       expect(runtime.golemAgent200Guest.discoverAgentTypes().map((a: any) => a.typeName)).toEqual(
@@ -436,8 +476,10 @@ describe("capability-sensitive component exports", () => {
       expect(
         runtime.golemTool010Guest.discoverTools().map((t: any) => t.commands.nodes[0].name),
       ).toEqual(tools ? ["double"] : [])
-      if (fixture === "tool-only")
+      if (fixture === "tool-only") {
+        expect(runtime.golemTool010Guest.discoverTools()[0].version).toBe("1.0.0")
         expect(runtime.golemTool010Guest.discoverTools()[0].requiresFilesystem).toBe(true)
+      }
       expect(runtime.toolMiddlewareGuest.discoverToolMiddlewares().map((m: any) => m.name)).toEqual(
         middleware ? ["passthrough"] : [],
       )

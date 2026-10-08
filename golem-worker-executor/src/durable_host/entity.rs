@@ -30,7 +30,7 @@ use crate::worker::entity_invocation::{EntityInvocationHandle, EntityInvocationR
 use crate::worker::owner_lane::OwnerInvocationId;
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
-use golem_common::model::agent::Principal;
+use golem_common::model::agent::{AgentPrincipal, Principal};
 use golem_common::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
     EntityInvocationPlan, EntityInvocationPlanReference, EntityInvocationRequest,
@@ -297,7 +297,6 @@ impl EntityInvocationDurability {
         parent: OwnerInvocationId,
         key_context: &EntityInvocationKeyContext,
         entity: AgentEntity,
-        calling_principal: Principal,
         principal: Principal,
         call_mode: EntityCallMode,
         operation: EntityInvocationDescriptor,
@@ -317,12 +316,13 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let metadata = EntityInvocationRequest {
             entity: entity.clone(),
-            calling_principal: calling_principal.clone(),
             call_mode,
             operation,
             principal,
             plan,
             assume_idempotence: key_context.assume_idempotence,
+            authority_wallet: store
+                .with(|mut access| get_ctx(access.data_mut()).agent_wallet_cards_snapshot()),
         };
         let encoded_metadata = desert_rust::serialize_to_byte_vec(&metadata).map_err(|error| {
             WorkerExecutorError::runtime(format!(
@@ -565,11 +565,13 @@ impl EntityInvocationDurability {
         let parent_start_index = parent.start_index();
         let owner =
             store.with(|mut access| get_ctx(access.data_mut()).state.owned_agent_id.clone());
+        let calling_principal = Principal::Agent(AgentPrincipal {
+            agent_id: owner.agent_id.clone(),
+        });
         let idempotency_key = golem_common::model::IdempotencyKey::derived(
             &key_context.caller_key,
             key_context.logical_position.unwrap_or(handle.start_index()),
         );
-        let logical_key_positions = key_context.logical_position.is_some();
         let operation = metadata.operation;
         let resolved_position = resolve_recorded_plan(
             store,
@@ -623,14 +625,15 @@ impl EntityInvocationDurability {
             invocation_id,
             parent_start_index,
             activation,
-            metadata.calling_principal,
+            calling_principal,
             execution_mode,
             idempotency_key,
             metadata.assume_idempotence,
-            logical_key_positions,
+            true,
             stream_session_idempotency_key,
         )
         .map_err(WorkerExecutorError::runtime)?
+        .with_authority_wallet(metadata.authority_wallet)
         .with_span_started(span_started);
         Ok(Self {
             handle,
@@ -740,6 +743,7 @@ impl EntityInvocationDurability {
             scope.stream_session_idempotency_key().clone(),
         )
         .map_err(WorkerExecutorError::runtime)?
+        .with_authority_wallet(scope.authority_wallet().to_vec())
         .with_span_started(
             scope
                 .span_started()
@@ -1192,6 +1196,7 @@ impl EntityInvocationDurability {
                 None => Some(body.as_mut().await),
             };
             let Some(body_result) = body_result else {
+                on_completed_cancelled();
                 let _ = body.as_mut().await;
                 let response = cancelled_tool_terminal(SerializableEntityBodyExecution::Executed)
                     .await
@@ -1522,7 +1527,6 @@ fn entity_request_identity(
 ) -> EntityInvocationRequestIdentity {
     EntityInvocationRequestIdentity {
         entity: request.entity.clone(),
-        calling_principal: request.calling_principal.clone(),
         call_mode: request.call_mode,
         operation: (&request.operation).into(),
         plan_position: match &request.plan {
@@ -2140,9 +2144,6 @@ mod tests {
         let owner = invocation().owner_id().clone();
         desert_rust::serialize_to_byte_vec(&EntityInvocationRequest {
             entity: AgentEntity::ToolMiddleware(ToolMiddlewareName::try_from("audit").unwrap()),
-            calling_principal: Principal::Agent(AgentPrincipal {
-                agent_id: owner.agent_id.clone(),
-            }),
             call_mode: EntityCallMode::Synchronous,
             operation: EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
                 attempt_ordinal: 1,
@@ -2163,6 +2164,7 @@ mod tests {
             }),
             plan,
             assume_idempotence: true,
+            authority_wallet: Vec::new(),
         })
         .unwrap()
     }

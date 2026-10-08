@@ -924,7 +924,31 @@ fn activation_enforces_requirement_and_propagates_capability_for_every_owner() {
         (
             ToolFilesystemAccess::Allowed,
             false,
+            false,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Allowed,
+            false,
             true,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Allowed,
+            true,
+            false,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Allowed,
+            true,
+            true,
+            Some(FilesystemCapability::Capable),
+        ),
+        (
+            ToolFilesystemAccess::Unset,
+            true,
+            false,
             Some(FilesystemCapability::Capable),
         ),
         (
@@ -940,7 +964,14 @@ fn activation_enforces_requirement_and_propagates_capability_for_every_owner() {
             Some(FilesystemCapability::Incapable),
         ),
         (ToolFilesystemAccess::Unset, false, true, None),
+        (
+            ToolFilesystemAccess::Denied,
+            false,
+            false,
+            Some(FilesystemCapability::Incapable),
+        ),
         (ToolFilesystemAccess::Denied, false, true, None),
+        (ToolFilesystemAccess::Denied, true, false, None),
         (ToolFilesystemAccess::Denied, true, true, None),
     ];
 

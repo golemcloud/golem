@@ -106,10 +106,21 @@ object WireToolSpec extends ZIOSpecDefault {
       val result = invoke(
         git,
         "remote/add",
-        input(
-          WitSchemaValueNode.StringValue(".git"),
-          WitSchemaValueNode.StringValue("origin"),
-          WitSchemaValueNode.StringValue("https://example.test")
+        WireToolInput(
+          WitSchemaValueTree(
+            Vector(
+              WitSchemaValueNode.StringValue(".git"),
+              WitSchemaValueNode.OptionValue(Some(0)),
+              WitSchemaValueNode.StringValue("origin"),
+              WitSchemaValueNode.StringValue("https://example.test"),
+              WitSchemaValueNode.RecordValue(Vector(1, 2, 3))
+            ),
+            4
+          ),
+          None,
+          None,
+          None,
+          Principal.Anonymous
         )
       )
       assertTrue(text(result) == "origin=https://example.test")

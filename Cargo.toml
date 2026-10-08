@@ -5,6 +5,7 @@ members = [
     "golem-api-grpc",
     "golem-client",
     "golem-common",
+    "test-components/human-approval-service",
     "golem-mcp-import",
     "golem-native-tool",
     "golem-rust-macro",
@@ -39,6 +40,7 @@ golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-human-approval = { version = "=0.0.0", path = "test-components/human-approval-service" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-mcp-import = { version = "=0.0.0", path = "golem-mcp-import" }
 golem-native-tool = { version = "=0.0.0", path = "golem-native-tool" }
@@ -71,7 +73,9 @@ async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
+aws-runtime = "1.9.1"
 aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-runtime-api = { version = "1.15.0", features = ["client"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22.1"
@@ -80,6 +84,7 @@ bit-vec = { version = "0.6.3", features = ["serde"] }
 bitflags = "2.6.0"
 blake3 = { version = "1.8.2", features = ["rayon"] }
 bytes = "1.10.1"
+bytesize = "2.7.0"
 camino = "1.1.10"
 cap-fs-ext = "3.4.5" # keep in sync with wasmtime
 cap-std = "3.4.5" # keep in sync with wasmtime
@@ -219,6 +224,7 @@ rand = "0.9.0"
 range-set-blaze = "0.1.16"
 rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
+reedline = { version = "0.51", default-features = false }
 regex = "1.11.1"
 reqwest = { version = "0.13.1", features = ["gzip", "json", "multipart", "stream", "query"] }
 reqwest-middleware = { version = "0.5.1", features = ["json", "multipart", "query"] }
@@ -231,6 +237,7 @@ rsa = "0.9.7"
 
 rust_decimal = "1.39.0"
 rustc-hash = "2.1.1"
+rustic_core = { version = "0.13.0", default-features = false }
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = { version = "0.23.23", features = ["ring"] }
 rustls-pemfile = "2.2.0"
@@ -313,13 +320,14 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.4.8", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.4.9", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"
 wasmtime = { version = "=46.0.1", features = ["component-model", "component-model-async", "component-model-bytes", "anyhow"] }
 wasmtime-wasi = { version = "=46.0.1", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { version = "=46.0.1", features = ["p3"] }
+wasmtime-wizer = { version = "=46.0.1", features = ["component-model", "wasmtime"] }
 wat = "1.248.0"
 wax = "0.7.0"
 webbrowser = "1.0.4"
@@ -339,6 +347,8 @@ wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
 wasmtime-wizer = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v46.0.1-p3" }
+# The head of the branch `golem-rustic_core-v0.13.0` of the fork.
+rustic_core = { git = "https://github.com/golemcloud/rustic_core", rev = "b1f72158c3b07c2efb8c546aa9d2aaff0819ea95" }
 
 [profile.dev]
 panic = "abort"

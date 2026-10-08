@@ -305,7 +305,7 @@ object AgentDefinitionMacro {
       if (idPrincipalParams.nonEmpty) {
         if (HttpDeclarationMacro.exposesFiles(typeSymbol))
           report.errorAndAbort("filesystem-constructor: caller-dependent identities cannot expose files")
-        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None)
+        val mount = HttpMountDetails(mountSegments, false, false, Nil, Nil, Nil, Nil, None, Nil)
         HttpValidation.validateMountVarsAreNotPrincipal(agentTypeName, mount, idPrincipalParams) match {
           case Left(err) => report.errorAndAbort(err)
           case Right(()) => ()
@@ -904,11 +904,12 @@ object AgentDefinitionMacro {
   )(symbol: quotes.reflect.Symbol, agentName: String): Option[HttpMountDetails] = {
     import quotes.reflect.*
 
-    val filesystem       = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
-    val mountPath        = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
-    val selectorPath     = extractAgentDefinitionStringArg(symbol, "phantomIdPath", 9, trim = false)
-    val selectorQuery    = extractAgentDefinitionStringArg(symbol, "phantomIdQuery", 10, trim = false)
-    val selectorOptional = extractAgentDefinitionBoolArg(symbol, "phantomIdOptional", 11).getOrElse(false)
+    val filesystem          = HttpDeclarationMacro.mappingValues(symbol, "agentDefinition", "exposeFiles", 8)
+    val fileResponseHeaders = HttpDeclarationMacro.headerValues(symbol, "agentDefinition", 9)
+    val mountPath           = extractAgentDefinitionStringArg(symbol, "mount", positionalIndex = 2)
+    val selectorPath        = extractAgentDefinitionStringArg(symbol, "phantomIdPath", 10, trim = false)
+    val selectorQuery       = extractAgentDefinitionStringArg(symbol, "phantomIdQuery", 11, trim = false)
+    val selectorOptional    = extractAgentDefinitionBoolArg(symbol, "phantomIdOptional", 12).getOrElse(false)
     if (
       (selectorPath.nonEmpty && selectorQuery.nonEmpty) || (selectorOptional && selectorPath.isEmpty && selectorQuery.isEmpty)
     )
@@ -919,8 +920,9 @@ object AgentDefinitionMacro {
     mountPath match {
       case None if filesystem.nonEmpty || selector.nonEmpty =>
         report.errorAndAbort("exposeFiles and phantom selectors require an HTTP mount")
-      case None     => None
-      case Some(mp) =>
+      case None if fileResponseHeaders.nonEmpty => report.errorAndAbort("fileResponseHeaders requires an HTTP mount")
+      case None                                 => None
+      case Some(mp)                             =>
         val pathSegments = HttpRouteParser.parsePathOnly(mp, "mount") match {
           case Left(err)                                                    => report.errorAndAbort(s"Invalid mount path in @agentDefinition for '$agentName': $err")
           case Right(segments) if HttpDeclarationMacro.exposesFiles(symbol) =>
@@ -958,6 +960,7 @@ object AgentDefinitionMacro {
           staticBindings = Nil,
           filesystemBindings = filesystem,
           openapiProviderMethod = None,
+          fileResponseHeaders = fileResponseHeaders,
           phantomIdBinding = selector
         )
         HttpValidation.validateNoCatchAllInMount(agentName, mount) match {

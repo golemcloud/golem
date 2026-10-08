@@ -554,6 +554,7 @@ pub struct HttpMountDetails {
     pub webhook_suffix: Vec<PathSegment>,
     pub static_bindings: Vec<FileMapping>,
     pub filesystem_bindings: Vec<FileMapping>,
+    pub file_response_headers: Vec<FileResponseHeader>,
     /// The name of a parameterless router method that returns the OpenAPI document as a string.
     pub openapi_provider_method: Option<String>,
 }
@@ -578,6 +579,19 @@ pub enum PhantomIdBinding {
 pub struct PhantomIdBindingDetails {
     pub name: String,
     pub optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, poem_openapi::Object)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct FileResponseHeader {
+    pub name: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema)]

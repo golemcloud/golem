@@ -90,6 +90,7 @@ pub(all) struct HttpMountInfo {
   router : Bool
   static_bindings : Array[HttpFileMapping]
   filesystem_bindings : Array[HttpFileMapping]
+  file_response_headers : Array[(String, String)]
   openapi_provider_method : String?
 } derive(Debug, Eq)
 
@@ -1535,6 +1536,9 @@ pub fn parse_agents(
                 filesystem_bindings: extract_file_mappings(
                   type_decl.attrs,
                   "expose_files",
+                ),
+                file_response_headers: extract_file_response_headers(
+                  type_decl.attrs,
                 ),
                 openapi_provider_method: None,
               })

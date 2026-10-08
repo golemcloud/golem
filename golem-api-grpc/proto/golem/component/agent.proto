@@ -45,7 +45,8 @@ message HttpMountDetails {
   repeated FileMapping filesystem_bindings = 7;
   // The name of a parameterless router method that returns the OpenAPI document as a string.
   optional string openapi_provider_method = 8;
-  optional PhantomIdBinding phantom_id_binding = 9;
+  repeated FileResponseHeader file_response_headers = 9;
+  optional PhantomIdBinding phantom_id_binding = 10;
 }
 
 message PhantomIdBinding {
@@ -58,6 +59,11 @@ message PhantomIdBinding {
 message PhantomIdBindingDetails {
   string name = 1;
   bool optional = 2;
+}
+
+message FileResponseHeader {
+  string name = 1;
+  string value = 2;
 }
 
 message FileMapping {

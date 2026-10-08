@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Layer, Option, Redacted, Schema } from "effect"
 import type * as CoreTypes from "golem:core/types@2.0.0"
+import * as Bridge from "../src/Bridge.js"
 import { ConfigError, compileConfig, defineConfig, encodeOverrides } from "../src/Config.js"
 import { ConfigClient } from "../src/host/ConfigClient.js"
 import { SecretsClient } from "../src/host/SecretsClient.js"
@@ -174,8 +175,11 @@ describe("Config 1.6", () => {
       )
       yield* Effect.gen(function* () {
         const cfg = yield* PublicConfig
-        expect(yield* cfg.token.borrow).toBe(handles[0])
-        expect(yield* cfg.token.borrow).toBe(handles[1])
+        const first = yield* cfg.token.borrow
+        const second = yield* cfg.token.borrow
+        expect(Bridge.secretHandleToSchemaValue(first)).toMatchObject({ tag: "secret" })
+        expect(Bridge.secretHandleToSchemaValue(second)).toMatchObject({ tag: "secret" })
+        expect(first).not.toBe(second)
       }).pipe(Effect.provideService(PublicConfig, shape as never))
       expect(calls).toBe(2)
     }),

@@ -47,6 +47,26 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
+    pub(super) async fn configured_managed(
+        config: &DbSqliteConfig,
+    ) -> Result<Self, IndexedStorageError> {
+        let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
+        golem_service_base::db::sqlite::migrate_managed(config, migrations.sqlite_migrations())
+            .await
+            .map_err(|error| {
+                IndexedStorageError::initialization_failed("Managed SQLite migration failed", error)
+            })?;
+        let pool = SqlitePool::configured_managed(config)
+            .await
+            .map_err(|error| {
+                IndexedStorageError::initialization_failed(
+                    "Managed SQLite pool initialization failed",
+                    error,
+                )
+            })?;
+        Ok(Self { pool })
+    }
+
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, IndexedStorageError> {
         Self::migrate(config).await?;
 
@@ -78,7 +98,118 @@ impl SqliteIndexedStorage {
         Self { pool }
     }
 
-    fn namespace(namespace: IndexedStorageNamespace) -> String {
+    pub(super) async fn close(&self) {
+        self.pool.close().await;
+    }
+
+    #[cfg(test)]
+    pub(super) async fn hold_connection_for_test(&self) -> SqliteLabelledTransaction {
+        use golem_service_base::db::LabelledPoolApi;
+        self.pool
+            .with_ro("test", "retirement_barrier")
+            .begin()
+            .await
+            .unwrap()
+    }
+
+    /// Presence markers and staged entries keep a database alive, even without visible oplogs.
+    pub(super) async fn empty_database_epochs(
+        &self,
+    ) -> Result<Option<Vec<(String, String, i64)>>, IndexedStorageError> {
+        // The caller holds exclusive file admission across both reads.
+        let mut reader = self.pool.with_ro("multi_sqlite", "empty_database");
+        let (present,): (bool,) = reader
+            .fetch_one_as(sqlx::query_as(
+                "SELECT EXISTS(SELECT 1 FROM index_storage);",
+            ))
+            .await
+            .map_err(Self::classify_repo_error)?;
+        if present {
+            return Ok(None);
+        }
+        reader
+            .fetch_all_as(sqlx::query_as(
+                "SELECT namespace, key, epoch FROM indexed_key_epoch;",
+            ))
+            .await
+            .map(Some)
+            .map_err(Self::classify_repo_error)
+    }
+
+    pub(super) async fn restore_database_epochs(
+        &self,
+        epochs: Vec<(String, String, i64)>,
+    ) -> Result<(), IndexedStorageError> {
+        self.pool
+            .with_tx::<_, _>("multi_sqlite", "restore_epochs", |tx| {
+                Box::pin(async move {
+                    for (namespace, key, epoch) in epochs {
+                        tx.execute(
+                            sqlx::query(
+                                "INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?);",
+                            )
+                            .bind(namespace)
+                            .bind(key)
+                            .bind(epoch),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await
+            .map_err(Self::classify_repo_error)
+    }
+
+    // A record in the shared metadata database transfers authority away from the per-agent file.
+    // Remove it after restoring all writer generations, or after unlink if no generations remain.
+    pub(super) async fn database_epoch_snapshot(
+        &self,
+        file: &str,
+    ) -> Result<Option<Vec<(String, String, i64)>>, IndexedStorageError> {
+        let row: Option<(Vec<u8>,)> = self.pool.with_ro("multi_sqlite", "epoch_snapshot")
+            .fetch_optional_as(sqlx::query_as(
+                "SELECT value FROM index_storage WHERE namespace = 'database-epochs' AND key = ? AND id = 0;",
+            ).bind(file)).await.map_err(Self::classify_repo_error)?;
+        row.map(|(bytes,)| {
+            serde_json::from_slice(&bytes).map_err(|error| {
+                IndexedStorageError::Other(format!("Invalid epoch snapshot for {file}: {error}"))
+            })
+        })
+        .transpose()
+    }
+
+    pub(super) async fn save_database_epoch_snapshot(
+        &self,
+        file: &str,
+        epochs: Vec<(String, String, i64)>,
+    ) -> Result<(), IndexedStorageError> {
+        let bytes = serde_json::to_vec(&epochs).map_err(|error| {
+            IndexedStorageError::Other(format!("Failed to encode epochs for {file}: {error}"))
+        })?;
+        self.pool.with_rw("multi_sqlite", "save_epochs").execute(sqlx::query(
+            "INSERT INTO index_storage (namespace, key, id, value) VALUES ('database-epochs', ?, 0, ?) ON CONFLICT(namespace, key, id) DO UPDATE SET value = excluded.value;",
+        ).bind(file).bind(bytes)).await.map(|_| ()).map_err(Self::classify_repo_error)
+    }
+
+    pub(super) async fn delete_database_epoch_snapshot(
+        &self,
+        file: &str,
+    ) -> Result<(), IndexedStorageError> {
+        self.pool
+            .with_rw("multi_sqlite", "delete_epochs")
+            .execute(
+                sqlx::query(
+                    "DELETE FROM index_storage WHERE namespace = 'database-epochs' AND key = ?;",
+                )
+                .bind(file),
+            )
+            .await
+            .map(|_| ())
+            .map_err(Self::classify_repo_error)
+    }
+
+    pub(super) fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog {
                 agent_id: _,
@@ -102,6 +233,14 @@ impl SqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageNamespace::BlobOplogManifest {
+                agent_id: _,
+                agent_mode,
+                level,
+            } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -115,6 +254,10 @@ impl SqliteIndexedStorage {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}-worker-c{level}-oplog")
             }
+            IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}-worker-b{level}-oplog")
+            }
         }
     }
 
@@ -123,7 +266,7 @@ impl SqliteIndexedStorage {
     /// cross to `i64` first. Checked, like Postgres's own `to_i64`: an unchecked `as i64` on a
     /// value above `i64::MAX` wraps to negative, and reading that back `as u64` produces a
     /// spuriously huge epoch instead of failing loudly.
-    fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
+    pub(super) fn to_i64(value: u64, field_name: &'static str) -> Result<i64, IndexedStorageError> {
         i64::try_from(value).map_err(|_| {
             IndexedStorageError::Other(format!(
                 "SQLite indexed storage cannot represent {field_name}={value} as i64"
@@ -134,7 +277,7 @@ impl SqliteIndexedStorage {
     /// A stored epoch that will not fit a `u64` is corruption, not a fence: `to_i64` refuses to
     /// write one, so a negative column value came from outside this code, and reading it back as
     /// `u64` would wrap it into a spuriously huge epoch.
-    fn negative_epoch_message(value: i64, key: &str) -> String {
+    pub(super) fn negative_epoch_message(value: i64, key: &str) -> String {
         format!("SQLite indexed storage read a negative epoch {value} for key '{key}'")
     }
 
@@ -167,7 +310,7 @@ impl SqliteIndexedStorage {
         FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
-    fn classify_repo_error(err: RepoError) -> IndexedStorageError {
+    pub(super) fn classify_repo_error(err: RepoError) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
         } else {
@@ -187,6 +330,19 @@ impl SqliteIndexedStorage {
             ))
         } else {
             IndexedStorageError::Other(err.to_safe_string())
+        }
+    }
+
+    /// A blob manifest insert under an index the key already holds is a conflict, which the blob
+    /// layer acts on. Its other failures are classified as any other write's are.
+    fn classify_repo_error_manifest_insert(err: RepoError) -> IndexedStorageError {
+        if err.is_unique_violation() {
+            IndexedStorageError::Conflict(format!(
+                "the blob oplog manifest already holds the index: {}",
+                err.to_safe_string()
+            ))
+        } else {
+            Self::classify_repo_error(err)
         }
     }
 }
@@ -317,10 +473,15 @@ impl IndexedStorage for SqliteIndexedStorage {
             return Ok(());
         }
 
-        let primary_oplog_insert = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. }
-        );
+        let classify: fn(RepoError) -> IndexedStorageError = match namespace {
+            IndexedStorageNamespace::OpLog { .. } | IndexedStorageNamespace::StagedOpLog { .. } => {
+                Self::classify_repo_error_primary_oplog_insert
+            }
+            IndexedStorageNamespace::BlobOplogManifest { .. } => {
+                Self::classify_repo_error_manifest_insert
+            }
+            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error,
+        };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
         for (_, value) in pairs.iter() {
@@ -330,16 +491,10 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool
             .with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
                 Box::pin(async move {
-                    // SQLite has no `SELECT ... FOR UPDATE`, and it does not need one here: the
-                    // write pool is capped at a single connection (golem-service-base
-                    // db/sqlite.rs:46-50), so this transaction holds the only writer and the
-                    // check cannot be interleaved. Raising that cap means switching this to
-                    // `BEGIN IMMEDIATE`.
-                    //
-                    // That holds within one process. Two processes on one SQLite file would rely
-                    // on SQLite's own lock upgrade, which surfaces a loser as `SQLITE_BUSY` - a
-                    // storage error, not a fence - so a SQLite file shared between executors is
-                    // not supported; give each its own file, or use PostgreSQL.
+                    // SQLite has no `SELECT ... FOR UPDATE`, so labelled write transactions use
+                    // `BEGIN IMMEDIATE` (golem-service-base db/sqlite.rs). The reservation covers
+                    // this epoch check and insert atomically, including when another process uses
+                    // the same SQLite file; a competing writer waits via SQLite's busy timeout.
                     if let Some(expected) = expected_epoch {
                         Self::check_epoch(tx, &namespace, &key, expected).await?;
                     }
@@ -361,13 +516,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                 })
             })
             .await
-            .map_err(|err| {
-                err.into_indexed_storage_error(if primary_oplog_insert {
-                    Self::classify_repo_error_primary_oplog_insert
-                } else {
-                    Self::classify_repo_error
-                })
-            })
+            .map_err(|err| err.into_indexed_storage_error(classify))
     }
 
     /// SQLite's half of [`IndexedStorage::set_key_epoch`], which states the rule this
@@ -777,7 +926,11 @@ impl IndexedStorage for SqliteIndexedStorage {
         last_dropped_id: u64,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let delete_if_empty = matches!(&namespace, IndexedStorageNamespace::CompressedOpLog { .. });
+        let delete_if_empty = matches!(
+            &namespace,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+        );
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool

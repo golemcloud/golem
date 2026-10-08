@@ -680,21 +680,6 @@ interface CompiledAgent {
 /** Module-level registry of compiled agents, keyed by `typeName`. */
 const registry = new Map<string, CompiledAgent>()
 
-/** Register compiler-emitted metadata and concrete codecs without schema compilation. */
-export function registerCompiledAgent(
-  compiled: Omit<CompiledAgent, "impl">,
-  impl: CompiledAgent["impl"],
-): void {
-  if (registry.has(compiled.name)) {
-    pendingRegistrationErrors.push({
-      agentName: compiled.name,
-      cause: Cause.fail(new DuplicateAgentNameError(compiled.name)),
-    })
-    return
-  }
-  registry.set(compiled.name, { ...compiled, impl })
-}
-
 /**
  * Validation failures captured by {@link defineAgent} (i.e. typed
  * failures or defects from {@link registerAgent} — invalid schemas,

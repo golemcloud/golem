@@ -3,7 +3,6 @@ import ts from 'typescript';
 import { minify } from 'terser';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { staticTools } from './static-tools.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
@@ -205,8 +204,6 @@ export default (async () => {
 
 export function componentPlugin(parsedConfig, main) {
   const capabilities = discoverCapabilities(parsedConfig);
-  const tools = staticTools(parsedConfig, runtime);
-  const dynamicModels = tools.usesDynamicModels || capabilities.middleware || capabilities.schemas;
   const entry = '\0golem:component-entry';
   let started = false;
   const validateBuild = (options, watchMode = false) => {
@@ -245,70 +242,6 @@ export function componentPlugin(parsedConfig, main) {
     },
     load(id) {
       if (id === entry) return componentEntry(main, capabilities);
-    },
-    transform: {
-      order: 'post',
-      handler(code, id) {
-        const compiled = tools.transform(code, id);
-        if (compiled) return compiled;
-        if (id === path.join(runtime, 'index.mjs')) {
-          if (capabilities.tools)
-            code = code
-              .replaceAll('./internal/registry/toolRegistry.mjs', './internal/tool/compiled.mjs')
-              .replaceAll('./internal/tool/invocationResult.mjs', './internal/tool/compiled.mjs');
-          if (!dynamicModels)
-            code = code.replace(
-              /^import ['"]\.\/schema\/(zod|valibot|arktype|effect)\.mjs['"];?\s*$/gm,
-              '',
-            );
-          return { code, map: null };
-        }
-        if (id === path.join(runtime, 'agentId.mjs') && !dynamicModels) {
-          const source = ts.createSourceFile(
-            id,
-            code,
-            ts.ScriptTarget.Latest,
-            true,
-            ts.ScriptKind.JS,
-          );
-          const edits = [];
-          for (const statement of source.statements) {
-            if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'ParsedAgentId')
-              continue;
-            for (const member of statement.members)
-              if (['create', 'parsed', 'parts', 'dynamicClient'].includes(member.name?.text))
-                edits.push([member.getStart(source), member.end]);
-          }
-          for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
-          return { code, map: null };
-        }
-        // Rollup does not eliminate unused class methods. Specialize only the two
-        // registration methods of the SDK's builder, before Rollup links imports.
-        // There are no capability tests or alternate implementations at runtime.
-        if (id !== path.join(runtime, 'tool.mjs')) return;
-        const source = ts.createSourceFile(
-          id,
-          code,
-          ts.ScriptTarget.Latest,
-          true,
-          ts.ScriptKind.JS,
-        );
-        const edits = [];
-        for (const statement of source.statements) {
-          if (!ts.isClassDeclaration(statement) || statement.name?.text !== 'CommandBuilder')
-            continue;
-          for (const member of statement.members) {
-            if (
-              (member.name?.text === 'middleware' && !capabilities.middleware) ||
-              (member.name?.text === 'implement' && !capabilities.tools)
-            ) {
-              edits.push([member.getStart(source), member.end]);
-            }
-          }
-        }
-        for (const [start, end] of edits.reverse()) code = code.slice(0, start) + code.slice(end);
-        return { code, map: null };
-      },
     },
     async renderChunk(code, _chunk, options) {
       const result = await minify(code, {

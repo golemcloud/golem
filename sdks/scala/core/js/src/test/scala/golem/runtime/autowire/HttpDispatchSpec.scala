@@ -45,7 +45,7 @@ object HttpDispatchSpec extends ZIOSpecDefault {
         PhantomIdBinding.Query("instance", true)
       )
       val actual = selectors.map { selector =>
-        val mount = HttpMountDetails(Nil, false, true, Nil, Nil, Nil, Nil, None, Some(selector))
+        val mount = HttpMountDetails(Nil, false, true, Nil, Nil, Nil, Nil, None, phantomIdBinding = Some(selector))
         val agent = AgentMetadata(
           "Selected",
           AgentTypeKind.Regular,

@@ -20,7 +20,8 @@ use base64::Engine;
 use desert_rust::BinaryCodec;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{
-    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, HttpMethod, ReadOnlyConfig,
+    AgentFileContentHash, AgentMode, AgentTypeName, FileMapping, FileResponseHeader, HttpMethod,
+    ReadOnlyConfig,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -452,6 +453,11 @@ impl RouteMatch {
                     return Err("Router handler and provider must be distinct methods".into());
                 }
                 FileMapping::validate_list(&router.static_bindings)?;
+                golem_common::schema::agent::http::validate_file_response_headers(
+                    &router.file_response_headers,
+                    !router.static_bindings.is_empty(),
+                )
+                .map_err(|error| error.to_string())?;
                 let mut paths = BTreeSet::new();
                 for entry in &router.file_index {
                     let path = entry
@@ -473,6 +479,11 @@ impl RouteMatch {
             RouteBehaviour::AgentFilesystem(filesystem) => {
                 filesystem.constructor_input.validate()?;
                 FileMapping::validate_list(&filesystem.filesystem_bindings)?;
+                golem_common::schema::agent::http::validate_file_response_headers(
+                    &filesystem.file_response_headers,
+                    !filesystem.filesystem_bindings.is_empty(),
+                )
+                .map_err(|error| error.to_string())?;
                 let captures = path
                     .iter()
                     .filter(|segment| matches!(segment, PathSegment::Variable { .. }))
@@ -520,6 +531,7 @@ pub struct HttpRouterBehaviour {
     pub openapi_provider_method: Option<RouterMethod>,
     pub static_bindings: Vec<FileMapping>,
     pub file_index: Vec<RouterFileIndexEntry>,
+    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, BinaryCodec)]
@@ -549,6 +561,7 @@ pub struct AgentFilesystemBehaviour {
     pub constructor_input: CompiledInputSchema,
     pub constructor_parameters: Vec<ConstructorParameter>,
     pub filesystem_bindings: Vec<FileMapping>,
+    pub file_response_headers: Vec<FileResponseHeader>,
 }
 
 #[derive(Debug, Clone, BinaryCodec)]

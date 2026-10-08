@@ -32,6 +32,19 @@ export interface FileExposure {
   readonly path: string;
 }
 
+/** Response headers applied by the host when serving mounted files. */
+export type FileResponseHeaders = Readonly<Record<string, string>>;
+
+/** Copy ergonomic file response headers into their ordered WIT representation. */
+export function compileFileResponseHeaders(
+  headers: FileResponseHeaders | undefined,
+): Array<{ name: string; value: string }> {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({
+    name,
+    value,
+  }));
+}
+
 /** Safe diagnostics never contain document, header, or body contents. */
 export class HttpRouterError extends TypeError {
   constructor(readonly category: string) {
@@ -118,6 +131,7 @@ export interface RouterMountOptions {
   readonly mount: string;
   readonly auth?: boolean;
   readonly cors?: readonly string[];
+  readonly fileResponseHeaders?: FileResponseHeaders;
   /** Validated structural mappings returned by compileFileMappings. */
   readonly staticBindings?: readonly FileMapping[];
   readonly handlerMethod?: string;
@@ -148,6 +162,7 @@ export function compileRouterMount(options: RouterMountOptions): {
       staticBindings: [...(options.staticBindings ?? [])],
       filesystemBindings: [],
       openapiProviderMethod,
+      fileResponseHeaders: compileFileResponseHeaders(options.fileResponseHeaders),
     },
     handlerBinding:
       handlerMethod === undefined

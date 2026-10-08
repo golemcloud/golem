@@ -446,6 +446,7 @@ mod tests {
                 webhook_suffix: vec![],
                 static_bindings,
                 filesystem_bindings,
+                file_response_headers: vec![],
                 openapi_provider_method: Some("openapi".to_string()),
             }),
             snapshotting: Snapshotting::Disabled,

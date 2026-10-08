@@ -818,7 +818,7 @@ impl CursorTx<'_> {
     /// head is reported as the divergence it is. The invocation-boundary reader never waits on
     /// another Store: every entity body of the invocation has terminated before
     /// `AgentInvocationFinished`, so an unconsumed body entry there is dead history.
-    pub(super) fn check_parked_positional_read(
+    pub(super) async fn check_parked_positional_read(
         &self,
         reader: PositionalReader,
     ) -> Result<(), WorkerExecutorError> {
@@ -843,7 +843,10 @@ impl CursorTx<'_> {
         };
         let owner_can_consume = self.st.retained_starts.contains_key(&owner)
             || self.st.claimed_starts.contains(&owner)
-            || self.cursor.reconstruction_claims.is_body_active(owner);
+            || self.cursor.reconstruction_claims.is_body_active(owner)
+            || self
+                .future_entity_start_can_be_claimed(*head_idx, owner)
+                .await;
         if owner_can_consume {
             Ok(())
         } else {
@@ -854,6 +857,33 @@ impl CursorTx<'_> {
                 ),
             ))
         }
+    }
+
+    /// An entity Store can append its first positional record before the asynchronously enqueued
+    /// invocation `Start` is assigned its oplog index. The record carries that reserved future
+    /// index as its owner, so leave it for the body while the identity claim scans ahead to the
+    /// `Start`. This is accepted only when the referenced index is replay-visible and names an
+    /// entity invocation claim; arbitrary forward attribution must not turn corrupt history into
+    /// a wait.
+    async fn future_entity_start_can_be_claimed(
+        &self,
+        head_idx: OplogIndex,
+        owner: OplogIndex,
+    ) -> bool {
+        if owner <= head_idx
+            || owner > self.cursor.replay_target()
+            || self.st.skipped_regions.is_in_deleted_region(owner)
+        {
+            return false;
+        }
+        matches!(
+            self.cursor.oplog.read(owner).await,
+            OplogEntry::Start {
+                function_name: HostFunctionName::GolemEntityInvoke
+                    | HostFunctionName::GolemToolInvocationRejected,
+                ..
+            }
+        )
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -3380,7 +3410,8 @@ impl ReplayState {
                         .try_get_oplog_entry(positional_reader_accepts(scope))
                         .await?;
                     if entry.is_none() {
-                        tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                        tx.check_parked_positional_read(PositionalReader::Ordinary)
+                            .await?;
                     }
                     Ok(entry)
                 })
@@ -3418,7 +3449,8 @@ impl ReplayState {
                         Some((index, entry)) => Some(PositionalRead::Entry(index, entry)),
                         None if tx.cursor.is_live() => Some(PositionalRead::ReplayEnded),
                         None => {
-                            tx.check_parked_positional_read(PositionalReader::Ordinary)?;
+                            tx.check_parked_positional_read(PositionalReader::Ordinary)
+                                .await?;
                             None
                         }
                     })
@@ -3718,7 +3750,8 @@ impl ReplayState {
                         )
                         .await?;
                     if entry.is_none() {
-                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)?;
+                        tx.check_parked_positional_read(PositionalReader::InvocationBoundary)
+                            .await?;
                     }
                     Ok(entry)
                 })
@@ -3872,6 +3905,7 @@ pub(super) fn scope_entry_owner(
         | OplogEntry::Revert { .. }
         | OplogEntry::CancelPendingInvocation { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }
@@ -3960,6 +3994,7 @@ pub(super) fn terminal_start_index(entry: &OplogEntry) -> Option<OplogIndex> {
         | OplogEntry::CommittedRemoteTransaction { .. }
         | OplogEntry::RolledBackRemoteTransaction { .. }
         | OplogEntry::Snapshot { .. }
+        | OplogEntry::SnapshotConfirmed { .. }
         | OplogEntry::OplogProcessorCheckpoint { .. }
         | OplogEntry::SetRetryPolicy { .. }
         | OplogEntry::RemoveRetryPolicy { .. }

@@ -14,10 +14,11 @@ use golem_common::model::oplog::payload::types::{
     SerializableP3HttpBodyChunk, SerializableP3HttpConsumeBodyResult, SerializableToolRpcError,
 };
 use golem_common::model::oplog::{
-    AgentError, DurableFunctionType, HostRequest, HostRequestGolemToolInvocationRejected,
-    HostRequestNoInput, HostRequestPollCount, HostResponseMonotonicClockTimestamp,
-    HostResponseP3HttpClientConsumeBodyChunk, HostResponseP3HttpClientConsumeBodyResult,
-    HostStreamKind, OplogErrorKind, OplogPayload, PayloadId, RawOplogPayload,
+    AgentError, DurableFunctionType, FilesystemSnapshotName, HostRequest,
+    HostRequestGolemToolInvocationRejected, HostRequestNoInput, HostRequestPollCount,
+    HostResponseMonotonicClockTimestamp, HostResponseP3HttpClientConsumeBodyChunk,
+    HostResponseP3HttpClientConsumeBodyResult, HostStreamKind, OplogErrorKind, OplogPayload,
+    PayloadId, RawOplogPayload,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::tool::ToolName;
@@ -2461,6 +2462,35 @@ async fn error_hint_between_start_and_end_resolves() {
         .unwrap();
 
     match rs.await_resolution(handle).await.unwrap() {
+        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+#[test]
+async fn snapshot_confirmed_hint_between_start_and_end_resolves() {
+    // [NoOp, Start, SnapshotConfirmed, End] — SnapshotConfirmed is a hint, skipped transparently.
+    // A non-hint entry in that position would park the resolution, so the wait is bounded.
+    let rs = replay_state_over(vec![
+        noop(),
+        start_now(),
+        OplogEntry::snapshot_confirmed(FilesystemSnapshotName::periodic()).rounded(),
+        end_for(2, 42),
+    ])
+    .await;
+    let handle = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+
+    let resolution = tokio::time::timeout(Duration::from_secs(5), rs.await_resolution(handle))
+        .await
+        .expect("resolution must not block on a SnapshotConfirmed hint entry")
+        .unwrap();
+    match resolution {
         Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(4)),
         other => panic!("expected Completed, got {other:?}"),
     }
@@ -8450,6 +8480,74 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
             if end_idx == OplogIndex::from_u64(6)
     ));
     reconstruction.body_settled();
+}
+
+#[test]
+async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
+    // The entity body reserved Start(3), then appended its NoOp(2) before the asynchronous Start
+    // write completed. The owner's reader must leave 2 for the body while its reconstruction
+    // claim scans ahead to 3, rather than rejecting the forward attribution as orphaned history.
+    let parent = OplogIndex::from_u64(1);
+    let (entity_start, identity) = rejected_tool_reconstruction_start(parent);
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        entity_start,
+        end_for(3, 1),
+        noop(),
+    ])
+    .await;
+
+    let mut owner_read = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(&mut owner_read, "the owner's positional read").await;
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+
+    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent, &identity).await;
+    let mut reconstruction = entity_handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    let (idx, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .await
+        .unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(2));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+
+    assert!(matches!(
+        rs.await_resolution_outcome(entity_handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(4)
+    ));
+    reconstruction.body_settled();
+    let (idx, entry) = owner_read.await.unwrap();
+    assert_eq!(idx, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::NoOp { .. }));
+}
+
+#[test]
+async fn positional_reader_rejects_forward_body_owner_that_is_not_an_entity_start() {
+    // The future Start at 3 is an ordinary monotonic-clock call, so no entity body can ever claim
+    // it and consume the NoOp attributed to it at 2. Treating every retainable future Start as an
+    // entity owner would park this read forever instead of rejecting the orphaned attribution.
+    let rs = replay_state_over(vec![
+        noop(),
+        anchored_noop(3),
+        start_now(),
+        end_for(3, 42),
+        noop(),
+    ])
+    .await;
+
+    let result = tokio::time::timeout(Duration::from_millis(100), rs.get_oplog_entry(None)).await;
+    let error = result
+        .expect("an ordinary future Start must not leave the positional reader parked")
+        .expect_err("an entry attributed to a non-entity Start must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("neither retained, claimed nor replaying"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

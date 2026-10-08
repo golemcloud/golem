@@ -15,11 +15,12 @@
 use super::{AgentMethodSchema, AgentTypeKind, AgentTypeSchema, FieldSource};
 use crate::base_model::agent::http_files::valid_decoded_segment;
 use crate::base_model::agent::{
-    AgentMode, FileMapping, HttpMethod, HttpMountDetails, PathSegment, PhantomIdBinding,
-    Snapshotting,
+    AgentMode, FileMapping, FileResponseHeader, HttpMethod, HttpMountDetails, PathSegment,
+    PhantomIdBinding, Snapshotting,
 };
 use crate::schema::validation::is_equivalent_cross_graph;
 use crate::schema::{SchemaGraph, SchemaType};
+use http::{HeaderName, HeaderValue};
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
@@ -27,6 +28,8 @@ use std::fmt::{Display, Formatter};
 pub enum HttpAgentValidationError {
     DuplicateMethod(String),
     InvalidFileMapping(String),
+    InvalidFileResponseHeader(String),
+    FileResponseHeadersWithoutBindings,
     RouterMethodOnRegularAgent(String),
     StaticBindingsOnRegularAgent,
     OpenApiProviderOnRegularAgent,
@@ -49,6 +52,13 @@ impl Display for HttpAgentValidationError {
         match self {
             DuplicateMethod(name) => write!(f, "HTTP agent has duplicate method '{name}'"),
             InvalidFileMapping(error) => write!(f, "invalid HTTP file mapping: {error}"),
+            InvalidFileResponseHeader(name) => {
+                write!(f, "invalid or reserved HTTP file response header '{name}'")
+            }
+            FileResponseHeadersWithoutBindings => write!(
+                f,
+                "HTTP file response headers require static or filesystem bindings"
+            ),
             RouterMethodOnRegularAgent(name) => write!(
                 f,
                 "regular agent method '{name}' uses the router-only ANY HTTP method"
@@ -146,6 +156,10 @@ pub(super) fn validate(agent: &AgentTypeSchema) -> Result<(), HttpAgentValidatio
         FileMapping::validate_list(&mount.filesystem_bindings)
             .map_err(HttpAgentValidationError::InvalidFileMapping)?;
         validate_phantom_binding(agent, mount)?;
+        validate_file_response_headers(
+            &mount.file_response_headers,
+            !mount.static_bindings.is_empty() || !mount.filesystem_bindings.is_empty(),
+        )?;
     }
     match agent.kind {
         AgentTypeKind::HttpRouter => validate_router(agent),
@@ -253,6 +267,58 @@ fn validate_phantom_binding(
                     "query selector conflicts with an application query parameter",
                 ));
             }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_file_response_headers(
+    headers: &[FileResponseHeader],
+    has_file_bindings: bool,
+) -> Result<(), HttpAgentValidationError> {
+    if !headers.is_empty() && !has_file_bindings {
+        return Err(HttpAgentValidationError::FileResponseHeadersWithoutBindings);
+    }
+    let mut names = HashSet::new();
+    for header in headers {
+        let name = HeaderName::from_bytes(header.name.as_bytes()).map_err(|_| {
+            HttpAgentValidationError::InvalidFileResponseHeader(header.name.clone())
+        })?;
+        HeaderValue::from_bytes(header.value.as_bytes()).map_err(|_| {
+            HttpAgentValidationError::InvalidFileResponseHeader(header.name.clone())
+        })?;
+        let normalized = name.as_str();
+        if !names.insert(normalized.to_owned())
+            || normalized.starts_with("access-control-")
+            || matches!(
+                normalized,
+                "age"
+                    | "accept-ranges"
+                    | "cache-control"
+                    | "connection"
+                    | "content-encoding"
+                    | "content-length"
+                    | "content-range"
+                    | "content-type"
+                    | "etag"
+                    | "expires"
+                    | "keep-alive"
+                    | "last-modified"
+                    | "pragma"
+                    | "proxy-authenticate"
+                    | "proxy-authorization"
+                    | "proxy-connection"
+                    | "te"
+                    | "trailer"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "vary"
+                    | "x-content-type-options"
+            )
+        {
+            return Err(HttpAgentValidationError::InvalidFileResponseHeader(
+                header.name.clone(),
+            ));
         }
     }
     Ok(())

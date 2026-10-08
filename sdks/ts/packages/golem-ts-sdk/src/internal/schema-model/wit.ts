@@ -1693,6 +1693,12 @@ export function typedSchemaValueToWit(tv: TypedSchemaValue): WitTypedSchemaValue
   return { graph: schemaGraphToWit(tv.graph), value: schemaValueToWit(tv.value) };
 }
 
+export async function typedSchemaValueToWitAsync(
+  tv: TypedSchemaValue,
+): Promise<WitTypedSchemaValue> {
+  return { graph: schemaGraphToWit(tv.graph), value: await schemaValueToWitAsync(tv.value) };
+}
+
 /**
  * Validate a wire typed schema value without lifting or mutating any owned
  * resources. This combines graph decoding with {@link preflightWitValueTree}

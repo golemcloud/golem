@@ -348,9 +348,6 @@ fn test_entity_request(
     .unwrap();
     let metadata = EntityInvocationRequest {
         entity,
-        calling_principal: Principal::Agent(AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
         call_mode,
         operation: operation.unwrap_or_else(|| {
             EntityInvocationDescriptor::Tool(ToolInvocationDescriptor {
@@ -373,6 +370,7 @@ fn test_entity_request(
         }),
         plan: EntityInvocationPlanReference::Root { plan },
         assume_idempotence: true,
+        authority_wallet: Vec::new(),
     };
     HostRequestEntityInvocation {
         metadata: desert_rust::serialize_to_byte_vec(&metadata).unwrap(),

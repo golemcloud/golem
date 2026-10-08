@@ -127,6 +127,64 @@ object ToolGuestSpec extends ZIOSpecDefault {
       )
     )
 
+  private def dualOutputTool(name: String): ExtendedToolType = {
+    val base = stdoutTool(name)
+    base.copy(commands =
+      base.commands.map(node =>
+        node.copy(body = node.body.map(_.copy(stderr = Some(StreamSpec(doc(""), Nil, required = true)))))
+      )
+    )
+  }
+
+  private def lifecycleInvoker(
+    tool: ExtendedToolType,
+    stdoutBytes: Array[Byte],
+    stderrBytes: Array[Byte],
+    stdoutFailure: Option[ByteStreamFailure],
+    outcome: Either[ToolInvokeError[TypedSchemaValue], Unit]
+  ): ToolRegistry.ToolInvoker = {
+    val handle = ToolImplementationHandle(
+      _ => Right(tool),
+      List(
+        ToolMethodBinding(
+          tool.commands.head.name,
+          Nil,
+          ctx =>
+            ToolInvokerRuntime.decodeArgs(ctx, List(ToolParamDecoder.StdoutParam, ToolParamDecoder.StderrParam)) match {
+              case Left(error)                   => Future.successful(Left(error))
+              case Right((args, stdout, stderr)) =>
+                val out = args(0).asInstanceOf[ToolOutputStream]
+                val err = args(1).asInstanceOf[ToolOutputStream]
+                out
+                  .write(stdoutBytes)
+                  .flatMap {
+                    case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                    case Right(_)    =>
+                      err
+                        .write(stderrBytes)
+                        .flatMap {
+                          case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                          case Right(_)    =>
+                            val terminal =
+                              stdoutFailure.fold(Future.successful(Right(()): Either[StreamWriteError, Unit]))(out.fail)
+                            terminal.flatMap {
+                              case Left(error) => Future.failed(new IllegalStateException(error.toString))
+                              case Right(_)    =>
+                                outcome match {
+                                  case Left(error) => Future.successful(Left(error))
+                                  case Right(_)    => Future.successful(ToolInvokerRuntime.encodeUnit(stdout, stderr))
+                                }
+                            }(ToolInvokerRuntime.executionContext)
+                        }(ToolInvokerRuntime.executionContext)
+                  }(ToolInvokerRuntime.executionContext)
+            }
+        )
+      ),
+      Nil
+    )
+    ToolImplementationRuntime.adaptHandler(tool, handle)
+  }
+
   private def stdoutInvoker(
     tool: ExtendedToolType,
     outcome: Either[ToolInvokeError[TypedSchemaValue], ToolInvokeResult]
@@ -179,6 +237,8 @@ object ToolGuestSpec extends ZIOSpecDefault {
     stdin: ToolHostApi.RawByteStream,
     stdout: ToolHostApi.RawToolOutputWriter,
     stdinCloses: () => Int,
+    stdoutBytes: () => List[Byte],
+    stdoutTerminal: () => Option[String],
     stdoutFinishes: () => Int,
     stdoutFailures: () => Int,
     stdoutDisposals: () => Int
@@ -189,6 +249,8 @@ object ToolGuestSpec extends ZIOSpecDefault {
     disposeFails: Boolean = false
   ): InvocationAttachments = {
     var stdinCloses                                 = 0
+    var stdoutBytes                                 = List.empty[Byte]
+    var stdoutTerminal                              = Option.empty[String]
     var stdoutFinishes                              = 0
     var stdoutFailures                              = 0
     var stdoutDisposals                             = 0
@@ -214,13 +276,18 @@ object ToolGuestSpec extends ZIOSpecDefault {
       js.Any.fromFunction0(() => iterator)
     )
     val rawStdout = js.Dynamic.literal(
-      "write"  -> js.Any.fromFunction1((_: js.typedarray.Uint8Array) => js.Promise.resolve[Unit](())),
+      "write" -> js.Any.fromFunction1 { (bytes: js.typedarray.Uint8Array) =>
+        stdoutBytes = stdoutBytes ++ bytes.toArray.map(_.toByte)
+        js.Promise.resolve[Unit](())
+      },
       "finish" -> js.Any.fromFunction0 { () =>
         stdoutFinishes += 1
+        stdoutTerminal = Some("ended")
         cleanup(js.undefined)
       },
-      "fail" -> js.Any.fromFunction1 { (_: js.Any) =>
+      "fail" -> js.Any.fromFunction1 { (reason: js.Dynamic) =>
         stdoutFailures += 1
+        stdoutTerminal = Some(s"failed:${reason.tag.asInstanceOf[String]}")
         cleanup(js.undefined)
       }
     )
@@ -236,6 +303,8 @@ object ToolGuestSpec extends ZIOSpecDefault {
       rawStdin.asInstanceOf[ToolHostApi.RawByteStream],
       rawStdout.asInstanceOf[ToolHostApi.RawToolOutputWriter],
       () => stdinCloses,
+      () => stdoutBytes,
+      () => stdoutTerminal,
       () => stdoutFinishes,
       () => stdoutFailures,
       () => stdoutDisposals
@@ -721,6 +790,83 @@ object ToolGuestSpec extends ZIOSpecDefault {
           attachments.stdoutDisposals() == 1
         )
       }
+    },
+    test("provider terminal tuples preserve partial stdout, stderr, outcome, and cleanup independently") {
+      final case class Scenario(
+        name: String,
+        failure: Option[ByteStreamFailure],
+        outcome: Either[ToolInvokeError[TypedSchemaValue], Unit],
+        expectedResult: String,
+        expectedTerminal: String
+      )
+      val payload   = TypedSchemaValue(strGraph, SchemaValue.StringValue("bad request"))
+      val scenarios = List(
+        Scenario("success", None, Right(()), "success", "ended"),
+        Scenario(
+          "declared-error",
+          None,
+          Left(ToolInvokeError.UnknownToolError("invalid-request", payload)),
+          "custom-error",
+          "ended"
+        ),
+        Scenario(
+          "explicit-failure-success",
+          Some(ByteStreamFailure.Failed("stdout failed")),
+          Right(()),
+          "success",
+          "failed:failed"
+        ),
+        Scenario(
+          "explicit-cancellation-success",
+          Some(ByteStreamFailure.Cancelled),
+          Right(()),
+          "success",
+          "failed:cancelled"
+        )
+      )
+      ZIO
+        .foreach(scenarios.zipWithIndex) { case (scenario, index) =>
+          val tool   = dualOutputTool(s"guest-terminal-${scenario.name}-$index")
+          val stdin  = invocationAttachments()
+          val stdout = invocationAttachments()
+          val stderr = invocationAttachments()
+          ToolRegistry.registerInvoker(
+            tool,
+            lifecycleInvoker(
+              tool,
+              "partial-out".getBytes("UTF-8"),
+              Array[Byte](0, 1, 2),
+              scenario.failure,
+              scenario.outcome
+            )
+          )
+          fromPromise(
+            invokeAtGuest(
+              tool.toolName,
+              encodedInput(emptyInput(tool)),
+              Some(stdin.stdin),
+              Some(stdout.stdout),
+              Some(stderr.stdout)
+            )
+          ).either.map { result =>
+            val resultTag = result match {
+              case Right(_)                          => "success"
+              case Left(js.JavaScriptException(raw)) => raw.asInstanceOf[js.Dynamic].tag.asInstanceOf[String]
+              case Left(other)                       => other.getClass.getSimpleName
+            }
+            assertTrue(
+              resultTag == scenario.expectedResult,
+              stdout.stdoutBytes() == "partial-out".getBytes("UTF-8").toList,
+              stdout.stdoutTerminal().contains(scenario.expectedTerminal),
+              stderr.stdoutBytes() == List[Byte](0, 1, 2),
+              stderr.stdoutTerminal().contains("ended"),
+              stdin.stdinCloses() == 1,
+              stdout.stdoutDisposals() == 1,
+              stderr.stdoutDisposals() == 1
+            )
+          }
+        }
+        .map(_.reduce(_ && _))
     },
     test("invoke_rejects_malformed_input_with_invalid_input") {
       val captured = echoCaptured

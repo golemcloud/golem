@@ -184,6 +184,8 @@ pub trait SnapshotUpdateTest {
     fn suffix_exit(&self) -> u32;
     fn accumulated_value(&self) -> u32;
     fn revision_two_only(&self) -> u32;
+    fn write_file(&mut self, path: String, content: String);
+    fn read_file(&self, path: String) -> Option<String>;
 }
 
 struct SnapshotUpdateTestImpl {
@@ -249,6 +251,14 @@ impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
 
     fn accumulated_value(&self) -> u32 {
         self.accumulated_value
+    }
+
+    fn write_file(&mut self, path: String, content: String) {
+        std::fs::write(&path, content).expect("the agent writes the file");
+    }
+
+    fn read_file(&self, path: String) -> Option<String> {
+        std::fs::read_to_string(&path).ok()
     }
 
     fn revision_two_only(&self) -> u32 {
