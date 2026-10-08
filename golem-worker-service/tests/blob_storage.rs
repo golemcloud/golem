@@ -49,11 +49,6 @@ test_r::enable!();
 #[async_trait]
 trait GetBlobStorage: Debug {
     async fn get_blob_storage(&self) -> TestStorage;
-
-    /// Tells if `copy` from a path with no blob gives [`BlobMissingError`] on this backend.
-    fn copy_of_a_missing_source_gives_blob_missing_error(&self) -> bool {
-        true
-    }
 }
 
 /// The storage of one test, and the RustFS container that the S3 storage uses while the test
@@ -323,10 +318,9 @@ fn filesystem_snapshots_of(
     }
 }
 
+// The in-memory backend stands in for S3 in the tests of other crates, and a deployment can keep
+// its blobs on any of the backends, so every backend must give the same answer.
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "fs", "s3", "s3_prefixed", "sqlite");
-// The in-memory backend stands in for S3 in the tests of other crates, so the two must give the
-// same answer. The filesystem and the SQLite backends do not give it for every operation yet.
-define_matrix_dimension!(mem_and_s3: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3", "s3_prefixed");
 define_matrix_dimension!(ns: BlobStorageNamespace -> "cc", "co", "cs");
 define_matrix_dimension!(s3_storage: Arc<dyn GetBlobStorage + Send + Sync> -> "s3", "s3_prefixed");
 
@@ -1383,14 +1377,14 @@ async fn list_dir_root_only_subdirs(
 #[test]
 #[tracing::instrument]
 async fn list_dir_gives_a_created_directory_below_the_path_at_any_depth(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
-    // The in-memory backend holds the key of a directory that `create_dir` made, and the S3
-    // backend holds the marker object of it. Each of them reads every such key below the path,
-    // so a directory two names below the path is in the list with both names. A directory that
-    // only holds blobs has no key and no marker, so `dir/blobs` is not in the list, and neither
-    // is the blob that is below it.
+    // Each backend keeps a record of a directory that `create_dir` made: a key in memory, a marker
+    // object on S3, a row in SQLite and a marker file on the filesystem. Each of them reads every
+    // such record below the path, so a directory two names below the path is in the list with
+    // both names. A directory that only holds blobs has no record, so `dir/blobs` is not in the
+    // list, and neither is the blob that is below it.
     let storage = test.get_blob_storage().await;
 
     storage
@@ -1432,9 +1426,9 @@ async fn list_dir_gives_a_blob_and_the_directory_of_its_path_one_time(
     #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
-    // A blob and a directory that `create_dir` made can hold one path. The in-memory backend
-    // then holds two keys for the path, and the S3 backend holds the blob and the marker of the
-    // directory. `list_dir` gives the path one time.
+    // A blob and a directory that `create_dir` made can hold one path. Each backend then holds
+    // the blob and the record of the directory as two entries. `list_dir` gives the path one
+    // time.
     let storage = test.get_blob_storage().await;
     let label = "list_dir_gives_a_blob_and_the_directory_of_its_path_one_time";
 
@@ -1538,6 +1532,136 @@ async fn a_blob_written_over_a_created_directory_is_a_blob_and_the_directory_sta
             (None, ExistsResult::Directory, Some(0), Vec::new()),
         )
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_blob_below_a_blob_is_a_second_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_blob_below_a_blob_is_a_second_blob";
+    let (upper, lower) = (Path::new("a"), Path::new("a/b"));
+    let read = |path: &'static Path| {
+        let storage = &storage;
+        async move {
+            (
+                storage
+                    .get_raw(label, "get-raw", namespace.clone(), path)
+                    .await
+                    .unwrap(),
+                storage
+                    .exists(label, "exists", namespace.clone(), path)
+                    .await
+                    .unwrap(),
+            )
+        }
+    };
+
+    storage
+        .put_raw(label, "put-upper", namespace.clone(), upper, b"upper")
+        .await
+        .unwrap();
+    storage
+        .put_raw(label, "put-lower", namespace.clone(), lower, b"lower")
+        .await
+        .unwrap();
+    let written = (read(upper).await, read(lower).await);
+
+    storage
+        .delete(label, "delete-upper", namespace.clone(), upper)
+        .await
+        .unwrap();
+    let deleted = (read(upper).await, read(lower).await);
+
+    assert_eq!(
+        (written, deleted),
+        (
+            (
+                (Some(b"upper".to_vec()), ExistsResult::File),
+                (Some(b"lower".to_vec()), ExistsResult::File),
+            ),
+            (
+                (None, ExistsResult::Directory),
+                (Some(b"lower".to_vec()), ExistsResult::File),
+            ),
+        )
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn a_read_at_a_directory_finds_no_blob(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "a_read_at_a_directory_finds_no_blob";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+    put_blobs(&storage, namespace, &[("implied/blob", 4)]).await;
+
+    for directory in ["made", "implied"] {
+        let path = Path::new(directory);
+        let found = (
+            storage
+                .get_raw(label, "get-raw", namespace.clone(), path)
+                .await
+                .unwrap(),
+            storage
+                .get_stream(label, "get-stream", namespace.clone(), path)
+                .await
+                .unwrap()
+                .is_some(),
+            storage
+                .get_raw_slice(label, "get-raw-slice", namespace.clone(), path, 0, 0)
+                .await
+                .unwrap(),
+            storage
+                .get_range_stream(label, "get-range-stream", namespace.clone(), path, 0, 0)
+                .await
+                .unwrap()
+                .is_some(),
+        );
+        assert_eq!(found, (None, false, None, false), "{directory}");
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn put_raw_if_absent_writes_a_blob_at_the_path_of_a_directory(
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(ns)] namespace: &BlobStorageNamespace,
+) {
+    let storage = test.get_blob_storage().await;
+    let label = "put_raw_if_absent_writes_a_blob_at_the_path_of_a_directory";
+
+    storage
+        .create_dir(label, "create-dir", namespace.clone(), Path::new("made"))
+        .await
+        .unwrap();
+    put_blobs(&storage, namespace, &[("implied/blob", 4)]).await;
+
+    for directory in ["made", "implied"] {
+        let path = Path::new(directory);
+        let written = storage
+            .put_raw_if_absent(label, "put-if-absent", namespace.clone(), path, b"blob")
+            .await
+            .unwrap();
+        let read = storage
+            .get_raw(label, "get-raw", namespace.clone(), path)
+            .await
+            .unwrap();
+        assert_eq!(
+            (written, read),
+            (PutIfAbsent::Written, Some(b"blob".to_vec())),
+            "{directory}"
+        );
+    }
 }
 
 #[test]
@@ -3447,9 +3571,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
         .await
         .unwrap();
 
-    // A blob and a directory cannot share one path on the filesystem backend, which refuses
-    // this write, so the rest of the case belongs to the other backends.
-    if storage
+    storage
         .put_raw(
             label,
             "put-below",
@@ -3458,10 +3580,7 @@ async fn exists_on_a_blob_that_also_has_blobs_below_gives_a_file(
             &Bytes::from("payload"),
         )
         .await
-        .is_err()
-    {
-        return;
-    }
+        .unwrap();
 
     assert_eq!(
         storage
@@ -3746,7 +3865,7 @@ async fn a_copy_or_a_move_at_a_root_path_is_an_error(
 #[test]
 #[tracing::instrument]
 async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3835,7 +3954,7 @@ async fn a_directory_of_blobs_goes_when_its_last_blob_goes(
 #[test]
 #[tracing::instrument]
 async fn delete_dir_deletes_a_directory_further_up_that_only_holds_blobs(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3911,7 +4030,7 @@ async fn get_metadata_of_a_created_directory_gives_metadata(
 #[test]
 #[tracing::instrument]
 async fn get_metadata_of_a_created_directory_gives_a_size_of_zero(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -3941,7 +4060,7 @@ async fn get_metadata_of_a_created_directory_gives_a_size_of_zero(
 #[test]
 #[tracing::instrument]
 async fn get_metadata_of_a_directory_of_blobs_finds_no_blob(
-    #[dimension(mem_and_s3)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+    #[dimension(storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
     #[dimension(ns)] namespace: &BlobStorageNamespace,
 ) {
     let storage = test.get_blob_storage().await;
@@ -4156,7 +4275,6 @@ async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
         )
         .await
         .map_err(|error| error.downcast_ref::<BlobMissingError>().is_some());
-    let expected_missing_source = Err(test.copy_of_a_missing_source_gives_blob_missing_error());
 
     let payload = Some(Bytes::from("payload").to_vec());
     assert_eq!(
@@ -4164,7 +4282,7 @@ async fn a_copy_or_a_move_to_another_path_writes_the_blob_there(
         (
             (payload.clone(), payload.clone()),
             (None, payload),
-            expected_missing_source,
+            Err(true),
             None
         )
     );
