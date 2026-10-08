@@ -66,10 +66,7 @@ describe('invocation-equivalent RPC wire codecs', () => {
       metadata: { agentId: 'wire-rpc', idempotencyKey: 'key' },
       future: {
         get: vi.fn().mockResolvedValue({
-          valueNodes: [
-            { tag: 'string-value', val: 'valid root' },
-            null as never,
-          ],
+          valueNodes: [{ tag: 'string-value', val: 'valid root' }, null as never],
           root: 0,
         }),
         cancel: vi.fn(),
