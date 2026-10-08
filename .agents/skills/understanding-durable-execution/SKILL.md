@@ -88,8 +88,8 @@ something from the right column to survive a restart is wrong. Sockets and other
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
 must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
 coordination gate so concurrent calls cannot reconnect one handle twice (see
-"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
-wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
+wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
@@ -845,8 +845,25 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    never random.
 
 ### Pending RPC waits and proactive suspension
-Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
-this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+`OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
+participants (`worker/instance.rs`, `worker/suspension.rs`). A current runtime blocked witness
+is necessary but insufficient: every admitted participant must be accounted for, with no active
+outer poll or unclassified non-root work. Unknown work, preparation and borrowed synchronous
+RPC waits veto automatic suspension; raw sync RPC does not automatically suspend.
+Owned async RPC activities become eligible after their grace period; the owner rechecks while
+other work vetoes. Owned timers (including the narrow P2 timer-only poll/block dispatcher) and
+promises provide deadline/activation evidence. This is not general P2 readiness adaptation.
+Durable source reads bind to their exact runtime transfer activity and retain the read future.
+Only an established source wait can be passive: locally registered external inline input and
+its descendants veto suspension; agent-hosted input, invocation output and attached downstream
+waits can qualify with a durable timed recheck. Active journaling, publication and settlement
+are not passive waits. Root/result return alone is not idle.
+`RuntimeStore::drive` persists the earliest timed wake, then revalidates the same activity revision
+and eligibility before committing timestamped suspension. Activity changes invalidate stale
+evidence. Existing interrupt/retirement precedence and discard/replay reconstruction remain
+unchanged; there is no new cleanup or lifecycle protocol. Borrowed waits in
+`durable_host/suspendable_wait.rs` observe only readiness and interruption.
+See `reference/rpc-suspension.md` for timing and admission details.
 Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
 `tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,

@@ -71,13 +71,15 @@ cancellation must not split that prefix. Settled read-only cache hits and coales
 not persist a separate invocation, result, or alias; only the miss owner follows normal durable
 admission. Ephemeral targets are fail-stop; do not build resumption for them.
 
-Pending durable RPC operations register suspendable waits when the operation starts. After
-`rpc_suspend_after`, their await uses the shared voluntary-suspension predicate; if HTTP or other
-live work makes the Store ineligible, it retries after `wait_suspend_check_interval`. Before
-suspending it durably schedules a wakeup `rpc_resume_after` later (or the earliest wakeup among
-mixed waits), then uses ordinary reconstruction with the same logical RPC key. This is proactive
-scheduling only: never gate explicit interruption or arbitrary Store loss on this predicate, and
-do not add a feature-specific recovery path or immediate restart.
+Owned asynchronous RPC operations register with the owner's suspension coordinator when the
+operation starts, including before the guest consumes the result. Their passive remote waits
+can qualify after `rpc_suspend_after`, but every owner participant must also be eligible and
+runtime-blocked. Active work and borrowed synchronous RPC/preparation veto automatic suspension.
+The coordinator rechecks after `wait_suspend_check_interval`, durably schedules a wakeup
+`rpc_resume_after` later (or the earliest wakeup among mixed waits), then revalidates eligibility
+before suspending. Ordinary reconstruction uses the same logical RPC key. This is proactive
+scheduling only: never gate explicit interruption or arbitrary Store loss on eligibility, and do
+not add a feature-specific recovery path or immediate restart.
 
 ## Durable streams
 

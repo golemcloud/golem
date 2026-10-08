@@ -791,7 +791,10 @@ pub(super) fn sync_after_reflink(
                 xfs::sync_volume(materialization_root)
             }
             #[cfg(not(target_os = "linux"))]
-            unreachable!("XFS storage is unavailable on this platform")
+            {
+                let _ = materialization_root;
+                unreachable!("XFS storage is unavailable on this platform")
+            }
         }
     }
 }
