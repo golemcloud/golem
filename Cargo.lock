@@ -4607,6 +4607,7 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wat",
  "windows-sys 0.61.2",
  "zstd",
 ]
