@@ -128,6 +128,9 @@ pub(in crate::wasi_filesystem) fn p2_agent_error(error: AgentFilesystemError) ->
         AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted) => {
             ErrorCode::NotPermitted.into()
         }
+        AgentFilesystemError::Access(agent_filesystem::AccessError::ReadOnly) => {
+            ErrorCode::ReadOnly.into()
+        }
         AgentFilesystemError::Sandbox(error) => p2_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => ErrorCode::InsufficientSpace.into(),
@@ -212,6 +215,7 @@ pub(in crate::wasi_filesystem) fn p2_agent_open_request(
         follow: path_flags.contains(PathFlags::SYMLINK_FOLLOW),
         read: descriptor_flags.contains(DescriptorFlags::READ),
         write: descriptor_flags.contains(DescriptorFlags::WRITE),
+        mutate_directory: descriptor_flags.contains(DescriptorFlags::MUTATE_DIRECTORY),
         unsupported_sync: descriptor_flags.intersects(
             DescriptorFlags::FILE_INTEGRITY_SYNC
                 | DescriptorFlags::DATA_INTEGRITY_SYNC

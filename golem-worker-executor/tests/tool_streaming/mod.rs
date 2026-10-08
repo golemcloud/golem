@@ -12817,6 +12817,254 @@ async fn builtin_javascript_and_typescript_tools_run_in_sidecars(
 }
 
 #[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn builtin_node_recursive_rm_removes_typescript_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("javascript_tools")] javascript_tools: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let mut deployment: Option<ToolDeploymentState> = None;
+    for (provider, package) in [
+        (javascript_tools, "golem:javascript-tools"),
+        (typescript_tools, "golem:typescript-tools"),
+    ] {
+        let component = executor
+            .component_dep(&context.default_environment_id, provider)
+            .store()
+            .await?;
+        let metadata = extract_component_metadata(
+            &deps
+                .component_directory
+                .join(format!("{}.wasm", provider.wasm_name)),
+            false,
+            true,
+        )
+        .await?;
+        let provider_deployment = deployment_state(
+            context.account_id,
+            component.id,
+            component.revision,
+            package,
+            "ToolStreamingCaller",
+            metadata.tools,
+        );
+        if let Some(deployment) = &mut deployment {
+            deployment
+                .registered_tools
+                .extend(provider_deployment.registered_tools);
+            for (owner, bindings) in provider_deployment.tool_bindings {
+                deployment
+                    .tool_bindings
+                    .entry(owner)
+                    .or_default()
+                    .extend(bindings);
+            }
+        } else {
+            deployment = Some(provider_deployment);
+        }
+    }
+    let mut deployment = deployment.unwrap();
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+
+    let mut failures = Vec::new();
+    for (agent_name, remove) in [
+        (
+            "recursive-rm-sync",
+            "fs.rmSync('candidate', { recursive: true, force: true }); verify();",
+        ),
+        (
+            "recursive-rm-promises",
+            "await require('node:fs/promises').rm('candidate', { recursive: true, force: true }); verify();",
+        ),
+    ] {
+        let setup = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec![
+                "-e",
+                "const fs = require('node:fs'); fs.mkdirSync('src/nested', { recursive: true }); fs.writeFileSync('src/main.ts', 'export const main: number = 17;\\n'); fs.writeFileSync('src/nested/value.ts', 'export const value: number = 42;\\n');",
+            ],
+        )
+        .await?;
+        assert_eq!(setup.exit_code, 0, "setup: {setup:?}");
+
+        let compilation = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "tsc",
+            "/workspace",
+            vec![
+                "--pretty",
+                "false",
+                "--target",
+                "es2022",
+                "--module",
+                "es2022",
+                "--rootDir",
+                "src",
+                "--outDir",
+                "candidate",
+                "--noEmitOnError",
+                "src/main.ts",
+                "src/nested/value.ts",
+            ],
+        )
+        .await?;
+        assert_eq!(compilation.exit_code, 0, "compilation: {compilation:?}");
+
+        let script = format!(
+            r#"
+const fs = require('node:fs');
+const assert = require('node:assert/strict');
+assert.equal(fs.readFileSync('candidate/main.js', 'utf8'), 'export const main = 17;\n');
+assert.equal(fs.readFileSync('candidate/nested/value.js', 'utf8'), 'export const value = 42;\n');
+console.log('compiled-output-readable');
+function verify() {{
+    assert.equal(fs.existsSync('candidate'), false);
+    assert.equal(fs.readFileSync('src/nested/value.ts', 'utf8'), 'export const value: number = 42;\n');
+    console.log('candidate-removed-source-preserved');
+}}
+{remove}
+"#
+        );
+        let removal = invoke_cli_tool(
+            &executor,
+            &caller_component,
+            agent_name,
+            "node",
+            "/workspace",
+            vec!["-e", &script],
+        )
+        .await?;
+        assert!(
+            removal.stdout.starts_with(b"compiled-output-readable\n"),
+            "output must be readable before removal: {removal:?}"
+        );
+        if removal.exit_code != 0
+            || removal.stdout != b"compiled-output-readable\ncandidate-removed-source-preserved\n"
+            || !removal.stderr.is_empty()
+        {
+            failures.push(format!(
+                "{agent_name}: exit {}; stdout: {}; stderr: {}",
+                removal.exit_code,
+                String::from_utf8_lossy(&removal.stdout),
+                String::from_utf8_lossy(&removal.stderr),
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn typescript_guest_recursive_rm_removes_tool_created_output(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_ts_caller")] caller: &PrecompiledComponent,
+    #[tagged_as("typescript_tools")] typescript_tools: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let caller_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .store()
+        .await?;
+    let provider = executor
+        .component_dep(&context.default_environment_id, typescript_tools)
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", typescript_tools.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider.id,
+        provider.revision,
+        "golem:typescript-tools",
+        "TsToolStreamingCaller",
+        metadata.tools,
+    );
+    for bindings in deployment.tool_bindings.values_mut() {
+        for binding in bindings.values_mut() {
+            binding.filesystem_access = ToolFilesystemAccess::Allowed;
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        caller_component.id,
+        caller_component.revision,
+        Some(deployment),
+    );
+    let mut failures = Vec::new();
+    for promises in [false, true] {
+        let result = executor
+            .invoke_and_await_agent(
+                &caller_component,
+                &agent_id!("TsToolStreamingCaller", format!("guest-rm-{promises}")),
+                "recursiveRmToolOutput",
+                data_value!(promises),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        if result != Ok("removed-output-source-preserved-recompiled".to_string()) {
+            failures.push(format!("promises={promises}: {result:?}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    Ok(())
+}
+
+#[test]
 #[ignore = "GOL-714: completed JavaScript tool calls do not reconstruct deterministically"]
 #[tracing::instrument]
 #[timeout("10m")]

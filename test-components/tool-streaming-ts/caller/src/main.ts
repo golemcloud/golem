@@ -4,6 +4,7 @@ import {
   client,
   defineAgent,
   method,
+  Result,
   s,
   toolDefinition,
   ToolStreamError,
@@ -15,6 +16,21 @@ import { TsStreamingClient } from 'ts-streaming-tool-guest-client';
 import { getConfigValue } from 'golem:agent/host@2.0.0';
 import type { SchemaGraph, Secret } from 'golem:core/types@2.0.0';
 import { z } from 'zod/v4';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+
+const TscClient = client(
+  toolDefinition('tsc', { requiresFilesystem: true })
+    .version('5.9.2+golem.2')
+    .body((body) =>
+      body
+        .option('cwd', z.string(), { default: '/workspace' })
+        .tail('args', z.string(), { separator: '--', verbatim: true })
+        .stdout({ required: true })
+        .stderr({ required: true })
+        .returns(s.s32()),
+    ),
+);
 
 const MatrixCoreObservation = z.object({
   provider: z.string(),
@@ -158,6 +174,10 @@ const Caller = defineAgent({
   name: 'TsToolStreamingCaller',
   id: { name: z.string() },
   methods: {
+    recursiveRmToolOutput: method({
+      input: { promises: z.boolean() },
+      returns: s.result(z.string(), z.string()),
+    }),
     markerBeforeEof: method({
       input: { payload: s.bytes() },
       returns: Evidence,
@@ -343,6 +363,64 @@ ResourceCaller.implement({
 Caller.implement({
   init: () => ({}),
   methods: {
+    async recursiveRmToolOutput({ promises }) {
+      const root = '/workspace/recursive-rm';
+      const candidate = `${root}/candidate`;
+      mkdirSync(`${root}/src/nested`, { recursive: true });
+      writeFileSync(`${root}/src/main.ts`, 'export const main: number = 17;\n');
+      writeFileSync(`${root}/src/nested/value.ts`, 'export const value: number = 42;\n');
+      const compile = async () => {
+        const invocation = TscClient.tsc({
+          cwd: root,
+          args: [
+            '--pretty',
+            'false',
+            '--target',
+            'es2022',
+            '--module',
+            'es2022',
+            '--rootDir',
+            'src',
+            '--outDir',
+            'candidate',
+            '--noEmitOnError',
+            'src/main.ts',
+            'src/nested/value.ts',
+          ],
+        });
+        const [exitCode, stdout, stderr] = await Promise.all([
+          invocation.result,
+          collect(invocation.stdout!.getReader()),
+          collect(invocation.stderr!.getReader()),
+        ]);
+        if (exitCode !== 0 || stdout.length !== 0 || stderr.length !== 0) {
+          throw new Error(
+            `tsc: ${exitCode}: ${new TextDecoder().decode(stdout)} ${new TextDecoder().decode(stderr)}`,
+          );
+        }
+        if (
+          readFileSync(`${candidate}/main.js`, 'utf8') !== 'export const main = 17;\n' ||
+          readFileSync(`${candidate}/nested/value.js`, 'utf8') !== 'export const value = 42;\n'
+        ) {
+          throw new Error('compiler output differs');
+        }
+      };
+      await compile();
+      try {
+        if (promises) await rm(candidate, { recursive: true, force: true });
+        else rmSync(candidate, { recursive: true, force: true });
+      } catch (error) {
+        return Result.err(`readable compiler output could not be removed: ${String(error)}`);
+      }
+      if (
+        existsSync(candidate) ||
+        readFileSync(`${root}/src/nested/value.ts`, 'utf8') !== 'export const value: number = 42;\n'
+      ) {
+        throw new Error('removal left output behind or changed the source');
+      }
+      await compile();
+      return Result.ok('removed-output-source-preserved-recompiled');
+    },
     async matrix_core_observation() {
       const client = MatrixCoreClient.newClient();
       const success = await client.artifact().inspect(

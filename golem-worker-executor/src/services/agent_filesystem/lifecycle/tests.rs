@@ -3587,7 +3587,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert_eq!(
         edit_namespace(
@@ -3598,7 +3598,7 @@ async fn namespace_authorization_and_expected_kind_reject_before_sandbox_mutatio
             },
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "create_directory("));
     assert!(!has_call(&control, "hard_link("));
@@ -8123,6 +8123,130 @@ async fn native_failed_cleanup_retry_cannot_delete_recreated_filesystem() {
 }
 
 #[test]
+async fn directory_capabilities_bound_child_opens_and_deny_ungranted_io() {
+    let (filesystem, control, window) = metered_resident().await;
+    let generation_handle = resident_generation_handle(&filesystem);
+    for (id, mode) in [
+        AccessMode::None,
+        AccessMode::Read,
+        AccessMode::Write,
+        AccessMode::ReadWrite,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let directory =
+            open_directory_with_access(&generation_handle, &control, 900 + id as u64, mode).await;
+        let file = open_file_with_access(&generation_handle, &control, 910 + id as u64, mode).await;
+        let calls_before = control.calls().len();
+        if !mode.can_read() {
+            assert_eq!(
+                list_directory(&generation_handle, &directory).unwrap_err(),
+                AccessError::NotPermitted
+            );
+            assert_eq!(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1
+                    }
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        } else {
+            drop(list_directory(&generation_handle, &directory).unwrap());
+            drop(
+                read_file(
+                    &generation_handle,
+                    &file,
+                    ReadRange {
+                        offset: 0,
+                        length: 1,
+                    },
+                )
+                .unwrap(),
+            );
+        }
+        if !mode.can_write() {
+            assert_eq!(
+                write(
+                    &generation_handle,
+                    &file,
+                    WritePlacement::At(0),
+                    Bytes::from_static(b"x")
+                )
+                .unwrap_err(),
+                AccessError::NotPermitted
+            );
+        }
+        for path in ["child", "."] {
+            for options in [
+                OpenOptions::Existing {
+                    expected: ObjectKind::File,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::Existing {
+                    expected: ObjectKind::Directory,
+                    access: AccessMode::Write,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::None,
+                    disposition: FileDisposition::CreateIfMissing,
+                    follow: Follow::Yes,
+                },
+                OpenOptions::File {
+                    access: AccessMode::Read,
+                    disposition: FileDisposition::TruncateExisting,
+                    follow: Follow::Yes,
+                },
+            ] {
+                let result = open(
+                    &generation_handle,
+                    PathTarget::at(&directory, path),
+                    options,
+                );
+                if mode.can_write() {
+                    drop(result.unwrap());
+                } else {
+                    assert_eq!(result.unwrap_err(), AccessError::ReadOnly);
+                }
+            }
+        }
+        let edit = edit_namespace(
+            &generation_handle,
+            NamespaceEdit::Insert {
+                destination: PathTarget::at(&directory, "child"),
+                object: NewObject::Directory,
+            },
+        );
+        if mode.can_write() {
+            drop(edit.unwrap());
+        } else {
+            assert_eq!(edit.unwrap_err(), AccessError::ReadOnly);
+        }
+        assert_eq!(
+            control.calls().len(),
+            calls_before,
+            "capability checks must precede storage IO"
+        );
+        control.push_close(Ok(()));
+        close(OpenNode::File(file)).await.unwrap();
+        control.push_close(Ok(()));
+        close(OpenNode::Directory(directory)).await.unwrap();
+    }
+    close_window(window, Instant::now() + Duration::from_secs(1))
+        .await
+        .unwrap();
+    control.push_delete_and_verify(Ok(()));
+    delete(seal(filesystem)).await.unwrap();
+}
+
+#[test]
 async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
     let (filesystem, control, window) = metered_resident().await;
     let generation_handle = resident_generation_handle(&filesystem);
@@ -8159,7 +8283,7 @@ async fn read_only_attribute_targets_are_rejected_before_sandbox_work() {
             }),
         )
         .unwrap_err(),
-        AccessError::NotPermitted
+        AccessError::ReadOnly
     );
     assert!(!has_call(&control, "set_times("));
     close_window(window, Instant::now() + Duration::from_secs(1))

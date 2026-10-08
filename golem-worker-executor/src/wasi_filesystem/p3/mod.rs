@@ -175,6 +175,9 @@ fn p3_agent_error(error: AgentFilesystemError) -> FilesystemError {
         AgentFilesystemError::Access(agent_filesystem::AccessError::NotPermitted) => {
             types::ErrorCode::NotPermitted.into()
         }
+        AgentFilesystemError::Access(agent_filesystem::AccessError::ReadOnly) => {
+            types::ErrorCode::ReadOnly.into()
+        }
         AgentFilesystemError::Sandbox(error) => p3_agent_storage_error(error),
         AgentFilesystemError::AgentQuota(_) => types::ErrorCode::Quota.into(),
         AgentFilesystemError::PhysicalCapacity(_) => types::ErrorCode::InsufficientSpace.into(),
@@ -266,6 +269,7 @@ fn p3_agent_open_request(
         follow: path_flags.contains(types::PathFlags::SYMLINK_FOLLOW),
         read: descriptor_flags.contains(types::DescriptorFlags::READ),
         write: descriptor_flags.contains(types::DescriptorFlags::WRITE),
+        mutate_directory: descriptor_flags.contains(types::DescriptorFlags::MUTATE_DIRECTORY),
         unsupported_sync: descriptor_flags.intersects(
             types::DescriptorFlags::FILE_INTEGRITY_SYNC
                 | types::DescriptorFlags::DATA_INTEGRITY_SYNC
@@ -2728,6 +2732,7 @@ mod tests {
             follow: false,
             read: false,
             write: false,
+            mutate_directory: false,
             unsupported_sync: false,
         }
     }
@@ -2735,7 +2740,7 @@ mod tests {
     fn decided_open(request: AgentOpenRequest) -> OpenOptions {
         match decide_agent_open(request).unwrap() {
             AgentOpenDecision::Open(options) => options,
-            AgentOpenDecision::ObserveAttributes { .. } => {
+            AgentOpenDecision::ObserveAttributes => {
                 panic!("open policy unexpectedly requested attributes")
             }
         }
@@ -2780,8 +2785,8 @@ mod tests {
 
     #[test]
     fn agent_open_policy_selects_access_modes() {
-        for (read, write, expected) in [
-            (false, false, AccessMode::Read),
+        for (read, mutate_directory, expected) in [
+            (false, false, AccessMode::None),
             (true, false, AccessMode::Read),
             (false, true, AccessMode::Write),
             (true, true, AccessMode::ReadWrite),
@@ -2790,7 +2795,8 @@ mod tests {
                 decided_open(AgentOpenRequest {
                     directory: true,
                     read,
-                    write,
+                    write: true,
+                    mutate_directory,
                     ..open_request()
                 }),
                 OpenOptions::Existing {
@@ -2808,6 +2814,7 @@ mod tests {
             decided_open(AgentOpenRequest {
                 directory: true,
                 follow: false,
+                read: true,
                 ..open_request()
             }),
             OpenOptions::Existing {
@@ -2820,6 +2827,7 @@ mod tests {
             decided_open(AgentOpenRequest {
                 directory: true,
                 follow: true,
+                read: true,
                 ..open_request()
             }),
             OpenOptions::Existing {
@@ -2867,7 +2875,7 @@ mod tests {
             assert_eq!(
                 decided_open(request),
                 OpenOptions::File {
-                    access: AccessMode::Read,
+                    access: AccessMode::None,
                     disposition,
                     follow: Follow::No,
                 }
@@ -2883,13 +2891,17 @@ mod tests {
                 follow: true,
                 ..open_request()
             }),
-            Ok(AgentOpenDecision::ObserveAttributes {
-                access: AccessMode::Read,
-                follow: Follow::Yes,
-            })
+            Ok(AgentOpenDecision::ObserveAttributes)
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::Yes, ObjectKind::File),
+            decide_agent_existing_open(
+                AgentOpenRequest {
+                    read: true,
+                    follow: true,
+                    ..open_request()
+                },
+                ObjectKind::File
+            ),
             Ok(OpenOptions::Existing {
                 expected: ObjectKind::File,
                 access: AccessMode::Read,
@@ -2897,7 +2909,13 @@ mod tests {
             })
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::No, ObjectKind::Directory),
+            decide_agent_existing_open(
+                AgentOpenRequest {
+                    read: true,
+                    ..open_request()
+                },
+                ObjectKind::Directory
+            ),
             Ok(OpenOptions::Existing {
                 expected: ObjectKind::Directory,
                 access: AccessMode::Read,
@@ -2905,9 +2923,50 @@ mod tests {
             })
         );
         assert_eq!(
-            decide_agent_existing_open(AccessMode::Read, Follow::No, ObjectKind::Symlink),
+            decide_agent_existing_open(open_request(), ObjectKind::Symlink),
             Err(AgentOpenPolicyError::SymlinkLoop)
         );
+    }
+
+    #[test]
+    fn observed_open_capabilities_depend_on_kind_not_irrelevant_libc_flags() {
+        for read in [false, true] {
+            for write in [false, true] {
+                for mutate_directory in [false, true] {
+                    let request = AgentOpenRequest {
+                        read,
+                        write,
+                        mutate_directory,
+                        ..open_request()
+                    };
+                    assert_eq!(
+                        decide_agent_open(request),
+                        Ok(AgentOpenDecision::ObserveAttributes)
+                    );
+                    for kind in [ObjectKind::Directory, ObjectKind::File] {
+                        let mutable = if kind == ObjectKind::Directory {
+                            mutate_directory
+                        } else {
+                            write
+                        };
+                        let access = match (read, mutable) {
+                            (false, false) => AccessMode::None,
+                            (true, false) => AccessMode::Read,
+                            (false, true) => AccessMode::Write,
+                            (true, true) => AccessMode::ReadWrite,
+                        };
+                        assert_eq!(
+                            decide_agent_existing_open(request, kind),
+                            Ok(OpenOptions::Existing {
+                                expected: kind,
+                                access,
+                                follow: Follow::No,
+                            })
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -3041,6 +3100,7 @@ mod tests {
             P2OpenFlags::CREATE | P2OpenFlags::TRUNCATE,
             P2DescriptorFlags::READ
                 | P2DescriptorFlags::WRITE
+                | P2DescriptorFlags::MUTATE_DIRECTORY
                 | P2DescriptorFlags::DATA_INTEGRITY_SYNC,
         );
         let p3 = p3_agent_open_request(
@@ -3048,10 +3108,12 @@ mod tests {
             types::OpenFlags::CREATE | types::OpenFlags::TRUNCATE,
             types::DescriptorFlags::READ
                 | types::DescriptorFlags::WRITE
+                | types::DescriptorFlags::MUTATE_DIRECTORY
                 | types::DescriptorFlags::DATA_INTEGRITY_SYNC,
         );
 
         assert_eq!(p2, p3);
+        assert!(p2.mutate_directory);
         assert_eq!(decide_agent_open(p2), decide_agent_open(p3));
     }
 
@@ -3398,15 +3460,6 @@ mod tests {
             .unwrap()
             .await
             .unwrap();
-        route_replay_times(
-            &generation_handle,
-            AgentTarget::Open(&node),
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(300)),
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(400)),
-        )
-        .unwrap()
-        .await
-        .unwrap();
 
         let root_node = open(
             &generation_handle,
@@ -3424,6 +3477,246 @@ mod tests {
         let OpenNode::Directory(root_directory) = &root_node else {
             panic!("sandbox root open returned a file")
         };
+
+        use wasmtime_wasi::p2::bindings::filesystem::types::{
+            DescriptorFlags as P2Flags, ErrorCode as P2Error, OpenFlags as P2Open,
+            PathFlags as P2Path,
+        };
+        for (flags, access) in [
+            (types::DescriptorFlags::empty(), AccessMode::None),
+            (types::DescriptorFlags::READ, AccessMode::Read),
+            (types::DescriptorFlags::WRITE, AccessMode::None),
+            (types::DescriptorFlags::MUTATE_DIRECTORY, AccessMode::Write),
+            (
+                types::DescriptorFlags::READ | types::DescriptorFlags::MUTATE_DIRECTORY,
+                AccessMode::ReadWrite,
+            ),
+        ] {
+            let child = route_open(
+                &generation_handle,
+                PathTarget::at(root_directory, "."),
+                types::PathFlags::empty(),
+                types::OpenFlags::empty(),
+                flags,
+            )
+            .await
+            .unwrap()
+            .node;
+            assert_eq!(child.access(), access);
+            let OpenNode::Directory(directory) = &child else {
+                panic!("observed root is not a directory")
+            };
+            if !access.can_read() {
+                assert_eq!(
+                    agent_filesystem::list_directory(&generation_handle, directory).unwrap_err(),
+                    agent_filesystem::AccessError::NotPermitted
+                );
+            }
+            let p2 = crate::wasi_filesystem::p2::types::route_create_directory(
+                &generation_handle,
+                PathTarget::at(directory, "capability-p2"),
+            )
+            .await;
+            let p3 = route_create_directory(
+                &generation_handle,
+                PathTarget::at(directory, "capability-p3"),
+            )
+            .await;
+            if access.can_write() {
+                p2.unwrap();
+                p3.unwrap();
+                crate::wasi_filesystem::p2::types::route_unlink(
+                    &generation_handle,
+                    PathTarget::at(directory, "capability-p2"),
+                    ObjectKind::Directory,
+                )
+                .await
+                .unwrap();
+                route_unlink(
+                    &generation_handle,
+                    PathTarget::at(directory, "capability-p3"),
+                    ObjectKind::Directory,
+                )
+                .await
+                .unwrap();
+            } else {
+                assert_eq!(p2.unwrap_err().downcast().unwrap(), P2Error::ReadOnly);
+                assert!(matches!(
+                    p3.unwrap_err().downcast().unwrap(),
+                    types::ErrorCode::ReadOnly
+                ));
+                for (path, p2_open, p3_open, p2_flags, p3_flags) in [
+                    (
+                        ".",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::WRITE,
+                        types::DescriptorFlags::WRITE,
+                    ),
+                    (
+                        "file",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::READ | P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::READ | types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        "file",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::WRITE | P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::WRITE | types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        ".",
+                        P2Open::empty(),
+                        types::OpenFlags::empty(),
+                        P2Flags::MUTATE_DIRECTORY,
+                        types::DescriptorFlags::MUTATE_DIRECTORY,
+                    ),
+                    (
+                        "new",
+                        P2Open::CREATE,
+                        types::OpenFlags::CREATE,
+                        P2Flags::empty(),
+                        types::DescriptorFlags::empty(),
+                    ),
+                    (
+                        "file",
+                        P2Open::TRUNCATE,
+                        types::OpenFlags::TRUNCATE,
+                        P2Flags::READ,
+                        types::DescriptorFlags::READ,
+                    ),
+                ] {
+                    let p2 = crate::wasi_filesystem::p2::types::route_open(
+                        &generation_handle,
+                        PathTarget::at(directory, path),
+                        P2Path::empty(),
+                        p2_open,
+                        p2_flags,
+                    )
+                    .await
+                    .err()
+                    .unwrap();
+                    let p3 = route_open(
+                        &generation_handle,
+                        PathTarget::at(directory, path),
+                        types::PathFlags::empty(),
+                        p3_open,
+                        p3_flags,
+                    )
+                    .await
+                    .err()
+                    .unwrap();
+                    assert_eq!(p2.downcast().unwrap(), P2Error::ReadOnly);
+                    assert!(matches!(p3.downcast().unwrap(), types::ErrorCode::ReadOnly));
+                }
+            }
+            let descriptor = AgentDescriptor::new(child, "/".into());
+            let visible = agent_descriptor_flags(&descriptor).unwrap();
+            assert_eq!(
+                visible.contains(types::DescriptorFlags::READ),
+                access.can_read()
+            );
+            assert_eq!(
+                visible.contains(types::DescriptorFlags::MUTATE_DIRECTORY),
+                access.can_write()
+            );
+            assert!(!visible.contains(types::DescriptorFlags::WRITE));
+            drop(descriptor);
+        }
+        let combined = route_open(
+            &generation_handle,
+            PathTarget::at(root_directory, "file"),
+            types::PathFlags::empty(),
+            types::OpenFlags::empty(),
+            types::DescriptorFlags::WRITE | types::DescriptorFlags::MUTATE_DIRECTORY,
+        )
+        .await
+        .unwrap()
+        .node;
+        assert_eq!(combined.access(), AccessMode::Write);
+        let OpenNode::File(combined_file) = &combined else {
+            panic!("combined libc flags did not open a file")
+        };
+        assert_eq!(
+            crate::wasi_filesystem::p2::types::route_write(
+                &generation_handle,
+                combined_file,
+                0,
+                Bytes::from_static(b"p"),
+            )
+            .unwrap()
+            .await
+            .unwrap(),
+            1
+        );
+        let descriptor = AgentDescriptor::new(combined, "/file".into());
+        assert_eq!(
+            agent_descriptor_flags(&descriptor).unwrap(),
+            types::DescriptorFlags::WRITE
+        );
+        drop(descriptor);
+
+        let no_access = route_open(
+            &generation_handle,
+            PathTarget::at(root_directory, "file"),
+            types::PathFlags::empty(),
+            types::OpenFlags::empty(),
+            types::DescriptorFlags::empty(),
+        )
+        .await
+        .unwrap()
+        .node;
+        let OpenNode::File(no_access_file) = &no_access else {
+            panic!("observed file is not a file")
+        };
+        let denied_read = agent_filesystem::read_file(
+            &generation_handle,
+            no_access_file,
+            agent_filesystem::ReadRange {
+                offset: 0,
+                length: 1,
+            },
+        )
+        .unwrap_err();
+        let denied_write = crate::wasi_filesystem::p2::types::route_write(
+            &generation_handle,
+            no_access_file,
+            0,
+            Bytes::from_static(b"x"),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(denied_write.downcast().unwrap(), P2Error::NotPermitted);
+        assert_eq!(
+            p2_agent_error(AgentFilesystemError::Access(denied_read))
+                .downcast()
+                .unwrap(),
+            P2Error::NotPermitted
+        );
+        assert!(matches!(
+            p3_agent_error(AgentFilesystemError::Access(denied_read))
+                .downcast()
+                .unwrap(),
+            types::ErrorCode::NotPermitted
+        ));
+        let descriptor = AgentDescriptor::new(no_access, "/file".into());
+        assert_eq!(
+            agent_descriptor_flags(&descriptor).unwrap(),
+            types::DescriptorFlags::empty()
+        );
+        drop(descriptor);
+        route_replay_times(
+            &generation_handle,
+            AgentTarget::Open(&node),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(300)),
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(400)),
+        )
+        .unwrap()
+        .await
+        .unwrap();
 
         crate::wasi_filesystem::p2::types::route_create_directory(
             &generation_handle,

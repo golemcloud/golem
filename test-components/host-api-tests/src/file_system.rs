@@ -524,6 +524,20 @@ impl FileSystem for FileSystemImpl {
         let path = path.trim_start_matches('/');
         let other = other.trim_start_matches('/');
 
+        if operation == "unlink-file-at-mutable" {
+            let directory = root
+                .open_at(
+                    PathFlags::empty(),
+                    path,
+                    OpenFlags::DIRECTORY,
+                    DescriptorFlags::READ | DescriptorFlags::MUTATE_DIRECTORY,
+                )
+                .map_err(|error| format!("open mutable directory: {error:?}"))?;
+            return directory
+                .unlink_file_at(other)
+                .map_err(|error| format!("{error:?}"));
+        }
+
         if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
             "open-read" => Some((OpenFlags::empty(), DescriptorFlags::READ)),
             "open-list" => Some((OpenFlags::DIRECTORY, DescriptorFlags::READ)),
@@ -604,6 +618,22 @@ impl FileSystem for FileSystemImpl {
             .ok_or("no P3 preopened directory")?;
         let path = path.trim_start_matches('/').to_string();
         let other = other.trim_start_matches('/').to_string();
+
+        if operation == "unlink-file-at-mutable" {
+            let directory = root
+                .open_at(
+                    p3_types::PathFlags::empty(),
+                    path,
+                    p3_types::OpenFlags::DIRECTORY,
+                    p3_types::DescriptorFlags::READ | p3_types::DescriptorFlags::MUTATE_DIRECTORY,
+                )
+                .await
+                .map_err(|error| format!("open mutable directory: {error:?}"))?;
+            return directory
+                .unlink_file_at(other)
+                .await
+                .map_err(|error| format!("{error:?}"));
+        }
 
         if let Some((open_flags, descriptor_flags)) = match operation.as_str() {
             "open-read" => Some((
