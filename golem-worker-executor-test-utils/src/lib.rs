@@ -1873,6 +1873,23 @@ impl TestWorkerExecutor {
         Ok(worker.owner_execution().test_replay_is_live().await?)
     }
 
+    /// Waits until a `Start` claim of the owner's current replay waits for an active entity body
+    /// that owns the cursor head.
+    pub async fn wait_for_replay_claim_blocked_on_active_body(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_wait_for_replay_claim_blocked_on_active_body()
+            .await?)
+    }
+
     /// Whether the owner has clamped replay and is waiting to settle completed reconstructions.
     pub async fn owner_replay_is_settling(
         &self,
@@ -5956,10 +5973,8 @@ pub struct AdditionalTestDeps {
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
-    entity_reconstruction_claim_gates:
-        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
-    completed_supervisor_gates:
-        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    entity_reconstruction_claim_gates: EntityReconstructionClaimGates,
+    completed_supervisor_gates: EntityReconstructionClaimGates,
     /// One-shot gates pausing an agent's next replayed accessor-call admission
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
@@ -6184,32 +6199,14 @@ impl AdditionalTestDeps {
         &self,
         agent_id: AgentId,
     ) -> EntityReconstructionClaimGateHandle {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(EntityReconstructionClaimGate {
-            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
-            release: tokio::sync::Semaphore::new(0),
-        });
-        self.completed_supervisor_gates
-            .lock()
-            .unwrap()
-            .insert(agent_id, gate.clone());
-        EntityReconstructionClaimGateHandle { entered_rx, gate }
+        EntityReconstructionClaimGate::install(&self.completed_supervisor_gates, agent_id)
     }
 
     fn gate_next_entity_reconstruction_claim(
         &self,
         agent_id: AgentId,
     ) -> EntityReconstructionClaimGateHandle {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(EntityReconstructionClaimGate {
-            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
-            release: tokio::sync::Semaphore::new(0),
-        });
-        self.entity_reconstruction_claim_gates
-            .lock()
-            .unwrap()
-            .insert(agent_id, gate.clone());
-        EntityReconstructionClaimGateHandle { entered_rx, gate }
+        EntityReconstructionClaimGate::install(&self.entity_reconstruction_claim_gates, agent_id)
     }
 
     fn entity_reconstruction_claim_hook(
@@ -6818,6 +6815,45 @@ struct EntityReconstructionClaimGate {
     release: tokio::sync::Semaphore,
 }
 
+/// One-shot entity reconstruction gates, keyed by the agent whose next reconstruction they hold.
+type EntityReconstructionClaimGates =
+    Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>;
+
+impl EntityReconstructionClaimGate {
+    fn install(
+        gates: &EntityReconstructionClaimGates,
+        agent_id: AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(Self {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        gates.lock().unwrap().insert(agent_id, gate.clone());
+        EntityReconstructionClaimGateHandle { entered_rx, gate }
+    }
+
+    /// Takes the agent's gate, if one is installed, reports `start_index` to its handle and waits
+    /// until the handle releases it.
+    async fn enter_and_wait(
+        gates: &EntityReconstructionClaimGates,
+        agent_id: &AgentId,
+        start_index: OplogIndex,
+    ) {
+        let gate = gates.lock().unwrap().remove(agent_id);
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(start_index);
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("entity reconstruction gate was closed")
+                .forget();
+        }
+    }
+}
+
 pub struct AgentInvocationSuccessGateHandle {
     entered_rx: tokio::sync::oneshot::Receiver<()>,
     gate: Arc<AgentInvocationSuccessGate>,
@@ -7070,8 +7106,8 @@ mod replay_admission_gate_tests {
 
 struct TestEntityReconstructionClaimHook {
     agent_id: AgentId,
-    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
-    supervisor_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    gates: EntityReconstructionClaimGates,
+    supervisor_gates: EntityReconstructionClaimGates,
 }
 
 #[async_trait]
@@ -7079,31 +7115,17 @@ impl golem_worker_executor::workerctx::EntityReconstructionClaimHook
     for TestEntityReconstructionClaimHook
 {
     async fn after_claim(&self, start_index: OplogIndex) {
-        let gate = self.gates.lock().unwrap().remove(&self.agent_id);
-        if let Some(gate) = gate {
-            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
-                let _ = entered_tx.send(start_index);
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("entity reconstruction claim gate was closed")
-                .forget();
-        }
+        EntityReconstructionClaimGate::enter_and_wait(&self.gates, &self.agent_id, start_index)
+            .await;
     }
 
     async fn before_completed_supervisor(&self, start_index: OplogIndex) {
-        let gate = self.supervisor_gates.lock().unwrap().remove(&self.agent_id);
-        if let Some(gate) = gate {
-            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
-                let _ = entered_tx.send(start_index);
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("completed reconstruction supervisor gate was closed")
-                .forget();
-        }
+        EntityReconstructionClaimGate::enter_and_wait(
+            &self.supervisor_gates,
+            &self.agent_id,
+            start_index,
+        )
+        .await;
     }
 }
 

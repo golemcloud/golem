@@ -333,6 +333,18 @@ impl OwnerExecution {
 
     #[cfg(feature = "test-utils")]
     #[doc(hidden)]
+    pub async fn test_wait_for_replay_claim_blocked_on_active_body(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_wait_for_claim_blocked_on_active_body()
+            .await;
+        Ok(())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
     pub async fn test_replay_is_settling(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.test_is_settling())
     }

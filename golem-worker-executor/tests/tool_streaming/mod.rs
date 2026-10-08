@@ -8626,6 +8626,23 @@ enum CompletedReconstructionExclusiveCase {
     CrashReplaySupervisorWindow,
 }
 
+/// Waits until the replayed clock claim parks on the completed reconstruction whose supervisor the
+/// test holds: the clock `Start` was never recorded, and the body's entries are still at the
+/// cursor head.
+async fn wait_for_clock_claim_blocked_on_held_reconstruction(
+    executor: &TestWorkerExecutor,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        executor.wait_for_replay_claim_blocked_on_active_body(owned_agent_id),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!("the replayed clock claim did not wait for the held reconstruction")
+    })?
+}
+
 async fn run_completed_reconstruction_exclusive_p2_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -8754,7 +8771,7 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                         anyhow::anyhow!("crash-replay reconstruction supervisor was not reached")
                     })?;
             assert_eq!(start, reconstruction_start);
-            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id).await?;
             supervisor.release();
             return Ok::<_, anyhow::Error>(());
         }
@@ -8872,7 +8889,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     anyhow::anyhow!("source-revision reconstruction supervisor was not reached")
                 })?;
                 assert_eq!(source_start, reconstruction_start);
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                wait_for_clock_claim_blocked_on_held_reconstruction(&executor, &owned_agent_id)
+                    .await?;
                 source_claim.release();
             }
             CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => unreachable!(),
