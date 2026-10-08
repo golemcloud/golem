@@ -24,11 +24,21 @@ golem-cli --yes exec copy
 The `copy` commands put only these five WASMs in `test-components/`. From the root:
 
 ```sh
+cargo build --profile benchmarks --bins \
+  -p golem-registry-service -p golem-shard-manager -p golem-worker-service \
+  -p golem-worker-executor -p golem-component-compilation-service
 cargo run --profile benchmarks -p integration-tests --bin benchmarks -- \
-  suite --check-artifacts integration-tests/benchmark_suites/conversion.yaml spawned
+  suite --check-artifacts integration-tests/benchmark_suites/conversion.yaml \
+  spawned --build-target target/benchmarks
 cargo run --profile benchmarks -p integration-tests --bin benchmarks -- \
-  --retain-details suite integration-tests/benchmark_suites/conversion.yaml spawned
+  --retain-details suite integration-tests/benchmark_suites/conversion.yaml \
+  spawned --build-target target/benchmarks
 ```
+
+Use the resolved Cargo target directory instead of `target/benchmarks` when it is
+redirected. In an orb, choose unoccupied service ports: port 8081 can belong to
+the terminal service. The spawned mode exposes explicit port overrides; keep
+them identical between baseline and current runs and leave existing services alone.
 
 Use the same harness, fixture source/locks, build profile, toolchain, instrumentation
 and hardware for baseline/current. Save service/fixture hashes and source revisions
