@@ -1182,8 +1182,20 @@ the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 ## Concurrency and guest completion delivery
 
-p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized
-(`concurrent/mod.rs`). Concurrent completions may finish in any host order, but the guest observes
+`Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
+the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
+exclusive because concurrent bindings cannot run during synchronous core initialization.
+Fresh clock/random value reads in the primary Store skip live wallet synchronization: their
+results require no permissions, and waiting for an accessor holding `card_event_boundary_lock`
+would retain the Store that accessor needs. The explicit allowlist is in `call_coordinator.rs`;
+`ReadLocal` alone does not imply permission independence. Snapshotting, retained recorded Starts,
+entity Stores and replay still use the ordinary boundary. An automatic-update latch prevents
+the exemption until update success is committed, including after the pending description is taken.
+Clock-only execution does not guarantee pending card-transfer progress. Permission-sensitive calls
+still synchronize. Replay-transition/cleanup lock contention is not eliminated by this exemption.
+WebSocket connect/send/close use accessor bindings so their asynchronous work releases the Store.
+WebSocket drop only removes local state and does not await boundary work.
+Concurrent completions may finish in any host order, but the guest observes
 them in exactly one order per run, and that order is recorded by the `CompletionDelivered` markers.
 `ReplayDeliveryBarrier` transfers the cursor gate so replay releases each completion at its
 recorded boundary. `supersede_prior_completion_delivery` hard-errors if an observer is still armed:
@@ -1206,8 +1218,8 @@ Cursor operations and recorded-marker waits stay active; durable `Start`/`End` w
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
 per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
-handle goes through `ensure_websocket_connection_live` (direct) or
-`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+handle goes through `ensure_websocket_connection_live_access` in
+`durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
 still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
