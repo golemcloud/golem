@@ -6528,6 +6528,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
             let expected = format!("hello-{readers}-{run}");
             let agent_id = agent_id!("ConcurrentStreamProbe", name, readers as f64, port as f64);
             let worker_id = executor.start_agent(&component.id, agent_id).await?;
+            let metadata = executor.get_worker_metadata(&worker_id).await?;
             let input = golem_schema::proto::golem::schema::SchemaValue {
                 value: Some(schema_value::Value::RecordValue(RecordValue {
                     fields: vec![golem_schema::proto::golem::schema::SchemaValue {
@@ -6548,6 +6549,7 @@ async fn effect_concurrent_stream_with_pending_websocket_readers(
                     component_owner_account_id: Some(component.account_id.into()),
                     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                     attempt_id: Some(uuid::Uuid::new_v4().into()),
+                    expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
                     ..Default::default()
                 })),
             };
