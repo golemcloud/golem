@@ -18,6 +18,7 @@ use futures::future::ready;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, AgentTypeName};
 use golem_common::model::card::EffectiveSurface;
+use golem_common::model::card::StoredCard;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
@@ -110,6 +111,7 @@ pub struct AgentConfig {
     /// The replay inputs of the baseline of the start.
     pub(crate) replay: ReplayBaseline,
     pub agent_effective_surface: EffectiveSurface,
+    pub authority_wallet: Option<Vec<StoredCard>>,
     pub owner_component_metadata: Option<Arc<Component>>,
 }
 
@@ -123,6 +125,7 @@ impl AgentConfig {
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         replay: ReplayBaseline,
         agent_effective_surface: EffectiveSurface,
+        authority_wallet: Option<Vec<StoredCard>>,
         owner_component_metadata: Option<Arc<Component>>,
     ) -> AgentConfig {
         AgentConfig {
@@ -134,6 +137,7 @@ impl AgentConfig {
             initial_agent_config,
             replay,
             agent_effective_surface,
+            authority_wallet,
             owner_component_metadata,
         }
     }

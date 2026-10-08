@@ -156,7 +156,7 @@ Output stream state is durable. Golem records each channel under a distinct iden
 
 ## Add middleware
 
-Use **monomorphic middleware** when the wrapper knows the tool shape and may adapt it. Use **universal middleware** for shape-preserving policy across every tool. Middleware receives only an invocation-scoped handle to the next layer.
+Use **monomorphic middleware** when the wrapper knows the tool shape and may adapt it. Use **universal middleware** for schema-agnostic, shape-preserving policy. Universal middleware can wrap selected tools or every tool in an environment; monomorphic middleware must be installed on tool bindings, not the environment-wide list. Middleware receives only an invocation-scoped handle to the next layer.
 
 ```typescript
 import { ToolInvokeError } from '@golemcloud/golem-ts-sdk';
@@ -205,7 +205,7 @@ agents:
             parameters: { channel: security }
 ```
 
-Bindings expose a tool; permission cards authorize calls. Component bindings provide defaults that agent entries can override, replace, or remove. Readable configuration and secret scopes intersect across retained layers and between environment and owner bindings; revealable secrets are also limited to readable secrets. Filesystem access uses the last explicit cascade value, with denial taking precedence when environment and owner bindings are combined. `toolsMergeMode` can `upsert`, `replace`, or `remove` inherited bindings. Middleware order is environment-universal middleware, then the merged per-tool list, then the leaf tool; `middlewareMergeMode` is `prepend` (the default), `append`, or `replace`.
+Bindings expose a tool; permission cards authorize calls. Component bindings provide defaults that agent entries can override, replace, or remove. Readable configuration and secret scopes intersect across retained layers and between environment and owner bindings; revealable secrets are also limited to readable secrets. Filesystem access uses the last explicit cascade value, with denial taking precedence when environment and owner bindings are combined. `toolsMergeMode` can `upsert`, `replace`, or `remove` inherited bindings. Middleware order is environment-wide middleware, then the merged per-tool list (universal or monomorphic), then the leaf tool; `middlewareMergeMode` is `prepend` (the default), `append`, or `replace` and changes only the per-tool list.
 
 The example assumes that the `audit` middleware is declared separately under `tools.middleware`.
 

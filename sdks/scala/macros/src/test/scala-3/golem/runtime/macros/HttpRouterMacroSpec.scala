@@ -15,7 +15,8 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     "/web",
     staticBindings = Array(("/assets/*", "/one/$1"), ("/assets/logo", "/logo"), ("/assets/*", "/two/$1")),
     auth = true,
-    cors = Array("https://example.com")
+    cors = Array("https://example.com"),
+    fileResponseHeaders = Array(("Content-Security-Policy", "default-src 'self'"), ("Referrer-Policy", "same-origin"))
   )
   trait Website {
     @httpHandler def arbitraryName(request: HttpRequest, principal: golem.Principal): Future[HttpResponse]
@@ -32,7 +33,8 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
 
   @agentDefinition(
     mount = "/doc%75ments/{owner}",
-    exposeFiles = Array(("/latest", "/public/latest.txt"), ("/*", "/public/$1"))
+    exposeFiles = Array(("/latest", "/public/latest.txt"), ("/*", "/public/$1")),
+    fileResponseHeaders = Array(("Content-Security-Policy", "default-src 'none'"), ("Referrer-Policy", "no-referrer"))
   )
   trait Documents {
     class Id(val owner: String)
@@ -57,6 +59,10 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
           FileMapping.Subtree(List("assets"), "/one"),
           FileMapping.Exact(List("assets", "logo"), "/logo"),
           FileMapping.Subtree(List("assets"), "/two")
+        ),
+        mount.fileResponseHeaders == List(
+          FileResponseHeader("Content-Security-Policy", "default-src 'self'"),
+          FileResponseHeader("Referrer-Policy", "same-origin")
         ),
         mount.openapiProviderMethod.contains("description"),
         metadata.methods.find(_.name == "arbitraryName").get.httpEndpoints.head.httpMethod == HttpMethod.Any,
@@ -84,6 +90,10 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
         metadata.httpMount.get.filesystemBindings == List(
           FileMapping.Exact(List("latest"), "/public/latest.txt"),
           FileMapping.Subtree(Nil, "/public")
+        ),
+        metadata.httpMount.get.fileResponseHeaders == List(
+          FileResponseHeader("Content-Security-Policy", "default-src 'none'"),
+          FileResponseHeader("Referrer-Policy", "no-referrer")
         )
       )
     },

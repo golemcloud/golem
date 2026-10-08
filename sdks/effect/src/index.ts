@@ -224,6 +224,9 @@ export * as Quota from "./Quota.js"
  */
 export * as Retry from "./Retry.js"
 
+/** Opaque secret revelation through an explicit payload schema. @since 1.6.0 @category modules */
+export * as Secrets from "./Secrets.js"
+
 /**
  * Effect-idiomatic multi-step transactions on top of the Golem oplog
  * (`withCompensation`, `withFallibleCompensation`, `operation`,

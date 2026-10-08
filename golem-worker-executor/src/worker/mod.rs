@@ -2811,6 +2811,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         executable: WorkerCtxExecutable,
         activation: Arc<golem_common::model::entity::EntityActivation>,
         owner_component_metadata: Arc<golem_service_base::model::component::Component>,
+        authority_wallet: Vec<StoredCard>,
     ) -> Result<Ctx, WorkerExecutorError> {
         if !matches!(runtime, OwnerRuntime::Entity(_)) {
             return Err(WorkerExecutorError::runtime(
@@ -2986,6 +2987,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 initial_agent_config,
                 filesystem_snapshots::ReplayBaseline::initial_files(),
                 agent_effective_surface,
+                Some(authority_wallet),
                 Some(owner_component_metadata),
             ),
             self.execution_status.clone(),
@@ -12366,6 +12368,7 @@ impl RunningWorker {
                 worker_metadata.config,
                 replay,
                 agent_effective_surface,
+                None,
                 None,
             ),
             parent.execution_status.clone(),

@@ -592,10 +592,19 @@ dependencies = [
 ]
 
 [tasks.unit-tests]
-dependencies = ["wit"]
+dependencies = ["wit", "test-component-middleware-unit-tests"]
 description = "Runs unit tests only"
 script = '''
 cargo-test-r run --workspace --exclude golem-schema-derive --lib -- --nocapture --report-time $JUNIT_OPTS
+'''
+
+[tasks.test-component-middleware-unit-tests]
+description = "Runs unit and contract tests for test-only middleware components"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --manifest-path test-components/audit-middleware/Cargo.toml --lib --tests
+exec --fail-on-error cargo test --manifest-path test-components/output-redaction/Cargo.toml --lib
+exec --fail-on-error cargo test --manifest-path test-components/rate-limit-middleware/Cargo.toml --lib
 '''
 
 [tasks.dev-tools-tests]
@@ -677,6 +686,15 @@ env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" =
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+'''
+
+[tasks.worker-executor-tests-tool-streaming]
+dependencies = ["wit", "fetch-builtin-artifacts"]
+description = "Runs tool streaming worker executor tests with bounded concurrency"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests]
@@ -1802,7 +1820,7 @@ description = "Builds all built-in plugins"
 ## BUILT-IN TOOLS
 [tasks.build-filesystem-tools]
 dependencies = ["wit"]
-description = "Builds the built-in filesystem tool component"
+description = "Builds the built-in filesystem tools and path-policy middleware"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build -p golem --bin golem
@@ -2036,14 +2054,14 @@ elif equals ${component} filesystem-tools
     build_task = set build-filesystem-tools
     wasm = set builtin-tools/filesystem-tools.wasm
     artifact_id = set filesystem_tools
-    exports_json = set "{\"tools\":[\"read-file@0.4.0\",\"write-file@0.4.0\",\"edit-file@0.4.0\",\"ls@0.1.0\",\"grep@0.1.0\"],\"middlewares\":[\"path-policy@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"read-file@0.4.1\",\"write-file@0.4.1\",\"edit-file@0.4.1\",\"ls@0.1.1\",\"grep@0.1.1\"],\"middlewares\":[\"path-policy@0.1.1\"]}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.0\",\"npm@10.9.9\",\"npx@10.9.9\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.1\",\"npm@10.9.9+golem.1\",\"npx@10.9.9+golem.1\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2051,7 +2069,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.1\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2059,7 +2077,7 @@ elif equals ${component} bash
     build_task = set build-bash-tool
     wasm = set builtin-tools/bash.wasm
     artifact_id = set bash
-    exports_json = set "{\"tools\":[\"bash@0.2.0\"]}"
+    exports_json = set "{\"tools\":[\"bash@0.2.1\"]}"
     licenses = set builtin-tools/bash/LICENSE
     source_notice = set builtin-tools/bash/NOTICE
     sbom = set ""
@@ -2067,7 +2085,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.7\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.8\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json
@@ -2075,7 +2093,7 @@ elif equals ${component} web-fetch
     build_task = set build-web-fetch
     wasm = set builtin-tools/web-fetch.wasm
     artifact_id = set web_fetch
-    exports_json = set "{\"tools\":[\"web-fetch@0.1.0\"]}"
+    exports_json = set "{\"tools\":[\"web-fetch@0.1.1\"]}"
     licenses = set builtin-tools/web-fetch/licenses/THIRD_PARTY_LICENSES.html
     source_notice = set LICENSE
     sbom = set ""

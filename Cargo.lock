@@ -2337,6 +2337,7 @@ dependencies = [
  "mio",
  "parking_lot",
  "rustix 1.1.4",
+ "serde",
  "signal-hook",
  "signal-hook-mio",
  "winapi",
@@ -3852,6 +3853,7 @@ dependencies = [
  "golem-client",
  "golem-common",
  "golem-mcp-import",
+ "golem-native-tool",
  "golem-schema",
  "heck",
  "http 1.5.0",
@@ -3875,10 +3877,12 @@ dependencies = [
  "proptest",
  "prost",
  "quote",
+ "reedline",
  "regex",
  "reqwest 0.13.4",
  "reqwest-middleware",
  "reqwest-retry",
+ "rustix 1.1.4",
  "rustls",
  "semver",
  "serde",
@@ -3921,6 +3925,7 @@ dependencies = [
  "walkdir",
  "wasm-metadata 0.251.0",
  "wasm-rquickjs",
+ "wasmtime",
  "wasmtime-wasi",
  "wat",
  "wax",
@@ -4076,6 +4081,20 @@ dependencies = [
  "tracing",
  "uuid",
  "wasmtime",
+]
+
+[[package]]
+name = "golem-human-approval"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "test-r",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -4515,6 +4534,7 @@ dependencies = [
  "goldenfile",
  "golem-api-grpc",
  "golem-common",
+ "golem-human-approval",
  "golem-mcp-import",
  "golem-native-tool",
  "golem-schema",
@@ -8339,6 +8359,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "reedline"
+version = "0.51.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d010acf9ed312cbc737e5f9064c375a7093975b0c25568337f0c24148f46540d"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "fd-lock",
+ "itertools 0.15.0",
+ "nu-ansi-term",
+ "serde",
+ "strip-ansi-escapes",
+ "strum 0.28.0",
+ "thiserror 2.0.20",
+ "unicase",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
+]
+
+[[package]]
 name = "ref-cast"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11627,9 +11667,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.4.8"
+version = "0.4.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948e5eb3a8305b319094019b30f8d303cedb00ec1a6b1e96e7eab6ca8d4ed2fd"
+checksum = "1a0f14051c159b3c2aa1def708d1ce36db0a4b2237cd45dc3e4f4c5cc2c2e70b"
 dependencies = [
  "anyhow",
  "camino",

@@ -254,7 +254,11 @@ object DurableStreamsSpec extends ZIOSpecDefault {
             ): js.Function2[js.Dynamic, js.Dynamic, js.Promise[js.Dynamic]]
           )
         )
-        val secret = new Secret[String](List("token"), () => throw new AssertionError("must not reveal"))
+        val secret = new Secret[String](
+          List("token"),
+          () => throw new AssertionError("must not reveal"),
+          () => throw new AssertionError("must not load through Secret.handle")
+        )
         val stream = DurableStreams.json[Int](url, auth = Some(secret))
         for { first <- stream.pull(); second <- stream.pull(); _ <- stream.close() } yield assertTrue(
           first.contains(1),
@@ -281,7 +285,11 @@ object DurableStreamsSpec extends ZIOSpecDefault {
           }): js.Function1[js.Any, Unit]
         )
       )
-      val secret    = new Secret[String](List("token"), () => throw new AssertionError("must not reveal"))
+      val secret = new Secret[String](
+        List("token"),
+        () => throw new AssertionError("must not reveal"),
+        () => throw new AssertionError("must not load through Secret.handle")
+      )
       val attempted =
         scala.util.Try(DurableStreams.byteWriter(url, producer = DurableStreamProducer("p"), auth = Some(secret)))
       assertTrue(

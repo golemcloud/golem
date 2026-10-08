@@ -11,7 +11,7 @@ import { Principal, type PrincipalInputSchema } from "../Principal.js"
 import { SelfAgentId } from "../SelfAgentId.js"
 import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
 import {
-  decodeFromWire,
+  makeWireDecoder,
   toWitCodec,
   type UnsupportedSchemaError,
   type WitCodec,
@@ -364,7 +364,7 @@ export const compileParamBindings = <Input extends MethodParams>(
         Effect.flatMap(encodeValue(value), (sv) =>
           Effect.promise((signal) => schemaValueToWitAsync(sv, signal)),
         ),
-      decode: (value) => decodeFromWire(codec, value),
+      decode: makeWireDecoder(codec),
     }
   })
 
@@ -471,6 +471,7 @@ export const compileMethodSpec = <
       ...inputCodec.inputSchema,
       val: inputCodec.inputSchema.val.map((f, i) => ({ ...f, schema: inputRoots[i]! })),
     }
+    const encodeOutput = outputCodec && Schema.encodeEffect(outputCodec.codec)
     return {
       name,
       spec,
@@ -487,10 +488,10 @@ export const compileMethodSpec = <
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
           : undefined,
       encodeOutput:
-        outputCodec === undefined
+        encodeOutput === undefined
           ? undefined
           : (value) =>
-              Effect.flatMap(Schema.encodeEffect(outputCodec.codec)(value), (encoded) =>
+              Effect.flatMap(encodeOutput(value), (encoded) =>
                 Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
               ),
       inputSchema,
@@ -585,9 +586,9 @@ export const invokeMethod = <
   handler: (input: MethodInput<I>) => Effect.Effect<MethodSuccessType<S>, E["Type"], R>,
   input: CoreTypes.SchemaValueTree,
 ) =>
-  invokeSchemaValue(
+  invokeWireValue(
     codec.inputCodec,
-    codec.outputCodec,
+    codec.encodeOutput,
     { errorWrapped: codec.errorWrapped, successVoid: codec.successVoid },
     handler,
     input,

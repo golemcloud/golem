@@ -94,6 +94,10 @@ pub(all) struct TaskInfo {
 }
 ```
 
+For a unit-case enum that should appear directly in every generated schema rather than as a named
+schema definition, use `#derive.golem_schema(inline=true)`. Add `#derive.case(name="...")` to a
+case when its authored schema value differs from the MoonBit constructor name.
+
 ### 3. Stream typed agent data
 
 Use `@schema.AgentStream[T]` in agent method parameters and results. Create a demand-driven

@@ -4,7 +4,7 @@ use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
 use crate::service::worker::{WorkerResult, WorkerServiceError};
 use bytes::Bytes;
 use futures::{FutureExt, StreamExt};
-use golem_common::model::agent::FileMapping;
+use golem_common::model::agent::{FileMapping, FileResponseHeader};
 use golem_common::model::filesystem::{
     FileByteSelection, FileReadError, FileReadExtent, FileReadHead, FileReadMetadata,
 };
@@ -37,6 +37,16 @@ fn route(mappings: &[(&str, &str)]) -> CompiledRoute {
         parameter_type: PathSegmentType::U64,
     }];
     filesystem.filesystem_bindings = FileMapping::compile_list(mappings.iter().copied()).unwrap();
+    filesystem.file_response_headers = vec![
+        FileResponseHeader {
+            name: "content-security-policy".into(),
+            value: "default-src 'none'".into(),
+        },
+        FileResponseHeader {
+            name: "referrer-policy".into(),
+            value: "no-referrer".into(),
+        },
+    ];
     route
 }
 
@@ -464,6 +474,17 @@ async fn live_file_representation_corpus_through_request_handler() {
             ))
             .await;
         assert_eq!(u64::from(response.status().as_u16()), status, "{id}");
+        let has_configured_headers = matches!(status, 200 | 206 | 304);
+        assert_eq!(
+            response.headers().contains_key("content-security-policy"),
+            has_configured_headers,
+            "{id}"
+        );
+        assert_eq!(
+            response.headers().contains_key("referrer-policy"),
+            has_configured_headers,
+            "{id}"
+        );
         assert_eq!(
             response.headers()["access-control-allow-origin"],
             "https://client.example",

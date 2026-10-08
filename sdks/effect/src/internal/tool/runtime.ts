@@ -14,7 +14,9 @@ const bytes = (source: AsyncIterator<Host.ByteStreamItem> | undefined) =>
       ).pipe(
         Stream.mapEffect((item) =>
           item.tag === "ok"
-            ? Effect.succeed(item.val)
+            ? item.val.length > 0
+              ? Effect.succeed(item.val)
+              : Effect.fail(asError({ tag: "invalid-input", val: "stdin yielded an empty chunk" }))
             : Effect.fail(asError({ tag: "invalid-input", val: `stdin ${item.val.tag}` })),
         ),
       )
@@ -40,9 +42,16 @@ export async function invokeRegistered(
                   try: () => writer.write(chunk),
                   catch: (e) => asError({ tag: "invalid-result", val: String(e) }),
                 }),
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.promise(() => target.fail(cause)).pipe(
+                Effect.ignoreCause,
+                Effect.andThen(Effect.failCause(cause)),
+              ),
+            ),
           )
       : undefined
-    return {
+    const target = {
       finish: () => {
         if (!writer || completed) return Promise.resolve()
         completed = true
@@ -55,6 +64,7 @@ export async function invokeRegistered(
       },
       consume,
     }
+    return target
   }
   const stdoutOutput = output("stdout", stdout)
   const stderrOutput = output("stderr", stderr)
@@ -66,11 +76,8 @@ export async function invokeRegistered(
         return Promise.reject(cause)
       }
     }
-    const settled = await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
-    const failed = settled.find(
-      (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
-    )
-    if (failed) throw failed.reason
+    const results = await Promise.allSettled([start(stdoutOutput), start(stderrOutput)])
+    return results.find((result): result is PromiseRejectedResult => result.status === "rejected")
   }
   try {
     const registered = registeredTools().find((x) => x.definition.name === toolName)
@@ -177,15 +184,12 @@ export async function invokeRegistered(
         never
       >,
     )
-    await settleOutputs("finish")
+    const finishFailure = await settleOutputs("finish")
+    if (finishFailure) throw finishFailure.reason
     return result
   } catch (error) {
-    try {
-      if (error instanceof ToolInvokeError || isToolError(error)) await settleOutputs("finish")
-      else await settleOutputs("fail", error)
-    } catch {
-      // The original invocation failure wins terminal arbitration.
-    }
+    if (error instanceof ToolInvokeError || isToolError(error)) await settleOutputs("finish")
+    else await settleOutputs("fail", error)
     if (error instanceof ToolInvokeError) throw error.cause
     throw error
   } finally {

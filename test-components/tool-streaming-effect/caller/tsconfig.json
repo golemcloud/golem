@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "paths": {
+      "matrix-core-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/matrix-core-tool-guest-client.ts"
+      ],
+      "matrix-resource-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/matrix-resource-tool-guest-client/matrix-resource-tool-guest-client.ts"
+      ],
+      "matrix-permission-issuer-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/matrix-permission-issuer-tool-guest-client/matrix-permission-issuer-tool-guest-client.ts"
+      ],
+      "chunk-m-effect-streaming-tool-guest-client": [
+        "../golem-temp/bridge-sdk/effect/internal/chunk-m-effect-streaming-tool-guest-client/chunk-m-effect-streaming-tool-guest-client.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/matrix-core-tool-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/matrix-resource-tool-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/matrix-permission-issuer-tool-guest-client/*.ts",
+    "../golem-temp/bridge-sdk/effect/internal/chunk-m-effect-streaming-tool-guest-client/*.ts"
+  ]
+}

@@ -39,7 +39,7 @@ pub fn expand(attrs: TokenStream, item: TokenStream) -> syn::Result<TokenStream>
         let Expr::Assign(assign) = option else {
             return Err(syn::Error::new_spanned(
                 option,
-                "expected name, mount, auth, cors, or static_files = value",
+                "expected name, mount, auth, cors, static_files, or file_response_headers = value",
             ));
         };
         let Expr::Path(path) = &*assign.left else {
@@ -55,11 +55,11 @@ pub fn expand(attrs: TokenStream, item: TokenStream) -> syn::Result<TokenStream>
             .unwrap_or_default();
         if !matches!(
             name.as_str(),
-            "name" | "mount" | "auth" | "cors" | "static_files"
+            "name" | "mount" | "auth" | "cors" | "static_files" | "file_response_headers"
         ) {
             return Err(syn::Error::new_spanned(
                 option,
-                "unknown router option; use name, mount, auth, cors, or static_files (routers are always ephemeral with snapshots disabled)",
+                "unknown router option; use name, mount, auth, cors, static_files, or file_response_headers (routers are always ephemeral with snapshots disabled)",
             ));
         }
         if !keys.insert(name) {

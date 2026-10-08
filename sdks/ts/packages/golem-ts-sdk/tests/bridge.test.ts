@@ -6,7 +6,10 @@ import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0'
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
 import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge } from '../src';
+import { bridge, s, type PermissionCard } from '../src';
+import { compileSchema } from '../src/schema/adapter';
+import { peekGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
@@ -18,11 +21,15 @@ const streamFailures = [
 ] satisfies ByteStreamFailure[];
 
 describe('public bridge runtime', () => {
-  it('validates both the graph and value of typed schema values', () => {
+  it('validates equivalent cross-graph schemas and their values', () => {
     const stringGraph = graph(bridge.t.string());
     const otherStringGraph = graph(
       bridge.schemaType({ tag: 'string' }, { ...bridge.emptyMetadata(), doc: 'different schema' }),
     );
+    const referencedStringGraph = {
+      defs: new Map([['example.String', { name: 'DisplayString', body: bridge.t.string() }]]),
+      root: bridge.schemaType({ tag: 'ref', id: 'example.String' }),
+    };
 
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
@@ -35,7 +42,13 @@ describe('public bridge runtime', () => {
         graph: otherStringGraph,
         value: bridge.v.string('structurally compatible with the expected value'),
       }),
-    ).toBe(false);
+    ).toBe(true);
+    expect(
+      bridge.typedSchemaValueConforms(stringGraph, {
+        graph: referencedStringGraph,
+        value: bridge.v.string('referenced schema'),
+      }),
+    ).toBe(true);
     expect(
       bridge.typedSchemaValueConforms(stringGraph, {
         graph: stringGraph,
@@ -545,6 +558,23 @@ describe('public bridge runtime', () => {
       tag: 'tool',
       error: 'secret',
     });
+  });
+
+  it('forwards an SDK-owned permission card through the generated-client bridge exactly once', () => {
+    const raw = { id: 'imported-card' } as never;
+    const lifted = bridge.schemaValueFromWit({
+      valueNodes: [{ tag: 'permission-card-handle', val: raw }],
+      root: 0,
+    });
+    const card = compileSchema(s.permissionCard({ polymorphic: false })).fromValue(
+      lifted,
+    ) as PermissionCard;
+    const encoded = bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card));
+    expect(encoded.valueNodes[encoded.root]).toEqual({ tag: 'permission-card-handle', val: raw });
+    expect(peekGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, card)).toBeUndefined();
+    expect(() => bridge.schemaValueToWit(bridge.permissionCardHandleToSchemaValue(card))).toThrow(
+      /already transferred/,
+    );
   });
 
   it('keeps bridge capability conversions opaque and affine', () => {

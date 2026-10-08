@@ -621,7 +621,7 @@ export function schemaValueConforms(
   value: SchemaValue,
 ): boolean {
   try {
-    assertSchemaValueRepresentable(value);
+    assertSchemaValueRepresentable(value, true);
   } catch {
     return false;
   }

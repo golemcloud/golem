@@ -152,9 +152,9 @@ calls commit their scope `Start` first, so a refusal stops them before the effec
 assert no epoch are never refused: a handle opened before this executor has an assignment, and
 fork stages and their publication. The archive transfer is fenced like the primary oplog (see
 "Resharding, revocation and the oplog epoch fence" below), and so is an ephemeral agent's oplog,
-which writes only through the compressed archive levels. Two writes stay outside the fence: the
-blob archive layer, because blob storage has no conditional write, and blob uploads of large
-payloads.
+which writes only through the compressed archive levels. The blob archive layer is fenced
+through its manifest in indexed storage, since blob storage has no conditional write. One write
+stays outside the fence: blob uploads of large payloads.
 
 `worker/state_actor.rs::commit_and_update_state` samples the appended tip before its explicit
 commit and ignores receipt entries already folded into the published status. Primary/ephemeral
@@ -458,9 +458,10 @@ owner leaves by:
   retirement synchronously (`Worker::record_retirement`); the stop follows once that lock is
   released, and `stop_internal` hands the generation to `interrupt_and_retire(ShardLost)`, the
   one retirement that fails the waiters and drops it.
-- **Archive transfer.** Opening the layered oplog records the owner's epoch on every compressed
-  archive level's own key (`services/oplog/compressed.rs::CompressedOplogArchive::opened`) before
-  the archive watermark is read, so an older owner's transfer either landed before the record,
+- **Archive transfer.** Opening the layered oplog records the owner's epoch on every archive
+  level's own key (`services/oplog/fenced_stream.rs::FencedIndexedStream::opened`, used by the
+  compressed levels and by the blob layer's manifest) before the archive watermark is read, so
+  an older owner's transfer either landed before the record,
   and the watermark covers it, or is refused after it. Each level asserts the epoch on its
   appends, trims and delete-when-empty, and the primary oplog asserts it on the trim that follows
   archiving (the `expected_epoch` of `IndexedStorage::drop_prefix`). A refused step ends the transfer
@@ -477,8 +478,34 @@ owner leaves by:
   records with it, so a transfer still in flight on an older owner cannot write the deleted
   agent's archive back. An ephemeral oplog's writer task latches a refused batch, and the next add or commit fails with
   it; the open-oplog cache replaces an ephemeral handle for an opener at a newer epoch, as it
-  replaces a primary one. The blob archive layer has no conditional write and stays outside the
-  fence.
+  replaces a primary one.
+- **Blob archive layer.** Blob storage has no conditional write, so a blob level's chunks exist
+  only as far as its manifest lists them: a per-agent key in indexed storage
+  (`IndexedStorageNamespace::BlobOplogManifest`) holding, per chunk, the object name and entry
+  count, fenced like a compressed level (`services/oplog/blob.rs`). An append stores the chunk
+  under an object name no other write uses, then appends its manifest entry. The rule for the
+  object is that it is deleted only when it is not listed and cannot become listed, which holds
+  in two cases. In the first, the storage answers the first attempt of the append that the
+  index is already held (`IndexedStorageError::Conflict`, which every backend reports for this
+  namespace as it does for a primary oplog insert): nothing was stored and nothing is on its
+  way, and the append counts as stored when the listed chunk holds the same entries, as it does
+  when a repeated transfer finds the chunk it listed before. In the second, the entry is refused
+  and the manifest does not list the object: no entry asserting the old epoch can be stored
+  after a refusal. A refused entry whose object the manifest lists keeps it, because an append
+  repeated after a lost reply is refused on its second run although its first run stored the
+  entry. A manifest append that fails in any other way keeps the object, because the entry may
+  still land, even under an index another chunk holds now, once a trim has freed it; that
+  includes a held index reported to a repeated attempt, since the attempt before it may have
+  been sent. Such an append is checked against the manifest: if this attempt's entry landed, or
+  another attempt listed a chunk holding the same entries, it counts as stored, and otherwise it
+  is a maintenance failure to retry. On Redis a manifest append is sent once, as a primary oplog
+  insert is, so that a lost reply is reported as a failure and not answered by a second run.
+  Reads, lengths and scans go through the manifest, never a directory listing. A trim removes
+  the manifest entries first and deletes their objects after, and never deletes the agent's
+  directory, which is recursive and unfenced. An object no manifest lists is left behind by a
+  crash after its upload, by a crash after its trim, and by a manifest append that failed
+  without an answer and whose entry never landed; nothing reads it, and deleting the agent
+  removes it.
 
 Recording a `ShardLost` retirement cancels `owner_retirement_requested`, so every owner write gate
 refuses at once, fences the durable stream producer, and stops the `AgentStatusFlusher` and

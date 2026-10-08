@@ -1,0 +1,16 @@
+[package]
+name = "golem_it_tool_runtime_bypass_owner"
+version = "0.0.1"
+edition = "2024"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+validation-probe-tool-guest-client = { path = "../golem-temp/bridge-sdk/rust/internal/validation-probe-tool-guest-client" }

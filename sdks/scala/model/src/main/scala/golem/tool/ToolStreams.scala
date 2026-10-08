@@ -19,8 +19,9 @@ package golem.tool
 import zio.blocks.async.*
 import zio.blocks.streams.Stream
 
+import java.util.concurrent.CancellationException
 import scala.concurrent.{ExecutionContext, Future}
-import scala.util.Success
+import scala.util.control.NonFatal
 
 /**
  * Opaque handle to the byte stream supplied as a tool invocation's stdin. A
@@ -103,6 +104,43 @@ object StreamWriteError {
   case object ConcurrentOperation                      extends StreamWriteError
 }
 
+private[golem] object ToolCollectionFailures {
+  private object Recoverable {
+    def unapply(error: Throwable): Option[Throwable] = classify(error, Nil)
+
+    private def classify(error: Throwable, seen: List[Throwable]): Option[Throwable] = error match {
+      case _: CancellationException               => None
+      case NonFatal(_) if seen.exists(_ eq error) => Some(error)
+      case NonFatal(_) if error.getCause != null  => classify(error.getCause, error :: seen)
+      case NonFatal(_)                            => Some(error)
+      case _                                      => None
+    }
+  }
+
+  private def message(error: Throwable): String = Option(error.getMessage).getOrElse(error.toString)
+
+  private def settle[A](future: => Future[A])(failure: Throwable => A)(implicit ec: ExecutionContext): Future[A] =
+    try future.recover { case Recoverable(error) => failure(error) }
+    catch {
+      case Recoverable(error) => Future.successful(failure(error))
+      case error: Throwable   => Future.failed(error)
+    }
+
+  def result[E, A](future: => Future[Either[ToolError[E], A]])(implicit
+    ec: ExecutionContext
+  ): Future[Either[ToolError[E], A]] =
+    settle(future)(error => Left(ToolError.Rpc(RpcError.Protocol(message(error)))))
+
+  def output(stream: => Option[ToolInputStream])(implicit
+    ec: ExecutionContext
+  ): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
+    settle(
+      stream.fold(Future.successful(Right(Option.empty[Array[Byte]]): Either[ByteStreamFailure, Option[Array[Byte]]]))(
+        value => value.stream.runCollectAsync.toFuture.map(_.map(bytes => Some(bytes.toArray)))
+      )
+    )(error => Left(ByteStreamFailure.Failed(message(error))))
+}
+
 /**
  * A started output-bearing invocation. Streams and result have independent
  * lifetimes.
@@ -114,18 +152,19 @@ final case class ToolInvocation[+E, +A](
   cancel: () => Unit
 ) {
 
-  /** Drains both outputs concurrently with the structured result. */
-  def collect()(implicit ec: ExecutionContext): Future[CollectedToolInvocation[E, A]] = {
-    def collectOutput(stream: Option[ToolInputStream]): Future[Either[ByteStreamFailure, Option[Array[Byte]]]] =
-      stream
-        .fold(Future.successful(Right(Option.empty[Array[Byte]]): Either[ByteStreamFailure, Option[Array[Byte]]]))(
-          value => value.stream.runCollectAsync.toFuture.map(_.map(bytes => Some(bytes.toArray)))
-        )
-
-    result.transform(Success(_)).zip(collectOutput(stdout)).zip(collectOutput(stderr)).map {
-      case ((result, stdout), stderr) => CollectedToolInvocation(result.get, stdout, stderr)
-    }
-  }
+  /**
+   * Drains both outputs concurrently with the structured result. Non-fatal
+   * channel failures are retained in their corresponding outcome. Fatal JVM
+   * failures and cancellation remain failed futures.
+   */
+  def collect()(implicit ec: ExecutionContext): Future[CollectedToolInvocation[E, A]] =
+    ToolCollectionFailures
+      .result(result)
+      .zip(ToolCollectionFailures.output(stdout))
+      .zip(ToolCollectionFailures.output(stderr))
+      .map { case ((result, stdout), stderr) =>
+        CollectedToolInvocation(result, stdout, stderr)
+      }
 }
 
 final case class CollectedToolInvocation[+E, +A](

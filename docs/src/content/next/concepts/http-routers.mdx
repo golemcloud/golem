@@ -158,6 +158,16 @@ Golem does not hash mutable files into strong validators. See the
 [timeout configuration](/next/invoke/http-routers#setting-timeouts-and-resource-budgets) for the
 serving deadline and current resource-limit behavior.
 
+All SDKs let a mount configure additional `fileResponseHeaders` (or the language's
+snake_case equivalent) for both live and static file bindings. For example, a mount can set
+`Content-Security-Policy: default-src 'self'` and `Referrer-Policy: no-referrer`. Golem applies
+these headers to 200, 206, and 304 file responses, including HEAD responses, but not to handler,
+missing, forbidden, precondition-failed, or unsatisfiable-range responses. Header names and values
+must be valid HTTP fields and names must be unique ignoring case. Golem rejects headers it manages
+itself, including representation framing, content encoding and type, caching and validators,
+`X-Content-Type-Options`, CORS, `Vary`, and hop-by-hop headers. Values are treated as opaque HTTP
+field values; Golem does not validate policy-specific syntax such as CSP directives.
+
 ## File HTTP reference
 
 Golem handles file response headers and preconditions for you. These rules apply

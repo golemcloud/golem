@@ -17,13 +17,14 @@
 
 use super::BlobOplogArchiveService;
 use crate::services::oplog::OplogArchiveService;
+use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use futures::StreamExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, ScanCursor};
+use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -33,10 +34,28 @@ use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
 use test_r::test;
 
 const MODE: AgentMode = AgentMode::Durable;
+
+/// A blob archive at level 0 whose manifests are in a new in-memory indexed storage. A storage
+/// call runs once, without a retry.
+fn blob_archive(storage: Arc<dyn BlobStorage + Send + Sync>) -> BlobOplogArchiveService {
+    BlobOplogArchiveService::new(
+        storage,
+        Arc::new(InMemoryIndexedStorage::new()),
+        0,
+        RetryConfig {
+            max_attempts: 1,
+            min_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        },
+    )
+}
 
 /// What the service tells about the archive of one agent: whether the archive exists, the entry
 /// at the first index, and the last index.
@@ -116,7 +135,7 @@ async fn observe(service: &BlobOplogArchiveService, agent: &OwnedAgentId) -> Obs
 async fn check_that_each_agent_name_gets_its_own_archive(
     storage: Arc<dyn BlobStorage + Send + Sync>,
 ) {
-    let service = BlobOplogArchiveService::new(storage, 0);
+    let service = blob_archive(storage);
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId::new();
     let archives: Box<[(OwnedAgentId, OplogEntry)]> = agent_names()
@@ -243,12 +262,12 @@ async fn each_agent_name_gets_its_own_archive_on_the_sqlite_backend() {
     .await;
 }
 
-/// `drop_prefix` deletes the directory of the archive that it empties, with the `agent_id` blob
-/// in it. The next append on the same archive makes the directory and the blob again. So the
-/// archive exists, and the scan lists the agent again.
+/// `drop_prefix` deletes the manifest of the archive that it empties. The next append on the same
+/// archive lists its chunk in the manifest again. So the archive exists, and the scan lists the
+/// agent again.
 #[test]
 async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
-    let service = BlobOplogArchiveService::new(Arc::new(InMemoryBlobStorage::new()), 0);
+    let service = blob_archive(Arc::new(InMemoryBlobStorage::new()));
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId::new();
     let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
@@ -290,21 +309,21 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     );
 }
 
-/// A process that stops after it makes the directory of an archive and before it writes the
-/// `agent_id` blob leaves a directory without that blob. The test makes such a directory. The
-/// directory holds no archive: `exists` gives false, and the scan skips the directory. The next
-/// append writes the blob, although the directory is there.
+/// A process that stops after it stores the object of a chunk and before the manifest lists it
+/// leaves an object in the directory of the archive that no manifest entry refers to. The test
+/// makes such an object. The directory holds no archive: `exists` gives false, and the scan skips
+/// the agent. The next append lists its own chunk, although the object is there.
 #[test]
-async fn a_directory_without_an_agent_id_holds_no_archive() {
+async fn a_directory_without_a_manifest_holds_no_archive() {
     let storage = Arc::new(InMemoryBlobStorage::new());
-    let service = BlobOplogArchiveService::new(storage.clone(), 0);
+    let service = blob_archive(storage.clone());
     let environment_id = EnvironmentId::new();
     let component_id = ComponentId::new();
     let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
     let entry = log_entry("entry");
 
     storage
-        .create_dir(
+        .put_raw(
             "test",
             "test",
             BlobStorageNamespace::CompressedOplog {
@@ -313,7 +332,8 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
                 agent_mode: MODE,
                 level: 0,
             },
-            Path::new(&agent_path_segment(&agent.agent_id)),
+            &Path::new(&agent_path_segment(&agent.agent_id)).join("0-unlisted"),
+            b"not-an-oplog-chunk",
         )
         .await
         .unwrap();
@@ -345,59 +365,5 @@ async fn a_directory_without_an_agent_id_holds_no_archive() {
                 BTreeMap::from([(OplogIndex::INITIAL, entry)])
             )
         )
-    );
-}
-
-#[test]
-fn chunk_index_gives_the_index_of_a_chunk_and_none_for_the_agent_id_blob() {
-    use super::{InvalidChunkName, chunk_index};
-    use std::path::Path;
-
-    assert_eq!(
-        [
-            chunk_index(Path::new("directory/17")),
-            chunk_index(Path::new("directory/agent_id")),
-            chunk_index(Path::new("directory/other")),
-        ],
-        [
-            Ok(Some(OplogIndex::from_u64(17))),
-            Ok(None),
-            Err(InvalidChunkName),
-        ]
-    );
-}
-
-/// The directory of an archive holds only the `agent_id` blob and chunks. The listing of the
-/// chunks gives an error of the archive of this agent at any other name, and does not skip it.
-#[test]
-async fn the_chunk_listing_refuses_a_name_that_is_not_a_chunk() {
-    let storage = Arc::new(InMemoryBlobStorage::new());
-    let environment_id = EnvironmentId::new();
-    let component_id = ComponentId::new();
-    let agent = owned_agent_id(environment_id, component_id, r#"counter("a/b")"#);
-    let directory = Path::new(&agent_path_segment(&agent.agent_id)).to_path_buf();
-
-    storage
-        .put_raw(
-            "test",
-            "test",
-            BlobStorageNamespace::CompressedOplog {
-                environment_id,
-                component_id,
-                agent_mode: MODE,
-                level: 0,
-            },
-            &directory.join("not-a-chunk"),
-            b"",
-        )
-        .await
-        .unwrap();
-
-    let error = super::BlobOplogArchive::entries(agent, MODE, storage, 0)
-        .await
-        .unwrap_err();
-    assert!(
-        error.contains("failed to parse oplog index from path"),
-        "{error}"
     );
 }

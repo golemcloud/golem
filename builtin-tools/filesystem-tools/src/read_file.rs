@@ -30,7 +30,7 @@ pub struct ReadFileResult {
     pub next_cursor: Option<ReadFileCursor>,
 }
 
-#[tool_definition(version = "0.4.0", requires_filesystem = true)]
+#[tool_definition(version = "0.4.1", requires_filesystem = true)]
 pub trait ReadFile {
     /// Reads a page from a known text file. Lines are 1-based and `end_line` is inclusive. Omit
     /// both bounds to read from the beginning. A call examines at most 64 KiB and 200 lines, so a

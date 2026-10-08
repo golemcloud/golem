@@ -32,6 +32,7 @@ import {
   t,
   type TypedSchemaValue,
   typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
   v,
   validateSchemaGraph,
   encodeChild,
@@ -40,9 +41,11 @@ import {
 import {
   CodecShapeMismatchError,
   directTypedSchemaValueToWit,
+  relinquishSchemaValueCapabilities,
   type SchemaCodec,
   withDirectCodec,
 } from '../../schema/codec';
+import { SchemaEncodeError } from '../schema-model/errors';
 import { toolBuildError } from './errors';
 
 export type {
@@ -302,6 +305,36 @@ export class CanonicalInputModel {
     return this.codec.direct
       ? directTypedSchemaValueToWit(this.codec, input)
       : typedSchemaValueToWit(this.encodeTyped(input));
+  }
+
+  encodeWireForStartedInvocation(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return typedSchemaValueToWit(encoded);
+    } catch (error) {
+      if (
+        !(error instanceof SchemaEncodeError) ||
+        !error.message.includes('native schema value streams require asynchronous encoding')
+      ) {
+        throw error;
+      }
+      return typedSchemaValueToWitAsync(encoded).catch((asyncError) => {
+        relinquishSchemaValueCapabilities(encoded.value);
+        throw asyncError;
+      });
+    }
+  }
+
+  async encodeWireAsync(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return await typedSchemaValueToWitAsync(encoded);
+    } catch (error) {
+      relinquishSchemaValueCapabilities(encoded.value);
+      throw error;
+    }
   }
 
   decode(input: SchemaValue): Record<string, unknown> {

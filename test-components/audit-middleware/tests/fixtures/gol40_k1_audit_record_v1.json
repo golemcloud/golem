@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "policyInvocationKey": "policy-call-01",
+  "occurrenceLabel": "security",
+  "toolName": "artifact",
+  "commandPath": ["render"],
+  "owner": {
+    "componentId": "component-01",
+    "agentId": "Artifact/audit-owner"
+  },
+  "principal": {
+    "kind": "oidc",
+    "issuer": "https://issuer.audit.test",
+    "subject": "subject-01"
+  },
+  "input": {
+    "rootKind": "record",
+    "nodes": 3,
+    "collectionEntries": 2,
+    "stringBytes": 32,
+    "binaryBytes": 4,
+    "secretHandles": 0,
+    "quotaTokens": 0,
+    "permissionCards": 0,
+    "streams": 0
+  },
+  "outcome": {
+    "kind": "success",
+    "result": {
+      "rootKind": "string",
+      "nodes": 1,
+      "collectionEntries": 0,
+      "stringBytes": 2,
+      "binaryBytes": 0,
+      "secretHandles": 0,
+      "quotaTokens": 0,
+      "permissionCards": 0,
+      "streams": 0
+    }
+  },
+  "stdout": {
+    "declared": true,
+    "chunks": 2,
+    "bytes": 9,
+    "terminal": "finished"
+  },
+  "stderr": {
+    "declared": true,
+    "chunks": 1,
+    "bytes": 7,
+    "terminal": "resource-exhausted"
+  }
+}

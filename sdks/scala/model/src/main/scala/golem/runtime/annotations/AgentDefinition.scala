@@ -35,5 +35,6 @@ final class agentDefinition(
   val phantomAgent: Boolean = false,
   val webhookSuffix: String = "",
   val snapshotting: String = "disabled",
-  val exposeFiles: Array[(String, String)] = Array.empty
+  val exposeFiles: Array[(String, String)] = Array.empty,
+  val fileResponseHeaders: Array[(String, String)] = Array.empty
 ) extends StaticAnnotation
