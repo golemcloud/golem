@@ -26,6 +26,7 @@
     },
     "dependencies": [],
     "description": "Rust Code First BarAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -1930,6 +1931,98 @@
               "fields": [
                 {
                   "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.AllPrimitives"
+                    }
+                  },
+                  "name": "primitives"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.OptionResultBound"
+                    }
+                  },
+                  "name": "options_results_bounds"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.Tuples"
+                    }
+                  },
+                  "name": "tuples"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.Collections"
+                    }
+                  },
+                  "name": "collections"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.SimpleStruct"
+                    }
+                  },
+                  "name": "simple_struct"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.NestedStruct"
+                    }
+                  },
+                  "name": "nested_struct"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.SimpleEnum"
+                    }
+                  },
+                  "name": "enum_simple"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.EnumWithCollections"
+                    }
+                  },
+                  "name": "enum_collections"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.ComplexEnum"
+                    }
+                  },
+                  "name": "enum_complex"
+                }
+              ]
+            }
+          },
+          "id": "rust_code_first_rust_main.model.ComplexStruct",
+          "name": "ComplexStruct"
+        },
+        {
+          "body": {
+            "kind": "record",
+            "value": {
+              "fields": [
+                {
+                  "body": {
                     "kind": "option",
                     "value": {
                       "inner": {
@@ -2459,98 +2552,6 @@
         },
         {
           "body": {
-            "kind": "record",
-            "value": {
-              "fields": [
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.AllPrimitives"
-                    }
-                  },
-                  "name": "primitives"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.OptionResultBound"
-                    }
-                  },
-                  "name": "options_results_bounds"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.Tuples"
-                    }
-                  },
-                  "name": "tuples"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.Collections"
-                    }
-                  },
-                  "name": "collections"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.SimpleStruct"
-                    }
-                  },
-                  "name": "simple_struct"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.NestedStruct"
-                    }
-                  },
-                  "name": "nested_struct"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.SimpleEnum"
-                    }
-                  },
-                  "name": "enum_simple"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.EnumWithCollections"
-                    }
-                  },
-                  "name": "enum_collections"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.ComplexEnum"
-                    }
-                  },
-                  "name": "enum_complex"
-                }
-              ]
-            }
-          },
-          "id": "rust_code_first_rust_main.model.ComplexStruct",
-          "name": "ComplexStruct"
-        },
-        {
-          "body": {
             "kind": "enum",
             "value": {
               "cases": [
@@ -2629,6 +2630,7 @@
     },
     "dependencies": [],
     "description": "Rust Code First FooAgent",
+    "kind": "regular",
     "methods": [
       {
         "description": "",
@@ -4577,6 +4579,98 @@
               "fields": [
                 {
                   "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.AllPrimitives"
+                    }
+                  },
+                  "name": "primitives"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.OptionResultBound"
+                    }
+                  },
+                  "name": "options_results_bounds"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.Tuples"
+                    }
+                  },
+                  "name": "tuples"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.Collections"
+                    }
+                  },
+                  "name": "collections"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.SimpleStruct"
+                    }
+                  },
+                  "name": "simple_struct"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.NestedStruct"
+                    }
+                  },
+                  "name": "nested_struct"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.SimpleEnum"
+                    }
+                  },
+                  "name": "enum_simple"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.EnumWithCollections"
+                    }
+                  },
+                  "name": "enum_collections"
+                },
+                {
+                  "body": {
+                    "kind": "ref",
+                    "value": {
+                      "id": "rust_code_first_rust_main.model.ComplexEnum"
+                    }
+                  },
+                  "name": "enum_complex"
+                }
+              ]
+            }
+          },
+          "id": "rust_code_first_rust_main.model.ComplexStruct",
+          "name": "ComplexStruct"
+        },
+        {
+          "body": {
+            "kind": "record",
+            "value": {
+              "fields": [
+                {
+                  "body": {
                     "kind": "option",
                     "value": {
                       "inner": {
@@ -5106,98 +5200,6 @@
         },
         {
           "body": {
-            "kind": "record",
-            "value": {
-              "fields": [
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.AllPrimitives"
-                    }
-                  },
-                  "name": "primitives"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.OptionResultBound"
-                    }
-                  },
-                  "name": "options_results_bounds"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.Tuples"
-                    }
-                  },
-                  "name": "tuples"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.Collections"
-                    }
-                  },
-                  "name": "collections"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.SimpleStruct"
-                    }
-                  },
-                  "name": "simple_struct"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.NestedStruct"
-                    }
-                  },
-                  "name": "nested_struct"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.SimpleEnum"
-                    }
-                  },
-                  "name": "enum_simple"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.EnumWithCollections"
-                    }
-                  },
-                  "name": "enum_collections"
-                },
-                {
-                  "body": {
-                    "kind": "ref",
-                    "value": {
-                      "id": "rust_code_first_rust_main.model.ComplexEnum"
-                    }
-                  },
-                  "name": "enum_complex"
-                }
-              ]
-            }
-          },
-          "id": "rust_code_first_rust_main.model.ComplexStruct",
-          "name": "ComplexStruct"
-        },
-        {
-          "body": {
             "kind": "enum",
             "value": {
               "cases": [
@@ -5260,6 +5262,7 @@
     },
     "dependencies": [],
     "description": "",
+    "kind": "regular",
     "methods": [
       {
         "description": "",

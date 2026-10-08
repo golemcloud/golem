@@ -312,7 +312,9 @@ impl ErrorHandler {
                     ShowClapHelpTarget::AppNew => {
                         self.ctx.app_handler().log_languages_help();
                     }
-                    ShowClapHelpTarget::ProfileNew => {}
+                    ShowClapHelpTarget::ProfileNew
+                    | ShowClapHelpTarget::SecretCreate
+                    | ShowClapHelpTarget::SecretUpdate => {}
                 }
                 Ok(ExitCode::from(USAGE_ERROR_EXIT_CODE))
             }

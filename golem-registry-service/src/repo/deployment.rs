@@ -23,9 +23,9 @@ use super::model::deployment::{
 use super::model::deployment::{
     DeploymentAgentToolBindingRecord, DeploymentCompiledRouteRecord,
     DeploymentComponentRevisionRecord, DeploymentHttpApiDeploymentRevisionRecord,
-    DeploymentMcpDeploymentRevisionRecord, DeploymentRegisteredAgentTypeRecord,
-    DeploymentRegisteredAgentTypeScopedRecord, DeploymentRegisteredToolRecord,
-    DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
+    DeploymentMcpDeploymentRevisionRecord, DeploymentMcpImportIdentityRecord,
+    DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredAgentTypeScopedRecord,
+    DeploymentRegisteredToolRecord, DeploymentToolIdentityRecord, ToolDeploymentStateRecord,
 };
 use super::model::deployment::{
     DeploymentMiddlewareIdentity, DeploymentToolMiddlewareBindingRecord,
@@ -54,6 +54,7 @@ use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use futures::FutureExt;
 use futures::future::BoxFuture;
+use golem_common::model::mcp_import::McpImportCredential;
 use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::ToolMiddlewareName;
 use golem_service_base::db::postgres::PostgresPool;
@@ -70,6 +71,13 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait DeploymentRepo: Send + Sync {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>>;
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64>;
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>>;
 
     async fn get_currently_deployed_revision(
@@ -112,12 +120,18 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
 
     async fn list_active_compiled_routes_for_domain(
         &self,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>>;
 
     async fn get_active_mcp_for_domain(
         &self,
@@ -130,6 +144,12 @@ pub trait DeploymentRepo: Send + Sync {
         deployment_revision_id: i64,
         domain: &str,
     ) -> RepoResult<Vec<DeploymentCompiledRouteWithSecuritySchemeRecord>>;
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>>;
 
     async fn get_deployment_agent_type(
         &self,
@@ -161,7 +181,14 @@ pub trait DeploymentRepo: Send + Sync {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord>;
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>>;
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>>;
 
     async fn get_current_tool_deployment_state(
         &self,
@@ -219,6 +246,7 @@ pub trait DeploymentRepo: Send + Sync {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
 }
 
@@ -266,6 +294,23 @@ impl<Repo: DeploymentRepo> LoggedDeploymentRepo<Repo> {
 
 #[async_trait]
 impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>> {
+        self.repo
+            .get_http_routing_epoch_if_exists(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64> {
+        self.repo
+            .get_http_routing_epoch(environment_id)
+            .instrument(Self::span_env(environment_id))
+            .await
+    }
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         self.repo
             .get_next_revision_number(environment_id)
@@ -351,6 +396,7 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
     {
         let span = Self::span_user_and_env(
@@ -358,7 +404,11 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
             deployment_creation.environment_id,
         );
         self.repo
-            .deploy(deployment_creation, version_check)
+            .deploy(
+                deployment_creation,
+                version_check,
+                expected_http_routing_epoch,
+            )
             .instrument(span)
             .await
     }
@@ -370,6 +420,16 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         self.repo
             .list_active_compiled_routes_for_domain(domain)
             .instrument(Self::span_domain(domain))
+            .await
+    }
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        self.repo
+            .list_active_domains_for_environment(environment_id)
+            .instrument(Self::span_env(environment_id))
             .await
     }
 
@@ -400,6 +460,20 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
                 environment_id = %environment_id,
                 deployment_revision_id,
                 domain
+            ))
+            .await
+    }
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>> {
+        self.repo
+            .list_domains_for_deployment(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
             ))
             .await
     }
@@ -471,9 +545,28 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord> {
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
         self.repo
             .get_tool_deployment_state(environment_id, deployment_revision_id)
+            .instrument(Self::span_env_and_revision(
+                environment_id,
+                deployment_revision_id,
+            ))
+            .await
+    }
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>> {
+        self.repo
+            .get_deployment_mcp_import_credential(
+                environment_id,
+                deployment_revision_id,
+                import_index,
+            )
             .instrument(Self::span_env_and_revision(
                 environment_id,
                 deployment_revision_id,
@@ -617,9 +710,15 @@ impl<Repo: DeploymentRepo> DeploymentRepo for LoggedDeploymentRepo<Repo> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         self.repo
-            .set_current_deployment(user_account_id, environment_id, deployment_revision_id)
+            .set_current_deployment(
+                user_account_id,
+                environment_id,
+                deployment_revision_id,
+                expected_http_routing_epoch,
+            )
             .instrument(info_span!(
                 SPAN_NAME,
                 user_account_id = %user_account_id,
@@ -668,8 +767,67 @@ impl<DBP: Pool> DbDeploymentRepo<DBP> {
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+impl DbDeploymentRepo<PostgresPool> {
+    async fn claim_http_routing_epoch(
+        tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        environment_id: Uuid,
+        expected_epoch: i64,
+    ) -> Result<(), DeployRepoError> {
+        let result = tx
+            .execute(
+                sqlx::query(indoc! { r#"
+                    UPDATE environments
+                    SET http_routing_mutation_epoch = http_routing_mutation_epoch + 1
+                    WHERE environment_id = $1 AND http_routing_mutation_epoch = $2
+                "# })
+                .bind(environment_id)
+                .bind(expected_epoch),
+            )
+            .await?;
+        if result.rows_affected() == 0 {
+            return Err(DeployRepoError::ConcurrentModification);
+        }
+        Ok(())
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
 impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
+    async fn get_http_routing_epoch_if_exists(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Option<i64>> {
+        let row = self
+            .with_ro("get_http_routing_epoch_if_exists")
+            .fetch_optional(
+                sqlx::query(
+                    "SELECT http_routing_mutation_epoch FROM environments WHERE environment_id = $1",
+                )
+                .bind(environment_id),
+            )
+            .await?;
+        row.map(|row| {
+            row.try_get("http_routing_mutation_epoch")
+                .map_err(RepoError::from)
+        })
+        .transpose()
+    }
+
+    async fn get_http_routing_epoch(&self, environment_id: Uuid) -> RepoResult<i64> {
+        let row = self
+            .with_ro("get_http_routing_epoch")
+            .fetch_one(
+                sqlx::query(
+                    "SELECT http_routing_mutation_epoch FROM environments WHERE environment_id = $1",
+                )
+                .bind(environment_id),
+            )
+            .await?;
+        row.try_get("http_routing_mutation_epoch")
+            .map_err(RepoError::from)
+    }
+
     async fn get_next_revision_number(&self, environment_id: Uuid) -> RepoResult<Option<i64>> {
         let current_staged_revision_id_row = self
             .with_ro("deploy - get current staged revision")
@@ -717,7 +875,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 SELECT dr.environment_id, dr.revision_id, dr.version, dr.hash, dr.created_at, dr.created_by
                 FROM current_deployments cd
                 JOIN current_deployment_revisions cdr
-                    ON dr.environment_id = cd.environment_id AND cdr.current_revision_id = cd.current_revision_id
+                    ON cdr.environment_id = cd.environment_id AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_revisions dr
+                    ON dr.environment_id = cdr.environment_id
+                    AND dr.revision_id = cdr.deployment_revision_id
                 WHERE cd.environment_id = $1
             "#})
                 .bind(environment_id),
@@ -811,6 +972,19 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(revision_id),
             )
             .await?;
+        let mcp_imports = self
+            .with_ro("get_deployment_mcp_import_identities")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT import_index, import_hash
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY import_index
+                "#})
+                .bind(environment_id)
+                .bind(revision_id),
+            )
+            .await?;
         Ok(Some(DeployedDeploymentIdentity {
             deployment_revision,
             identity: DeploymentIdentity {
@@ -822,6 +996,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     .get_deployed_mcp_deployments(environment_id, revision_id)
                     .await?,
                 tools,
+                mcp_imports,
                 middleware: Self::get_middleware_identity(
                     &mut self.with_ro("get_deployment_middleware_identity"),
                     environment_id,
@@ -836,6 +1011,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         deployment_creation: DeploymentRevisionCreationRecord,
         version_check: bool,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
     {
         if version_check
@@ -857,6 +1033,13 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     let mut deployment_creation = deployment_creation;
                     let environment_id = deployment_creation.environment_id;
                     let deployment_revision_id = deployment_creation.deployment_revision_id;
+
+                    Self::claim_http_routing_epoch(
+                        tx,
+                        environment_id,
+                        expected_http_routing_epoch,
+                    )
+                    .await?;
 
                     let deployment_revision = Self::create_deployment_revision(
                         tx,
@@ -975,6 +1158,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         Self::create_deployment_agent_tool_binding(tx, agent_tool_binding).await?;
                     }
 
+                    for mcp_import in &deployment_creation.mcp_imports {
+                        Self::create_deployment_mcp_import(tx, mcp_import).await?;
+                    }
+
                     tx.execute(
                         sqlx::query(indoc! { r#"
                             INSERT INTO deployment_tool_middleware_snapshots
@@ -995,25 +1182,23 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         }
                     }
                     let mut bindings = Vec::new();
-                    bindings.push(("universal", "", "", None, Some(&deployment_creation.universal_tool_middlewares)));
+                    bindings.push(("universal", "", "", None, Some(&deployment_creation.universal_tool_middlewares), None));
                     for (tool, binding) in &deployment_creation.environment_tool_middleware_bindings {
-                        if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
-                            bindings.push(("environment", "", tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
-                        }
+                        bindings.push(("environment", "", tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref(), Some(binding)));
                     }
                     for (agent, agent_bindings) in &deployment_creation.agent_tool_middleware_bindings {
                         for (tool, binding) in agent_bindings {
-                            if binding.middleware.is_some() || binding.middleware_merge_mode.is_some() {
-                                bindings.push(("agent", agent.0.as_str(), tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref()));
-                            }
+                            bindings.push(("agent", agent.0.as_str(), tool.as_str(), binding.middleware_merge_mode, binding.middleware.as_ref(), Some(binding)));
                         }
                     }
-                    for (scope, agent, tool, mode, installations) in bindings {
+                    for (scope, agent, tool, mode, installations, binding) in bindings {
                         let mode = mode.map(|mode| match mode { golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Prepend => "prepend", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Append => "append", golem_common::model::tool_middleware::ToolMiddlewareMergeMode::Replace => "replace" });
-                        tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations) VALUES ($1, $2, $3, $4, $5, $6, $7)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some())).await?;
+                        let default_binding = golem_common::model::tool::ToolBindingInput::default();
+                        let binding = binding.unwrap_or(&default_binding);
+                        tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_bindings (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, merge_mode, has_installations, config_keys_readable, secret_keys_readable, secret_keys_revealable) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(mode).bind(installations.is_some()).bind(Blob::new(binding.config_keys_readable.clone())).bind(Blob::new(binding.secret_keys_readable.clone())).bind(Blob::new(binding.secret_keys_revealable.clone()))).await?;
                         for (index, installation) in installations.into_iter().flatten().enumerate() {
                             let filesystem_access = match installation.filesystem_access { golem_common::model::tool::ToolFilesystemAccess::Unset => "unset", golem_common::model::tool::ToolFilesystemAccess::Allowed => "allowed", golem_common::model::tool::ToolFilesystemAccess::Denied => "denied" };
-                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(filesystem_access)).await?;
+                            tx.execute(sqlx::query("INSERT INTO deployment_tool_middleware_installations (environment_id, deployment_revision_id, scope, agent_type_name, tool_name, installation_index, middleware_name, middleware_version, parameters, account_email, secret_keys_readable, secret_keys_revealable, filesystem_access) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)").bind(environment_id).bind(deployment_revision_id).bind(scope).bind(agent).bind(tool).bind(index as i64).bind(installation.name.to_string()).bind(&installation.version).bind(Blob::new(installation.parameters.clone())).bind(installation.account.as_ref().map(ToString::to_string)).bind(installation.secret_keys_readable.clone().map(Blob::new)).bind(installation.secret_keys_revealable.clone().map(Blob::new)).bind(filesystem_access)).await?;
                         }
                     }
 
@@ -1223,9 +1408,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         r.deployment_revision_id,
                         r.domain,
                         r.route_id,
-                        FALSE as security_scheme_missing,
+                        (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1233,6 +1419,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
@@ -1240,7 +1427,10 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     -- active deployment
                     JOIN current_deployments cd
                       ON cd.environment_id = r.environment_id
-                      AND cd.current_revision_id = r.deployment_revision_id
+                    JOIN current_deployment_revisions cdr
+                      ON cdr.environment_id = cd.environment_id
+                      AND cdr.revision_id = cd.current_revision_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
 
                     -- parent objects not deleted
                     JOIN environments e
@@ -1269,13 +1459,44 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                       ON sr.security_scheme_id = s.security_scheme_id
                       AND sr.revision_id = s.current_revision_id
 
-                    WHERE r.domain = $1 AND (r.security_scheme IS NULL OR s.security_scheme_id IS NOT NULL)
+                    WHERE r.domain = $1
 
                     ORDER BY r.route_id
                 "#})
                 .bind(domain),
             )
             .await
+    }
+
+    async fn list_active_domains_for_environment(
+        &self,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .with_ro("list_active_domains_for_environment")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT DISTINCT r.domain
+                    FROM deployment_compiled_routes r
+                    JOIN current_deployments cd
+                      ON cd.environment_id = r.environment_id
+                    JOIN current_deployment_revisions cdr
+                      ON cdr.environment_id = cd.environment_id
+                      AND cdr.revision_id = cd.current_revision_id
+                      AND cdr.deployment_revision_id = r.deployment_revision_id
+                    JOIN domain_registrations dr
+                      ON dr.environment_id = r.environment_id
+                      AND dr.domain = r.domain
+                      AND dr.deleted_at IS NULL
+                    WHERE r.environment_id = $1
+                    ORDER BY r.domain
+                "#})
+                .bind(environment_id),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| row.try_get("domain").map_err(RepoError::from))
+            .collect()
     }
 
     async fn list_compiled_routes_for_domain_and_deployment(
@@ -1297,6 +1518,7 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         (r.security_scheme IS NOT NULL AND s.security_scheme_id IS NULL) AS security_scheme_missing,
                         s.security_scheme_id,
                         s.name AS security_scheme_name,
+                        sr.revision_id AS security_scheme_revision_id,
                         sr.provider_type AS security_scheme_provider_type,
                         sr.client_id AS security_scheme_client_id,
                         sr.client_secret AS security_scheme_client_secret,
@@ -1304,13 +1526,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                         sr.scopes AS security_scheme_scopes,
                         sr.custom_provider_name AS security_scheme_custom_provider_name,
                         sr.custom_issuer_url AS security_scheme_custom_issuer_url,
+                        sr.login_config AS security_scheme_login_config,
                         r.compiled_route
 
                     FROM deployment_compiled_routes r
 
                     -- parent objects not deleted
                     JOIN environments e
-                      ON e.environment_id = d.environment_id
+                      ON e.environment_id = r.environment_id
                       AND e.deleted_at IS NULL
                     JOIN applications a
                       ON a.application_id = e.application_id
@@ -1340,6 +1563,29 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(domain),
             )
             .await
+    }
+
+    async fn list_domains_for_deployment(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> RepoResult<Vec<String>> {
+        let rows = self
+            .with_ro("list_domains_for_deployment")
+            .fetch_all(
+                sqlx::query(indoc! { r#"
+                    SELECT DISTINCT domain
+                    FROM deployment_compiled_routes
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY domain
+                "# })
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| row.try_get("domain").map_err(RepoError::from))
+            .collect()
     }
 
     async fn get_deployment_agent_type(
@@ -1488,7 +1734,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         &self,
         environment_id: Uuid,
         deployment_revision_id: i64,
-    ) -> RepoResult<ToolDeploymentStateRecord> {
+    ) -> RepoResult<Option<ToolDeploymentStateRecord>> {
+        if self
+            .get_deployment_revision(environment_id, deployment_revision_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
         let registered_tools = self
             .list_deployment_registered_tools(environment_id, deployment_revision_id)
             .await?;
@@ -1501,6 +1754,20 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                     FROM deployment_tool_bindings
                     WHERE environment_id = $1 AND deployment_revision_id = $2
                     ORDER BY binding_owner, tool_name
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id),
+            )
+            .await?;
+        let mcp_imports = self
+            .with_ro("list_deployment_mcp_imports")
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT environment_id, deployment_revision_id, import_index,
+                           import_hash, import_config
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2
+                    ORDER BY import_index
                 "#})
                 .bind(environment_id)
                 .bind(deployment_revision_id),
@@ -1519,12 +1786,49 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
                 .bind(deployment_revision_id),
             )
             .await?;
-        Ok(ToolDeploymentStateRecord {
+        let middleware = Self::get_middleware_identity(
+            &mut self.with_ro("get_tool_deployment_middleware_configuration"),
+            environment_id,
+            deployment_revision_id,
+        )
+        .await?;
+        Ok(Some(ToolDeploymentStateRecord {
             deployment_revision_id,
             registered_tools,
             agent_tool_bindings,
+            mcp_imports,
             middleware_snapshot,
-        })
+            middleware_configuration:
+                golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+                    universal: middleware.universal,
+                    compatibility_mode: middleware.compatibility_mode,
+                    environment_bindings: middleware.environment_bindings,
+                    agent_bindings: middleware.agent_bindings,
+                },
+        }))
+    }
+
+    async fn get_deployment_mcp_import_credential(
+        &self,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+        import_index: u32,
+    ) -> RepoResult<Option<McpImportCredential>> {
+        let credential: Option<(Blob<McpImportCredential>,)> = self
+            .with_ro("get_deployment_mcp_import_credential")
+            .fetch_optional_as(
+                sqlx::query_as(indoc! { r#"
+                    SELECT inline_credential
+                    FROM deployment_mcp_imports
+                    WHERE environment_id = $1 AND deployment_revision_id = $2 AND import_index = $3
+                        AND inline_credential IS NOT NULL
+                "#})
+                .bind(environment_id)
+                .bind(deployment_revision_id)
+                .bind(i64::from(import_index)),
+            )
+            .await?;
+        Ok(credential.map(|(credential,)| credential.into_value()))
     }
 
     async fn get_current_tool_deployment_state(
@@ -1553,7 +1857,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .map_err(RepoError::from)?;
         self.get_tool_deployment_state(environment_id, deployment_revision_id)
             .await
-            .map(Some)
     }
 
     async fn get_active_tool_deployment_state_by_component_revision(
@@ -1594,7 +1897,6 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
             .map_err(RepoError::from)?;
         self.get_tool_deployment_state(*environment_id, deployment_revision_id)
             .await
-            .map(Some)
     }
 
     async fn get_deployed_agent_type(
@@ -1793,10 +2095,14 @@ impl DeploymentRepo for DbDeploymentRepo<PostgresPool> {
         user_account_id: Uuid,
         environment_id: Uuid,
         deployment_revision_id: i64,
+        expected_http_routing_epoch: i64,
     ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
         let result = self
             .with_tx_err("set_current_deployment", |tx| {
                 Box::pin(async move {
+                    Self::claim_http_routing_epoch(tx, environment_id, expected_http_routing_epoch)
+                        .await?;
+
                     let revision = Self::set_current_deployment_internal(
                         tx,
                         user_account_id,
@@ -1967,6 +2273,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
         environment_id: Uuid,
     ) -> RepoResult<Vec<DeploymentToolIdentityRecord>>;
 
+    async fn get_staged_mcp_imports(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentMcpImportIdentityRecord>>;
+
     async fn get_middleware_identity(
         api: &mut Self::Api,
         environment_id: Uuid,
@@ -2013,6 +2324,11 @@ trait DeploymentRepoInternal: DeploymentRepo {
     async fn create_deployment_agent_tool_binding(
         tx: &mut Self::Tx,
         agent_tool_binding: &DeploymentAgentToolBindingRecord,
+    ) -> RepoResult<()>;
+
+    async fn create_deployment_mcp_import(
+        tx: &mut Self::Tx,
+        mcp_import: &super::model::deployment::DeploymentMcpImportCreationRecord,
     ) -> RepoResult<()>;
 
     async fn set_current_deployment_internal(
@@ -2098,6 +2414,7 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .await?,
             mcp_deployments: Self::get_staged_mcp_deployments(api, environment_id).await?,
             tools,
+            mcp_imports: Self::get_staged_mcp_imports(api, environment_id).await?,
             middleware: match middleware_revision {
                 Some(revision) => {
                     Self::get_middleware_identity(api, environment_id, revision).await?
@@ -2117,18 +2434,20 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let Some(snapshot) = snapshot else {
-            return Ok(Default::default());
+            return Err(RepoError::InternalError(anyhow::anyhow!(
+                "deployment revision {revision_id} is missing its middleware snapshot"
+            )));
         };
         let names: Vec<DeploymentToolMiddlewareNameRecord> = api.fetch_all_as(
             sqlx::query_as("SELECT middleware_name, kind FROM deployment_tool_middleware_names WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY kind, middleware_name")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let bindings: Vec<DeploymentToolMiddlewareBindingRecord> = api.fetch_all_as(
-            sqlx::query_as("SELECT scope, agent_type_name, tool_name, merge_mode, has_installations FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name")
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, merge_mode, has_installations, config_keys_readable, secret_keys_readable, secret_keys_revealable FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let installations: Vec<DeploymentToolMiddlewareInstallationRecord> = api.fetch_all_as(
-            sqlx::query_as("SELECT scope, agent_type_name, tool_name, middleware_name, middleware_version, parameters, account_email, filesystem_access FROM deployment_tool_middleware_installations WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name, installation_index")
+            sqlx::query_as("SELECT scope, agent_type_name, tool_name, middleware_name, middleware_version, parameters, account_email, secret_keys_readable, secret_keys_revealable, filesystem_access FROM deployment_tool_middleware_installations WHERE environment_id = $1 AND deployment_revision_id = $2 ORDER BY scope, agent_type_name, tool_name, installation_index")
                 .bind(environment_id).bind(revision_id),
         ).await?;
         let mut grouped: std::collections::BTreeMap<(String, String, String), Vec<_>> =
@@ -2169,6 +2488,15 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                 .collect::<Result<_, _>>()?,
             ..Default::default()
         };
+        let universal_count = bindings
+            .iter()
+            .filter(|binding| binding.scope == "universal")
+            .count();
+        if universal_count != 1 {
+            return Err(RepoError::InternalError(anyhow::anyhow!(
+                "deployment middleware snapshot must have exactly one universal binding, found {universal_count}"
+            )));
+        }
         for binding in bindings {
             let middleware = binding.has_installations.then(|| {
                 grouped
@@ -2180,10 +2508,17 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     .unwrap_or_default()
             });
             if binding.scope == "universal" {
-                result.universal = middleware.unwrap();
+                result.universal = middleware.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "deployment middleware universal binding is missing its installation list"
+                    ))
+                })?;
                 continue;
             }
             let input = golem_common::model::tool::ToolBindingInput {
+                config_keys_readable: binding.config_keys_readable.into_value(),
+                secret_keys_readable: binding.secret_keys_readable.into_value(),
+                secret_keys_revealable: binding.secret_keys_revealable.into_value(),
                 middleware,
                 middleware_merge_mode: binding
                     .merge_mode
@@ -2207,6 +2542,11 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     ))
                     .or_default()
                     .insert(tool, input);
+            } else {
+                return Err(RepoError::InternalError(anyhow::anyhow!(
+                    "invalid deployment middleware binding scope {}",
+                    binding.scope
+                )));
             }
         }
         Ok(result)
@@ -2282,6 +2622,28 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
                     AND r.deployment_revision_id = cdr.deployment_revision_id
                 WHERE cd.environment_id = $1
                 ORDER BY r.tool_name
+            "#})
+            .bind(environment_id),
+        )
+        .await
+    }
+
+    async fn get_staged_mcp_imports(
+        api: &mut Self::Api,
+        environment_id: Uuid,
+    ) -> RepoResult<Vec<DeploymentMcpImportIdentityRecord>> {
+        api.fetch_all_as(
+            sqlx::query_as(indoc! { r#"
+                SELECT r.import_index, r.import_hash
+                FROM current_deployments cd
+                JOIN current_deployment_revisions cdr
+                    ON cdr.environment_id = cd.environment_id
+                    AND cdr.revision_id = cd.current_revision_id
+                JOIN deployment_mcp_imports r
+                    ON r.environment_id = cdr.environment_id
+                    AND r.deployment_revision_id = cdr.deployment_revision_id
+                WHERE cd.environment_id = $1
+                ORDER BY r.import_index
             "#})
             .bind(environment_id),
         )
@@ -2367,6 +2729,29 @@ impl DeploymentRepoInternal for DbDeploymentRepo<PostgresPool> {
         )
         .await?;
 
+        Ok(())
+    }
+
+    async fn create_deployment_mcp_import(
+        tx: &mut Self::Tx,
+        mcp_import: &super::model::deployment::DeploymentMcpImportCreationRecord,
+    ) -> RepoResult<()> {
+        let deployment = &mcp_import.deployment;
+        tx.execute(
+            sqlx::query(indoc! { r#"
+                INSERT INTO deployment_mcp_imports
+                    (environment_id, deployment_revision_id, import_index, import_hash,
+                     import_config, inline_credential)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            "#})
+            .bind(deployment.environment_id)
+            .bind(deployment.deployment_revision_id)
+            .bind(deployment.import_index)
+            .bind(deployment.import_hash)
+            .bind(&deployment.import_config)
+            .bind(&mcp_import.inline_credential),
+        )
+        .await?;
         Ok(())
     }
 

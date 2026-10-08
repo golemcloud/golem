@@ -18,15 +18,21 @@ use super::{
 use super::{CorsOptions, SecuritySchemeDetails};
 use super::{PathSegment, PathSegmentType, RequestBodySchema, RouteBehaviour};
 use crate::custom_api::{
-    AgentRouteMode, CallAgentBehaviour, CompiledInputSchema, CompiledOutputSchema, CompiledSchema,
-    ConstructorParameter, CorsPreflightBehaviour, CorsPreflightMethodPolicy, MethodParameter,
-    OriginPattern, QueryOrHeaderType, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
+    AgentFilesystemBehaviour, AgentRouteMode, CallAgentBehaviour, CompiledInputSchema,
+    CompiledOutputSchema, CompiledSchema, ConstructorParameter, CorsPreflightBehaviour,
+    CorsPreflightMethodPolicy, DurableStreamRepresentation, DurableStreamRouteLoadPolicy,
+    DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, HttpRouterBehaviour,
+    MethodParameter, OriginPattern, QueryOrHeaderType, RouteMatch, RouterFileIndexEntry,
+    RouterMethod, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
     WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::security_scheme::{Provider, SecuritySchemeName};
+use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
+use golem_common::model::security_scheme::{
+    Provider, SecuritySchemeLogin, SecuritySchemeName, SecuritySchemeRevision,
+};
 use http::HeaderName;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use std::collections::HashMap;
@@ -54,6 +60,8 @@ impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeD
 
         Ok(Self {
             id,
+            revision: SecuritySchemeRevision::new(value.revision)
+                .map_err(|e| format!("invalid security scheme revision: {e}"))?,
             name: SecuritySchemeName(value.name),
             provider_type,
             client_id: ClientId::new(value.client_id),
@@ -61,6 +69,8 @@ impl TryFrom<proto::golem::customapi::SecuritySchemeDetails> for SecuritySchemeD
             redirect_url: RedirectUrl::new(value.redirect_url)
                 .map_err(|e| format!("Failed parsing redirect url: {e}"))?,
             scopes: value.scopes.into_iter().map(Scope::new).collect(),
+            login: serde_json::from_str::<SecuritySchemeLogin>(&value.login_config)
+                .map_err(|e| format!("invalid login config: {e}"))?,
         })
     }
 }
@@ -71,12 +81,15 @@ impl From<SecuritySchemeDetails>
     fn from(value: SecuritySchemeDetails) -> Self {
         Self {
             id: Some(value.id.into()),
+            revision: value.revision.get(),
             name: value.name.0,
             provider: Some(value.provider_type.into()),
             client_id: value.client_id.deref().clone(),
             client_secret: value.client_secret.secret().clone(),
             redirect_url: value.redirect_url.deref().clone(),
             scopes: value.scopes.iter().map(|s| s.deref().clone()).collect(),
+            login_config: serde_json::to_string(&value.login)
+                .expect("security scheme login must serialize"),
         }
     }
 }
@@ -135,16 +148,19 @@ impl TryFrom<proto::golem::customapi::CompiledRoute> for CompiledRoute {
     type Error = String;
 
     fn try_from(value: proto::golem::customapi::CompiledRoute) -> Result<Self, Self::Error> {
+        let route_match: RouteMatch = value.route_match.ok_or("Missing route_match")?.try_into()?;
+        let behavior: RouteBehaviour = value.behavior.ok_or("Missing behavior")?.try_into()?;
+        let path = value
+            .path
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<_>, _>>()?;
+        route_match.validate(&path, &behavior)?;
         Ok(Self {
             route_id: value.route_id,
-            method: value.method.ok_or("Missing method")?.try_into()?,
-            path: value
-                .path
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
-            body: value.body.ok_or("Missing body")?.try_into()?,
-            behavior: value.behavior.ok_or("Missing behavior")?.try_into()?,
+            route_match,
+            path,
+            behavior,
             security: value.security.ok_or("Missing security")?.try_into()?,
             cors: value.cors.ok_or("Missing cors")?.try_into()?,
         })
@@ -155,12 +171,51 @@ impl From<CompiledRoute> for proto::golem::customapi::CompiledRoute {
     fn from(value: CompiledRoute) -> Self {
         Self {
             route_id: value.route_id,
-            method: Some(value.method.into()),
+            route_match: Some(value.route_match.into()),
             path: value.path.into_iter().map(Into::into).collect(),
-            body: Some(value.body.into()),
             behavior: Some(value.behavior.into()),
             security: Some(value.security.into()),
             cors: Some(value.cors.into()),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::RouteMatch> for RouteMatch {
+    type Error = String;
+
+    fn try_from(value: proto::golem::customapi::RouteMatch) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_match::Kind;
+        match value.kind.ok_or("RouteMatch.kind missing")? {
+            Kind::Method(value) => {
+                let method = value.method.ok_or("RouteMatch.Method.method missing")?;
+                let method = golem_common::model::agent::HttpMethod::try_from(method)?;
+                if matches!(method, golem_common::model::agent::HttpMethod::Any(_)) {
+                    return Err("RouteMatch.Method cannot contain HttpMethod.Any".into());
+                }
+                Ok(Self::Method {
+                    method,
+                    trailing_slash: value.trailing_slash,
+                })
+            }
+            Kind::MountPrefix(_) => Ok(Self::MountPrefix),
+        }
+    }
+}
+
+impl From<RouteMatch> for proto::golem::customapi::RouteMatch {
+    fn from(value: RouteMatch) -> Self {
+        use proto::golem::customapi::route_match::{Kind, Method, MountPrefix};
+        Self {
+            kind: Some(match value {
+                RouteMatch::Method {
+                    method,
+                    trailing_slash,
+                } => Kind::Method(Method {
+                    method: Some(method.into()),
+                    trailing_slash,
+                }),
+                RouteMatch::MountPrefix => Kind::MountPrefix(MountPrefix {}),
+            }),
         }
     }
 }
@@ -174,6 +229,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
         match value.kind.ok_or("RouteBehaviour.kind missing")? {
             Kind::CallAgent(call_agent) => Ok(RouteBehaviour::CallAgent(CallAgentBehaviour {
                 base_path_variables: call_agent.base_path_variables,
+                durable_streams: call_agent
+                    .durable_streams
+                    .map(TryInto::try_into)
+                    .transpose()?,
                 route_mode: match proto::golem::customapi::route_behaviour::AgentRouteMode::try_from(
                     call_agent.route_mode,
                 ) {
@@ -209,6 +268,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .method_input
                     .ok_or("Missing method_input")?
                     .try_into()?,
+                body: call_agent.body.ok_or("Missing body")?.try_into()?,
                 method_parameters: call_agent
                     .method_parameters
                     .into_iter()
@@ -256,7 +316,7 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                 }))
             }
             Kind::OpenApiSpec(open_api_spec) => {
-                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+                use proto::golem::customapi::route_behaviour::open_api_spec::{Format, Scheme};
 
                 let format = Format::try_from(open_api_spec.format)
                     .map_err(|_| "Invalid OpenApiSpec.format".to_string())?;
@@ -269,10 +329,127 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     Format::Yaml => OpenApiSpecFormat::Yaml,
                 };
 
-                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }))
+                let scheme = match Scheme::try_from(open_api_spec.scheme)
+                    .map_err(|_| "Invalid OpenApiSpec.scheme".to_string())?
+                {
+                    Scheme::Unspecified => return Err("OpenApiSpec.scheme missing".to_string()),
+                    Scheme::Http => HttpApiDeploymentScheme::Http,
+                    Scheme::Https => HttpApiDeploymentScheme::Https,
+                };
+                Ok(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                    format,
+                    scheme,
+                }))
+            }
+            Kind::HttpRouter(value) => Ok(RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing component_id")?
+                    .try_into()?,
+                component_revision: value.component_revision.try_into()?,
+                agent_type: AgentTypeName(value.agent_type),
+                constructor_input: value
+                    .constructor_input
+                    .ok_or("Missing constructor_input")?
+                    .try_into()?,
+                handler: value.handler.map(TryInto::try_into).transpose()?,
+                openapi_provider_method: value
+                    .openapi_provider_method
+                    .map(TryInto::try_into)
+                    .transpose()?,
+                static_bindings: value
+                    .static_bindings
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<_, _>>()?,
+                file_index: decode_file_index(value.file_index)?,
+                file_response_headers: value
+                    .file_response_headers
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            })),
+            Kind::AgentFilesystem(value) => {
+                Ok(RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
+                    component_id: value
+                        .component_id
+                        .ok_or("Missing component_id")?
+                        .try_into()?,
+                    component_revision: value.component_revision.try_into()?,
+                    agent_type: AgentTypeName(value.agent_type),
+                    constructor_input: value
+                        .constructor_input
+                        .ok_or("Missing constructor_input")?
+                        .try_into()?,
+                    constructor_parameters: value
+                        .constructor_parameters
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, _>>()?,
+                    filesystem_bindings: value
+                        .filesystem_bindings
+                        .into_iter()
+                        .map(TryInto::try_into)
+                        .collect::<Result<_, _>>()?,
+                    file_response_headers: value
+                        .file_response_headers
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                }))
             }
         }
     }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::RouterMethod> for RouterMethod {
+    type Error = String;
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::RouterMethod,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            method_name: value.method_name,
+            input: value
+                .input
+                .ok_or("RouterMethod.input missing")?
+                .try_into()?,
+            output: value
+                .output
+                .ok_or("RouterMethod.output missing")?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<RouterMethod> for proto::golem::customapi::route_behaviour::RouterMethod {
+    fn from(value: RouterMethod) -> Self {
+        Self {
+            method_name: value.method_name,
+            input: Some(value.input.into()),
+            output: Some(value.output.into()),
+        }
+    }
+}
+
+fn decode_file_index(
+    values: Vec<proto::golem::customapi::route_behaviour::RouterFileIndexEntry>,
+) -> Result<Vec<RouterFileIndexEntry>, String> {
+    values
+        .into_iter()
+        .map(|value| {
+            let blob_key: [u8; 32] = value
+                .blob_key
+                .try_into()
+                .map_err(|_| "Router file blob_key must be exactly 32 bytes")?;
+            Ok(RouterFileIndexEntry {
+                path: value.path,
+                blob_key: golem_common::model::agent::AgentFileContentHash(
+                    golem_common::model::diff::Hash::from(blake3::Hash::from_bytes(blob_key)),
+                ),
+                size: value.size,
+            })
+        })
+        .collect()
 }
 
 impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
@@ -283,6 +460,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
             RouteBehaviour::CallAgent(CallAgentBehaviour {
                 route_mode,
                 base_path_variables,
+                durable_streams,
                 component_id,
                 component_revision,
                 agent_type,
@@ -292,6 +470,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 phantom,
                 method_name,
                 method_input,
+                body,
                 method_parameters,
                 expected_agent_response,
                 method_description,
@@ -300,6 +479,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 kind: Some(Kind::CallAgent(
                     proto::golem::customapi::route_behaviour::CallAgent {
                         base_path_variables,
+                        durable_streams: durable_streams.map(Into::into),
                         route_mode: match route_mode {
                             AgentRouteMode::Rest => proto::golem::customapi::route_behaviour::AgentRouteMode::Rest as i32,
                             AgentRouteMode::DurableStreams => proto::golem::customapi::route_behaviour::AgentRouteMode::DurableStreams as i32,
@@ -316,6 +496,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                         phantom,
                         method_name,
                         method_input: Some(method_input.into()),
+                        body: Some(body.into()),
                         method_parameters: method_parameters.into_iter().map(Into::into).collect(),
                         expected_agent_response: Some(expected_agent_response.into()),
                         method_description,
@@ -355,8 +536,8 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                     },
                 )),
             },
-            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format }) => {
-                use proto::golem::customapi::route_behaviour::open_api_spec::Format;
+            RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour { format, scheme }) => {
+                use proto::golem::customapi::route_behaviour::open_api_spec::{Format, Scheme};
 
                 Self {
                     kind: Some(Kind::OpenApiSpec(
@@ -366,10 +547,147 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                                 OpenApiSpecFormat::Yaml => Format::Yaml,
                             }
                             .into(),
+                            scheme: match scheme {
+                                HttpApiDeploymentScheme::Http => Scheme::Http,
+                                HttpApiDeploymentScheme::Https => Scheme::Https,
+                            }.into(),
                         },
                     )),
                 }
             }
+            RouteBehaviour::HttpRouter(value) => Self { kind: Some(Kind::HttpRouter(
+                proto::golem::customapi::route_behaviour::HttpRouter {
+                    component_id: Some(value.component_id.into()), component_revision: value.component_revision.into(),
+                    agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
+                    handler: value.handler.map(Into::into), openapi_provider_method: value.openapi_provider_method.map(Into::into),
+                    static_bindings: value.static_bindings.into_iter().map(Into::into).collect(),
+                    file_index: value.file_index.into_iter().map(|entry| proto::golem::customapi::route_behaviour::RouterFileIndexEntry {
+                        path: entry.path, blob_key: entry.blob_key.0.as_blake3_hash().as_bytes().to_vec(), size: entry.size
+                    }).collect(),
+                    file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
+                })) },
+            RouteBehaviour::AgentFilesystem(value) => Self { kind: Some(Kind::AgentFilesystem(
+                proto::golem::customapi::route_behaviour::AgentFilesystem {
+                    component_id: Some(value.component_id.into()), component_revision: value.component_revision.into(),
+                    agent_type: value.agent_type.0, constructor_input: Some(value.constructor_input.into()),
+                    constructor_parameters: value.constructor_parameters.into_iter().map(Into::into).collect(),
+                    filesystem_bindings: value.filesystem_bindings.into_iter().map(Into::into).collect(),
+                    file_response_headers: value.file_response_headers.into_iter().map(Into::into).collect(),
+                })) },
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy>
+    for DurableStreamRoutePolicy
+{
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            slots: value
+                .slots
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        })
+    }
+}
+
+impl From<DurableStreamRoutePolicy>
+    for proto::golem::customapi::route_behaviour::DurableStreamRoutePolicy
+{
+    fn from(value: DurableStreamRoutePolicy) -> Self {
+        Self {
+            slots: value.slots.into_iter().map(Into::into).collect(),
+            allow_external_writes: value.allow_external_writes,
+            allow_stream_delete: value.allow_stream_delete,
+            allow_invocation_delete: value.allow_invocation_delete,
+            load: value.load.map(Into::into),
+        }
+    }
+}
+
+impl TryFrom<proto::golem::customapi::route_behaviour::DurableStreamSlot> for DurableStreamSlot {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::DurableStreamSlot,
+    ) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::{
+            DurableStreamRepresentation as ProtoRepresentation,
+            DurableStreamSlotDirection as ProtoDirection,
+        };
+
+        let direction = match ProtoDirection::try_from(value.direction) {
+            Ok(ProtoDirection::Input) => DurableStreamSlotDirection::Input,
+            Ok(ProtoDirection::Output) => DurableStreamSlotDirection::Output,
+            _ => return Err("Invalid or missing durable stream slot direction".into()),
+        };
+        let representation = match ProtoRepresentation::try_from(value.representation) {
+            Ok(ProtoRepresentation::Json) => DurableStreamRepresentation::Json,
+            Ok(ProtoRepresentation::Bytes) => DurableStreamRepresentation::Bytes,
+            _ => return Err("Invalid or missing durable stream representation".into()),
+        };
+        Ok(Self {
+            canonical_name: value.canonical_name,
+            public_name: value.public_name,
+            direction,
+            content_type: value.content_type,
+            representation,
+        })
+    }
+}
+
+impl From<DurableStreamSlot> for proto::golem::customapi::route_behaviour::DurableStreamSlot {
+    fn from(value: DurableStreamSlot) -> Self {
+        use proto::golem::customapi::route_behaviour::{
+            DurableStreamRepresentation as ProtoRepresentation,
+            DurableStreamSlotDirection as ProtoDirection,
+        };
+
+        Self {
+            canonical_name: value.canonical_name,
+            public_name: value.public_name,
+            direction: match value.direction {
+                DurableStreamSlotDirection::Input => ProtoDirection::Input as i32,
+                DurableStreamSlotDirection::Output => ProtoDirection::Output as i32,
+            },
+            content_type: value.content_type,
+            representation: match value.representation {
+                DurableStreamRepresentation::Json => ProtoRepresentation::Json as i32,
+                DurableStreamRepresentation::Bytes => ProtoRepresentation::Bytes as i32,
+            },
+        }
+    }
+}
+
+impl From<proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy>
+    for DurableStreamRouteLoadPolicy
+{
+    fn from(value: proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
+        }
+    }
+}
+
+impl From<DurableStreamRouteLoadPolicy>
+    for proto::golem::customapi::route_behaviour::DurableStreamRouteLoadPolicy
+{
+    fn from(value: DurableStreamRouteLoadPolicy) -> Self {
+        Self {
+            max_concurrent_readers_per_stream: value.max_concurrent_readers_per_stream,
+            max_append_requests_per_second_per_stream: value
+                .max_append_requests_per_second_per_stream,
         }
     }
 }
@@ -382,6 +700,7 @@ impl TryFrom<proto::golem::customapi::RouteSecurity> for RouteSecurity {
 
         match value.kind.ok_or("RouteSecurity.kind missing")? {
             Kind::None(_) => Ok(RouteSecurity::None),
+            Kind::Unavailable(_) => Ok(RouteSecurity::Unavailable),
             Kind::SessionFromHeader(session_from_header) => Ok(RouteSecurity::SessionFromHeader(
                 SessionFromHeaderRouteSecurity {
                     header_name: session_from_header.header_name,
@@ -406,6 +725,11 @@ impl From<RouteSecurity> for proto::golem::customapi::RouteSecurity {
         match value {
             RouteSecurity::None => Self {
                 kind: Some(Kind::None(proto::golem::customapi::route_security::None {})),
+            },
+            RouteSecurity::Unavailable => Self {
+                kind: Some(Kind::Unavailable(
+                    proto::golem::customapi::route_security::Unavailable {},
+                )),
             },
             RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity { header_name }) => {
                 Self {
@@ -736,6 +1060,7 @@ impl TryFrom<proto::golem::customapi::PathSegmentType> for PathSegmentType {
                 Primitive::U8 => Ok(PathSegmentType::U8),
                 Primitive::S8 => Ok(PathSegmentType::S8),
                 Primitive::Bool => Ok(PathSegmentType::Bool),
+                Primitive::Uuid => Ok(PathSegmentType::Uuid),
                 Primitive::Unspecified => Err("Invalid PathSegmentType::Primitive".to_string()),
             },
 
@@ -766,6 +1091,7 @@ impl From<PathSegmentType> for proto::golem::customapi::PathSegmentType {
             PathSegmentType::U8 => Kind::Primitive(Primitive::U8.into()),
             PathSegmentType::S8 => Kind::Primitive(Primitive::S8.into()),
             PathSegmentType::Bool => Kind::Primitive(Primitive::Bool.into()),
+            PathSegmentType::Uuid => Kind::Primitive(Primitive::Uuid.into()),
 
             PathSegmentType::Enum(inner) => {
                 Kind::EnumType(proto::golem::customapi::path_segment_type::Enum {
@@ -902,6 +1228,461 @@ impl From<CorsOptions> for golem_api_grpc::proto::golem::customapi::CorsOptions 
     fn from(value: CorsOptions) -> Self {
         Self {
             allowed_patterns: value.allowed_patterns.into_iter().map(|op| op.0).collect(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::agent::{
+        AgentFileContentHash, FileMapping, FileResponseHeader, HttpMethod,
+    };
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
+    use test_r::test;
+
+    #[test]
+    fn openapi_scheme_roundtrips_codecs_and_rejects_missing_or_unknown_wire_values() {
+        use proto::golem::customapi::route_behaviour::{Kind, OpenApiSpec};
+        for scheme in [
+            HttpApiDeploymentScheme::Http,
+            HttpApiDeploymentScheme::Https,
+        ] {
+            let behavior = OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Yaml,
+                scheme,
+            };
+            let bytes = desert_rust::serialize_to_byte_vec(&behavior).unwrap();
+            let decoded: OpenApiSpecBehaviour = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded.scheme, scheme);
+            let encoded: proto::golem::customapi::RouteBehaviour =
+                RouteBehaviour::OpenApiSpec(decoded).into();
+            let RouteBehaviour::OpenApiSpec(decoded) = RouteBehaviour::try_from(encoded).unwrap()
+            else {
+                panic!("wrong behavior")
+            };
+            assert_eq!(decoded.scheme, scheme);
+            assert!(matches!(decoded.format, OpenApiSpecFormat::Yaml));
+        }
+        for scheme in [0, 3, -1] {
+            let encoded = proto::golem::customapi::RouteBehaviour {
+                kind: Some(Kind::OpenApiSpec(OpenApiSpec { format: 1, scheme })),
+            };
+            assert!(RouteBehaviour::try_from(encoded).is_err());
+        }
+    }
+
+    #[test]
+    fn unavailable_route_security_roundtrip_is_not_public() {
+        let encoded: proto::golem::customapi::RouteSecurity = RouteSecurity::Unavailable.into();
+        assert!(matches!(
+            RouteSecurity::try_from(encoded).unwrap(),
+            RouteSecurity::Unavailable
+        ));
+    }
+
+    #[test]
+    fn security_scheme_revision_and_login_roundtrip() {
+        let details = SecuritySchemeDetails {
+            id: golem_common::model::security_scheme::SecuritySchemeId::new(),
+            revision: SecuritySchemeRevision::new(7).unwrap(),
+            name: SecuritySchemeName("frontend-login".into()),
+            provider_type: Provider::Google(golem_common::model::Empty {}),
+            client_id: ClientId::new("client".into()),
+            client_secret: ClientSecret::new("secret".into()),
+            redirect_url: RedirectUrl::new("https://api.example/callback".into()).unwrap(),
+            scopes: vec![Scope::new("openid".into())],
+            login: SecuritySchemeLogin::AuthorizationCodePkce(
+                golem_common::model::security_scheme::AuthorizationCodePkceConfig {
+                    redirect_uris: vec!["https://frontend.example/callback".into()],
+                    origins: vec!["https://frontend.example".into()],
+                },
+            ),
+        };
+        let id = details.id;
+        let encoded: proto::golem::customapi::SecuritySchemeDetails = details.into();
+        let decoded = SecuritySchemeDetails::try_from(encoded).unwrap();
+
+        assert_eq!(decoded.id, id);
+        assert_eq!(decoded.revision, SecuritySchemeRevision::new(7).unwrap());
+        assert!(matches!(
+            decoded.login,
+            SecuritySchemeLogin::AuthorizationCodePkce(ref config)
+                if config.redirect_uris == ["https://frontend.example/callback"]
+                    && config.origins == ["https://frontend.example"]
+        ));
+    }
+
+    fn input() -> CompiledInputSchema {
+        CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            input_schema: InputSchema::Parameters(vec![]),
+        }
+    }
+
+    fn router() -> RouteBehaviour {
+        RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+            component_id: ComponentId(uuid::Uuid::from_u128(17)),
+            component_revision: ComponentRevision::try_from(23u64).unwrap(),
+            agent_type: AgentTypeName("site".into()),
+            constructor_input: input(),
+            handler: None,
+            openapi_provider_method: Some(RouterMethod {
+                method_name: "schema".into(),
+                input: input(),
+                output: CompiledOutputSchema {
+                    graph: SchemaGraph::anonymous(SchemaType::string()),
+                    output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                },
+            }),
+            static_bindings: FileMapping::compile_list([
+                ("/favicon", "/assets/icon"),
+                ("/*", "/assets/$1"),
+            ])
+            .unwrap(),
+            file_index: vec![RouterFileIndexEntry {
+                path: "/assets/%2e$icon".into(),
+                blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
+                    blake3::hash(b"blob"),
+                )),
+                size: 4_294_967_301,
+            }],
+            file_response_headers: vec![
+                FileResponseHeader {
+                    name: "content-security-policy".into(),
+                    value: "default-src 'self'".into(),
+                },
+                FileResponseHeader {
+                    name: "referrer-policy".into(),
+                    value: "same-origin".into(),
+                },
+            ],
+        })
+    }
+
+    fn route(behavior: RouteBehaviour) -> CompiledRoute {
+        let mut path = vec![PathSegment::Literal {
+            value: "site".into(),
+        }];
+        if matches!(behavior, RouteBehaviour::AgentFilesystem(_)) {
+            path.push(PathSegment::Variable {
+                display_name: "id".into(),
+            });
+        }
+        CompiledRoute {
+            route_id: 19,
+            route_match: RouteMatch::MountPrefix,
+            path,
+            behavior,
+            security: RouteSecurity::SessionFromHeader(SessionFromHeaderRouteSecurity {
+                header_name: "x-session".into(),
+            }),
+            cors: CorsOptions {
+                allowed_patterns: [OriginPattern("https://site.example".into())].into(),
+            },
+        }
+    }
+
+    #[test]
+    fn mounted_file_headers_are_validated_on_compiled_route_ingress() {
+        for live in [false, true] {
+            let behavior = if live {
+                RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
+                    component_id: ComponentId(uuid::Uuid::from_u128(42)),
+                    component_revision: ComponentRevision::try_from(31u64).unwrap(),
+                    agent_type: AgentTypeName("files".into()),
+                    constructor_input: input(),
+                    constructor_parameters: vec![],
+                    filesystem_bindings: FileMapping::compile_list([("/*", "/public/$1")]).unwrap(),
+                    file_response_headers: vec![],
+                })
+            } else {
+                router()
+            };
+            let encoded: proto::golem::customapi::CompiledRoute = route(behavior).into();
+            for (headers, has_bindings, valid) in [
+                (
+                    vec![("Content-Security-Policy", "default-src 'self'")],
+                    true,
+                    true,
+                ),
+                (vec![("bad name", "value")], true, false),
+                (vec![("X-Policy", "value\r\ninjected: value")], true, false),
+                (vec![("Content-Length", "123")], true, false),
+                (vec![("Access-Control-Allow-Origin", "*")], true, false),
+                (vec![("X-Policy", "one"), ("x-policy", "two")], true, false),
+                (vec![("Referrer-Policy", "no-referrer")], false, false),
+                (vec![], false, true),
+            ] {
+                let mut candidate = encoded.clone();
+                let headers = headers
+                    .into_iter()
+                    .map(
+                        |(name, value)| proto::golem::component::FileResponseHeader {
+                            name: name.into(),
+                            value: value.into(),
+                        },
+                    )
+                    .collect();
+                match candidate.behavior.as_mut().unwrap().kind.as_mut().unwrap() {
+                    proto::golem::customapi::route_behaviour::Kind::HttpRouter(router) => {
+                        router.file_response_headers = headers;
+                        if !has_bindings {
+                            router.static_bindings.clear();
+                        }
+                    }
+                    proto::golem::customapi::route_behaviour::Kind::AgentFilesystem(filesystem) => {
+                        filesystem.file_response_headers = headers;
+                        if !has_bindings {
+                            filesystem.filesystem_bindings.clear();
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+                let behavior: RouteBehaviour =
+                    candidate.behavior.clone().unwrap().try_into().unwrap();
+                let path = candidate
+                    .path
+                    .clone()
+                    .into_iter()
+                    .map(TryInto::try_into)
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_eq!(
+                    RouteMatch::MountPrefix.validate(&path, &behavior).is_ok(),
+                    valid
+                );
+                assert_eq!(CompiledRoute::try_from(candidate).is_ok(), valid);
+            }
+        }
+    }
+
+    #[test]
+    fn mounted_dispatch_binary_and_protobuf_roundtrip() {
+        let filesystem = RouteBehaviour::AgentFilesystem(AgentFilesystemBehaviour {
+            component_id: ComponentId(uuid::Uuid::from_u128(42)),
+            component_revision: ComponentRevision::try_from(31u64).unwrap(),
+            agent_type: AgentTypeName("files".into()),
+            constructor_input: input(),
+            constructor_parameters: vec![ConstructorParameter::Path {
+                path_segment_index: 0u32.into(),
+                parameter_type: PathSegmentType::U64,
+            }],
+            filesystem_bindings: FileMapping::compile_list([
+                ("/*", "/public/$1"),
+                ("/fallback", "/fallback"),
+            ])
+            .unwrap(),
+            file_response_headers: vec![
+                FileResponseHeader {
+                    name: "content-security-policy".into(),
+                    value: "default-src 'none'".into(),
+                },
+                FileResponseHeader {
+                    name: "referrer-policy".into(),
+                    value: "no-referrer".into(),
+                },
+            ],
+        });
+        let mut filesystem_route = route(filesystem);
+        filesystem_route
+            .route_match
+            .validate(&filesystem_route.path, &filesystem_route.behavior)
+            .unwrap();
+        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+            unreachable!()
+        };
+        filesystem
+            .constructor_parameters
+            .push(ConstructorParameter::Path {
+                path_segment_index: 0u32.into(),
+                parameter_type: PathSegmentType::U64,
+            });
+        assert!(
+            filesystem_route
+                .route_match
+                .validate(&filesystem_route.path, &filesystem_route.behavior)
+                .is_err()
+        );
+        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+            unreachable!()
+        };
+        filesystem.constructor_parameters = vec![ConstructorParameter::Path {
+            path_segment_index: 1u32.into(),
+            parameter_type: PathSegmentType::U64,
+        }];
+        assert!(
+            filesystem_route
+                .route_match
+                .validate(&filesystem_route.path, &filesystem_route.behavior)
+                .is_err()
+        );
+        let RouteBehaviour::AgentFilesystem(filesystem) = &mut filesystem_route.behavior else {
+            unreachable!()
+        };
+        filesystem.constructor_parameters = vec![ConstructorParameter::Path {
+            path_segment_index: 0u32.into(),
+            parameter_type: PathSegmentType::U64,
+        }];
+        let filesystem = filesystem_route.behavior;
+        for behavior in [router(), filesystem] {
+            let expected: proto::golem::customapi::RouteBehaviour = behavior.into();
+            let decoded: RouteBehaviour = expected.clone().try_into().unwrap();
+            let bytes = desert_rust::serialize_to_byte_vec(&decoded).unwrap();
+            let decoded: RouteBehaviour = desert_rust::deserialize(&bytes).unwrap();
+            let actual: proto::golem::customapi::RouteBehaviour = decoded.into();
+            assert_eq!(actual, expected);
+
+            let expected: proto::golem::customapi::CompiledRoute =
+                route(actual.try_into().unwrap()).into();
+            let decoded: CompiledRoute = expected.clone().try_into().unwrap();
+            let actual: proto::golem::customapi::CompiledRoute = decoded.into();
+            assert_eq!(actual, expected);
+        }
+        for route_match in [
+            RouteMatch::MountPrefix,
+            RouteMatch::Method {
+                method: HttpMethod::Custom(golem_common::model::agent::CustomHttpMethod {
+                    value: "ANY".into(),
+                }),
+                trailing_slash: true,
+            },
+        ] {
+            let bytes = desert_rust::serialize_to_byte_vec(&route_match).unwrap();
+            let decoded: RouteMatch = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, route_match);
+            let encoded: proto::golem::customapi::RouteMatch = decoded.into();
+            assert_eq!(RouteMatch::try_from(encoded).unwrap(), route_match);
+        }
+    }
+
+    #[test]
+    fn mounted_dispatch_rejects_invalid_pairings_and_index() {
+        let mut invalid = route(router());
+        invalid.route_match = HttpMethod::Get(golem_common::model::Empty {}).into();
+        let encoded: proto::golem::customapi::CompiledRoute = invalid.into();
+        assert!(CompiledRoute::try_from(encoded).is_err());
+        let encoded: proto::golem::customapi::CompiledRoute =
+            route(RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                format: OpenApiSpecFormat::Json,
+                scheme: HttpApiDeploymentScheme::Https,
+            }))
+            .into();
+        assert!(CompiledRoute::try_from(encoded).is_err());
+
+        for path in [
+            "/", "/assets/", "relative", "/a//b", "/a/../b", "/a\\b", "/a\u{7f}",
+        ] {
+            let mut invalid = router();
+            let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+                unreachable!()
+            };
+            router.file_index[0].path = path.into();
+            // Same validation protects binary reload and protobuf ingress.
+            let bytes = desert_rust::serialize_to_byte_vec(&invalid).unwrap();
+            let decoded: RouteBehaviour = desert_rust::deserialize(&bytes).unwrap();
+            assert!(
+                RouteMatch::MountPrefix.validate(&[], &decoded).is_err(),
+                "{path}"
+            );
+            let encoded: proto::golem::customapi::CompiledRoute = route(invalid).into();
+            assert!(CompiledRoute::try_from(encoded).is_err(), "{path}");
+        }
+
+        let valid: proto::golem::customapi::CompiledRoute = route(router()).into();
+        for duplicate_mapping in [true, false] {
+            let mut invalid = valid.clone();
+            let Some(proto::golem::customapi::route_behaviour::Kind::HttpRouter(router)) =
+                invalid.behavior.as_mut().unwrap().kind.as_mut()
+            else {
+                unreachable!()
+            };
+            if duplicate_mapping {
+                router
+                    .static_bindings
+                    .push(router.static_bindings[0].clone());
+            } else {
+                router.file_index.push(router.file_index[0].clone());
+            }
+            assert!(CompiledRoute::try_from(invalid).is_err());
+        }
+        for length in [31, 33] {
+            let mut invalid = valid.clone();
+            let Some(proto::golem::customapi::route_behaviour::Kind::HttpRouter(router)) =
+                invalid.behavior.as_mut().unwrap().kind.as_mut()
+            else {
+                unreachable!()
+            };
+            router.file_index[0].blob_key.resize(length, 0);
+            assert!(CompiledRoute::try_from(invalid).is_err());
+        }
+        let any: proto::golem::customapi::RouteMatch =
+            RouteMatch::from(HttpMethod::Any(golem_common::model::Empty {})).into();
+        assert!(RouteMatch::try_from(any).is_err());
+
+        for segment in [
+            PathSegment::Variable {
+                display_name: "id".into(),
+            },
+            PathSegment::CatchAll {
+                display_name: "rest".into(),
+            },
+        ] {
+            assert!(
+                RouteMatch::MountPrefix
+                    .validate(&[segment], &router())
+                    .is_err()
+            );
+        }
+        let trailing = RouteMatch::Method {
+            method: HttpMethod::Get(golem_common::model::Empty {}),
+            trailing_slash: true,
+        };
+        assert!(
+            trailing
+                .validate(
+                    &[],
+                    &RouteBehaviour::OpenApiSpec(OpenApiSpecBehaviour {
+                        format: OpenApiSpecFormat::Json,
+                        scheme: HttpApiDeploymentScheme::Https,
+                    })
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn mounted_dispatch_rejects_constructor_schema_root_mismatch() {
+        let mut invalid = router();
+        let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+            unreachable!()
+        };
+        router.constructor_input.graph = SchemaGraph::anonymous(SchemaType::string());
+
+        let encoded: proto::golem::customapi::CompiledRoute = route(invalid).into();
+        assert!(
+            CompiledRoute::try_from(encoded).is_err(),
+            "constructor input graph root must describe the complete positional input"
+        );
+    }
+
+    #[test]
+    fn mounted_dispatch_rejects_method_schema_root_mismatch() {
+        for corrupt_input in [true, false] {
+            let mut invalid = router();
+            let RouteBehaviour::HttpRouter(router) = &mut invalid else {
+                unreachable!()
+            };
+            let method = router.openapi_provider_method.as_mut().unwrap();
+            if corrupt_input {
+                method.input.graph = SchemaGraph::anonymous(SchemaType::string());
+            } else {
+                method.output.graph = SchemaGraph::anonymous(SchemaType::u64());
+            }
+
+            let encoded: proto::golem::customapi::CompiledRoute = route(invalid).into();
+            assert!(CompiledRoute::try_from(encoded).is_err());
         }
     }
 }

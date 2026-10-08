@@ -12,17 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use crate::proto::golem::worker::input_stream_item::Payload;
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
     InputStreamEnd, InputStreamItem, InvocationAccepted, InvocationFailureKind,
     InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
     InvocationSessionResult, ResumeAttach, ResumeOperation, StreamCancel, StreamCancelReason,
-    StreamCancelRole, StreamMappingRole, invocation_request, invocation_response,
-    invocation_session_completion, invocation_session_result, public_external_tool_result,
-    public_tool_error, public_tool_rpc_error,
+    StreamCancelRole, StreamMappingRole, ToolByteStreamRole, invocation_request,
+    invocation_response, invocation_session_completion, invocation_session_result,
+    public_external_tool_result, public_tool_error, public_tool_rpc_error,
 };
+use golem_schema::proto::golem::schema::{SchemaValue, result_value, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -94,15 +94,14 @@ pub struct InvocationSessionState {
     resume_cursors: HashMap<(u64, u64), Option<[u8; 24]>>,
     resume_agent_id: Option<AgentId>,
     resume_environment_id: Option<crate::proto::golem::common::EnvironmentId>,
-    resume_attachment_id: Option<crate::proto::golem::common::Uuid>,
-    resume_attempt_id: Option<crate::proto::golem::common::Uuid>,
-    resume_callee_fingerprint: Option<crate::proto::golem::common::Uuid>,
+    resume_attachment_id: Option<golem_schema::proto::golem::common::Uuid>,
+    resume_attempt_id: Option<golem_schema::proto::golem::common::Uuid>,
+    resume_callee_fingerprint: Option<golem_schema::proto::golem::common::Uuid>,
     resume_accepted_epoch: Option<u64>,
-    terminal_resume_cursors: HashSet<(u64, u64)>,
     has_result: bool,
     inputs: HashMap<u64, InputState>,
     outputs: HashMap<u64, OutputState>,
-    expected_tool: Option<(String, Vec<String>, bool, bool)>,
+    expected_tool: Option<(String, Vec<String>, bool, bool, bool)>,
     allows_no_result: bool,
 }
 
@@ -123,7 +122,6 @@ impl Default for InvocationSessionState {
             resume_attempt_id: None,
             resume_callee_fingerprint: None,
             resume_accepted_epoch: None,
-            terminal_resume_cursors: HashSet::new(),
             has_result: false,
             inputs: HashMap::new(),
             outputs: HashMap::new(),
@@ -422,25 +420,6 @@ impl InvocationSessionState {
         self.inputs.values().all(|state| state.terminal)
     }
 
-    pub fn mark_terminal_resume_cursor(
-        &mut self,
-        durable_stream_id: (u64, u64),
-    ) -> Result<(), String> {
-        if !matches!(self.phase, SessionPhase::AwaitDecision { resume: true }) {
-            return Err(
-                "terminal resume cursors can only be marked before resume acceptance".to_string(),
-            );
-        }
-        match self.resume_cursors.get(&durable_stream_id) {
-            Some(Some(_)) => {
-                self.terminal_resume_cursors.insert(durable_stream_id);
-                Ok(())
-            }
-            Some(None) => Err("a stream-start resume cursor cannot be terminal".to_string()),
-            None => Err("terminal resume cursor was not requested".to_string()),
-        }
-    }
-
     fn validate_request(
         &mut self,
         message: RequestMessage<'_>,
@@ -489,6 +468,7 @@ impl InvocationSessionState {
                             tool.command_path.clone(),
                             tool.stdin,
                             tool.stdout,
+                            tool.stderr,
                         ));
                         Ok(())
                     }
@@ -681,7 +661,7 @@ impl InvocationSessionState {
                 (None, Some(_)) | (Some(_), None) => {
                     return Err("invocation acceptance kind differs from its start".to_string());
                 }
-                (Some((tool_name, command_path, stdin, stdout)), Some(accepted_name)) => {
+                (Some((tool_name, command_path, stdin, stdout, stderr)), Some(accepted_name)) => {
                     if accepted_name != tool_name || &accepted.command_path != command_path {
                         return Err(
                             "external-tool acceptance target differs from its start".to_string()
@@ -698,7 +678,16 @@ impl InvocationSessionState {
                             .iter()
                             .filter(|m| m.role() == StreamMappingRole::Output)
                             .count()
-                            != usize::from(*stdout)
+                            != usize::from(*stdout) + usize::from(*stderr)
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdin as i32)
+                        }) != *stdin
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+                        }) != *stdout
+                        || accepted.stream_mappings.iter().any(|mapping| {
+                            mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stderr as i32)
+                        }) != *stderr
                     {
                         return Err(
                             "external-tool acceptance byte streams differ from its start"
@@ -714,23 +703,34 @@ impl InvocationSessionState {
                 }
             }
         } else if let Some(tool_name) = &accepted.tool_name {
-            self.expected_tool = Some((
-                tool_name.clone(),
-                accepted.command_path.clone(),
-                accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|m| m.role() == StreamMappingRole::Input),
-                accepted
-                    .stream_mappings
-                    .iter()
-                    .any(|m| m.role() == StreamMappingRole::Output),
-            ));
+            self.expected_tool =
+                Some((
+                    tool_name.clone(),
+                    accepted.command_path.clone(),
+                    accepted
+                        .stream_mappings
+                        .iter()
+                        .any(|m| m.role() == StreamMappingRole::Input),
+                    accepted.stream_mappings.iter().any(|m| {
+                        m.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+                    }),
+                    accepted.stream_mappings.iter().any(|m| {
+                        m.tool_byte_stream_role == Some(ToolByteStreamRole::Stderr as i32)
+                    }),
+                ));
         } else if !accepted.command_path.is_empty() {
             return Err("agent-method acceptance contains external-tool fields".to_string());
         }
         if accepted.tool_name.is_some() && accepted.method_name.is_some() {
             return Err("external-tool acceptance contains an agent method".to_string());
+        }
+        if accepted.tool_name.is_none()
+            && accepted
+                .stream_mappings
+                .iter()
+                .any(|mapping| mapping.tool_byte_stream_role.is_some())
+        {
+            return Err("agent-method acceptance contains external-tool byte roles".to_string());
         }
         if self.resume {
             required_uuid(
@@ -782,6 +782,20 @@ impl InvocationSessionState {
             {
                 return Err("resume cursor may only name an output stream".to_string());
             }
+            let mut terminal_resume_cursors = HashSet::new();
+            for id in &accepted.terminal_cursor_stream_ids {
+                let id = (id.high_bits, id.low_bits);
+                if !terminal_resume_cursors.insert(id) {
+                    return Err("duplicate terminal resume cursor".to_string());
+                }
+                match self.resume_cursors.get(&id) {
+                    Some(Some(_)) => {}
+                    Some(None) => {
+                        return Err("a stream-start resume cursor cannot be terminal".to_string());
+                    }
+                    None => return Err("terminal resume cursor was not requested".to_string()),
+                }
+            }
             for mapping in &accepted.stream_mappings {
                 let durable_stream_id = mapping_stream_id(mapping)?;
                 match mapping.role() {
@@ -817,7 +831,7 @@ impl InvocationSessionState {
                         );
                     }
                     StreamMappingRole::Output => {
-                        let terminal = self.terminal_resume_cursors.contains(&durable_stream_id);
+                        let terminal = terminal_resume_cursors.contains(&durable_stream_id);
                         self.outputs.insert(
                             mapping.transport_stream_id,
                             OutputState {
@@ -844,6 +858,9 @@ impl InvocationSessionState {
             self.accepted_epoch = Some(accepted.epoch);
             self.phase = SessionPhase::Active;
             return Ok(());
+        }
+        if !accepted.terminal_cursor_stream_ids.is_empty() {
+            return Err("terminal cursors require resume acceptance".to_string());
         }
         let durable_acceptance = accepted.joined_origin_observer
             || !self.inputs.is_empty()
@@ -1467,9 +1484,13 @@ impl InvocationSessionState {
         let requested = {
             let state = self
                 .outputs
-                .get(&stream_id)
+                .get_mut(&stream_id)
                 .ok_or_else(|| format!("output stream {stream_id} is unknown"))?;
             ensure_open(state.terminal, stream_id)?;
+            if state.resume_first_frame {
+                state.next_offset = offset;
+                state.resume_first_frame = false;
+            }
             state.cancellation_requested
         };
         match requested {
@@ -1692,7 +1713,7 @@ impl InvocationSessionState {
     fn validate_output_frame(
         &mut self,
         transport_stream_id: u64,
-        durable_stream_id: &Option<crate::proto::golem::common::Uuid>,
+        durable_stream_id: &Option<golem_schema::proto::golem::common::Uuid>,
         durable_offset: &[u8],
         epoch: u64,
     ) -> Result<ValidatedOutputFrame, String> {
@@ -1850,9 +1871,9 @@ fn required_idempotency_key(key: &Option<IdempotencyKey>) -> Result<&str, String
 }
 
 fn required_uuid<'a>(
-    value: &'a Option<crate::proto::golem::common::Uuid>,
+    value: &'a Option<golem_schema::proto::golem::common::Uuid>,
     field: &str,
-) -> Result<&'a crate::proto::golem::common::Uuid, String> {
+) -> Result<&'a golem_schema::proto::golem::common::Uuid, String> {
     let value = value
         .as_ref()
         .ok_or_else(|| format!("{field} is missing"))?;
@@ -1878,6 +1899,7 @@ fn validate_agent_id(agent_id: &AgentId, field: &str) -> Result<(), String> {
 fn validate_accepted_mappings(mappings: &[DurableStreamMapping]) -> Result<(), String> {
     let mut transport_stream_ids = HashSet::with_capacity(mappings.len());
     let mut durable_stream_ids = HashSet::with_capacity(mappings.len());
+    let mut tool_byte_stream_roles = HashSet::new();
     for mapping in mappings {
         if !transport_stream_ids.insert(mapping.transport_stream_id) {
             return Err(format!(
@@ -1892,6 +1914,18 @@ fn validate_accepted_mappings(mappings: &[DurableStreamMapping]) -> Result<(), S
         }
         if role == StreamMappingRole::Output && mapping.high_water.is_some() {
             return Err("output stream mapping cannot carry input high-water state".to_string());
+        }
+        if let Some(byte_role) = mapping.tool_byte_stream_role {
+            let byte_role = ToolByteStreamRole::try_from(byte_role)
+                .map_err(|_| "durable stream mapping has an invalid tool byte role".to_string())?;
+            if !tool_byte_stream_roles.insert(byte_role) {
+                return Err("invocation acceptance repeats a tool byte stream role".to_string());
+            }
+            if matches!(byte_role, ToolByteStreamRole::Stdin)
+                != matches!(role, StreamMappingRole::Input)
+            {
+                return Err("tool byte stream role conflicts with mapping direction".to_string());
+            }
         }
         if let Some(high_water) = &mapping.high_water {
             validate_durable_offset(&high_water.resulting_offset)?;
@@ -2142,14 +2176,15 @@ fn stream_references(value: &SchemaValue) -> Result<Vec<u64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::golem::common::{Empty, EnvironmentId, Uuid};
+    use crate::proto::golem::common::EnvironmentId;
     use crate::proto::golem::component::ComponentId;
-    use crate::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use crate::proto::golem::worker::{
         AttachmentRevoked, InputStreamHighWater, InvocationFailure, InvocationRejected,
         InvocationStart, OutputStreamEnd, OutputStreamError, OutputStreamItem, ResumeAttach,
         StreamCursor, StreamInvocationIdentity,
     };
+    use golem_schema::proto::golem::common::{Empty, Uuid};
+    use golem_schema::proto::golem::schema::{RecordValue, SchemaValueStreamReference};
     use prost::Message;
     use test_r::test;
 
@@ -2448,6 +2483,7 @@ mod tests {
             }),
             high_water: None,
             role: role as i32,
+            tool_byte_stream_role: None,
         }
     }
 
@@ -2749,7 +2785,6 @@ mod tests {
         assert!(validate_accepted_handle(missing.handle.as_ref().unwrap()).is_err());
     }
 
-    // PROVISIONAL bug_finder reproducer — remove if the finding is rejected.
     #[test]
     fn durable_output_frames_require_identity_epoch_and_offset() {
         let mut state = InvocationSessionState::default();
@@ -3129,15 +3164,59 @@ mod tests {
                 last_observed_offset: Some(durable_offset(1)),
             }]))
             .unwrap();
-        state.mark_terminal_resume_cursor((0, 107)).unwrap();
-        state
-            .validate_response(&resumed_acceptance(vec![mapping(
-                7,
-                StreamMappingRole::Output,
-            )]))
-            .unwrap();
+        let mut acceptance = resumed_acceptance(vec![mapping(7, StreamMappingRole::Output)]);
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.terminal_cursor_stream_ids = vec![uuid(107)];
+        state.validate_response(&acceptance).unwrap();
         state.validate_response(&result(stream(7))).unwrap();
         state.validate_response(&success()).unwrap();
+    }
+
+    #[test]
+    fn terminal_resume_cursors_require_unique_requested_output_offsets() {
+        for invalid in 0..6 {
+            let mut state = InvocationSessionState::default();
+            let cursor = StreamCursor {
+                stream_id: Some(uuid(107)),
+                last_observed_offset: (invalid != 0).then(|| durable_offset(1)),
+            };
+            if invalid == 5 {
+                state
+                    .validate_public_request(&public_start(record(Vec::new())))
+                    .unwrap();
+            } else {
+                state
+                    .validate_public_request(&resume_attach(vec![cursor]))
+                    .unwrap();
+            }
+            let mut acceptance = if invalid == 5 {
+                accepted()
+            } else {
+                resumed_acceptance(vec![mapping(7, StreamMappingRole::Output)])
+            };
+            let Some(invocation_response::Response::Accepted(accepted)) =
+                acceptance.response.as_mut()
+            else {
+                unreachable!()
+            };
+            accepted.terminal_cursor_stream_ids = match invalid {
+                1 => vec![uuid(108)],
+                2 => vec![uuid(107), uuid(107)],
+                _ => vec![uuid(107)],
+            };
+            if invalid == 3 {
+                accepted.stream_mappings.clear();
+            } else if invalid == 4 {
+                accepted.stream_mappings[0].role = StreamMappingRole::Input as i32;
+            }
+            assert!(
+                state.validate_response(&acceptance).is_err(),
+                "case {invalid}"
+            );
+        }
     }
 
     #[test]
@@ -3545,6 +3624,97 @@ mod tests {
     }
 
     #[test]
+    fn resumed_output_cancellation_can_be_the_first_replayed_frame() {
+        for consumer_requested in [false, true] {
+            let mut state = InvocationSessionState::default();
+            state
+                .validate_public_request(&resume_attach(vec![StreamCursor {
+                    stream_id: Some(uuid(109)),
+                    last_observed_offset: Some(durable_offset(6)),
+                }]))
+                .unwrap();
+            state
+                .validate_response(&resumed_acceptance(vec![mapping(
+                    9,
+                    StreamMappingRole::Output,
+                )]))
+                .unwrap();
+            state.validate_response(&result(stream(9))).unwrap();
+            if consumer_requested {
+                let mut request = cancel(9, StreamCancelRole::OutputConsumer, 0);
+                request.epoch = 2;
+                state
+                    .validate_public_request(&public_request(
+                        public_invocation_request::Request::StreamCancel(request),
+                    ))
+                    .unwrap();
+            }
+            let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+            terminal.epoch = 2;
+            for invalid in ["offset", "epoch", "identity"] {
+                let mut invalid_terminal = terminal.clone();
+                match invalid {
+                    "offset" => invalid_terminal.durable_offset = durable_offset(6),
+                    "epoch" => invalid_terminal.epoch = 1,
+                    "identity" => invalid_terminal.durable_stream_id = Some(uuid(110)),
+                    _ => unreachable!(),
+                }
+                assert!(
+                    state
+                        .validate_response(&response(invocation_response::Response::StreamCancel(
+                            invalid_terminal,
+                        )))
+                        .is_err(),
+                    "consumer_requested={consumer_requested}, invalid={invalid}"
+                );
+            }
+            let terminal = response(invocation_response::Response::StreamCancel(terminal));
+            state
+                .validate_response(&terminal)
+                .unwrap_or_else(|error| panic!("consumer_requested={consumer_requested}: {error}"));
+            assert!(state.validate_response(&terminal).is_err());
+            let mut post_terminal = output_item(9, 8, scalar(3), Vec::new());
+            post_terminal.epoch = 2;
+            assert!(
+                state
+                    .validate_response(&response(invocation_response::Response::OutputItem(
+                        post_terminal,
+                    )))
+                    .is_err()
+            );
+            state.validate_response(&success()).unwrap();
+        }
+    }
+
+    #[test]
+    fn resumed_output_cancellation_does_not_reopen_terminal_cursor() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(vec![StreamCursor {
+                stream_id: Some(uuid(109)),
+                last_observed_offset: Some(durable_offset(6)),
+            }]))
+            .unwrap();
+        let mut acceptance = resumed_acceptance(vec![mapping(9, StreamMappingRole::Output)]);
+        let Some(invocation_response::Response::Accepted(accepted)) = acceptance.response.as_mut()
+        else {
+            unreachable!()
+        };
+        accepted.terminal_cursor_stream_ids = vec![uuid(109)];
+        state.validate_response(&acceptance).unwrap();
+        state.validate_response(&result(stream(9))).unwrap();
+        let mut terminal = cancel(9, StreamCancelRole::OutputProducer, 7);
+        terminal.epoch = 2;
+        assert!(
+            state
+                .validate_response(&response(invocation_response::Response::StreamCancel(
+                    terminal,
+                )))
+                .is_err()
+        );
+    }
+
+    #[test]
     fn all_role_appropriate_cancellations_are_unique_terminals() {
         let mut input = InvocationSessionState::default();
         input
@@ -3922,10 +4092,10 @@ mod tests {
 
     #[test]
     fn external_tool_byte_streams_flow_before_structured_result() {
-        use crate::proto::golem::schema::TypedSchemaValue;
         use crate::proto::golem::worker::{
             ExternalToolInvocation, PublicExternalToolResult, PublicToolInvocationResult,
         };
+        use golem_schema::proto::golem::schema::TypedSchemaValue;
 
         let mut state = InvocationSessionState::default();
         let start = trusted_request(invocation_request::Request::Start(InvocationStart {
@@ -3939,6 +4109,7 @@ mod tests {
                 }),
                 stdin: true,
                 stdout: true,
+                stderr: false,
                 fresh_owner: true,
                 expected_deployment_revision: None,
             }),
@@ -3953,8 +4124,16 @@ mod tests {
         accepted.tool_name = Some("shell".to_string());
         accepted.command_path = vec!["run".to_string()];
         accepted.stream_mappings = vec![
-            mapping(70, StreamMappingRole::Input),
-            mapping(71, StreamMappingRole::Output),
+            {
+                let mut mapping = mapping(70, StreamMappingRole::Input);
+                mapping.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+                mapping
+            },
+            {
+                let mut mapping = mapping(71, StreamMappingRole::Output);
+                mapping.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+                mapping
+            },
         ];
         state.validate_response(&acceptance).unwrap();
 
@@ -4054,10 +4233,11 @@ mod tests {
         state
             .validate_public_request(&resume_attach(Vec::new()))
             .unwrap();
-        let mut acceptance = resumed_acceptance(vec![
-            mapping(0, StreamMappingRole::Input),
-            mapping(1, StreamMappingRole::Output),
-        ]);
+        let mut stdin = mapping(0, StreamMappingRole::Input);
+        stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+        let mut stdout = mapping(1, StreamMappingRole::Output);
+        stdout.tool_byte_stream_role = Some(ToolByteStreamRole::Stdout as i32);
+        let mut acceptance = resumed_acceptance(vec![stdin, stdout]);
         let Some(invocation_response::Response::Accepted(accepted)) = &mut acceptance.response
         else {
             unreachable!()
@@ -4110,8 +4290,8 @@ mod tests {
 
     #[test]
     fn external_tool_acceptance_rejects_forged_or_colliding_roles() {
-        use crate::proto::golem::schema::TypedSchemaValue;
         use crate::proto::golem::worker::ExternalToolInvocation;
+        use golem_schema::proto::golem::schema::TypedSchemaValue;
 
         let mut start = trusted_request(invocation_request::Request::Start(InvocationStart {
             idempotency_key: key(),
@@ -4158,5 +4338,21 @@ mod tests {
             accepted.stream_mappings.clear();
         }
         assert!(state.validate_response(&acceptance).is_err());
+    }
+
+    #[test]
+    fn agent_acceptance_rejects_external_tool_byte_roles() {
+        let mut state = InvocationSessionState::default();
+        state
+            .validate_public_request(&resume_attach(Vec::new()))
+            .unwrap();
+        let mut stderr = mapping(9, StreamMappingRole::Output);
+        stderr.tool_byte_stream_role = Some(ToolByteStreamRole::Stderr as i32);
+
+        assert!(
+            state
+                .validate_response(&resumed_acceptance(vec![stderr]))
+                .is_err()
+        );
     }
 }

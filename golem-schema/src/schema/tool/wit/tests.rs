@@ -5,6 +5,7 @@ use test_r::test;
 fn tool(name: &str, version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -16,6 +17,16 @@ fn tool(name: &str, version: &str) -> Tool {
             }],
         },
         schema: SchemaGraph::empty(),
+    }
+}
+
+#[test]
+fn tool_wit_roundtrip_preserves_filesystem_requirement() {
+    for requires_filesystem in [false, true] {
+        let mut tool = tool("filesystem-test", "1");
+        tool.requires_filesystem = requires_filesystem;
+        let wire = wire::Tool::try_from(&tool).unwrap();
+        assert_eq!(Tool::try_from(&wire).unwrap(), tool);
     }
 }
 

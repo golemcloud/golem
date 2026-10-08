@@ -17,7 +17,7 @@ test "tool emitters generate root, leaf, registration, and typed clients" {
     @lib.generate_tool_registration(tools),
   )
   assert_true(registration.contains("fn __golem_tool_def_Grep"))
-  assert_true(registration.contains("@tool.register_tool_def_invoker"))
+  assert_true(registration.contains("@tool.register_wire_tool_invoker"))
   assert_true(registration.contains("Grep::count"))
   assert_true(registration.contains("subcommands: [1]"))
   let clients = @formatter.impls_to_string(
@@ -57,7 +57,8 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   )
   assert_true(subtree_generated.contains("name: \"child\""))
   assert_true(subtree_generated.contains("fn __golem_tool_def_Child"))
-  assert_true(subtree_generated.contains("@tool.register_subtool_def_invoker"))
+  assert_false(subtree_generated.contains("@tool.register_subtool_def_invoker"))
+  assert_true(subtree_generated.contains("__golem_tool_invoke_Root_subtree_0"))
   let subtree_clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(@lib.parse_tools([("subtree.mbt", subtree)])),
   )
@@ -68,7 +69,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   let stdout =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> Unit { () }
+    #|pub fn Out::out(input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> Unit { () }
   let stdout_tools = @lib.parse_tools([("stdout.mbt", stdout)])
   let stdout_registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(stdout_tools),
@@ -76,7 +77,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
   assert_true(stdout_registration.contains("stdout: Some("))
   assert_true(stdout_registration.contains("match __golem_stdin"))
   assert_true(
-    stdout_registration.contains("__golem_stdout : @tool.ProviderStdout?"),
+    stdout_registration.contains("__golem_stdout : @tool.ProviderOutput?"),
   )
   assert_true(
     stdout_registration.contains("Some(__golem_output) => __golem_output"),
@@ -87,7 +88,7 @@ test "pure dispatcher, subtree authoring, and stdout support" {
     @lib.generate_tool_client_code(stdout_tools),
   )
   assert_true(stdout_client.contains("@tool.TypedToolInvocation[Unit"))
-  assert_false(stdout_client.contains("output : @tool.ProviderStdout"))
+  assert_false(stdout_client.contains("output : @tool.ProviderOutput"))
   assert_true(stdout_client.contains("@tool.typed_invocation"))
 }
 
@@ -96,7 +97,7 @@ test "async tool commands generate async provider invokers" {
   let source =
     #|#derive.tool
     #|struct Streaming {}
-    #|pub async fn Streaming::stream(input : @asyncCore.Stream[Byte], output : @tool.ProviderStdout) -> UInt64 { 0UL }
+    #|pub async fn Streaming::stream(input : @asyncCore.Stream[Byte], output : @tool.ProviderOutput) -> UInt64 { 0UL }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(
       @lib.parse_tools([("streaming.mbt", source)]),
@@ -111,7 +112,7 @@ test "labelled stdout is injected and returned by generated invoker" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output~ : @tool.ProviderStdout) -> Unit { ignore(output) }
+    #|pub fn Out::out(output~ : @tool.ProviderOutput) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
@@ -125,7 +126,7 @@ test "stdout result does not reuse the stream handle owned by the tool method" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit {
+    #|pub fn Out::out(output : @tool.ProviderOutput) -> Unit {
     #|  output.drop()
     #|}
   let generated = @formatter.impls_to_string(
@@ -140,7 +141,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(value : @tool.ProviderStdout) -> String {
+    #|pub fn Out::out(value : @tool.ProviderOutput) -> String {
     #|  ignore(value)
     #|  "ok"
     #|}
@@ -162,7 +163,7 @@ test "stdout parameter is not shadowed by a generated result binding" {
   )
   assert_true(
     compact.contains(
-      "try{@tool.invocation_result_value(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
+      "try{@tool.invocation_result_wire(__golem_value)}catch{@asyncCore.Cancelled::Cancelledaserror=>raiseerror",
     ),
   )
 }
@@ -172,7 +173,7 @@ test "stdout parameter cannot collide with reserved result binding" {
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(__golem_value : @tool.ProviderStdout) -> String {
+    #|pub fn Out::out(__golem_value : @tool.ProviderOutput) -> String {
     #|  ignore(__golem_value)
     #|  "ok"
     #|}
@@ -184,7 +185,7 @@ test "tool generated internals use runtime facades instead of consumer aliases" 
   let source =
     #|#derive.tool
     #|struct Out {}
-    #|pub fn Out::out(output : @tool.ProviderStdout) -> Unit { ignore(output) }
+    #|pub fn Out::out(output : @tool.ProviderOutput) -> Unit { ignore(output) }
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("stdout.mbt", source)])),
   )
@@ -207,7 +208,7 @@ test "async tool commands use async ownership-aware invokers" {
   assert_true(generated.contains("AsyncTool::run(value)"))
   assert_true(generated.contains("@tool.reject_wire_invocation"))
   assert_true(generated.contains("@tool.reject_undecoded_invocation"))
-  assert_true(generated.contains("@tool.reject_decoded_invocation"))
+  assert_true(generated.contains("@schema.FromWire::read_wire"))
 }
 
 ///|
@@ -216,7 +217,7 @@ test "generated invokers claim stdout only after fallible input decoding" {
     #|#derive.tool
     #|struct StreamAfterInput {}
     #|pub fn StreamAfterInput::run(
-    #|  output : @tool.ProviderStdout,
+    #|  output : @tool.ProviderOutput,
     #|  value : String,
     #|) -> String {
     #|  ignore(output)
@@ -230,7 +231,7 @@ test "generated invokers claim stdout only after fallible input decoding" {
   let before_stdout = generated
     .split("Some(__golem_output) => __golem_output")
     .collect()[0]
-  assert_true(before_stdout.contains("@tool.decode_canonical_field"))
+  assert_true(before_stdout.contains("@schema.FromWire::read_wire"))
 }
 
 ///|
@@ -240,7 +241,7 @@ test "generated missing attachment failures release decoded invocation inputs" {
     #|struct Streams {}
     #|pub fn Streams::run(
     #|  input : @asyncCore.Stream[Byte],
-    #|  output : @tool.ProviderStdout,
+    #|  output : @tool.ProviderOutput,
     #|) -> Unit {
     #|  ignore(input)
     #|  ignore(output)
@@ -248,7 +249,9 @@ test "generated missing attachment failures release decoded invocation inputs" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("streams.mbt", source)])),
   )
-  let helper_calls = generated.split("@tool.reject_decoded_invocation").length()
+  let helper_calls = generated
+    .split("@tool.reject_undecoded_invocation")
+    .length()
   assert_true(helper_calls >= 3)
   assert_true(generated.contains("\"required stdin stream is missing\""))
   assert_true(generated.contains("\"required stdout stream is missing\""))
@@ -271,13 +274,13 @@ test "generated invokers reject unexpected stdout attachments" {
     .replace_all(old="\n", new="")
   assert_true(
     compact.contains(
-      "if__golem_stdoutisSome(_){return@tool.reject_decoded_invocation(__golem_decoded,__golem_stdin,",
+      "if__golem_stdoutisSome(_){__golem_reader.abort()return@tool.reject_undecoded_invocation(__golem_stdin,",
     ),
   )
   let accepts_stdout =
     #|#derive.tool
     #|struct Output {}
-    #|pub fn Output::run(stdout : @tool.ProviderStdout) -> Unit {}
+    #|pub fn Output::run(stdout : @tool.ProviderOutput) -> Unit {}
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(
       @lib.parse_tools([("output.mbt", accepts_stdout)]),
@@ -304,7 +307,7 @@ test "reexported tool Principal is injected as invocation context" {
 }
 
 ///|
-test "generated invoker passes diagnostic context to canonical decoders" {
+test "generated invoker passes diagnostic context to direct wire decoders" {
   let source =
     #|#derive.tool
     #|struct Echo {}
@@ -312,9 +315,9 @@ test "generated invoker passes diagnostic context to canonical decoders" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("echo.mbt", source)])),
   )
-  assert_true(generated.contains("@tool.decode_canonical_input("))
-  assert_true(generated.contains("\"tool echo invocation\""))
-  assert_true(generated.contains("@tool.decode_canonical_field("))
+  assert_true(generated.contains("@schema.WireReader::new("))
+  assert_true(generated.contains("@schema.wire_record("))
+  assert_true(generated.contains("@schema.FromWire::read_wire("))
   assert_true(generated.contains("\"tool echo command run\""))
 }
 
@@ -356,7 +359,21 @@ test "globals declared by a leaf command are emitted on that command node" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
   )
-  assert_eq(generated.split("long: \"token\"").count() - 1, 1)
+  let wire = generated.split("fn __golem_tool_wire_Runner").last().unwrap()
+  assert_eq(wire.split("long: \"token\"").count() - 1, 1)
+}
+
+///|
+test "direct wire descriptors preserve requires_filesystem" {
+  let source =
+    #|#derive.tool("files", requires_filesystem=true)
+    #|struct Files {}
+    #|pub fn Files::read(path : String) -> String { path }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("files.mbt", source)])),
+  )
+  let wire = generated.split("fn __golem_tool_wire_Files").last().unwrap()
+  assert_true(wire.contains("requires_filesystem: true"))
 }
 
 ///|
@@ -373,7 +390,7 @@ test "options are optional by default" {
 }
 
 ///|
-test "subtree invoker uses the child tool wire name" {
+test "subtree invoker specializes the child under its parent" {
   let source =
     #|#derive.tool
     #|struct Parent {}
@@ -385,7 +402,9 @@ test "subtree invoker uses the child tool wire name" {
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("subtree.mbt", source)])),
   )
-  assert_true(generated.contains("@tool.invoke_registered_subtool"))
+  assert_true(
+    generated.contains("return __golem_tool_invoke_Parent_subtree_0("),
+  )
   assert_true(generated.contains("\"wire-child\""))
   assert_true(
     generated.contains(
@@ -482,15 +501,9 @@ test "invoker decodes a reverse-alias global through the inherited canonical nam
   let generated = @formatter.impls_to_string(
     @lib.generate_tool_registration(@lib.parse_tools([("alias.mbt", source)])),
   )
-  assert_true(generated.contains("let count :String = try"))
-  assert_true(
-    generated.contains(
-      (
-        #|          "format",
-        #|          "tool root command run",
-      ),
-    ),
-  )
+  assert_true(generated.contains("let count"))
+  assert_true(generated.contains("@schema.FromWire::read_wire"))
+  assert_true(generated.contains("failed decoding `format`: "))
 }
 
 ///|
@@ -627,7 +640,8 @@ test "custom tool errors encode the declared case payload" {
   assert_true(
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
-  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_false(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_true(generated.contains("@tool.encode_wire_result(__golem_payload)"))
   assert_true(
     generated.split("@asyncCore.Cancelled::Cancelled as error").count() - 1 >= 2,
   )
@@ -653,7 +667,8 @@ test "raised custom tool errors encode the declared case payload" {
   assert_true(
     generated.contains("try_into_typed_schema_value(__golem_payload)"),
   )
-  assert_true(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_false(generated.contains("RunError::to_error_payload_value(error)"))
+  assert_true(generated.contains("@tool.encode_wire_result(__golem_payload)"))
 }
 
 ///|
@@ -685,7 +700,9 @@ test "tool error schemas are reusable across descriptors and typed clients" {
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools),
   )
-  assert_true(clients.contains("invoke_and_await_tool_error"))
+  assert_true(clients.contains("invoke_and_await_wire"))
+  assert_true(clients.contains("@schema.from_wire(__golem_value.value)"))
+  assert_false(clients.contains("from_error_payload_value"))
   assert_false(clients.contains("__golem_tool_decode_error"))
 }
 
@@ -911,6 +928,67 @@ test "delimiter metadata requires a delimiter-aware repetition mode" {
 }
 
 ///|
+test "repeatable options without authored defaults emit empty collection defaults" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.arg("tags", scope="option", repeatable="either", delim=",")
+    #|#derive.arg("defines", scope="option", repeatable="repeated")
+    #|pub fn Runner::run(tags : Array[String], defines : Map[String, Int64]) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  let compact = generated.split(" ").join("").split("\n").join("")
+  assert_true(compact.contains("@tool.ToolLiteral::List([])"))
+  assert_true(compact.contains("@tool.ToolLiteral::Map([])"))
+}
+
+///|
+test "argument description metadata does not require a doc summary" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.arg("input", description="Long argument description.")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  assert_true(generated.contains("Long argument description."))
+}
+
+///|
+test "result description metadata does not require a doc summary" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.result("json", description="Long result description.")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  assert_true(generated.contains("Long result description."))
+}
+
+///|
+test "result documentation preserves command examples" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|#derive.example("runner run input", title="Example run")
+    #|#derive.result("json", doc="Result summary")
+    #|pub fn Runner::run(input : String) -> String { input }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("runner.mbt", source)])),
+  )
+  let compact = generated.split(" ").join("").split("\n").join("")
+  assert_true(
+    compact.contains(
+      "summary:\"Resultsummary\",description:\"\",examples:[{title:\"Examplerun\",body:\"runnerruninput\"}]",
+    ),
+  )
+}
+
+///|
 test "repeatable option delimiters must be one character" {
   let source =
     #|#derive.tool
@@ -1107,11 +1185,10 @@ test "typed client preserves a parameter named values" {
       "let values = []\n  values.push((\"values\", @schema.to_value_as(values)))",
     ),
   )
-  assert_true(
-    generated.contains(
-      "__golem_values.push((\"values\", @schema.to_value_as(values)))",
-    ),
-  )
+  assert_true(generated.contains("__golem_values.push(values)"))
+  assert_false(generated.contains("canonical_input_model"))
+  assert_false(generated.contains("@model.SchemaValue"))
+  assert_false(generated.contains("@schema.to_value_as"))
 }
 
 ///|
@@ -1389,6 +1466,97 @@ test "constraints resolve authored aliases but not short forms" {
 }
 
 ///|
+test "direct dispatch orders global options before flags and deduplicates inherited aliases" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|#derive.arg("tenant", scope="global", alias="profile")
+    #|pub fn Root::root(verbose : Bool, tenant : String) -> Unit { () }
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|#derive.arg("profile", scope="global")
+    #|pub fn Root::run(verbose : Bool, profile : String, input : Int) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+      @lib.generate_tool_registration(
+        @lib.parse_tools([("ordering.mbt", source)]),
+      ),
+    )
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    generated.contains(
+      "letverbose:Bool=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[1])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "letprofile:String=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[0])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "letinput:Int=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[2])",
+    ),
+  )
+  assert_true(
+    generated.contains(
+      "@schema.wire_record(__golem_reader,__golem_input.value.root,3,",
+    ),
+  )
+}
+
+///|
+test "direct subtree input includes ancestor globals and releases unused fields" {
+  let source =
+    #|#derive.tool
+    #|struct Parent {}
+    #|#derive.arg("tenant", scope="global")
+    #|pub fn Parent::parent(tenant : String) -> Unit { () }
+    #|#derive.command(subtree="Child")
+    #|#derive.arg("verbose", scope="global", kind="flag")
+    #|pub fn Parent::child(verbose : Bool) -> Unit { () }
+    #|#derive.tool
+    #|struct Child {}
+    #|pub fn Child::run(value : Int) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+      @lib.generate_tool_registration(
+        @lib.parse_tools([("subtree-layout.mbt", source)]),
+      ),
+    )
+    .replace_all(old=" ", new="")
+    .replace_all(old="\n", new="")
+  assert_true(
+    generated.contains("asyncfn__golem_tool_invoke_Parent_subtree_1("),
+  )
+  assert_true(
+    generated.contains(
+      "letvalue:Int=try{@schema.FromWire::read_wire(__golem_reader,__golem_fields[2])",
+    ),
+  )
+  assert_true(generated.contains("@schema.release_wire(__golem_unused_0)"))
+  assert_true(generated.contains("@schema.release_wire(__golem_unused_1)"))
+}
+
+///|
+test "direct text refinement reads wire text rather than a string model" {
+  let source =
+    #|#derive.tool
+    #|struct Text {}
+    #|#derive.arg("value", regex="[a-z]+")
+    #|pub fn Text::text(value : String) -> String { value }
+    #|#derive.arg("items", scope="option", regex="[a-z]+")
+    #|pub fn Text::many(items : Array[String]) -> Unit { () }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_registration(@lib.parse_tools([("text.mbt", source)])),
+  )
+  assert_true(
+    generated.contains("@types.SchemaValueNode::TextValue(value) => value.text"),
+  )
+  assert_true(generated.contains("@types.SchemaValueNode::ListValue(children)"))
+  assert_false(generated.contains("canonical_value_for_sdk"))
+}
+
+///|
 test "discarded identity short does not collide with a surviving local short" {
   let source =
     #|#derive.tool("runner")
@@ -1508,11 +1676,8 @@ test "canonical MoonBit tools preserve the shared Rust and Scala contract" {
   let registration = @formatter.impls_to_string(
     @lib.generate_tool_registration(tools),
   )
-  assert_eq(registration.split("@tool.register_tool_def_invoker").length(), 5)
-  assert_eq(
-    registration.split("@tool.register_subtool_def_invoker").length(),
-    3,
-  )
+  assert_eq(registration.split("@tool.register_wire_tool_invoker").length(), 5)
+  assert_false(registration.contains("@tool.register_subtool_def_invoker"))
   let clients = @formatter.impls_to_string(
     @lib.generate_tool_client_code(tools),
   )
@@ -1539,5 +1704,424 @@ test "child constraint resolves parent subtree global" {
       @lib.parse_tools([("ancestor_constraint.mbt", source)]),
     ),
   )
-  assert_true(generated.contains("@tool.RefDef::ValueIs"))
+  let wire = generated.split("fn __golem_tool_wire_Parent").last().unwrap()
+  assert_true(wire.contains("@toolCommon.Ref::ValueIs"))
+  assert_true(wire.contains("long: \"format\""))
+  assert_true(wire.contains("@tool.wire_value_is_literal"))
+  assert_false(wire.contains("SchemaValue"))
+  assert_false(wire.contains("__golem_tool_wire_Child"))
+}
+
+///|
+test "wire client orders inherited globals before leaf globals and fields" {
+  let source =
+    #|#derive.tool
+    #|struct Root {}
+    #|#derive.arg("verbose", scope="global")
+    #|#derive.arg("format", scope="global")
+    #|pub fn Root::root(verbose : Bool, format : String) -> Unit { () }
+    #|#derive.arg("limit", scope="global")
+    #|pub fn Root::run(item : String, limit : UInt) -> String { item }
+  let generated = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(@lib.parse_tools([("ordered.mbt", source)])),
+  )
+  let run = generated.split("RootClient::run").last().unwrap()
+  let format = run.find("__golem_values.push(format)").unwrap()
+  let verbose = run.find("__golem_values.push(verbose)").unwrap()
+  let limit = run.find("__golem_values.push(limit)").unwrap()
+  let item = run.find("__golem_values.push(item)").unwrap()
+  assert_true(format < verbose && verbose < limit && limit < item)
+  assert_false(run.contains("command_index_by_path"))
+  assert_false(run.contains("build_canonical_input"))
+}
+
+///|
+test "multi-field errors preserve each constructor field's label mode" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(String, code~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("mixed-error.mbt", source)])
+  let error = tools[0].commands[0].errors[0]
+  assert_eq(error.payload_field_labels, [false, true])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_true(
+    registration.contains(
+      "Failed(__golem_error_payload_0, code=__golem_error_payload_1)",
+    ),
+  )
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_true(
+    clients.contains(
+      "Failed(__golem_error_payload_0, code=__golem_error_payload_1)",
+    ),
+  )
+}
+
+///|
+test "multi-field error synthetic names do not collide with authored labels" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(String, field0~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("colliding-error.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  assert_false(registration.contains("Failed(field0, field0~)"))
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools),
+  )
+  assert_false(clients.contains("Failed(field0, field0~)"))
+}
+
+///|
+test "multi-field error labels do not collide with generated locals" {
+  let source =
+    #|#derive.tool
+    #|struct Runner {}
+    #|
+    #|enum RunError {
+    #|  #derive.error(kind="runtime-error")
+    #|  Failed(__golem_error_schema~ : String, code~ : UInt)
+    #|}
+    #|
+    #|pub fn Runner::run() -> Result[Unit, RunError] { Ok(()) }
+  let tools = @lib.parse_tools([("local-collision-error.mbt", source)])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools),
+  )
+  let compact_registration = registration
+    .split(" ")
+    .join("")
+    .split("\n")
+    .join("")
+  assert_true(
+    compact_registration.contains(
+      "Failed(__golem_error_schema=__golem_error_payload_0,code=__golem_error_payload_1",
+    ),
+  )
+}
+
+///|
+test "GOL-40 artifact fixture preserves rich metadata and client call shape" {
+  let package_info = @lib.PackageInfo::{
+    rel_path: "gol40-conformance",
+    dir: "test-data/gol40-conformance",
+  }
+  let files = @lib.scan_package(package_info).files
+  let tools = @lib.parse_tools(files) catch {
+    error => fail("GOL-40 fixture did not parse: " + repr(error))
+  }
+  let value_types = @lib.parse_value_types(files) catch {
+    error => fail("GOL-40 value metadata did not parse: " + repr(error))
+  }
+  assert_eq(tools.length(), 2)
+  assert_eq(value_types.map(type_ => (type_.name, type_.inline)), [
+    ("ArtifactRequest", false),
+    ("ArtifactReport", false),
+    ("ValidationFailure", false),
+    ("Region", true),
+    ("Profile", true),
+    ("ReportFormat", true),
+    ("ColorMode", true),
+    ("ArtifactStatus", true),
+  ])
+  assert_eq(
+    value_types.filter_map(type_ => {
+      match type_.kind {
+        @lib.ValueTypeKind::SimpleEnum(cases) =>
+          Some((type_.name, cases.map(case => case.name)))
+        _ => None
+      }
+    }),
+    [
+      ("Region", ["eu-west-1", "us-east-1"]),
+      ("Profile", ["debug", "release"]),
+      ("ReportFormat", ["json", "text"]),
+      ("ColorMode", ["auto", "always", "never"]),
+      ("ArtifactStatus", ["queued", "ready", "failed"]),
+    ],
+  )
+  let artifact = canonical_tool(tools, "artifact")
+  assert_eq(artifact.version, Some("1.0.0"))
+  assert_eq(artifact.aliases, ["art"])
+  assert_eq(
+    artifact.description,
+    "Build and inspect artifacts\n A deliberately asymmetric conformance tool.",
+  )
+  assert_eq(artifact.examples, [
+    {
+      title: Some("Render"),
+      body: "artifact --region eu-west-1 render src/main.wasm --format json",
+    },
+  ])
+  let mount = canonical_command(artifact, "render")
+  assert_eq(mount.aliases, ["build"])
+  assert_true(mount.explicit_name)
+  assert_eq(mount.subtree, Some("ArtifactRender"))
+  assert_eq(mount.params.map(param => param.0), ["region", "trace"])
+  assert_eq(mount.args.map(arg => arg.scope), [
+    Some("root-global"),
+    Some("root-global"),
+  ])
+  assert_eq(mount.params[0].1, @lib.ToolParamType::Public(Simple("Region")))
+  assert_eq(
+    mount.args[0].description,
+    Some("Inherited by every executable descendant."),
+  )
+  let render_tool = canonical_tool(tools, "artifact-render")
+  let render = canonical_command(render_tool, "artifact-render")
+  assert_eq(render_tool.root_command, Some(0))
+  assert_eq(render.source_name, "artifact_render")
+  assert_eq(render.aliases, [])
+  assert_eq(
+    render.description,
+    "Render one artifact\n Build an artifact and return a structured report.",
+  )
+  assert_eq(render.idempotent, Some(true))
+  assert_eq(render.destructive, Some(false))
+  assert_eq(render.read_only, Some(false))
+  assert_eq(render.open_world, Some(false))
+  assert_eq(render.params.map(param => param.0), [
+    "profile", "request", "inputs", "format", "tag", "define", "color", "checksum",
+    "verbose", "stdin", "stdout", "stderr", "principal",
+  ])
+  assert_eq(render.params[0].1, @lib.ToolParamType::Public(Simple("Profile")))
+  assert_eq(
+    render.params[3].1,
+    @lib.ToolParamType::Public(Simple("ReportFormat")),
+  )
+  assert_eq(
+    render.params[6].1,
+    @lib.ToolParamType::Public(Optional(Simple("ColorMode"))),
+  )
+  assert_true(
+    render.params.any(param => param.1 is @lib.OptionalHidden(InputStream)),
+  )
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(OutputStream)))
+  assert_true(
+    render.params.any(param => param.1 is @lib.OptionalHidden(ErrorStream)),
+  )
+  assert_true(render.params.any(param => param.1 is @lib.Hidden(Principal)))
+  let inputs = render.args
+    .iter()
+    .find_first(arg => arg.source_param == "inputs")
+    .unwrap()
+  assert_eq(inputs.extensions, ["wasm", "wat"])
+  assert_eq(inputs.value_name, Some("INPUT"))
+  assert_eq(inputs.min, Some("1"))
+  assert_eq(inputs.max, Some("3"))
+  assert_eq(inputs.separator, Some("--"))
+  assert_eq(inputs.verbatim, Some(true))
+  assert_eq(inputs.direction, Some("input"))
+  assert_eq(inputs.description, Some("One to three source modules."))
+  let report = value_types
+    .iter()
+    .find_first(type_ => type_.name == "ArtifactReport")
+    .unwrap()
+  guard report.kind is @lib.ValueTypeKind::Record(report_fields) else {
+    fail("ArtifactReport did not emit record metadata")
+  }
+  assert_eq(
+    report_fields[1],
+    (
+      "digest",
+      @lib.ParamType::Parameterized("@schema.Text", [
+        @lib.ParamType::Simple("DigestText"),
+      ]),
+    ),
+  )
+  let status_type = value_types
+    .iter()
+    .find_first(type_ => type_.name == "ArtifactStatus")
+    .unwrap()
+  assert_eq(
+    status_type.kind,
+    @lib.ValueTypeKind::SimpleEnum([
+      @lib.ValueCase::{ source_name: "Queued", name: "queued", },
+      @lib.ValueCase::{ source_name: "Ready", name: "ready", },
+      @lib.ValueCase::{ source_name: "Failed", name: "failed", },
+    ]),
+  )
+  assert_eq(render.constraints, [
+    {
+      kind: "requires_all",
+      refs: ["checksum", "format"],
+      lhs: [],
+      rhs: [],
+      lhs_quant: None,
+      rhs_quant: None,
+      lhs_value_is: [],
+      rhs_value_is: [],
+      value_is: [],
+    },
+    {
+      kind: "implies",
+      refs: [],
+      lhs: [],
+      rhs: ["tag"],
+      lhs_quant: None,
+      rhs_quant: Some("any"),
+      lhs_value_is: ["profile=release"],
+      rhs_value_is: [],
+      value_is: [],
+    },
+    {
+      kind: "forbids",
+      refs: [],
+      lhs: [],
+      rhs: ["define"],
+      lhs_quant: Some("any"),
+      rhs_quant: None,
+      lhs_value_is: ["format=text"],
+      rhs_value_is: [],
+      value_is: [],
+    },
+  ])
+  assert_eq(render.result.unwrap().formatters, ["json", "table"])
+  assert_eq(render.result.unwrap().defaults, ["json"])
+  assert_eq(render.result.unwrap().doc, Some("Artifact report"))
+  assert_eq(render.result.unwrap().formatter_docs, [
+    ("json", "JSON report"),
+    ("table", "Tabular report"),
+  ])
+  assert_eq(
+    render.errors.map(error => (error.name, error.kind, error.exit_code)),
+    [
+      ("InvalidRequest", "usage-error", Some("2")),
+      ("RenderFailed", "runtime-error", Some("70")),
+    ],
+  )
+  assert_eq(
+    render.errors[1].payload,
+    @lib.VariantPayload::Multi(
+      [
+        ("stage", @lib.ParamType::Simple("String")),
+        ("code", @lib.ParamType::Simple("UInt")),
+      ],
+      true,
+    ),
+  )
+  assert_eq(render.errors[1].payload_field_labels, [true, true])
+  let status = canonical_command(render_tool, "status")
+  assert_eq(status.aliases, ["show"])
+  assert_eq(status.read_only, Some(true))
+  assert_eq(status.idempotent, Some(true))
+  assert_eq(status.args[0].source_param, "artifactId")
+  assert_eq(status.args[0].name, Some("artifact-id"))
+  assert_eq(status.result.unwrap().doc, Some("Current status"))
+  assert_eq(status.result.unwrap().formatter_docs, [("json", "JSON status")])
+  let registration = @formatter.impls_to_string(
+    @lib.generate_tool_registration(tools) catch {
+      error => fail("GOL-40 provider generation failed: " + repr(error))
+    },
+  )
+  assert_true(registration.contains("name: \"artifact\""))
+  assert_true(registration.contains("aliases: [\"art\"]"))
+  assert_true(registration.contains("name: \"render\""))
+  assert_true(registration.contains("name: \"status\""))
+  assert_true(registration.contains("Some(\"render\")"))
+  assert_true(registration.contains("@toolCommon.Constraint::RequiresAll"))
+  assert_true(registration.contains("@toolCommon.Constraint::Implies"))
+  assert_true(registration.contains("@toolCommon.Constraint::Forbids"))
+  assert_true(registration.contains("stdout: Some("))
+  assert_true(registration.contains("stderr: Some("))
+  let compact_registration = registration
+    .split(" ")
+    .join("")
+    .split("\n")
+    .join("")
+  assert_true(
+    compact_registration.contains("mime:[\"application/wasm\"],required:false"),
+  )
+  assert_true(
+    compact_registration.contains(
+      "mime:[\"text/plain;charset=utf-8\"],required:true",
+    ),
+  )
+  assert_true(
+    compact_registration.contains(
+      "mime:[\"application/octet-stream\"],required:false",
+    ),
+  )
+  assert_true(compact_registration.contains("RecordType([{name:\"stage\""))
+  assert_true(
+    compact_registration.contains("extensions=Some([\"wasm\",\"wat\"])"),
+  )
+  assert_true(compact_registration.contains("summary:\"Artifactreport\""))
+  assert_true(compact_registration.contains("summary:\"JSONreport\""))
+  assert_true(compact_registration.contains("summary:\"Tabularreport\""))
+  assert_true(compact_registration.contains("summary:\"Currentstatus\""))
+  assert_true(compact_registration.contains("summary:\"JSONstatus\""))
+  assert_true(compact_registration.contains("ToolLiteral::List([])"))
+  assert_true(compact_registration.contains("ToolLiteral::Map([])"))
+  assert_true(registration.contains("principal : @tool.Principal"))
+  let value_impls = @formatter.impls_to_string(
+    @lib.generate_value_type_impls(
+      value_types,
+      type_id_prefix="gol40-conformance",
+    ),
+  )
+  assert_true(value_impls.contains("@schema.TypeTag[@schema.Text[DigestText]]"))
+  assert_true(value_impls.contains("Enum([\"queued\", \"ready\", \"failed\"])"))
+  assert_true(value_impls.contains("Some(\"ArtifactRequest\")"))
+  assert_true(value_impls.contains("Some(\"ArtifactReport\")"))
+  assert_true(value_impls.contains("Some(\"ValidationFailure\")"))
+  let compact_value_impls = value_impls.split(" ").join("").split("\n").join("")
+  assert_true(
+    compact_value_impls.contains("EnumType([\"eu-west-1\",\"us-east-1\"])"),
+  )
+  assert_true(compact_value_impls.contains("EnumType([\"debug\",\"release\"])"))
+  assert_true(compact_value_impls.contains("EnumType([\"json\",\"text\"])"))
+  assert_true(
+    compact_value_impls.contains("EnumType([\"auto\",\"always\",\"never\"])"),
+  )
+  assert_true(
+    compact_value_impls.contains("EnumType([\"queued\",\"ready\",\"failed\"])"),
+  )
+  let clients = @formatter.impls_to_string(
+    @lib.generate_tool_client_code(tools) catch {
+      error => fail("GOL-40 client generation failed: " + repr(error))
+    },
+  )
+  assert_true(clients.contains("pub(all) struct ArtifactRenderClient"))
+  assert_true(clients.contains("ArtifactClient::new()"))
+  assert_true(clients.contains("ArtifactClient::new_for"))
+  assert_true(clients.contains("ArtifactClient::render"))
+  assert_true(clients.contains("ArtifactRenderClient::artifact_render"))
+  assert_true(clients.contains("ArtifactRenderClient::status"))
+  let mount_client = clients.split("ArtifactClient::render").last().unwrap()
+  assert_true(mount_client.contains("region : Region"))
+  assert_true(mount_client.contains("trace : Bool"))
+  let render_client = clients
+    .split("ArtifactRenderClient::artifact_render")
+    .last()
+    .unwrap()
+  let profile = render_client.find("__golem_values.push(profile)").unwrap()
+  let request = render_client.find("__golem_values.push(request)").unwrap()
+  assert_true(profile < request)
+  assert_true(
+    render_client.contains(
+      "match stdin {\n        Some(__golem_stdin) => __golem_stdin.drop_sync()\n        None => ()",
+    ),
+  )
+  assert_true(render_client.contains("ArtifactReport"))
+  assert_true(render_client.contains("ArtifactError"))
 }

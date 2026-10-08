@@ -94,4 +94,30 @@ message ToolDeploymentState {
   // per-occurrence policy, compatibility projection, and occurrence order.
   repeated bytes registered_tool_middlewares = 4;
   repeated bytes tool_middleware_chains = 5;
+  repeated McpImport mcp_imports = 6;
+  // BinaryCodec snapshot of ToolMiddlewareConfiguration for dynamic tool activation.
+  bytes tool_middleware_configuration = 7;
+}
+
+enum McpInlineCredentialKind {
+  MCP_INLINE_CREDENTIAL_KIND_UNSPECIFIED = 0;
+  MCP_INLINE_CREDENTIAL_KIND_BEARER = 1;
+  MCP_INLINE_CREDENTIAL_KIND_BASIC = 2;
+}
+
+message McpImportAuth {
+  McpInlineCredentialKind kind = 1;
+  golem.common.Hash credential_digest = 2;
+}
+
+message McpImport {
+  string url = 1;
+  optional McpImportAuth auth = 2;
+  optional string security_scheme = 3;
+  optional string prefix = 4;
+  repeated string include = 5;
+  repeated string exclude = 6;
+  optional string version = 7;
+  bool has_include = 8;
+  bool has_exclude = 9;
 }

@@ -27,6 +27,34 @@ extern "wasm" fn tool_core_resource_drop_count(kind : Int) -> Int = "golem:test"
 extern "wasm" fn set_tool_core_stream_host_mode(mode : Int) = "golem:test" "set-schema-value-stream-host-mode"
 
 ///|
+struct WireOnlyToolResult(UInt)
+
+///|
+impl @schema.WireSchema for WireOnlyToolResult with fn append_wire_type(encoder) {
+  encoder.push(@types.U32Type(None))
+}
+
+///|
+impl @schema.IntoWire for WireOnlyToolResult with fn append_wire(self, encoder) {
+  encoder.push(@types.U32Value(self.0))
+}
+
+///|
+test "generated tool results require no model serialization traits" {
+  run_tool_core_stream_async(async fn() {
+    let result = invocation_result_wire(WireOnlyToolResult(31U))
+    guard result.result is Some(typed) else { fail("missing tool result") }
+    assert_eq(
+      typed.graph.type_nodes[typed.graph.root].body,
+      @types.U32Type(None),
+    )
+    assert_eq(typed.value.value_nodes, [@types.U32Value(31U)])
+    assert_eq(typed.value.root, 0)
+    assert_true(result.stdout is None)
+  })
+}
+
+///|
 fn cancellable_tool_result_stream(
   raw_secret : Int,
   producer_started : Array[Bool],

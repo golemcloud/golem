@@ -1,4 +1,5 @@
 import {
+  "golemcloud/golem_sdk/tool" @tool,
   "golemcloud/golem_sdk/tool-middleware" @toolMiddleware,
 }
 

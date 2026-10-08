@@ -51,6 +51,7 @@ message ExternalToolInvocation {
   bool stdout = 5;
   bool fresh_owner = 6;
   optional uint64 expected_deployment_revision = 7;
+  bool stderr = 8;
 }
 
 message ResumeAttach {
@@ -102,6 +103,7 @@ message DurableStreamMapping {
   DurableStreamHandle handle = 2;
   InputStreamHighWater high_water = 3;
   StreamMappingRole role = 4;
+  optional ToolByteStreamRole tool_byte_stream_role = 5;
 }
 
 message InputStreamHighWater {
@@ -114,6 +116,12 @@ enum StreamMappingRole {
   STREAM_MAPPING_ROLE_UNSPECIFIED = 0;
   STREAM_MAPPING_ROLE_INPUT = 1;
   STREAM_MAPPING_ROLE_OUTPUT = 2;
+}
+
+enum ToolByteStreamRole {
+  TOOL_BYTE_STREAM_ROLE_STDIN = 0;
+  TOOL_BYTE_STREAM_ROLE_STDOUT = 1;
+  TOOL_BYTE_STREAM_ROLE_STDERR = 2;
 }
 
 enum InvocationFreshnessDisposition {
@@ -226,6 +234,9 @@ message InvocationAccepted {
   bool joined_origin_observer = 13;
   optional string tool_name = 11;
   repeated string command_path = 12;
+  // Requested output cursors verified against durable history to already name a terminal.
+  // No suffix or repeated terminal is sent for these streams on this attachment.
+  repeated golem.common.UUID terminal_cursor_stream_ids = 14;
 }
 
 message InvocationSessionResult {

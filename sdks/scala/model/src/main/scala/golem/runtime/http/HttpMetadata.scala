@@ -31,6 +31,7 @@ object PathSegment {
 
 final case class HeaderVariable(headerName: String, variableName: String)
 final case class QueryVariable(queryParamName: String, variableName: String)
+final case class FileResponseHeader(name: String, value: String)
 
 sealed trait HttpMethod extends Product with Serializable
 object HttpMethod {
@@ -43,6 +44,7 @@ object HttpMethod {
   case object Options                     extends HttpMethod
   case object Connect                     extends HttpMethod
   case object Trace                       extends HttpMethod
+  case object Any                         extends HttpMethod
   final case class Custom(method: String) extends HttpMethod
 
   def fromString(method: String): Either[String, HttpMethod] =
@@ -60,12 +62,22 @@ object HttpMethod {
     }
 }
 
+sealed trait FileMapping extends Product with Serializable
+object FileMapping {
+  final case class Exact(publicPath: List[String], filePath: String)           extends FileMapping
+  final case class Subtree(publicPrefix: List[String], filesystemRoot: String) extends FileMapping
+}
+
 final case class HttpMountDetails(
   pathPrefix: List[PathSegment],
   authRequired: Boolean,
   phantomAgent: Boolean,
   corsAllowedPatterns: List[String],
-  webhookSuffix: List[PathSegment]
+  webhookSuffix: List[PathSegment],
+  staticBindings: List[FileMapping],
+  filesystemBindings: List[FileMapping],
+  openapiProviderMethod: Option[String],
+  fileResponseHeaders: List[FileResponseHeader] = Nil
 )
 
 final case class HttpEndpointDetails(
@@ -74,5 +86,31 @@ final case class HttpEndpointDetails(
   headerVars: List[HeaderVariable],
   queryVars: List[QueryVariable],
   authOverride: Option[Boolean],
-  corsOverride: Option[List[String]]
+  corsOverride: Option[List[String]],
+  durableStreams: Option[DurableStreamRouteOptions] = None
+)
+
+sealed trait DurableStreamSlotSource extends Product with Serializable
+object DurableStreamSlotSource {
+  final case class Input(slot: String)  extends DurableStreamSlotSource
+  final case class Output(slot: String) extends DurableStreamSlotSource
+}
+
+final case class DurableStreamSlotOptions(
+  source: DurableStreamSlotSource,
+  name: Option[String],
+  contentType: Option[String]
+)
+
+final case class DurableStreamRouteLoadOptions(
+  maxConcurrentReadersPerStream: Option[Int],
+  maxAppendRequestsPerSecondPerStream: Option[Int]
+)
+
+final case class DurableStreamRouteOptions(
+  slots: List[DurableStreamSlotOptions],
+  allowExternalWrites: Option[Boolean],
+  allowStreamDelete: Option[Boolean],
+  allowInvocationDelete: Option[Boolean],
+  load: Option[DurableStreamRouteLoadOptions]
 )

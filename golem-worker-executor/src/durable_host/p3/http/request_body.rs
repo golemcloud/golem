@@ -23,7 +23,7 @@ use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::services::oplog::{Oplog, OplogOps};
+use crate::services::oplog::{Oplog, OplogError, OplogFence, OplogOps};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use golem_common::model::oplog::host_functions::P3HttpClientRequestBodyTransmission;
@@ -96,6 +96,7 @@ pub(super) struct DurableRequestBody {
     parent_start_index: OplogIndex,
     recording_enabled: bool,
     state: Arc<Mutex<DurableRequestBodyState>>,
+    recording_tasks: Arc<crate::worker::tasks::RuntimeAppendTasks>,
 }
 
 struct DurableRequestBodyState {
@@ -117,7 +118,7 @@ struct DurableRequestBodyState {
     cached_resend_bytes: usize,
     terminal: Option<RequestBodyTerminal>,
     /// First frame-recording failure; refuses resends and fails views.
-    recording_failed: Option<String>,
+    recording_failed: Option<OplogError>,
     live_polled: bool,
     active_live_view: bool,
     /// Bumped when an attempt's view is revoked (the attempt was abandoned
@@ -192,11 +193,13 @@ impl DurableRequestBody {
         oplog: Arc<dyn Oplog>,
         parent_start_index: OplogIndex,
         recording_enabled: bool,
+        recording_tasks: Arc<crate::worker::tasks::RuntimeAppendTasks>,
     ) -> Self {
         Self {
             oplog,
             parent_start_index,
             recording_enabled,
+            recording_tasks,
             state: Arc::new(Mutex::new(DurableRequestBodyState {
                 inner: Box::pin(body),
                 slots: Vec::new(),
@@ -225,6 +228,15 @@ impl DurableRequestBody {
             live_claimed: false,
             pending_load: None,
             epoch,
+        }
+    }
+
+    /// The refusal a frame recording met, if the storage refused one: the send then failed because
+    /// this agent's shard has a new owner, not because of the request.
+    pub(super) fn recording_fence(&self) -> Option<OplogFence> {
+        match &self.lock_state().recording_failed {
+            Some(OplogError::Fenced(fence)) => Some(fence.clone()),
+            _ => None,
         }
     }
 
@@ -405,6 +417,13 @@ impl DurableRequestBody {
         slot_data: Option<(u64, Option<CachedResendFrame>)>,
         frame: SerializableP3HttpRequestBodyFrame,
     ) {
+        let Some(recording) = self.recording_tasks.register() else {
+            state.recording_failed = Some(OplogError::Payload(
+                "request body belongs to an abandoned runtime".to_string(),
+            ));
+            state.wake_all();
+            return;
+        };
         let slot = slot_data.map(|(data_len, cached)| {
             state.slots.push(RecordedFrameSlot {
                 data_len,
@@ -418,6 +437,7 @@ impl DurableRequestBody {
         let parent_start_index = self.parent_start_index;
         let shared = self.state.clone();
         tokio::task::spawn(async move {
+            let _recording = recording;
             let result = record_frame_entry(oplog, parent_start_index, frame).await;
             let mut state = shared
                 .lock()
@@ -459,18 +479,18 @@ pub(super) async fn record_frame_entry(
     oplog: Arc<dyn Oplog>,
     parent_start_index: OplogIndex,
     frame: SerializableP3HttpRequestBodyFrame,
-) -> Result<OplogIndex, String> {
+) -> Result<OplogIndex, OplogError> {
     let request = HostRequest::from(HostRequestP3HttpClientRequestBodyFrame { frame });
     let bytes = serialize(&request)?;
     let raw = oplog.upload_raw_payload(bytes).await?;
     let payload = raw.into_payload::<HostRequest>()?;
-    Ok(oplog
+    oplog
         .add(OplogEntry::host_stream_frame(
             parent_start_index,
             HostStreamKind::P3HttpRequestBody,
             payload,
         ))
-        .await)
+        .await
 }
 
 /// Loads one recorded data/trailers frame back from its `HostStreamFrame`
@@ -755,8 +775,8 @@ impl HttpBody for DurableRequestBodyView {
             }
             let shared = this.shared.clone();
             let mut state = shared.lock_state();
-            if let Some(message) = &state.recording_failed {
-                return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(message.clone())))));
+            if let Some(error) = &state.recording_failed {
+                return Poll::Ready(Some(Err(ErrorCode::InternalError(Some(error.to_string())))));
             }
             if this.pos < state.slots.len() {
                 // A cached frame is served synchronously (even while its oplog
@@ -1497,7 +1517,13 @@ mod tests {
             ],
             None,
         );
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
 
         let (data, trailers) = collect_view(durable.replayer()).await;
         assert_eq!(data, b"hello world");
@@ -1528,7 +1554,13 @@ mod tests {
     async fn durable_request_body_records_end_terminal_for_bodiless_send() {
         let oplog = FrameTestOplog::new();
         let body = frame_body(vec![], None);
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
 
         assert!(matches!(
             durable.drain_to_terminal().await,
@@ -1563,7 +1595,13 @@ mod tests {
             ],
             None,
         );
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
         assert!(!durable.frames_consumed());
 
         let mut view = durable.replayer();
@@ -1578,6 +1616,7 @@ mod tests {
             bodiless_oplog,
             OplogIndex::INITIAL,
             true,
+            Default::default(),
         );
         assert!(matches!(
             bodiless.drain_to_terminal().await,
@@ -1600,7 +1639,13 @@ mod tests {
             ],
             None,
         );
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
 
         let mut view = durable.replayer();
         let first = view.frame().await.unwrap().unwrap();
@@ -1628,6 +1673,46 @@ mod tests {
         assert_eq!(data, b"firstsecond");
     }
 
+    #[test]
+    #[timeout("10s")]
+    async fn abandoned_request_body_waits_for_accepted_append_and_refuses_late_recording() {
+        let oplog = FrameTestOplog::gated();
+        let tasks = Arc::new(crate::worker::tasks::RuntimeAppendTasks::default());
+        let body = frame_body(
+            vec![
+                Frame::data(Bytes::from_static(b"first")),
+                Frame::data(Bytes::from_static(b"late")),
+            ],
+            None,
+        );
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            tasks.clone(),
+        );
+        let mut transport_view = durable.replayer();
+        transport_view.frame().await.unwrap().unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), tasks.seal_and_wait())
+                .await
+                .is_err(),
+            "the accepted payload upload must delay the horizon"
+        );
+        assert!(tasks.register().is_none(), "old admission remains sealed");
+        oplog.release_uploads(1);
+        tasks.seal_and_wait().await;
+        assert_eq!(oplog.recorded_frames_for(OplogIndex::INITIAL).len(), 1);
+
+        // The transport still owns the body after runtime teardown. Even a subsequent poll
+        // cannot register an append in the next generation.
+        let _ = transport_view.frame().await;
+        tasks.seal_and_wait().await;
+        assert_eq!(oplog.recorded_frames_for(OplogIndex::INITIAL).len(), 1);
+        assert!(!durable.can_replay_after_send_failure());
+    }
+
     /// The bounded in-flight window: with recordings stuck (oplog uploads
     /// gated), pulling stalls after `REQUEST_BODY_RECORDING_WINDOW` frames and
     /// resumes as recordings land.
@@ -1642,7 +1727,13 @@ mod tests {
                 .collect(),
             None,
         );
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
 
         let mut view = durable.replayer();
         for _ in 0..REQUEST_BODY_RECORDING_WINDOW {
@@ -1685,7 +1776,13 @@ mod tests {
                 "guest body failed".to_string(),
             ))),
         );
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, true);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            true,
+            Default::default(),
+        );
 
         let mut view = durable.replayer();
         view.frame().await.unwrap().unwrap();
@@ -1716,7 +1813,13 @@ mod tests {
     async fn durable_request_body_skips_recording_when_disabled() {
         let oplog = FrameTestOplog::new();
         let body = frame_body(vec![Frame::data(Bytes::from_static(b"data"))], None);
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, false);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            false,
+            Default::default(),
+        );
 
         assert!(durable.can_replay_after_send_failure());
         let (data, _) = collect_view(durable.replayer()).await;
@@ -1737,7 +1840,13 @@ mod tests {
     async fn durable_request_body_disabled_recording_keeps_empty_body_replayable() {
         let oplog = FrameTestOplog::new();
         let body = frame_body(vec![], None);
-        let durable = DurableRequestBody::new(body, oplog.clone(), OplogIndex::INITIAL, false);
+        let durable = DurableRequestBody::new(
+            body,
+            oplog.clone(),
+            OplogIndex::INITIAL,
+            false,
+            Default::default(),
+        );
 
         assert!(matches!(
             durable.drain_to_terminal().await,

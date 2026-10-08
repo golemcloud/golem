@@ -46,9 +46,6 @@ message RawOplogEntry {
     RawDeactivatePluginParameters deactivate_plugin = 27;
     RawRevertParameters revert = 28;
     RawCancelPendingInvocationParameters cancel_pending_invocation = 29;
-    RawStartSpanParameters start_span = 30;
-    RawFinishSpanParameters finish_span = 31;
-    RawSetSpanAttributeParameters set_span_attribute = 32;
     RawBeginRemoteTransactionParameters begin_remote_transaction = 34;
     RawRemoteTransactionParameters pre_commit_remote_transaction = 35;
     RawRemoteTransactionParameters pre_rollback_remote_transaction = 36;
@@ -81,6 +78,7 @@ message RawOplogEntry {
     RawDurableStreamRecordParameters stream_session = 63;
     RawTimestampOnly resumed = 64;
     RawTimestampOnly recovery_succeeded = 65;
+    RawSnapshotConfirmedParameters snapshot_confirmed = 66;
   }
 }
 
@@ -127,13 +125,24 @@ message RawUpdateDescription {
   oneof description {
     uint64 automatic_target_revision = 1;
     RawSnapshotBasedUpdate snapshot_based = 2;
+    RawSnapshotAssistedAutomaticUpdate snapshot_assisted_automatic = 3;
   }
+}
+
+message RawSnapshotAssistedAutomaticUpdate {
+  uint64 target_revision = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
+  uint64 snapshot_revision = 5;
+  optional string filesystem_snapshot = 6;
 }
 
 message RawSnapshotBasedUpdate {
   uint64 target_revision = 1;
   RawOplogPayload payload = 2;
   string mime_type = 3;
+  optional string filesystem_snapshot = 4;
 }
 
 // Oplog region (start..end index range).
@@ -174,17 +183,68 @@ message RawStartParameters {
   WrappedFunctionType durable_function_type = 5;
   optional golem.common.UUID invocation_id = 6;
   optional uint64 observational_owner = 7;
+  optional RawSpanStarted span_started = 8;
 }
 
 message RawEndParameters {
   uint64 start_index = 1;
   optional RawOplogPayload response = 2;
   bool forced_commit = 3;
+  optional RawSpanFinished span_finished = 4;
+  optional RawSpanAttributes span_attributes = 5;
 }
 
 message RawCancelledParameters {
   uint64 start_index = 1;
   optional RawOplogPayload partial = 2;
+  optional RawSpanFinished span_finished = 3;
+}
+
+enum RawSpanKind {
+  RAW_SPAN_KIND_INTERNAL = 0;
+  RAW_SPAN_KIND_CLIENT = 1;
+  RAW_SPAN_KIND_SERVER = 2;
+}
+
+enum RawSpanOutcome {
+  RAW_SPAN_OUTCOME_COMPLETED = 0;
+  RAW_SPAN_OUTCOME_FAILED = 1;
+  RAW_SPAN_OUTCOME_CANCELLED = 2;
+  RAW_SPAN_OUTCOME_ABANDONED = 3;
+  RAW_SPAN_OUTCOME_DENIED = 4;
+}
+
+message RawSpanLink {
+  string trace_id = 1;
+  string span_id = 2;
+  repeated string trace_states = 3;
+}
+
+// The span name remains in the "name" attribute. Embedded openings require an
+// explicit close; invocation boundaries do not close them automatically.
+message RawSpanStarted {
+  string span_id = 1;
+  string trace_id = 2;
+  repeated string trace_states = 3;
+  optional string parent_span_id = 4;
+  repeated RawSpanLink links = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, string> attributes = 7;
+  RawSpanKind kind = 8;
+}
+
+// This compact close carries the outcome but no error-message payload. Do not
+// decode an opaque request to derive one.
+message RawSpanFinished {
+  string span_id = 1;
+  google.protobuf.Timestamp finished_at = 2;
+  RawSpanOutcome outcome = 3;
+}
+
+// End applies these attributes before closing the span.
+message RawSpanAttributes {
+  string span_id = 1;
+  map<string, string> attributes = 2;
 }
 
 message RawCompletionDiscardedParameters {
@@ -243,6 +303,7 @@ message RawPendingAgentInvocationParameters {
 
 message RawPendingUpdateParameters {
   RawUpdateDescription description = 1;
+  optional uint64 update_attempt_index = 2;
 }
 
 message RawSuccessfulUpdateParameters {
@@ -250,11 +311,37 @@ message RawSuccessfulUpdateParameters {
   uint64 new_component_size = 2;
   repeated golem.component.EnvironmentPluginGrantId new_active_plugins = 3;
   optional uint64 new_total_linear_memory_size = 4;
+  optional RawSnapshotAssistedUpdateDetails snapshot_assisted_details = 5;
+}
+
+message RawSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message RawFailedUpdateParameters {
   uint64 target_revision = 1;
   optional string details = 2;
+  optional RawFailedSnapshotAssistedUpdateDetails snapshot_assisted_details = 3;
+  optional uint64 update_attempt_index = 4;
+  optional RawSnapshotFault snapshot_fault = 5;
+}
+
+// Whether a failed update is about the record that the update selected.
+enum RawSnapshotFault {
+  // The store lost the filesystem snapshot of the selected record.
+  RAW_SNAPSHOT_FAULT_UNAVAILABLE = 0;
+  // The target could not load the selected record, or the history after it diverged.
+  RAW_SNAPSHOT_FAULT_INCOMPATIBLE = 1;
+}
+
+message RawFailedSnapshotAssistedUpdateDetails {
+  uint64 pending_update_index = 1;
+  uint64 source_component_revision = 2;
+  uint64 source_revision_start_index = 3;
+  uint64 snapshot_index = 4;
 }
 
 message RawGrowMemoryParameters {
@@ -281,6 +368,7 @@ message RawLogParameters {
   string context = 2;
   string message = 3;
   optional uint64 parent_start_index = 4;
+  optional LogTraceContext trace_context = 5;
 }
 
 message RawActivatePluginParameters {
@@ -299,26 +387,6 @@ message RawCancelPendingInvocationParameters {
   IdempotencyKey idempotency_key = 1;
 }
 
-message RawStartSpanParameters {
-  string span_id = 1;
-  optional string parent = 2;
-  optional string linked_context_id = 3;
-  map<string, string> attributes = 4;
-  optional uint64 parent_start_index = 5;
-}
-
-message RawFinishSpanParameters {
-  string span_id = 1;
-  optional uint64 parent_start_index = 2;
-}
-
-message RawSetSpanAttributeParameters {
-  string span_id = 1;
-  string key = 2;
-  string value = 3;
-  optional uint64 parent_start_index = 4;
-}
-
 message RawBeginRemoteTransactionParameters {
   string transaction_id = 1;
   optional uint64 original_begin_index = 2;
@@ -333,6 +401,11 @@ message RawSnapshotParameters {
   string mime_type = 2;
   repeated bytes active_cards = 3;
   uint64 wallet_generation = 4;
+  optional string filesystem_snapshot = 5;
+}
+
+message RawSnapshotConfirmedParameters {
+  string filesystem_snapshot = 1;
 }
 
 message RawOplogProcessorCheckpointParameters {
@@ -480,6 +553,27 @@ message RawHostStreamFrameParameters {
 
 message RawDurableStreamRecordParameters {
   RawOplogPayload record = 1;
+  optional RawDurableStreamEventSummary summary = 2;
+}
+
+message RawDurableStreamEventSummary {
+  enum Kind {
+    REGISTERED = 0;
+    ITEMS = 1;
+    END = 2;
+    CANCELLED = 3;
+    SESSION_RESULT = 4;
+    SESSION_FINISHED = 5;
+    SESSION_CANCELLATION = 6;
+    SESSION_EXPIRED = 7;
+  }
+  enum Outcome {
+    SUCCESS = 0;
+    ERROR = 1;
+  }
+  Kind kind = 1;
+  optional uint64 item_count = 2;
+  optional Outcome outcome = 3;
 }
 
 message RawOplogEntryWithIndex {

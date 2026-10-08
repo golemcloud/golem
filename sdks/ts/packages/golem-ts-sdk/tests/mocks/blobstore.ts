@@ -42,7 +42,6 @@ export class StreamObjectNames {
 
 export const __blobTestState = {
   containers: new Map<string, Container>(),
-  endExclusive: false,
   lastOutgoingBody: undefined as AsyncIterable<number> | undefined,
 };
 
@@ -62,8 +61,7 @@ export class Container {
   getData(name: string, start: bigint, end: bigint): IncomingValue {
     const data = this.objects.get(name);
     if (data === undefined) throw new Error('no such object');
-    const endIndex = __blobTestState.endExclusive ? Number(end) : Number(end) + 1;
-    return new IncomingValue(data.subarray(Number(start), endIndex));
+    return new IncomingValue(data.subarray(Number(start), Number(end) + 1));
   }
 
   writeData(name: string, value: OutgoingValue): void {

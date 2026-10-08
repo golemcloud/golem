@@ -47,6 +47,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::filesystem::{FileByteSelection, FileReadExtent, FileReadHead};
 use golem_common::model::oplog::PublicOplogEntryWithIndex;
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::worker::{
@@ -126,8 +127,16 @@ impl TestWorkerExecutor {
             match response.response {
                 Some(invocation_response::Response::Accepted(_)) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
+                    // Kept alongside the message: a rejection is refused before acceptance, and
+                    // the reason says as what.
+                    let reason =
+                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
+                            rejected.reason,
+                        )
+                        .map(|reason| reason.as_str_name())
+                        .unwrap_or("UNKNOWN");
                     terminal = Some(Err(anyhow!(
-                        "Agent invocation rejected: {}",
+                        "Agent invocation rejected ({reason}): {}",
                         rejected.error
                     )));
                 }
@@ -537,7 +546,7 @@ impl TestDsl for TestWorkerExecutor {
         let agent_id = invocation_agent_id(component, agent_id, idempotency_key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         self.invoke_agent_session(InvocationStart {
@@ -584,7 +593,7 @@ impl TestDsl for TestWorkerExecutor {
         let worker_agent_id = invocation_agent_id(component, agent_id, &key)?;
 
         let (_graph, value) = params.into_parts();
-        let proto_method_parameters: golem_api_grpc::proto::golem::schema::SchemaValue =
+        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
             value.try_into().map_err(anyhow::Error::msg)?;
 
         let result = self
@@ -626,7 +635,7 @@ impl TestDsl for TestWorkerExecutor {
                 return Err(anyhow!("agent invocation returned an external-tool result"));
             }
         };
-        Ok(AgentResult::new(value))
+        Ok(AgentResult::new(value, worker_agent_id))
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id))]
@@ -950,6 +959,41 @@ impl TestDsl for TestWorkerExecutor {
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
+    async fn snapshot_assisted_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_revision(&agent_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .update_worker(UpdateWorkerRequest {
+                agent_id: Some(agent_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                target_revision: target_revision.into(),
+                mode: UpdateMode::Automatic.into(),
+                auth_ctx: Some(self.auth_ctx().into()),
+                disable_wakeup,
+                principal: None,
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(update_worker_response::Result::Success(_)) => Ok(()),
+            Some(update_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to update worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to update worker: unknown error")),
+        }
+    }
+
+    #[tracing::instrument(level = "info", skip_all, fields(%agent_id, target_revision, disable_wakeup))]
     async fn manual_update_worker(
         &self,
         agent_id: &AgentId,
@@ -1200,35 +1244,61 @@ impl TestDsl for TestWorkerExecutor {
                 component_owner_account_id: Some(latest_version.account_id.into()),
                 auth_ctx: Some(self.auth_ctx().into()),
                 principal: None,
+                selection: Some(FileByteSelection::Full.into()),
             })
             .await?
             .into_inner();
 
         let mut bytes = Vec::new();
+        let mut expected = None;
         while let Some(chunk) = stream.message().await? {
             match chunk.result {
                 Some(workerexecutor::v1::get_file_contents_response::Result::Success(data)) => {
+                    if expected.is_none() || data.len() > 64 * 1024 {
+                        return Err(anyhow!("Invalid body before header or oversized chunk"));
+                    }
                     bytes.extend_from_slice(&data);
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
-                    match header.result {
-                        Some(
-                            workerexecutor::v1::get_file_contents_response_header::Result::Success(
-                                _,
-                            ),
-                        ) => {}
-                        _ => {
-                            return Err(anyhow!("Unexpected header from get_file_contents"));
+                    if expected.is_some() {
+                        return Err(anyhow!("Duplicate header from get_file_contents"));
+                    }
+                    let head = FileReadHead::try_from(header)
+                        .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                    match head {
+                        FileReadHead::File(metadata) => {
+                            metadata
+                                .validate_for(FileByteSelection::Full)
+                                .map_err(|error| anyhow!("Invalid file metadata: {error}"))?;
+                            expected = Some(match metadata.selection {
+                                FileReadExtent::Selected { length, .. } => length,
+                                FileReadExtent::Unsatisfiable => 0,
+                            });
                         }
+                        other => return Err(anyhow!("Unexpected file head: {other:?}")),
                     }
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
                     return Err(anyhow!("Error from get_file_contents: {err:?}"));
                 }
+                Some(workerexecutor::v1::get_file_contents_response::Result::ReadFailure(err)) => {
+                    let err = golem_api_grpc::proto::golem::worker::FileReadError::try_from(err)?;
+                    return Err(anyhow!(
+                        "File read error from get_file_contents: {}",
+                        err.as_str_name()
+                    ));
+                }
                 None => {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
                 }
             }
+        }
+        let expected = expected.ok_or_else(|| anyhow!("Missing header from get_file_contents"))?;
+        if bytes.len() as u64 != expected {
+            return Err(anyhow!(
+                "Wrong file body length: expected {expected}, got {}",
+                bytes.len()
+            ));
         }
         Ok(Bytes::from(bytes))
     }

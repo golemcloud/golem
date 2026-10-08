@@ -17,12 +17,12 @@ val Scala212    = "2.12.21"
 // Global settings
 // ---------------------------------------------------------------------------
 
-ThisBuild / organization     := "cloud.golem"
-ThisBuild / scalaVersion     := Scala3Golem
-ThisBuild / dynverTagPrefix  := "golem-scala-v"
-ThisBuild / licenses     := List("Golem Source License v1.1" -> url("http://license.golem.cloud/LICENSE"))
-ThisBuild / homepage     := Some(url("https://github.com/golemcloud/golem"))
-ThisBuild / scmInfo := Some(
+ThisBuild / organization    := "cloud.golem"
+ThisBuild / scalaVersion    := Scala3Golem
+ThisBuild / dynverTagPrefix := "golem-scala-v"
+ThisBuild / licenses        := List("Golem Source License v1.1" -> url("http://license.golem.cloud/LICENSE"))
+ThisBuild / homepage        := Some(url("https://github.com/golemcloud/golem"))
+ThisBuild / scmInfo         := Some(
   ScmInfo(
     url("https://github.com/golemcloud/golem"),
     "scm:git@github.com:golemcloud/golem.git"
@@ -32,6 +32,11 @@ ThisBuild / developers := List(
   Developer("vigoo", "Daniel Vigovszky", "daniel.vigovszky@gmail.com", url("https://github.com/vigoo")),
   Developer("jdegoes", "John De Goes", "john@degoes.net", url("https://github.com/jdegoes"))
 )
+ThisBuild / initialize := {
+  val _           = (ThisBuild / initialize).value
+  val javaVersion = java.lang.Runtime.version().feature()
+  if (javaVersion < 21) sys.error(s"The Golem Scala SDK requires JDK 21 or newer (found JDK $javaVersion)")
+}
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
 
@@ -39,21 +44,21 @@ Global / onChangedBuildSource := ReloadOnSourceChanges
 // Dependency versions
 // ---------------------------------------------------------------------------
 
-val ujsonVersion              = "3.1.0"
-val scalametaVersion          = "4.14.7"
-val munitVersion              = "1.1.0"
-val zioTestVersion            = "2.1.24"
+val ujsonVersion               = "3.1.0"
+val scalametaVersion           = "4.14.7"
+val munitVersion               = "1.1.0"
+val zioTestVersion             = "2.1.24"
 val zioSchemaDerivationVersion = "1.8.3"
-val scalaJavaTimeVersion      = "2.6.0"
-val zioHttpVersion            = "3.0.1"
-val zioProcessVersion         = "0.8.0"
-val scalafmtDynamicVersion    = "3.10.4"
+val scalaJavaTimeVersion       = "2.6.0"
+val zioHttpVersion             = "3.0.1"
+val zioProcessVersion          = "0.8.0"
+val scalafmtDynamicVersion     = "3.10.4"
 
 // ---------------------------------------------------------------------------
 // zio-blocks dependency helper
 // ---------------------------------------------------------------------------
 
-val zioBlocksVersion = "0.0.51"
+val zioBlocksVersion = "0.0.54"
 
 def zioBlocksDep(name: String) = Def.setting {
   "dev.zio" %%% s"zio-blocks-$name" % zioBlocksVersion
@@ -103,6 +108,10 @@ lazy val root = (project in file("."))
     sbtPlugin,
     testAgents,
     emptyAutoRegisterFixture,
+    toolExportsFixture,
+    agentExportsFixture,
+    mixedExportsFixture,
+    clientExportsFixture,
     middlewareGuestLinkFixture,
     integrationTests
   )
@@ -121,12 +130,15 @@ lazy val model = crossProject(JVMPlatform, JSPlatform)
     name := "golem-scala-model",
     libraryDependencies ++= Seq(
       zioBlocksDep("schema").value,
+      zioBlocksDep("streams").value,
       "io.github.cquiroz" %%% "scala-java-time" % scalaJavaTimeVersion,
-      "dev.zio" %%% "zio-test"     % zioTestVersion % Test,
-      "dev.zio" %%% "zio-test-sbt" % zioTestVersion % Test
+      "dev.zio"           %%% "zio-test"        % zioTestVersion % Test,
+      "dev.zio"           %%% "zio-test-sbt"    % zioTestVersion % Test
     )
   )
   .jvmSettings(
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "golem-service-base" / "tests" / "fixtures" / "http-handlers",
     Compile / unmanagedSourceDirectories ++= Seq(
       (ThisBuild / baseDirectory).value / "model" / ".jvm" / "src" / "main" / "scala"
     ),
@@ -155,8 +167,8 @@ lazy val core = project
       "dev.zio"           %%% "zio-test-sbt"               % zioTestVersion       % Test,
       "io.github.cquiroz" %%% "scala-java-time"            % scalaJavaTimeVersion % Test,
       "io.github.cquiroz" %%% "scala-java-time-tzdb"       % scalaJavaTimeVersion % Test,
-      "io.github.cquiroz" %%% "scala-java-locales"         % "1.5.4"             % Test,
-      "io.github.cquiroz" %%% "locales-full-currencies-db" % "1.5.4"             % Test
+      "io.github.cquiroz" %%% "scala-java-locales"         % "1.5.4"              % Test,
+      "io.github.cquiroz" %%% "locales-full-currencies-db" % "1.5.4"              % Test
     ),
     Test / scalaJSLinkerConfig ~= (_.withModuleKind(ModuleKind.CommonJSModule)),
     Test / jsEnv := {
@@ -187,12 +199,14 @@ lazy val codegen = project
   .in(file("codegen"))
   .settings(commonSettings)
   .settings(
-    name               := "golem-scala-codegen",
-    scalaVersion       := Scala3Golem,
+    name         := "golem-scala-codegen",
+    scalaVersion := Scala3Golem,
     // sbt 1.x loads plugins with Scala 2.12; Mill loads these same sources with
     // Scala 3. This is a build-tool implementation constraint, not SDK support
     // for Scala 2 applications.
     crossScalaVersions := Seq(Scala212, Scala3Golem),
+    Test / unmanagedResourceDirectories += (ThisBuild / baseDirectory).value.getParentFile.getParentFile /
+      "golem-service-base" / "tests" / "fixtures" / "http-handlers",
     libraryDependencies ++= Seq(
       "org.scalameta" %% "scalameta" % scalametaVersion,
       "com.lihaoyi"   %% "ujson"     % ujsonVersion,
@@ -224,10 +238,10 @@ lazy val testAgents = project
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
-    name := "golem-scala-test-agents",
+    name                                              := "golem-scala-test-agents",
     golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("example"),
-    publish / skip     := true,
-    scalaJSUseMainModuleInitializer := false,
+    publish / skip                                    := true,
+    scalaJSUseMainModuleInitializer                   := false,
     scalaJSLinkerConfig ~= {
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
     },
@@ -238,8 +252,8 @@ lazy val testAgents = project
     libraryDependencies ++= Seq(
       zioBlocksDep("schema").value,
       "io.github.cquiroz" %%% "scala-java-time"      % scalaJavaTimeVersion,
-      "io.github.cquiroz" %%% "scala-java-time-tzdb"  % scalaJavaTimeVersion,
-      "dev.zio"           %%% "zio-http"              % zioHttpVersion
+      "io.github.cquiroz" %%% "scala-java-time-tzdb" % scalaJavaTimeVersion,
+      "dev.zio"           %%% "zio-http"             % zioHttpVersion
     ),
     scalacOptions += "-Wconf:cat=unused:s"
   )
@@ -249,30 +263,54 @@ lazy val testAgents = project
 lazy val emptyAutoRegisterFixture = project
   .in(file("test-empty-auto-register"))
   .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .dependsOn(core, macros)
   .settings(
-    name := "golem-scala-empty-auto-register-fixture",
+    name                                              := "golem-scala-empty-auto-register-fixture",
     golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("emptyfixture"),
-    publish / skip := true,
-    scalaJSUseMainModuleInitializer := false,
+    publish / skip                                    := true,
+    scalaJSUseMainModuleInitializer                   := false,
     scalaJSLinkerConfig ~= {
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
     }
   )
 
-// --- pure middleware guest link fixture (JS, not published) ----------------
+// --- capability-sensitive guest export fixtures (JS, not published) -------
+
+def capabilityFixture(id: String, capabilities: String*) =
+  Project(id, file(s"test-capability-exports/$id"))
+    .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+    .dependsOn(core, macros)
+    .settings(commonSettings)
+    .settings(jsSettings)
+    .settings(
+      golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("capabilityfixture"),
+      publish / skip                                    := true,
+      Compile / unmanagedSourceDirectories ++= capabilities.map { capability =>
+        (ThisBuild / baseDirectory).value / "test-capability-exports" / "src" / capability
+      },
+      scalaJSUseMainModuleInitializer := false,
+      scalaJSLinkerConfig ~= (_.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule))
+    )
+
+lazy val toolExportsFixture   = capabilityFixture("toolExportsFixture", "tool")
+lazy val agentExportsFixture  = capabilityFixture("agentExportsFixture", "agent")
+lazy val mixedExportsFixture  = capabilityFixture("mixedExportsFixture", "agent", "tool", "middleware")
+lazy val clientExportsFixture = capabilityFixture("clientExportsFixture", "client")
+
+// --- middleware guest link fixture (JS, not published) ---------------------
 
 lazy val middlewareGuestLinkFixture = project
   .in(file("test-middleware-guest-link"))
-  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin)
-  .dependsOn(model.js, macros)
+  .enablePlugins(org.scalajs.sbtplugin.ScalaJSPlugin, golem.sbt.GolemPlugin)
+  .dependsOn(core, macros)
   .settings(commonSettings)
   .settings(jsSettings)
   .settings(
-    name := "golem-scala-middleware-guest-link-fixture",
-    publish / skip := true,
+    name                                              := "golem-scala-middleware-guest-link-fixture",
+    golem.sbt.GolemPlugin.autoImport.golemBasePackage := Some("capabilityfixture"),
+    publish / skip                                    := true,
     Compile / unmanagedSourceDirectories +=
-      (ThisBuild / baseDirectory).value / "core" / "js" / "src" / "main" / "scala",
-    Compile / unmanagedSources / excludeFilter := HiddenFileFilter || "Guest.scala",
+      (ThisBuild / baseDirectory).value / "test-capability-exports" / "src" / "middleware",
     scalaJSUseMainModuleInitializer := false,
     scalaJSLinkerConfig ~= {
       _.withModuleKind(org.scalajs.linker.interface.ModuleKind.ESModule)
@@ -285,9 +323,9 @@ lazy val integrationTests = project
   .in(file("integration-tests"))
   .settings(commonSettings)
   .settings(
-    name               := "golem-scala-integration-tests",
-    publish / skip     := true,
-    fork               := true,
+    name                     := "golem-scala-integration-tests",
+    publish / skip           := true,
+    fork                     := true,
     Test / parallelExecution := false,
     Test / envVars ++= sys.env
       .get("GOLEM_TS_PACKAGES_PATH")

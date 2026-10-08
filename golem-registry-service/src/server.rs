@@ -77,10 +77,12 @@ fn main() -> anyhow::Result<()> {
 async fn dump_openapi_yaml() -> anyhow::Result<()> {
     let config = RegistryServiceConfig::default();
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
-    let services = Services::new(&config, &mut join_set).await?;
+    let services = Services::new_without_component_builtins(&config, &mut join_set).await?;
 
     let open_api_service = make_open_api_service(&services);
-    println!("{}", open_api_service.spec_yaml());
+    let spec_yaml = open_api_service.spec_yaml();
+    join_set.shutdown().await;
+    println!("{spec_yaml}");
     Ok(())
 }
 
@@ -89,9 +91,14 @@ async fn async_main(
     prometheus_registry: Registry,
     tracer: Option<SdkTracer>,
 ) -> anyhow::Result<()> {
-    let bootstrap = RegistryService::new(config, prometheus_registry);
-
     let mut join_set = JoinSet::<anyhow::Result<()>>::new();
+    golem_service_base::observability::install_runtime_metrics(
+        tokio::runtime::Handle::current(),
+        prometheus_registry.clone(),
+        config.runtime_metrics_sampling_interval,
+        &mut join_set,
+    );
+    let bootstrap = RegistryService::new(config, prometheus_registry);
 
     bootstrap.start(&mut join_set, tracer).await?;
 

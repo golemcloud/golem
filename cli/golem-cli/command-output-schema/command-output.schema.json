@@ -136,6 +136,21 @@
       "$ref": "#/definitions/api.domain.register"
     },
     {
+      "$ref": "#/definitions/api.mcp-import.authorize"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.complete"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.disconnect"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.status"
+    },
+    {
+      "$ref": "#/definitions/api.mcp-import.tools"
+    },
+    {
       "$ref": "#/definitions/api.security-scheme.create"
     },
     {
@@ -316,7 +331,7 @@
       "$ref": "#/definitions/secret.list"
     },
     {
-      "$ref": "#/definitions/secret.update-value"
+      "$ref": "#/definitions/secret.update"
     }
   ],
   "definitions": {
@@ -2124,6 +2139,101 @@
       },
       "additionalProperties": false
     },
+    "api.mcp-import.authorize": {
+      "type": "object",
+      "description": "Single structured output document emitted by `golem api mcp-import authorize`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import authorize",
+      "required": ["$type", "authorizationUrl", "deploymentRevision", "importIndex"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.authorize" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when authorizing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "authorizationUrl": { "type": "string", "format": "uri" }
+      },
+      "additionalProperties": false
+    },
+    "api.mcp-import.complete": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.complete" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import complete`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import complete"
+    },
+    "api.mcp-import.disconnect": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.disconnect" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import disconnect`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import disconnect"
+    },
+    "api.mcp-import.status": {
+      "allOf": [
+        { "$ref": "#/definitions/McpImportOAuthStatusOutput" },
+        { "properties": { "$type": { "const": "api.mcp-import.status" } } }
+      ],
+      "description": "Single structured output document emitted by `golem api mcp-import status`.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import status"
+    },
+    "api.mcp-import.tools": {
+      "type": "object",
+      "description": "Projected metadata for an individual import before native and earlier-import precedence.",
+      "x-golem-output-mode": "single",
+      "x-golem-command": "api mcp-import tools",
+      "x-golem-commands": ["api mcp-import tools", "api mcp-import refresh"],
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "protocolVersion", "tools", "diagnostics"],
+      "properties": {
+        "$type": { "const": "api.mcp-import.tools" },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": "integer", "minimum": 0 },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "protocolVersion": { "type": "string" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "digest", "definition"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "digest": { "type": "string" },
+              "definition": { "$ref": "#/definitions/Tool" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["upstreamName", "reason"],
+            "properties": {
+              "upstreamName": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "McpImportOAuthStatusOutput": {
+      "type": "object",
+      "required": ["$type", "environmentId", "deploymentRevision", "importIndex", "securityScheme", "status"],
+      "properties": {
+        "$type": { "enum": ["api.mcp-import.complete", "api.mcp-import.disconnect", "api.mcp-import.status"] },
+        "environmentId": { "type": "string", "format": "uuid" },
+        "deploymentRevision": { "type": ["integer", "null"], "minimum": 0, "description": "Null when inspecting or managing the selected manifest declaration before deployment." },
+        "importIndex": { "type": "integer", "minimum": 0 },
+        "securityScheme": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "api.deployment.get": {
       "type": "object",
       "description": "Single structured output document emitted by `golem api deployment get`.",
@@ -2139,6 +2249,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2172,6 +2283,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -2312,6 +2426,7 @@
         "agents",
         "webhooksPrefix",
         "openapiEndpointPrefix",
+        "scheme",
         "createdAt"
       ],
       "properties": {
@@ -2342,6 +2457,9 @@
         },
         "openapiEndpointPrefix": {
           "type": "string"
+        },
+        "scheme": {
+          "enum": ["http", "https"]
         },
         "createdAt": {
           "type": "string"
@@ -2404,6 +2522,7 @@
       "x-golem-command": "api security-scheme create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "name",
@@ -2411,11 +2530,17 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
           "const": "api.security-scheme.create"
+        },
+        "action": {
+          "description": "Whether the security scheme was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": {
           "type": "string"
@@ -2444,6 +2569,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2498,7 +2626,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2531,6 +2660,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2571,7 +2703,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "$type": {
@@ -2604,6 +2737,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
@@ -2618,7 +2754,8 @@
         "providerType",
         "clientId",
         "redirectUrl",
-        "scopes"
+        "scopes",
+        "login"
       ],
       "properties": {
         "id": {
@@ -2648,9 +2785,54 @@
           "items": {
             "type": "string"
           }
+        },
+        "login": {
+          "$ref": "#/definitions/SecuritySchemeLogin"
         }
       },
       "additionalProperties": false
+    },
+    "SecuritySchemeLogin": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "const": "Cookie"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "redirectUris",
+            "origins"
+          ],
+          "properties": {
+            "type": {
+              "const": "AuthorizationCodePkce"
+            },
+            "redirectUris": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "origins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "SecuritySchemeProvider": {
       "oneOf": [
@@ -2996,6 +3178,7 @@
     "ComponentLayerProperties": {
       "type": "object",
       "required": [
+        "guestLanguage",
         "componentWasm",
         "outputWasm",
         "dependencyAgents",
@@ -3012,6 +3195,7 @@
       ],
       "properties": {
         "appliedLayers": { "type": "array", "items": { "type": "string" } },
+        "guestLanguage": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageProperty" },
         "componentWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "outputWasm": { "$ref": "#/definitions/ComponentLayerOptionalStringProperty" },
         "dependencyAgents": { "$ref": "#/definitions/ComponentLayerDependencyReferenceVecProperty" },
@@ -3142,6 +3326,36 @@
       "required": ["componentCustomPresets"],
       "properties": { "componentCustomPresets": { "type": "string" } },
       "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/definitions/GuestLanguage" }
+          ]
+        },
+        "trace": { "type": "array", "items": { "$ref": "#/definitions/ComponentLayerOptionalGuestLanguageTraceElem" } }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerOptionalGuestLanguageTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id", "value"],
+          "properties": {
+            "type": { "const": "override" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "value": { "$ref": "#/definitions/GuestLanguage" }
+          },
+          "additionalProperties": false
+        },
+        { "$ref": "#/definitions/ComponentLayerOptionalStringSkipTraceElem" }
+      ]
     },
     "ComponentLayerOptionalStringProperty": {
       "type": "object",
@@ -3690,6 +3904,8 @@
             "version": { "type": "string" },
             "parameters": { "$ref": "#/definitions/JsonValue" },
             "account": { "type": "string" },
+            "secretKeysReadable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
+            "secretKeysRevealable": { "$ref": "#/definitions/ManifestSecretKeyScope" },
             "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
           },
           "additionalProperties": false
@@ -3957,7 +4173,7 @@
     },
     "GuestLanguage": {
       "type": "string",
-      "enum": ["TypeScript", "Rust", "Scala", "MoonBit"]
+      "enum": ["TypeScript", "Effect", "Rust", "Scala", "MoonBit"]
     },
     "ComponentView": {
       "type": "object",
@@ -4017,9 +4233,10 @@
     },
     "Tool": {
       "type": "object",
-      "required": ["version", "commands", "schema"],
+      "required": ["version", "requires_filesystem", "commands", "schema"],
       "properties": {
         "version": { "type": "string" },
+        "requires_filesystem": { "type": "boolean" },
         "commands": { "$ref": "#/definitions/CommandTree" },
         "schema": { "$ref": "#/definitions/SchemaGraph" }
       },
@@ -4060,7 +4277,7 @@
     },
     "CommandBody": {
       "type": "object",
-      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "result", "errors", "annotations"],
+      "required": ["positionals", "options", "flags", "constraints", "stdin", "stdout", "stderr", "result", "errors", "annotations"],
       "properties": {
         "positionals": { "$ref": "#/definitions/ToolPositionals" },
         "options": { "type": "array", "items": { "$ref": "#/definitions/ToolOptionSpec" } },
@@ -4068,6 +4285,7 @@
         "constraints": { "type": "array", "items": { "$ref": "#/definitions/ToolConstraint" } },
         "stdin": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "stdout": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
+        "stderr": { "oneOf": [{ "$ref": "#/definitions/ToolStreamSpec" }, { "type": "null" }] },
         "result": { "oneOf": [{ "$ref": "#/definitions/ToolResultSpec" }, { "type": "null" }] },
         "errors": { "type": "array", "items": { "$ref": "#/definitions/ToolErrorCase" } },
         "annotations": { "oneOf": [{ "$ref": "#/definitions/CommandAnnotations" }, { "type": "null" }] }
@@ -4431,12 +4649,32 @@
     },
     "ToolMiddlewareInstallation": {
       "type": "object",
-      "required": ["name", "version", "parameters", "account", "filesystemAccess"],
+      "required": [
+        "name",
+        "version",
+        "parameters",
+        "account",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "filesystemAccess"
+      ],
       "properties": {
         "name": { "type": "string" },
         "version": { "type": ["string", "null"] },
         "parameters": {},
         "account": { "type": ["string", "null"] },
+        "secretKeysReadable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
+        "secretKeysRevealable": {
+          "oneOf": [
+            { "$ref": "#/definitions/SecretKeyScope" },
+            { "type": "null" }
+          ]
+        },
         "filesystemAccess": { "$ref": "#/definitions/ToolFilesystemAccess" }
       },
       "additionalProperties": false
@@ -4731,6 +4969,17 @@
             "ttlNanos": { "type": "integer", "minimum": 0 }
           },
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "importIndex", "upstreamToolName", "reason"],
+          "properties": {
+            "type": { "const": "McpImportDiscovery" },
+            "importIndex": { "type": ["integer", "null"], "minimum": 0, "maximum": 4294967295 },
+            "upstreamToolName": { "type": ["string", "null"] },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
         }
       ]
     },
@@ -4847,36 +5096,61 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "PendingUpdate" },
             "timestamp": { "type": "string" },
-            "targetRevision": { "type": "integer", "minimum": 0 }
+            "targetRevision": { "type": "integer", "minimum": 0 },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "SuccessfulUpdate" },
             "timestamp": { "type": "string" },
-            "targetRevision": { "type": "integer", "minimum": 0 }
+            "targetRevision": { "type": "integer", "minimum": 0 },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         },
         {
           "type": "object",
-          "required": ["type", "timestamp", "targetRevision"],
+          "required": ["type", "timestamp", "targetRevision", "pendingUpdateIndex", "mode", "snapshotAssistedDetails"],
           "properties": {
             "type": { "const": "FailedUpdate" },
             "timestamp": { "type": "string" },
             "targetRevision": { "type": "integer", "minimum": 0 },
-            "details": { "type": ["string", "null"] }
+            "details": { "type": ["string", "null"] },
+            "pendingUpdateIndex": { "type": ["integer", "null"], "minimum": 0 },
+            "mode": { "$ref": "#/definitions/AgentUpdateMode" },
+            "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/SnapshotAssistedUpdateMetadata" }, { "type": "null" }] }
           },
           "additionalProperties": false
         }
       ]
+    },
+    "AgentUpdateMode": {
+      "type": "string",
+      "enum": ["automatic", "manual"]
+    },
+    "SnapshotAssistedUpdateMetadata": {
+      "type": "object",
+      "required": ["sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex", "snapshotRevision", "filesystemSnapshot"],
+      "properties": {
+        "sourceComponentRevision": { "type": "integer", "minimum": 0 },
+        "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 },
+        "snapshotIndex": { "type": "integer", "minimum": 0 },
+        "snapshotRevision": { "type": "integer", "minimum": 0 },
+        "filesystemSnapshot": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
     },
     "AgentResourceDescription": {
       "type": "object",
@@ -4942,7 +5216,7 @@
       "oneOf": [
         {
           "type": "object",
-          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout"],
+          "required": ["type", "commandPath", "hasStdin", "hasStdout", "declaresStdout", "hasStderr", "declaresStderr"],
           "properties": {
             "type": { "const": "Tool" },
             "commandPath": { "type": "array", "items": { "type": "string" } },
@@ -4954,6 +5228,14 @@
             "declaresStdout": {
               "type": "boolean",
               "description": "Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog."
+            },
+            "hasStderr": {
+              "type": "boolean",
+              "description": "Whether a live stderr attachment was requested. Stderr bytes are not recorded in the oplog."
+            },
+            "declaresStderr": {
+              "type": "boolean",
+              "description": "Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog."
             }
           },
           "additionalProperties": false
@@ -4991,15 +5273,13 @@
         { "$ref": "#/definitions/PublicOplogEntryDeactivatePlugin" },
         { "$ref": "#/definitions/PublicOplogEntryRevert" },
         { "$ref": "#/definitions/PublicOplogEntryCancelPendingInvocation" },
-        { "$ref": "#/definitions/PublicOplogEntryStartSpan" },
-        { "$ref": "#/definitions/PublicOplogEntryFinishSpan" },
-        { "$ref": "#/definitions/PublicOplogEntrySetSpanAttribute" },
         { "$ref": "#/definitions/PublicOplogEntryBeginRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreCommitRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryPreRollbackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryCommittedRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntryRolledBackRemoteTransaction" },
         { "$ref": "#/definitions/PublicOplogEntrySnapshot" },
+        { "$ref": "#/definitions/PublicOplogEntrySnapshotConfirmed" },
         { "$ref": "#/definitions/PublicOplogEntryOplogProcessorCheckpoint" },
         { "$ref": "#/definitions/PublicOplogEntrySetRetryPolicy" },
         { "$ref": "#/definitions/PublicOplogEntryRemoveRetryPolicy" },
@@ -5070,7 +5350,7 @@
     },
     "PublicOplogEntryStart": {
       "type": "object",
-      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType"],
+      "required": ["type", "timestamp", "parentStartIndex", "functionName", "invocationId", "observationalOwner", "request", "durableFunctionType", "spanStarted"],
       "properties": {
         "type": { "const": "Start" },
         "timestamp": { "type": "string" },
@@ -5079,30 +5359,34 @@
         "invocationId": { "type": ["string", "null"] },
         "observationalOwner": { "type": ["integer", "null"], "minimum": 0 },
         "request": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" }
+        "durableFunctionType": { "$ref": "#/definitions/PublicDurableFunctionType" },
+        "spanStarted": { "oneOf": [{ "$ref": "#/definitions/PublicSpanStarted" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryEnd": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit"],
+      "required": ["type", "timestamp", "startIndex", "response", "forcedCommit", "spanFinished", "spanAttributes"],
       "properties": {
         "type": { "const": "End" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
         "response": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
-        "forcedCommit": { "type": "boolean" }
+        "forcedCommit": { "type": "boolean" },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] },
+        "spanAttributes": { "oneOf": [{ "$ref": "#/definitions/PublicSpanAttributes" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
     "PublicOplogEntryCancelled": {
       "type": "object",
-      "required": ["type", "timestamp", "startIndex", "partial"],
+      "required": ["type", "timestamp", "startIndex", "partial", "spanFinished"],
       "properties": {
         "type": { "const": "Cancelled" },
         "timestamp": { "type": "string" },
         "startIndex": { "type": "integer", "minimum": 0 },
-        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] }
+        "partial": { "oneOf": [{ "$ref": "#/definitions/TypedSchemaValue" }, { "type": "null" }] },
+        "spanFinished": { "oneOf": [{ "$ref": "#/definitions/PublicSpanFinished" }, { "type": "null" }] }
       },
       "additionalProperties": false
     },
@@ -5181,20 +5465,20 @@
     },
     "PublicOplogEntryPendingUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision", "description"],
-      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" } },
+      "required": ["type", "timestamp", "targetRevision", "description", "updateAttemptIndex"],
+      "properties": { "type": { "const": "PendingUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "description": { "$ref": "#/definitions/PublicUpdateDescription" }, "updateAttemptIndex": { "type": "integer", "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntrySuccessfulUpdate": {
       "type": "object",
       "required": ["type", "timestamp", "targetRevision", "newComponentSize", "newActivePlugins"],
-      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } } },
+      "properties": { "type": { "const": "SuccessfulUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "newComponentSize": { "type": "integer", "minimum": 0 }, "newActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicSnapshotAssistedUpdateDetails" }, { "type": "null" }] } },
       "additionalProperties": false
     },
     "PublicOplogEntryFailedUpdate": {
       "type": "object",
-      "required": ["type", "timestamp", "targetRevision"],
-      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] } },
+      "required": ["type", "timestamp", "targetRevision", "updateAttemptIndex"],
+      "properties": { "type": { "const": "FailedUpdate" }, "timestamp": { "type": "string" }, "targetRevision": { "type": "integer", "minimum": 0 }, "details": { "type": ["string", "null"] }, "snapshotAssistedDetails": { "anyOf": [{ "$ref": "#/definitions/PublicFailedSnapshotAssistedUpdateDetails" }, { "type": "null" }] }, "updateAttemptIndex": { "type": ["integer", "null"], "minimum": 0 } },
       "additionalProperties": false
     },
     "PublicOplogEntryGrowMemory": {
@@ -5217,8 +5501,17 @@
     },
     "PublicOplogEntryLog": {
       "type": "object",
-      "required": ["type", "timestamp", "level", "context", "message"],
-      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" } },
+      "required": ["type", "timestamp", "level", "context", "message", "traceContext"],
+      "properties": { "type": { "const": "Log" }, "timestamp": { "type": "string" }, "level": { "$ref": "#/definitions/LogLevel" }, "context": { "type": "string" }, "message": { "type": "string" }, "traceContext": { "oneOf": [{ "$ref": "#/definitions/LogTraceContext" }, { "type": "null" }] } },
+      "additionalProperties": false
+    },
+    "LogTraceContext": {
+      "type": "object",
+      "required": ["traceId", "spanId"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" }
+      },
       "additionalProperties": false
     },
     "PublicOplogEntryActivatePlugin": {
@@ -5243,24 +5536,6 @@
       "type": "object",
       "required": ["type", "timestamp", "idempotencyKey"],
       "properties": { "type": { "const": "CancelPendingInvocation" }, "timestamp": { "type": "string" }, "idempotencyKey": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryStartSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "attributes"],
-      "properties": { "type": { "const": "StartSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "parentId": { "type": ["string", "null"] }, "linkedContext": { "type": ["string", "null"] }, "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntryFinishSpan": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId"],
-      "properties": { "type": { "const": "FinishSpan" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" } },
-      "additionalProperties": false
-    },
-    "PublicOplogEntrySetSpanAttribute": {
-      "type": "object",
-      "required": ["type", "timestamp", "spanId", "key", "value"],
-      "properties": { "type": { "const": "SetSpanAttribute" }, "timestamp": { "type": "string" }, "spanId": { "type": "string" }, "key": { "type": "string" }, "value": { "$ref": "#/definitions/PublicAttributeValue" } },
       "additionalProperties": false
     },
     "PublicOplogEntryBeginRemoteTransaction": {
@@ -5296,7 +5571,13 @@
     "PublicOplogEntrySnapshot": {
       "type": "object",
       "required": ["type", "timestamp", "data"],
-      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" } },
+      "properties": { "type": { "const": "Snapshot" }, "timestamp": { "type": "string" }, "data": { "$ref": "#/definitions/PublicSnapshotData" }, "filesystemSnapshot": { "type": ["string", "null"] } },
+      "additionalProperties": false
+    },
+    "PublicOplogEntrySnapshotConfirmed": {
+      "type": "object",
+      "required": ["type", "timestamp", "filesystemSnapshot"],
+      "properties": { "type": { "const": "SnapshotConfirmed" }, "timestamp": { "type": "string" }, "filesystemSnapshot": { "type": "string" } },
       "additionalProperties": false
     },
     "PublicOplogEntryOplogProcessorCheckpoint": {
@@ -5514,11 +5795,68 @@
         { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "String" }, "value": { "type": "string" } }, "additionalProperties": false }
       ]
     },
+    "PublicSpanLink": {
+      "type": "object",
+      "required": ["traceId", "spanId", "traceStates"],
+      "properties": {
+        "traceId": { "type": "string" },
+        "spanId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanStarted": {
+      "type": "object",
+      "required": ["spanId", "traceId", "traceStates", "parentSpanId", "links", "startedAt", "attributes", "kind"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "traceId": { "type": "string" },
+        "traceStates": { "type": "array", "items": { "type": "string" } },
+        "parentSpanId": { "type": ["string", "null"] },
+        "links": { "type": "array", "items": { "$ref": "#/definitions/PublicSpanLink" } },
+        "startedAt": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } },
+        "kind": { "type": "string", "enum": ["internal", "client", "server"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanFinished": {
+      "type": "object",
+      "required": ["spanId", "finishedAt", "outcome"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "finishedAt": { "type": "string" },
+        "outcome": { "type": "string", "enum": ["completed", "failed", "cancelled", "abandoned", "denied"] }
+      },
+      "additionalProperties": false
+    },
+    "PublicSpanAttributes": {
+      "type": "object",
+      "required": ["spanId", "attributes"],
+      "properties": {
+        "spanId": { "type": "string" },
+        "attributes": { "type": "array", "items": { "$ref": "#/definitions/PublicAttribute" } }
+      },
+      "additionalProperties": false
+    },
     "PublicUpdateDescription": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "const": "Automatic" } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "SnapshotAssistedAutomatic" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "payload", "mimeType"], "properties": { "type": { "const": "SnapshotBased" }, "payload": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } }, "mimeType": { "type": "string" }, "filesystemSnapshot": { "type": ["string", "null"] } }, "additionalProperties": false }
       ]
+    },
+    "PublicSnapshotAssistedUpdateDetails": {
+      "type": "object",
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "PublicFailedSnapshotAssistedUpdateDetails": {
+      "type": "object",
+      "required": ["pendingUpdateIndex", "sourceComponentRevision", "sourceRevisionStartIndex", "snapshotIndex"],
+      "properties": { "pendingUpdateIndex": { "type": "integer", "minimum": 0 }, "sourceComponentRevision": { "type": "integer", "minimum": 0 }, "sourceRevisionStartIndex": { "type": "integer", "minimum": 0 }, "snapshotIndex": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
     },
     "LogLevel": { "type": "string", "enum": ["Stdout", "Stderr", "Trace", "Debug", "Info", "Warn", "Error", "Critical"] },
     "PublicSnapshotData": {
@@ -5633,6 +5971,7 @@
         "components": { "$ref": "#/definitions/DeploymentDiffSection" },
         "httpApiDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
         "mcpDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
+        "mcpImports": { "$ref": "#/definitions/DeploymentDiffSection" },
         "remoteTools": { "$ref": "#/definitions/DeploymentDiffSection" },
         "publishedTools": { "$ref": "#/definitions/DeploymentSetDiffSection" },
         "remoteToolMiddlewareDeployments": { "$ref": "#/definitions/DeploymentDiffSection" },
@@ -5710,6 +6049,46 @@
         "bindings": {
           "type": "object",
           "additionalProperties": { "$ref": "#/definitions/EffectiveToolBindingDiffPayload" }
+        },
+        "environmentMiddlewareBinding": { "$ref": "#/definitions/ToolMiddlewareBindingInput" },
+        "componentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        },
+        "agentMiddlewareBindings": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/ToolMiddlewareBindingInput" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolMiddlewareBindingInput": {
+      "type": "object",
+      "required": [
+        "configKeysReadable",
+        "secretKeysReadable",
+        "secretKeysRevealable",
+        "middleware",
+        "middlewareMergeMode"
+      ],
+      "properties": {
+        "configKeysReadable": { "$ref": "#/definitions/ConfigKeyScope" },
+        "secretKeysReadable": { "$ref": "#/definitions/SecretKeyScope" },
+        "secretKeysRevealable": { "$ref": "#/definitions/SecretKeyScope" },
+        "middleware": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/ToolMiddlewareInstallation" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "middlewareMergeMode": {
+          "oneOf": [
+            { "$ref": "#/definitions/ToolMiddlewareMergeMode" },
+            { "type": "null" }
+          ]
         }
       },
       "additionalProperties": false
@@ -5849,8 +6228,9 @@
     },
     "HttpApiDeploymentDiffPayload": {
       "type": "object",
-      "required": ["webhooksUrlChanged", "openapiEndpointChanged"],
+      "required": ["schemeChanged", "webhooksUrlChanged", "openapiEndpointChanged"],
       "properties": {
+        "schemeChanged": { "type": "boolean" },
         "webhooksUrlChanged": { "type": "boolean" },
         "openapiEndpointChanged": { "type": "boolean" },
         "agentsChanges": {
@@ -5912,7 +6292,7 @@
       "required": [
         "display",
         "agentSecretDefaults",
-        "skippedExistingAgentSecretDefaults",
+        "replaceableAgentSecretDefaults",
         "retryPolicyDefaults",
         "resourceDefaults"
       ],
@@ -5922,7 +6302,7 @@
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
-        "skippedExistingAgentSecretDefaults": {
+        "replaceableAgentSecretDefaults": {
           "type": "array",
           "items": { "$ref": "#/definitions/DeploymentAgentSecretDefault" }
         },
@@ -6083,9 +6463,10 @@
     },
     "AgentType": {
       "type": "object",
-      "required": ["type_name", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
+      "required": ["type_name", "kind", "description", "source_language", "schema", "constructor", "methods", "dependencies", "mode", "snapshotting", "config"],
       "properties": {
         "type_name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["regular", "http-router"] },
         "description": { "type": "string" },
         "source_language": { "type": "string" },
         "schema": { "$ref": "#/definitions/SchemaGraph" },
@@ -6233,26 +6614,101 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
-        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } }
+        "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
+        "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
+        "fileResponseHeaders": { "type": "array", "items": { "$ref": "#/definitions/FileResponseHeader" } },
+        "openapiProviderMethod": { "type": ["string", "null"] }
       },
       "additionalProperties": false
     },
+    "FileResponseHeader": {
+      "type": "object",
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string" },
+        "value": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "FileMapping": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "publicPath", "filePath"],
+          "properties": {
+            "type": { "const": "Exact" },
+            "publicPath": { "type": "array", "items": { "type": "string" } },
+            "filePath": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "publicPrefix", "filesystemRoot"],
+          "properties": {
+            "type": { "const": "Subtree" },
+            "publicPrefix": { "type": "array", "items": { "type": "string" } },
+            "filesystemRoot": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "HttpEndpointDetails": {
       "type": "object",
-      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions"],
+      "required": ["httpMethod", "pathSuffix", "headerVars", "queryVars", "authDetails", "corsOptions", "durableStreams"],
       "properties": {
         "httpMethod": { "$ref": "#/definitions/HttpMethod" },
         "pathSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "headerVars": { "type": "array", "items": { "$ref": "#/definitions/HeaderVariable" } },
         "queryVars": { "type": "array", "items": { "$ref": "#/definitions/QueryVariable" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
-        "corsOptions": { "$ref": "#/definitions/CorsOptions" }
+        "corsOptions": { "$ref": "#/definitions/CorsOptions" },
+        "durableStreams": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamRouteOptions": {
+      "type": "object",
+      "required": ["slots", "allowExternalWrites", "allowStreamDelete", "allowInvocationDelete", "load"],
+      "properties": {
+        "slots": { "type": "array", "items": { "$ref": "#/definitions/DurableStreamSlotOptions" } },
+        "allowExternalWrites": { "type": ["boolean", "null"] },
+        "allowStreamDelete": { "type": ["boolean", "null"] },
+        "allowInvocationDelete": { "type": ["boolean", "null"] },
+        "load": { "oneOf": [{ "$ref": "#/definitions/DurableStreamRouteLoadOptions" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotOptions": {
+      "type": "object",
+      "required": ["source", "name", "contentType"],
+      "properties": {
+        "source": { "$ref": "#/definitions/DurableStreamSlotSource" },
+        "name": { "type": ["string", "null"] },
+        "contentType": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "DurableStreamSlotSource": {
+      "oneOf": [
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "input" }, "name": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "name"], "properties": { "type": { "const": "output" }, "name": { "type": "string" } }, "additionalProperties": false }
+      ]
+    },
+    "DurableStreamRouteLoadOptions": {
+      "type": "object",
+      "required": ["maxConcurrentReadersPerStream", "maxAppendRequestsPerSecondPerStream"],
+      "properties": {
+        "maxConcurrentReadersPerStream": { "type": ["integer", "null"], "minimum": 0 },
+        "maxAppendRequestsPerSecondPerStream": { "type": ["integer", "null"], "minimum": 0 }
       },
       "additionalProperties": false
     },
@@ -6292,7 +6748,8 @@
     "HttpMethod": {
       "oneOf": [
         { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["Get", "Head", "Post", "Put", "Delete", "Connect", "Options", "Trace", "Patch"] } }, "additionalProperties": false },
-        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false }
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "Custom" }, "value": { "type": "string" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "Any" } }, "additionalProperties": false }
       ]
     },
     "ApiPredicateValue": {
@@ -6386,6 +6843,9 @@
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "mcpDeployments": {
+          "$ref": "#/definitions/DeploymentDiffSection"
+        },
+        "mcpImports": {
           "$ref": "#/definitions/DeploymentDiffSection"
         },
         "remoteTools": {
@@ -6739,9 +7199,9 @@
     },
     "PublicTypedValue": {
       "type": "object",
-      "required": ["schema", "value"],
+      "required": ["graph", "value"],
       "properties": {
-        "schema": { "$ref": "#/definitions/SchemaGraph" },
+        "graph": { "$ref": "#/definitions/SchemaGraph" },
         "value": {}
       },
       "additionalProperties": false
@@ -7354,6 +7814,7 @@
       "x-golem-command": "resource create",
       "required": [
         "$type",
+        "action",
         "id",
         "revision",
         "environmentId",
@@ -7366,6 +7827,11 @@
       "properties": {
         "$type": {
           "const": "resource.create"
+        },
+        "action": {
+          "description": "Whether the resource definition was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "revision": { "type": "integer", "minimum": 0 },
@@ -7548,6 +8014,7 @@
       "x-golem-command": "retry-policy create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "name",
@@ -7559,6 +8026,11 @@
       "properties": {
         "$type": {
           "const": "retry-policy.create"
+        },
+        "action": {
+          "description": "Whether the retry policy was created, or an existing one was updated (`--update-existing`).",
+          "type": "string",
+          "enum": ["created", "updated"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -7714,7 +8186,7 @@
           "required": ["kind", "value"],
           "properties": {
             "kind": {
-              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "datetime", "duration"]
+              "enum": ["bool", "s8", "s16", "s32", "s64", "u8", "u16", "u32", "u64", "f32", "f64", "char", "string", "uuid", "datetime", "duration"]
             },
             "value": {
               "type": "object",
@@ -8233,7 +8705,7 @@
         {
           "type": "object",
           "required": ["kind", "value"],
-          "properties": { "kind": { "enum": ["string", "char"] }, "value": { "type": "string" } },
+          "properties": { "kind": { "enum": ["string", "char", "uuid"] }, "value": { "type": "string" } },
           "additionalProperties": false
         },
         {
@@ -8486,10 +8958,15 @@
       "additionalProperties": false
     },
     "EnvironmentId": {
-      "type": "object",
-      "required": ["uuid"],
-      "properties": { "uuid": { "type": "string" } },
-      "additionalProperties": false
+      "oneOf": [
+        { "type": "string", "format": "uuid" },
+        {
+          "type": "object",
+          "required": ["uuid"],
+          "properties": { "uuid": { "type": "string", "format": "uuid" } },
+          "additionalProperties": false
+        }
+      ]
     },
     "JsonValue": {
       "description": "Arbitrary JSON value.",
@@ -8509,6 +8986,7 @@
       "x-golem-command": "secret create",
       "required": [
         "$type",
+        "action",
         "id",
         "environmentId",
         "path",
@@ -8518,6 +8996,11 @@
       "properties": {
         "$type": {
           "const": "secret.create"
+        },
+        "action": {
+          "description": "Whether the secret was created, an existing secret was updated (`--update-existing`), or an existing secret with a different type was deleted and created again (`--replace-on-type-change`).",
+          "type": "string",
+          "enum": ["created", "updated", "replaced"]
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8611,11 +9094,11 @@
       },
       "additionalProperties": false
     },
-    "secret.update-value": {
+    "secret.update": {
       "type": "object",
-      "description": "Single structured output document emitted by `golem secret update-value`.",
+      "description": "Single structured output document emitted by `golem secret update`.",
       "x-golem-output-mode": "single",
-      "x-golem-command": "secret update-value",
+      "x-golem-command": "secret update",
       "required": [
         "$type",
         "id",
@@ -8626,7 +9109,7 @@
       ],
       "properties": {
         "$type": {
-          "const": "secret.update-value"
+          "const": "secret.update"
         },
         "id": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -8855,6 +9338,26 @@
     {
       "type": "api.domain.register",
       "rustType": "DomainRegistrationNewView"
+    },
+    {
+      "type": "api.mcp-import.authorize",
+      "rustType": "McpImportAuthorizeView"
+    },
+    {
+      "type": "api.mcp-import.complete",
+      "rustType": "McpImportCompleteView"
+    },
+    {
+      "type": "api.mcp-import.disconnect",
+      "rustType": "McpImportDisconnectView"
+    },
+    {
+      "type": "api.mcp-import.status",
+      "rustType": "McpImportStatusView"
+    },
+    {
+      "type": "api.mcp-import.tools",
+      "rustType": "McpImportToolsView"
     },
     {
       "type": "api.security-scheme.create",
@@ -9094,7 +9597,7 @@
       "rustType": "SecretListView"
     },
     {
-      "type": "secret.update-value",
+      "type": "secret.update",
       "rustType": "SecretUpdateView"
     }
   ]

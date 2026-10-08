@@ -6,13 +6,14 @@
 //
 //     http://license.golem.cloud/LICENSE
 
+use crate::services::agent_filesystem_snapshots::PublishFound;
 use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
-    DurableFunctionType, HostPayloadPair, HostRequest, HostRequestNoInput, HostResponse,
-    HostResponseGolemApiFork, OplogEntry, OplogIndex,
+    DurableFunctionType, FilesystemSnapshotName, HostPayloadPair, HostRequest, HostRequestNoInput,
+    HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
 };
 use golem_common::model::{AgentFingerprint, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -38,24 +39,73 @@ pub(crate) fn request_hash(
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 
+/// What a reconciliation found at the target of a fork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExistingFork {
+    /// No durable target exists.
+    Absent,
+    /// The target is a fork of this request, with this instance id.
+    Matching(AgentFingerprint),
+    /// The target has a `Create` with this instance id, and it is not a fork of this request.
+    Other(AgentFingerprint),
+}
+
+impl ExistingFork {
+    /// Whether the target `target` is a fork of this request. Another target is a conflict.
+    pub(crate) fn matches(self, target: &OwnedAgentId) -> Result<bool, WorkerExecutorError> {
+        match self {
+            Self::Absent => Ok(false),
+            Self::Matching(_) => Ok(true),
+            Self::Other(_) => Err(conflict(target)),
+        }
+    }
+}
+
+/// The answer of a plain fork attempt at the cut `cut` whose copy lacks the snapshot `name` of the
+/// baseline of the target, after its reconciliation found `existing`, with the instance id of the
+/// live target that the stage of the attempt lost to. A fork of this request answers success,
+/// another target answers a conflict, and without a target the fork is refused with an error that
+/// names the cut and the snapshot.
+pub(crate) fn missing_baseline_answer(
+    existing: ExistingFork,
+    target: &OwnedAgentId,
+    cut: OplogIndex,
+    name: &FilesystemSnapshotName,
+) -> (Option<AgentFingerprint>, Result<(), WorkerExecutorError>) {
+    match existing {
+        ExistingFork::Matching(live) => (Some(live), Ok(())),
+        ExistingFork::Other(live) => (Some(live), Err(conflict(target))),
+        ExistingFork::Absent => (
+            None,
+            Err(WorkerExecutorError::invalid_request(format!(
+                "Cannot fork worker at oplog index {cut}: the filesystem snapshot {name} of the target's baseline is not in the store"
+            ))),
+        ),
+    }
+}
+
+/// The error of a fork whose target exists and is not a fork of its request.
+pub(crate) fn conflict(target: &OwnedAgentId) -> WorkerExecutorError {
+    WorkerExecutorError::worker_already_exists(target.agent_id.clone())
+}
+
 /// Reconcile without opening a writer or depending on the fork still being suspended. A fork
-/// may already have run, archived, or lost its response; its creation prefix is immutable.
+/// may already have run, archived, or lost its response; its creation prefix is immutable. Once
+/// the reconciliation read the `Create` of the target, it gives the instance id of the target,
+/// also when the target is not a fork of this request.
 pub(crate) async fn existing_fork(
     service: &dyn OplogService,
     target: &OwnedAgentId,
     cut: OplogIndex,
     hash: [u8; 32],
-) -> Result<bool, WorkerExecutorError> {
+) -> Result<ExistingFork, WorkerExecutorError> {
     let mode = AgentMode::Durable;
-    let conflict = || WorkerExecutorError::worker_already_exists(target.agent_id.clone());
+    let conflict = || conflict(target);
     if service.exists(target, AgentMode::Ephemeral).await {
         return Err(conflict());
     }
     if !service.exists(target, mode).await {
-        return Ok(false);
-    }
-    if service.get_last_index(target, mode).await < cut.next() {
-        return Err(conflict());
+        return Ok(ExistingFork::Absent);
     }
     let initial = service
         .read_source(target, mode, OplogIndex::INITIAL, 1)
@@ -63,20 +113,24 @@ pub(crate) async fn existing_fork(
     let Some(OplogEntry::Create { parameters, .. }) = initial.get(&OplogIndex::INITIAL) else {
         return Err(conflict());
     };
+    let other = ExistingFork::Other(AgentFingerprint(parameters.instance_id));
+    if service.get_last_index(target, mode).await < cut.next() {
+        return Ok(other);
+    }
     if parameters.agent_id != target.agent_id || parameters.environment_id != target.environment_id
     {
-        return Err(conflict());
+        return Ok(other);
     }
     let entries = service.read_source(target, mode, cut.next(), 1).await;
     let Some(OplogEntry::StreamSession { record, .. }) = entries.get(&cut.next()) else {
-        return Err(conflict());
+        return Ok(other);
     };
     let record = service
         .download_payload(target, mode, record.clone())
         .await
         .map_err(WorkerExecutorError::runtime)?;
     if !record.has_supported_format() {
-        return Err(conflict());
+        return Ok(other);
     }
     match record {
         StreamSessionRecord::ForkCut(record)
@@ -84,9 +138,54 @@ pub(crate) async fn existing_fork(
                 && record.cut_index == cut
                 && record.creation_fingerprint.0 == parameters.instance_id =>
         {
-            Ok(true)
+            Ok(ExistingFork::Matching(AgentFingerprint(
+                parameters.instance_id,
+            )))
         }
-        _ => Err(conflict()),
+        _ => Ok(other),
+    }
+}
+
+/// The instance id of the live durable target, from its `Create`, or `None` when no target with
+/// a `Create` is there.
+pub(crate) async fn live_instance(
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+) -> Option<AgentFingerprint> {
+    let mode = AgentMode::Durable;
+    if !service.exists(target, mode).await {
+        return None;
+    }
+    match service
+        .read_source(target, mode, OplogIndex::INITIAL, 1)
+        .await
+        .get(&OplogIndex::INITIAL)
+    {
+        Some(OplogEntry::Create { parameters, .. }) => {
+            Some(AgentFingerprint(parameters.instance_id))
+        }
+        _ => None,
+    }
+}
+
+/// What a plain fork found after a publication that did not give `true`, from the `outcome` of the
+/// publication and the `reconciled` target. A read of a `Create` gives the live instance id: a fork
+/// of this request succeeds, and another target is a conflict. Without such a read, a refused
+/// publication is a loss that the snapshot service checks, and an error leaves the outcome
+/// unknown.
+pub(crate) fn found_after(
+    target: &OwnedAgentId,
+    outcome: Result<bool, String>,
+    reconciled: Result<ExistingFork, WorkerExecutorError>,
+) -> PublishFound<Result<(), WorkerExecutorError>, WorkerExecutorError> {
+    match (reconciled, outcome) {
+        (Ok(ExistingFork::Matching(live)), _) => PublishFound::Live(live, Ok(())),
+        (Ok(ExistingFork::Other(live)), _) => PublishFound::Live(live, Err(conflict(target))),
+        (Ok(ExistingFork::Absent), Ok(_)) => PublishFound::Refused(Err(
+            WorkerExecutorError::runtime("Fork publication lost its target before reconciliation"),
+        )),
+        (Err(error), Ok(_)) => PublishFound::Refused(Err(error)),
+        (_, Err(error)) => PublishFound::Unknown(WorkerExecutorError::runtime(error)),
     }
 }
 
@@ -121,15 +220,18 @@ pub(crate) async fn write_guest_result(
                 observational_owner: None,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
             },
             Box::new(move |start_index| OplogEntry::End {
                 timestamp: now,
                 start_index,
                 response: Some(response_payload),
                 forced_commit: false,
+                span_finished: None,
+                span_attributes: None,
             }),
         )
-        .await;
+        .await?;
     if let Some(start_index) = copied_scope_start {
         oplog
             .add(OplogEntry::End {
@@ -137,8 +239,10 @@ pub(crate) async fn write_guest_result(
                 start_index,
                 response: None,
                 forced_commit: true,
+                span_finished: None,
+                span_attributes: None,
             })
-            .await;
+            .await?;
     }
     Ok(())
 }
@@ -167,6 +271,42 @@ mod tests {
                 agent_id: name.into(),
             },
         )
+    }
+
+    #[test]
+    fn a_missing_baseline_answers_by_the_target_that_the_reconciliation_found() {
+        let target = owner("target");
+        let cut = OplogIndex::from_u64(7);
+        let name = FilesystemSnapshotName::update();
+        let (matching, other) = (
+            AgentFingerprint(Uuid::from_u128(5)),
+            AgentFingerprint(Uuid::from_u128(6)),
+        );
+        let answer = |existing| {
+            let (lost_to, answer) = missing_baseline_answer(existing, &target, cut, &name);
+            (lost_to, answer.map_err(|error| error.to_string()))
+        };
+
+        let (refused_lost_to, refused) = answer(ExistingFork::Absent);
+
+        assert_eq!(
+            [
+                answer(ExistingFork::Matching(matching)),
+                answer(ExistingFork::Other(other)),
+            ],
+            [
+                (Some(matching), Ok(())),
+                (Some(other), Err(conflict(&target).to_string())),
+            ]
+        );
+        assert_eq!(refused_lost_to, None);
+        let refused = refused.unwrap_err();
+        assert!(
+            refused.contains("Cannot fork worker at oplog index 7")
+                && refused.contains(name.as_str())
+                && refused.contains("is not in the store"),
+            "{refused}"
+        );
     }
 
     #[test]
@@ -243,7 +383,10 @@ mod tests {
             Some((None, phantom)),
         )
         .unwrap();
-        assert!(!existing_fork(&service, &target, cut, hash).await.unwrap());
+        assert_eq!(
+            existing_fork(&service, &target, cut, hash).await.unwrap(),
+            ExistingFork::Absent
+        );
         let account = AccountId::new();
         let stage_id = Uuid::new_v4();
         let stage = service
@@ -288,8 +431,9 @@ mod tests {
                     instance_id: fingerprint.0,
                 },
             )))
-            .await;
-        stage.add(OplogEntry::suspend()).await;
+            .await
+            .unwrap();
+        stage.add(OplogEntry::suspend()).await.unwrap();
         let record = StreamSessionRecord::ForkCut(StreamForkCutRecord {
             format_version: 1,
             request_hash: hash.to_vec(),
@@ -307,39 +451,55 @@ mod tests {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
                 record,
+                summary: None,
             })
-            .await;
+            .await
+            .unwrap();
         write_guest_result(stage.as_ref(), None, phantom)
             .await
             .unwrap();
         // Extra entries after creation must not affect retry recognition.
-        stage.add(OplogEntry::suspend()).await;
-        stage.commit(CommitLevel::Always).await;
+        stage.add(OplogEntry::suspend()).await.unwrap();
+        stage.commit(CommitLevel::Always).await.unwrap();
         let last = stage.current_oplog_index().await;
         drop(stage);
-        assert!(!existing_fork(&service, &target, cut, hash).await.unwrap());
+        let before = existing_fork(&service, &target, cut, hash).await.unwrap();
         assert!(
             service
-                .publish_staged(&target, AgentMode::Durable, stage_id, last)
+                .publish_staged(
+                    &target,
+                    AgentMode::Durable,
+                    crate::services::oplog::StagePublication::for_tests(stage_id),
+                    last
+                )
                 .await
                 .unwrap()
         );
-        assert!(existing_fork(&service, &target, cut, hash).await.unwrap());
-        assert!(
-            existing_fork(&service, &target, cut, [99; 32])
-                .await
-                .is_err()
+        let live = fingerprint;
+        // Each read of the `Create` gives the instance id of the target, also for another request.
+        assert_eq!(
+            [
+                before,
+                existing_fork(&service, &target, cut, hash).await.unwrap(),
+                existing_fork(&service, &target, cut, [99; 32])
+                    .await
+                    .unwrap(),
+                existing_fork(&service, &target, cut.next(), hash)
+                    .await
+                    .unwrap(),
+                existing_fork(&service, &target, last.next(), hash)
+                    .await
+                    .unwrap(),
+            ],
+            [
+                ExistingFork::Absent,
+                ExistingFork::Matching(live),
+                ExistingFork::Other(live),
+                ExistingFork::Other(live),
+                ExistingFork::Other(live),
+            ]
         );
-        assert!(
-            existing_fork(&service, &target, cut.next(), hash)
-                .await
-                .is_err()
-        );
-        assert!(
-            existing_fork(&service, &target, last.next(), hash)
-                .await
-                .is_err()
-        );
+        assert_eq!(live_instance(&service, &target).await, Some(live));
         let result = service
             .read_exact(&target, AgentMode::Durable, OplogIndex::from_u64(5), 1)
             .await;

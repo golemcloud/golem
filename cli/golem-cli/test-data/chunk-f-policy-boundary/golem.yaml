@@ -1,0 +1,44 @@
+manifestVersion: 1.6.0
+
+app: chunk-f-policy-boundary
+
+environments:
+  local:
+    server: local
+    componentPresets: release
+    tools:
+      chunk-f-config-probe:
+        filesystemAccess: allowed
+      chunk-f-filesystem-probe:
+        filesystemAccess: allowed
+
+components:
+  chunk-f:provider:
+    dir: provider
+    templates: rust
+  chunk-f:caller:
+    dir: caller
+    templates: rust
+    dependencies:
+      tools:
+        - chunk-f:provider/chunk-f-config-probe
+        - chunk-f:provider/chunk-f-filesystem-probe
+
+tools:
+  chunk-f-config-probe: {}
+  chunk-f-filesystem-probe: {}
+
+agents:
+  ChunkFPolicyAgent:
+    tools:
+      chunk-f-config-probe:
+        filesystemAccess: allowed
+      chunk-f-filesystem-probe:
+        filesystemAccess: allowed
+
+bridge:
+  rust:
+    internal:
+      tools:
+        - chunk-f-config-probe
+        - chunk-f-filesystem-probe

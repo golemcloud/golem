@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, ReadFileResult, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -53,11 +53,9 @@ use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::entity::{
     EntityInvocationScope, FilesystemCapability, InvocationExecutionMode, OwnerRuntime,
 };
-use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
-};
+use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, HostResponseEntityInvocation, TimestampedUpdateDescription,
+    AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
@@ -133,6 +131,43 @@ pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
 }
 
+/// Where a replaying accessor durable call is paused relative to its scope admission.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplayAdmissionStage {
+    /// Before the call opens its durable scope (when it has one) and before it claims its `Start`.
+    BeforeScope,
+    /// After the scope `Start` is claimed but before the call's own `Start` is claimed.
+    AfterScope,
+    /// Before a deferred call is prepared, on both live execution and replay.
+    BeforeDeferredStart,
+    /// After the deferred call owns its `Start`, before resolution or live execution.
+    AfterDeferredStart,
+    /// Before committing the Jump that abandons an incomplete batched attempt.
+    BeforeBatchedJump,
+    /// After that Jump is committed and registered, before continuing the scope.
+    AfterBatchedJump,
+}
+
+/// Test-harness coordination at the host-scheduling boundaries of durable call replay: where a
+/// replaying accessor call is admitted to claim its recorded `Start`, and where a direct
+/// (Store-holding) call begins waiting for its recorded terminal.
+#[doc(hidden)]
+#[async_trait]
+pub trait ReplayAdmissionHook: Send + Sync {
+    /// Runs on the accessor future, outside every cursor lock, at the selected admission or
+    /// recovery stage. Deferred-call stages also run on live execution.
+    async fn before_replay_access_start(&self, function: &'static str, stage: ReplayAdmissionStage);
+
+    /// Runs synchronously on the Store-holding direct call right before it waits for its
+    /// recorded terminal.
+    fn before_direct_replay_wait(&self, function: &'static str, start_index: OplogIndex);
+
+    /// Runs synchronously on the Store-holding direct path right before a positional replay
+    /// read expecting the `expected` marker entry.
+    fn before_positional_replay_read(&self, expected: &str);
+}
+
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
 /// well as providing hooks for the general worker executor logic.
@@ -164,17 +199,6 @@ pub trait WorkerCtx:
 
     /// Static log event behaviour configuration for workers
     const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
-
-    /// Whether an incomplete durable call encountered during replay (a committed `Start` whose
-    /// terminal `End`/`Cancelled` entry is missing before the replay target) may be repaired by
-    /// switching to live re-execution of the side effect.
-    ///
-    /// Regular workers allow this for re-executable function types. Debug sessions disable it:
-    /// a debugging session must never perform real side effects, and its oplog silently discards
-    /// writes, so the repaired call's `End` could never be persisted anyway. When disabled, such
-    /// a call fails with an explicit "replay target inside an in-flight durable call" error
-    /// instead of re-executing.
-    const ALLOW_LIVE_REPAIR_OF_INCOMPLETE_DURABLE_CALLS: bool = true;
 
     /// Wraps per-agent oplog handles used by worker internals, their context, and fork source reads.
     fn wrap_oplog(
@@ -264,7 +288,7 @@ pub trait WorkerCtx:
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
@@ -389,12 +413,15 @@ pub trait CallCountManagement {
     /// Called at the start of each exported function invocation.
     fn reset_invocation_call_counts(&mut self);
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota. Only fresh live work is
+    /// charged; a replayed call or one that may adopt a retained recorded HTTP-charged `Start` is
+    /// not.
     ///
     /// Returns `Err` with `WorkerMonthlyHttpCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_http_call(&mut self) -> anyhow::Result<()>;
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota, under the same rule as
+    /// [`Self::record_monthly_http_call`].
     ///
     /// Returns `Err` with `WorkerMonthlyRpcCallBudgetExhausted` if budget is exhausted.
     fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()>;
@@ -528,20 +555,23 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed
+    /// Called when an update attempt has failed, with its `FailedUpdate` entry. Fails when the
+    /// oplog refused to record the failure: the agent has been given up, and must not be rebuilt
+    /// on its old revision here.
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    );
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError>;
 
-    /// Called when an update attempt succeeded
+    /// Called when an update attempt succeeded. Fails when the oplog refused to record the
+    /// update: the agent has been given up, and the update must not be reported as applied.
     async fn on_worker_update_succeeded(
         &self,
         target_revision: ComponentRevision,
         new_component_size: u64,
         new_active_plugins: HashSet<EnvironmentPluginGrantId>,
-    );
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// Operations not requiring an active worker context, but still depending on the
@@ -610,39 +640,13 @@ pub trait FileSystemReading {
         &self,
         path: &CanonicalFilePath,
     ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError>;
 }
 
 /// Functions to manipulate and query the current invocation context
 #[async_trait]
 pub trait InvocationContextManagement {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
-
     /// Removes an inherited span without finishing it
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    /// Removes and finishes a local span
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError>;
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError>;
 
     /// Clones every element of the stack belonging to the given current span id, and sets
     /// the inherited flag to true on them, without changing the spans in this invocation context.

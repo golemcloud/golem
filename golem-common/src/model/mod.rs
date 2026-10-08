@@ -31,6 +31,7 @@ pub mod environment_plugin_grant;
 pub mod environment_tool_grant;
 pub mod environment_tool_middleware_grant;
 pub mod error;
+pub mod filesystem;
 pub mod http_api_deployment;
 pub mod invocation_context;
 pub mod invocation_session_public;
@@ -66,7 +67,7 @@ pub use retry_policy::{
 use self::component::ComponentId;
 use self::component::{AgentFilePermissions, ComponentRevision};
 use self::environment::EnvironmentId;
-use self::oplog::QueuedCardEvent;
+use self::oplog::{FilesystemSnapshotName, QueuedCardEvent};
 use self::worker::{AgentConfigEntryDto, TypedAgentConfigEntry};
 use crate::base_model::agent::AgentMode;
 use crate::base_model::agent::Principal;
@@ -394,6 +395,13 @@ pub enum ScheduledAction {
         parent: Option<AgentId>,
         creation_principal: Box<Principal>,
     },
+    ExpireDurableStreamSession {
+        owned_agent_id: OwnedAgentId,
+        target_agent_fingerprint: AgentFingerprint,
+        public_session_id: String,
+        session_key: IdempotencyKey,
+        expected_deadline_millis: u64,
+    },
 }
 
 impl ScheduledAction {
@@ -406,7 +414,10 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::Invoke { owned_agent_id, .. }
-            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => owned_agent_id.clone(),
+            | ScheduledAction::InvokeEphemeral { owned_agent_id, .. }
+            | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
+                owned_agent_id.clone()
+            }
             ScheduledAction::Resume { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
@@ -425,6 +436,14 @@ impl Display for ScheduledAction {
             | ScheduledAction::InvokeEphemeral { owned_agent_id, .. } => {
                 write!(f, "invoke[{owned_agent_id}]")
             }
+            ScheduledAction::ExpireDurableStreamSession {
+                owned_agent_id,
+                public_session_id,
+                ..
+            } => write!(
+                f,
+                "expire-stream-session[{owned_agent_id}/{public_session_id}]"
+            ),
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
         }
     }
@@ -543,19 +562,51 @@ impl Display for ShardEpoch {
     }
 }
 
-/// The revision of the shard manager's persisted state that a delivered shard
-/// set was read from. Every delivery carries one - a registration, a push, a
-/// renewal - and an executor applies a delivery only if its revision is at
-/// least the last one it applied, so two deliveries that cross on the network
-/// cannot leave the older set in place. `0` is "nothing applied yet". The
-/// executor's own newtype; it never imports the shard manager's.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ShardLeaseRevision(pub u64);
+/// Where a delivered shard set sits in the shard manager's order: the manager
+/// process that sent it, and the revision of the persisted state the set was
+/// read from. Every delivery carries one - a registration, a push, a renewal -
+/// and an executor applies a delivery only if its number is at least the last
+/// one it applied from that process, so two deliveries that cross on the
+/// network cannot leave the older set in place.
+///
+/// The numbers of two manager processes are not comparable: one that failed
+/// over, or came back on a wiped or restored store, counts from a state this
+/// executor's last applied number says nothing about. So this has no `Ord`, and
+/// [`ShardAssignment`] is the one place the two halves are read together. The
+/// executor's own type; it never imports the shard manager's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ShardLeaseRevision {
+    pub incarnation: Uuid,
+    pub number: u64,
+}
+
+impl ShardLeaseRevision {
+    /// Off the wire. Every delivery names the process that sent it, so an id
+    /// that is empty, or not a UUID, makes the delivery malformed.
+    pub fn from_wire(incarnation_id: &str, number: u64) -> Result<Self, String> {
+        let incarnation = Uuid::parse_str(incarnation_id)
+            .map_err(|error| format!("incarnation_id {incarnation_id:?} is not a UUID: {error}"))?;
+        Ok(Self {
+            incarnation,
+            number,
+        })
+    }
+}
 
 impl Display for ShardLeaseRevision {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}@{}", self.number, self.incarnation)
     }
+}
+
+/// Which way a delivery reached this executor, which decides what a change of
+/// manager process means - see [`ShardAssignment::apply`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShardDeliveryPath {
+    /// The answer to a registration or a renewal this executor sent.
+    Reply,
+    /// An `AssignShards` or `RevokeShards` the manager sent on its own.
+    Push,
 }
 
 /// What applying a delivered shard set did.
@@ -567,6 +618,13 @@ pub enum ShardDeliveryOutcome {
     Applied { set_changed: bool },
     /// Older than a delivery already applied, so ignored whole.
     Stale {
+        delivered: ShardLeaseRevision,
+        applied: ShardLeaseRevision,
+    },
+    /// A push from a manager process other than the one this executor follows,
+    /// so ignored whole. The executor owes a renewal: its answer names the
+    /// process in charge and carries that process's set.
+    FromAnotherManager {
         delivered: ShardLeaseRevision,
         applied: ShardLeaseRevision,
     },
@@ -586,12 +644,14 @@ pub struct ShardAssignment {
     /// or renewal - and the grant is anchored where that request was sent, so
     /// the shard manager's copy of the lease is never earlier than this one.
     /// A push carries no lease. `None` means the lease never expires
-    /// (single-shard mode, the debugging service, and the pre-registration
-    /// placeholder).
+    /// (single-shard mode and the pre-registration placeholder).
     pub expires_at: Option<Instant>,
-    /// The revision of the delivery this set came from. A delivery older than
-    /// this is ignored; see [`ShardLeaseRevision`].
-    pub revision: ShardLeaseRevision,
+    /// The revision of the delivery this set came from, and the shard manager
+    /// process this executor follows. A delivery older than this, or pushed
+    /// by another process, is ignored; see [`ShardLeaseRevision`]. `None`
+    /// until a delivery has been applied, and for good on the single-shard
+    /// assignment, which no shard manager delivers.
+    pub revision: Option<ShardLeaseRevision>,
 }
 
 impl ShardAssignment {
@@ -609,7 +669,7 @@ impl ShardAssignment {
                 .map(|shard_id| (shard_id, ShardEpoch::default()))
                 .collect(),
             expires_at: None,
-            revision: ShardLeaseRevision::default(),
+            revision: None,
         }
     }
 
@@ -637,9 +697,9 @@ impl ShardAssignment {
         self.shard_epochs.get(shard_id).copied()
     }
 
-    /// The claim sent on a lease renewal: exactly the set last received, in a
+    /// The held epochs sent on a lease renewal: exactly the set last received, in a
     /// deterministic order.
-    pub fn claim(&self) -> BTreeMap<ShardId, ShardEpoch> {
+    pub fn held_epochs(&self) -> BTreeMap<ShardId, ShardEpoch> {
         self.shard_epochs
             .iter()
             .map(|(shard_id, epoch)| (*shard_id, *epoch))
@@ -658,7 +718,12 @@ impl ShardAssignment {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome {
-        self.apply(Some(number_of_shards), shard_epochs, revision)
+        self.apply(
+            Some(number_of_shards),
+            shard_epochs,
+            revision,
+            ShardDeliveryPath::Push,
+        )
     }
 
     /// A grant: the answer to this executor's own registration
@@ -674,7 +739,7 @@ impl ShardAssignment {
     /// set goes through [`Self::apply`]'s revision gate like every other
     /// delivery: the revision orders sets and the request time orders leases,
     /// and the two are independent. Normally the set is exactly what was
-    /// claimed, because a renewal never advances an epoch; when it is not, the
+    /// held, because a renewal never advances an epoch; when it is not, the
     /// manager is correcting a push this executor never received, and the
     /// caller sweeps and recovers agents exactly as it would for a push.
     ///
@@ -691,7 +756,12 @@ impl ShardAssignment {
         revision: ShardLeaseRevision,
     ) -> ShardDeliveryOutcome {
         self.expires_at = Some(expires_at);
-        self.apply(number_of_shards, shard_epochs, revision)
+        self.apply(
+            number_of_shards,
+            shard_epochs,
+            revision,
+            ShardDeliveryPath::Reply,
+        )
     }
 
     /// The one place any delivery's set is applied, including
@@ -705,24 +775,52 @@ impl ShardAssignment {
     /// from the same persisted state and carry the same set, so they apply
     /// harmlessly. The lease is not this function's business: only
     /// [`Self::adopt_grant`] moves it, and it does so before coming here.
+    ///
+    /// That order holds within one manager process. A delivery from another
+    /// one is told apart by how it came. A reply answers a request this
+    /// executor has just made, so its sender is the manager in charge: the
+    /// executor follows it from here on and its numbers start over, which is
+    /// what lets a manager that lost its history deliver a set at all. A push
+    /// proves nothing of the kind - a deposed manager can still be sending -
+    /// so it is ignored, and the caller renews to hear from the one in charge.
+    /// Starting the numbers over cannot let an old manager's delayed push
+    /// back in, because that push no longer names the process followed. The
+    /// first delivery applied names the process followed, whichever way it
+    /// came; on an executor that is a registration's reply, because the shard
+    /// service refuses pushes until a registration has installed an
+    /// assignment.
     fn apply(
         &mut self,
         number_of_shards: Option<usize>,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
+        path: ShardDeliveryPath,
     ) -> ShardDeliveryOutcome {
-        if revision < self.revision {
-            return ShardDeliveryOutcome::Stale {
-                delivered: revision,
-                applied: self.revision,
-            };
+        if let Some(applied) = self.revision {
+            if revision.incarnation != applied.incarnation {
+                match path {
+                    // The process in charge answered: its numbers start over.
+                    ShardDeliveryPath::Reply => {}
+                    ShardDeliveryPath::Push => {
+                        return ShardDeliveryOutcome::FromAnotherManager {
+                            delivered: revision,
+                            applied,
+                        };
+                    }
+                }
+            } else if revision.number < applied.number {
+                return ShardDeliveryOutcome::Stale {
+                    delivered: revision,
+                    applied,
+                };
+            }
         }
         let set_changed = self.shard_epochs != *shard_epochs;
         if let Some(number_of_shards) = number_of_shards {
             self.number_of_shards = number_of_shards;
         }
         self.shard_epochs = shard_epochs.clone();
-        self.revision = revision;
+        self.revision = Some(revision);
         ShardDeliveryOutcome::Applied { set_changed }
     }
 
@@ -742,7 +840,7 @@ impl ShardAssignment {
     ) -> ShardDeliveryOutcome {
         let mut remaining = self.shard_epochs.clone();
         remaining.retain(|shard_id, _| !shard_ids.contains(shard_id));
-        self.apply(None, &remaining, revision)
+        self.apply(None, &remaining, revision, ShardDeliveryPath::Push)
     }
 
     /// Drops every shard, keeping `number_of_shards`, and leaves the lease
@@ -1236,6 +1334,147 @@ impl Default for InvocationResultMembership {
     }
 }
 
+/// The newest automatic snapshot entry in the oplog, with the filesystem snapshot that it names
+/// and the confirmation of that snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The time of the `Snapshot` entry.
+    pub timestamp: Timestamp,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot that the entry names, with its confirmation.
+    pub files: SnapshotFiles,
+}
+
+/// The filesystem snapshot that an automatic snapshot entry names, with its confirmation. Only a
+/// named snapshot can be confirmed.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum SnapshotFiles {
+    /// The entry names no filesystem snapshot: it has no filesystem capture.
+    Unnamed,
+    /// The entry names this filesystem snapshot, and no `SnapshotConfirmed` entry confirmed it.
+    Unconfirmed(FilesystemSnapshotName),
+    /// A `SnapshotConfirmed` entry with the same name follows the entry.
+    Confirmed(FilesystemSnapshotName),
+}
+
+impl SnapshotFiles {
+    /// The files of a new entry that names `name`, before any confirmation.
+    pub fn named(name: Option<FilesystemSnapshotName>) -> Self {
+        name.map_or(Self::Unnamed, Self::Unconfirmed)
+    }
+
+    /// The name of the filesystem snapshot, when the entry names one.
+    pub fn name(&self) -> Option<&FilesystemSnapshotName> {
+        match self {
+            Self::Unnamed => None,
+            Self::Unconfirmed(name) | Self::Confirmed(name) => Some(name),
+        }
+    }
+
+    /// The files after a `SnapshotConfirmed` entry of `name`: confirmed when the entry names
+    /// `name` and is unconfirmed, and unchanged otherwise.
+    pub fn confirmed(self, name: &FilesystemSnapshotName) -> Self {
+        match self {
+            Self::Unconfirmed(own) if &own == name => Self::Confirmed(own),
+            files => files,
+        }
+    }
+}
+
+impl AutomaticSnapshot {
+    /// The entry as a baseline of a start, when it is usable: its filesystem snapshot is
+    /// confirmed, or it names none.
+    pub fn into_usable(self) -> Option<UsableAutomaticSnapshot> {
+        let filesystem_snapshot = match self.files {
+            SnapshotFiles::Unnamed => None,
+            SnapshotFiles::Confirmed(name) => Some(name),
+            SnapshotFiles::Unconfirmed(_) => return None,
+        };
+        Some(UsableAutomaticSnapshot {
+            index: self.index,
+            component_revision: self.component_revision,
+            filesystem_snapshot,
+        })
+    }
+}
+
+/// An automatic snapshot entry that a start can use as its baseline: its filesystem snapshot is
+/// confirmed, or it has no filesystem snapshot name.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct UsableAutomaticSnapshot {
+    /// The index of the `Snapshot` entry.
+    pub index: OplogIndex,
+    /// The component revision that made the entry.
+    pub component_revision: ComponentRevision,
+    /// The filesystem snapshot name of the entry, which a `SnapshotConfirmed` entry confirmed.
+    /// `None` when the entry has no filesystem snapshot name.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+}
+
+/// Visible rollback boundaries since the last invocation finish with no open recovery scopes.
+/// Completed atomic intervals remain necessary when a later cut crosses their ends.
+#[derive(Clone, Debug, Default, PartialEq, BinaryCodec)]
+pub struct AtomicRollbackState {
+    pub regions: OrdMap<OplogIndex, Option<OplogIndex>>,
+    pub open_cut_scopes: OrdMap<OplogIndex, ()>,
+    pub last_work: OplogIndex,
+    pub retired_through: OplogIndex,
+}
+
+impl AtomicRollbackState {
+    /// Fold one visible entry in oplog order. Jump/revert visibility is resolved by the caller.
+    pub fn observe(&mut self, index: OplogIndex, entry: &OplogEntry) {
+        use crate::model::oplog::DurableFunctionType;
+
+        if !matches!(
+            entry,
+            OplogEntry::Jump { .. }
+                | OplogEntry::Suspend { .. }
+                | OplogEntry::Interrupted { .. }
+                | OplogEntry::Restart { .. }
+                | OplogEntry::Error { .. }
+                | OplogEntry::RecoverySucceeded { .. }
+        ) {
+            self.last_work = index;
+        }
+        match entry {
+            OplogEntry::BeginAtomicRegion { .. } => {
+                self.regions.insert(index, None);
+            }
+            OplogEntry::EndAtomicRegion { begin_index, .. } => {
+                if let Some(end) = self.regions.get_mut(begin_index) {
+                    *end = Some(index);
+                }
+            }
+            OplogEntry::Start {
+                request: None,
+                durable_function_type:
+                    DurableFunctionType::WriteRemoteBatched(None)
+                    | DurableFunctionType::WriteRemoteTransaction(None),
+                ..
+            } => {
+                self.open_cut_scopes.insert(index, ());
+            }
+            OplogEntry::End { start_index, .. } => {
+                self.open_cut_scopes.remove(start_index);
+            }
+            OplogEntry::AgentInvocationFinished { .. }
+                if self.open_cut_scopes.is_empty()
+                    && self.regions.values().all(Option::is_some) =>
+            {
+                self.regions.clear();
+                self.retired_through = index;
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Contains status information about a worker according to a given oplog index.
 ///
 /// This status is just cached information, all fields must be computable by the oplog alone.
@@ -1247,6 +1486,7 @@ pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
     pub skipped_regions: DeletedRegions,
+    pub atomic_rollback: AtomicRollbackState,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
     pub pending_card_events: Vec<PendingCardEventRef>,
@@ -1272,22 +1512,33 @@ pub struct AgentStatusRecord {
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
     pub revoked_cards: HashSet<CardId>,
     pub deleted_regions: DeletedRegions,
-    /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
-    /// if only automatic updates were used or the version of the latest snapshot-based update
+    /// Historical component revision used for replay metadata at the recovery baseline.
+    /// Initially the `Create` revision; successful manual snapshot updates set it to their target
+    /// revision, and successful snapshot-assisted automatic updates set it to their source revision.
+    /// Automatic updates without snapshot assistance leave it unchanged.
     pub component_revision_for_replay: ComponentRevision,
+    /// Oplog index that established the active component revision (`Create` or the latest
+    /// surviving `SuccessfulUpdate`).
+    pub component_revision_start_index: OplogIndex,
     /// Semantic retry policy state per `retry_from` oplog index.
     pub current_retry_state: HashMap<OplogIndex, RetryPolicyState>,
-    /// Index of the last manual update snapshot index. Agent will call load_snapshot
-    /// on this payload before starting replay.
-    pub last_manual_update_snapshot_index: Option<OplogIndex>,
-    /// Index of the last automatic snapshot index. Must be >= last_manual_snapshot_index.
-    /// Agent will call load_snapshot on this payload before starting replay. If the load_snapshot
-    /// fails this will be ignored and a full replay from last_manual_snapshot_index will performed.
-    pub last_automatic_snapshot_index: Option<OplogIndex>,
-    /// Timestamp of the last automatic snapshot entry in the oplog.
-    pub last_automatic_snapshot_timestamp: Option<Timestamp>,
-    /// Component revision that created the last automatic snapshot.
-    pub last_automatic_snapshot_component_revision: Option<ComponentRevision>,
+    /// Mandatory recovery snapshot established by a successful update. Agent will call
+    /// load_snapshot on this payload before starting replay.
+    pub authoritative_snapshot: Option<AuthoritativeSnapshot>,
+    /// The last automatic snapshot entry. Its index is after the index of `authoritative_snapshot`.
+    /// A start that selects it calls load_snapshot on its payload before it starts the replay. If
+    /// the load_snapshot fails, the start rejects this entry and tries
+    /// `previous_usable_automatic_snapshot`, then `authoritative_snapshot`, and a full replay only
+    /// when there is no authoritative snapshot.
+    pub last_automatic_snapshot: Option<AutomaticSnapshot>,
+    /// The newest automatic snapshot entry before the last one that was usable when the entry
+    /// after it came: an entry with a confirmed filesystem snapshot, or an entry without a
+    /// filesystem snapshot name. A new entry moves a usable last entry here, also when it reuses
+    /// the filesystem snapshot name of that entry, because each entry has its own application
+    /// snapshot. A start uses this entry when the last automatic snapshot entry is not usable, or
+    /// when the last entry does not load or restore. A successful update clears it together with
+    /// the last automatic snapshot entry.
+    pub previous_usable_automatic_snapshot: Option<UsableAutomaticSnapshot>,
     /// The agent mode the worker was created with. Decided at create time and persisted in the
     /// `Create` oplog entry; immutable for the life of the worker. `#[transient]`: it is not part
     /// of the serialized record (it is persisted separately) and defaults to `Durable` on
@@ -1302,6 +1553,7 @@ impl Default for AgentStatusRecord {
             status: AgentStatus::Idle,
             last_error_kind: None,
             skipped_regions: DeletedRegions::new(),
+            atomic_rollback: AtomicRollbackState::default(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
             pending_card_events: Vec::new(),
@@ -1326,11 +1578,11 @@ impl Default for AgentStatusRecord {
             revoked_cards: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_revision_for_replay: ComponentRevision::INITIAL,
+            component_revision_start_index: OplogIndex::INITIAL,
             current_retry_state: HashMap::new(),
-            last_manual_update_snapshot_index: None,
-            last_automatic_snapshot_index: None,
-            last_automatic_snapshot_timestamp: None,
-            last_automatic_snapshot_component_revision: None,
+            authoritative_snapshot: None,
+            last_automatic_snapshot: None,
+            previous_usable_automatic_snapshot: None,
             agent_mode: AgentMode::Durable,
         }
     }
@@ -1446,6 +1698,12 @@ pub struct DurableStreamSessionStatus {
     pub lifecycle_error: Option<String>,
     pub tombstoned_slots: HashSet<String>,
     pub cancellation_requested: bool,
+    pub public_session_id: Option<String>,
+    pub expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+    pub expired: bool,
+    pub export_fork_initialized: bool,
+    pub export_source_invocation: Option<crate::model::durable_stream::StreamInvocationId>,
 }
 
 impl DurableStreamSessionStatus {
@@ -1510,11 +1768,24 @@ impl DurableStreamSessionStatus {
         if let StreamSessionRecord::ForkCut(cut) = record {
             self.attachment_epoch = Some(cut.epoch_floor);
             self.attachment_attached = Some(false);
+            if cut.revert.is_none() {
+                // Concrete Prepared invocation identities remain valid continuations on an
+                // ordinary fork. A target-only export identity is replaced on initialization.
+                if self.first_prepared.is_none() {
+                    self.public_session_id = None;
+                }
+                self.expiry_policy = crate::model::durable_stream::StreamSessionExpiryPolicy::None;
+                self.expiry_deadline_millis = None;
+                self.expired = false;
+            }
             return;
         }
 
         let local_record_key = match record {
             StreamSessionRecord::Prepared(v) => Some(&v.session_key),
+            StreamSessionRecord::ExpiryRefreshed(v) => Some(&v.session_key),
+            StreamSessionRecord::Expired(v) => Some(&v.session_key),
+            StreamSessionRecord::ExportForkInitialized(v) => Some(&v.session_key),
             StreamSessionRecord::Attached(v) => Some(&v.session_key),
             StreamSessionRecord::ResumeAttempt(v) => Some(&v.session_key),
             StreamSessionRecord::Detached(v) => Some(&v.session_key),
@@ -1567,7 +1838,36 @@ impl DurableStreamSessionStatus {
                     self.first_prepared = Some(oplog_idx);
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
+                    self.public_session_id = Some(v.public_session_id.clone());
+                    self.expiry_policy = v.expiry_policy;
+                    self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
+            }
+            StreamSessionRecord::ExpiryRefreshed(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && matches!(
+                        self.expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    )
+                    && !self.expired =>
+            {
+                self.expiry_deadline_millis = Some(v.deadline_millis);
+            }
+            StreamSessionRecord::Expired(v)
+                if self.public_session_id.as_deref() == Some(&v.public_session_id)
+                    && self.expiry_deadline_millis == Some(v.expected_deadline_millis)
+                    && !self.expired =>
+            {
+                self.expired = true;
+            }
+            StreamSessionRecord::ExportForkInitialized(v) if self.public_session_id.is_none() => {
+                self.public_session_id = Some(v.public_session_id.clone());
+                self.expiry_policy = v.expiry_policy;
+                self.expiry_deadline_millis = v.expiry_deadline_millis;
+                self.expired = false;
+                self.export_fork_initialized = true;
+                self.export_source_invocation = Some(v.source_invocation.clone());
             }
             StreamSessionRecord::Attached(v) => {
                 if self.initial_attachment_epoch.is_some() {
@@ -1637,6 +1937,95 @@ impl DurableStreamSessionStatus {
 }
 
 pub const DURABLE_STREAM_SESSION_RECENT_CAPACITY: usize = 128;
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+pub enum DurableStreamPublicBinding {
+    Live {
+        session_key: IdempotencyKey,
+        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy,
+        expiry_deadline_millis: Option<u64>,
+    },
+    Retired {
+        session_key: IdempotencyKey,
+    },
+}
+
+impl DurableStreamPublicBinding {
+    pub fn fold(
+        current: Option<&Self>,
+        record: &crate::model::durable_stream::StreamSessionRecord,
+    ) -> Option<Self> {
+        use crate::model::durable_stream::StreamSessionRecord;
+
+        match record {
+            StreamSessionRecord::Prepared(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExportForkInitialized(record) => match current {
+                None => Some(Self::Live {
+                    session_key: record.session_key.clone(),
+                    expiry_policy: record.expiry_policy,
+                    expiry_deadline_millis: record.expiry_deadline_millis,
+                }),
+                Some(Self::Retired { session_key }) if session_key != &record.session_key => {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: record.expiry_policy,
+                        expiry_deadline_millis: record.expiry_deadline_millis,
+                    })
+                }
+                Some(current) => Some(current.clone()),
+            },
+            StreamSessionRecord::ExpiryRefreshed(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_policy,
+                    expiry_deadline_millis: Some(deadline),
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis
+                    && matches!(
+                        expiry_policy,
+                        crate::model::durable_stream::StreamSessionExpiryPolicy::Sliding { .. }
+                    ) =>
+                {
+                    Some(Self::Live {
+                        session_key: record.session_key.clone(),
+                        expiry_policy: *expiry_policy,
+                        expiry_deadline_millis: Some(record.deadline_millis),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            StreamSessionRecord::Expired(record) => match current {
+                Some(Self::Live {
+                    session_key,
+                    expiry_deadline_millis: Some(deadline),
+                    ..
+                }) if session_key == &record.session_key
+                    && *deadline == record.expected_deadline_millis =>
+                {
+                    Some(Self::Retired {
+                        session_key: record.session_key.clone(),
+                    })
+                }
+                _ => current.cloned(),
+            },
+            _ => current.cloned(),
+        }
+    }
+}
 
 /// An oplog-derived index of unfinished sessions and a bounded set of recent completions.
 /// Values contain only oplog indices; canonical invocation and result payloads remain in the oplog.
@@ -1731,7 +2120,13 @@ impl DurableStreamSessionIndex {
         };
         let mut status = match self.get(key) {
             Some(status) => status.clone(),
-            None if matches!(record, StreamSessionRecord::Prepared(_)) => Default::default(),
+            None if matches!(
+                record,
+                StreamSessionRecord::Prepared(_) | StreamSessionRecord::ExportForkInitialized(_)
+            ) =>
+            {
+                Default::default()
+            }
             // Caller-side results have no local Prepared/Finished lifecycle.
             None => return,
         };
@@ -1810,6 +2205,11 @@ pub struct FailedUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
     pub details: Option<String>,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::FailedSnapshotAssistedUpdateDetails>,
+    /// Whether the failure is about the record that the update selected. `None` for any other
+    /// failure.
+    pub snapshot_fault: Option<oplog::SnapshotFault>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1817,6 +2217,34 @@ pub struct FailedUpdateRecord {
 pub struct SuccessfulUpdateRecord {
     pub timestamp: Timestamp,
     pub target_revision: ComponentRevision,
+    /// The index of the `SuccessfulUpdate` entry. It orders the update against other entries,
+    /// which the timestamps of different executors cannot do.
+    pub oplog_index: OplogIndex,
+    /// The filesystem snapshot of the applied snapshot-based update. `None` for an automatic
+    /// update, for an update without a filesystem capture, and when no pending update was in
+    /// front of the queue.
+    pub filesystem_snapshot: Option<FilesystemSnapshotName>,
+    pub pending_update: Option<PendingUpdateRef>,
+    pub snapshot_assisted_details: Option<oplog::SnapshotAssistedUpdateDetails>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AuthoritativeSnapshot {
+    /// The `PendingUpdate` entry of a manual update, or the `Snapshot` entry of the record that a
+    /// snapshot-assisted automatic update selected.
+    pub index: OplogIndex,
+    pub kind: AuthoritativeSnapshotKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum AuthoritativeSnapshotKind {
+    ManualUpdate,
+    SnapshotAssistedAutomatic {
+        /// The filesystem snapshot of the selected record, or `None` when it has no name.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
@@ -1866,6 +2294,7 @@ pub enum AgentInvocation {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         invocation_context: InvocationContextStack,
         principal: Principal,
@@ -1911,6 +2340,7 @@ pub enum AgentInvocationPayload {
         input: Box<TypedSchemaValue>,
         stdin: bool,
         stdout: bool,
+        stderr: bool,
         activation: Box<ToolActivationSnapshot>,
         principal: Principal,
         scope_card: Option<ScopeCard>,
@@ -2180,6 +2610,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 principal,
                 scope_card,
@@ -2190,6 +2621,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 invocation_context,
                 principal,
@@ -2264,6 +2696,7 @@ impl AgentInvocation {
                 input,
                 stdin,
                 stdout,
+                stderr,
                 activation,
                 invocation_context,
                 principal,
@@ -2277,6 +2710,7 @@ impl AgentInvocation {
                     input,
                     stdin,
                     stdout,
+                    stderr,
                     activation,
                     principal,
                     scope_card,
@@ -2455,11 +2889,72 @@ pub struct PendingCardEventRef {
     pub event: QueuedCardEvent,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BinaryCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub enum PendingUpdateKind {
     Automatic,
-    SnapshotBased,
+    SnapshotAssistedAutomatic(Box<AssistedSelection>),
+    SnapshotBased {
+        /// The filesystem snapshot that the executor captured with the application snapshot.
+        /// `None` means that the executor made no filesystem capture.
+        filesystem_snapshot: Option<FilesystemSnapshotName>,
+    },
+}
+
+/// The record that a snapshot-assisted automatic update selected, and the source that it was
+/// selected from.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct AssistedSelection {
+    /// The index of the entry that started the source revision (`Create` or the last
+    /// `SuccessfulUpdate`) when the record was selected.
+    pub source_revision_start_index: OplogIndex,
+    /// The selected record. Its `component_revision` is the source revision.
+    pub snapshot: UsableAutomaticSnapshot,
+}
+
+impl PendingUpdateKind {
+    /// The filesystem snapshot of the update, when it has one: the capture of a snapshot-based
+    /// update, or the filesystem snapshot of the record that a snapshot-assisted automatic update
+    /// selected.
+    pub fn filesystem_snapshot(&self) -> Option<&FilesystemSnapshotName> {
+        match self {
+            Self::Automatic => None,
+            Self::SnapshotAssistedAutomatic(selection) => {
+                selection.snapshot.filesystem_snapshot.as_ref()
+            }
+            Self::SnapshotBased {
+                filesystem_snapshot,
+            } => filesystem_snapshot.as_ref(),
+        }
+    }
+
+    /// The kind of the pending update that `description` describes.
+    pub fn of(description: &oplog::UpdateDescription) -> Self {
+        match description {
+            oplog::UpdateDescription::Automatic { .. } => Self::Automatic,
+            oplog::UpdateDescription::SnapshotAssistedAutomatic {
+                source_revision_start_index,
+                snapshot_index,
+                snapshot_revision,
+                filesystem_snapshot,
+                ..
+            } => Self::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: *source_revision_start_index,
+                snapshot: UsableAutomaticSnapshot {
+                    index: *snapshot_index,
+                    component_revision: *snapshot_revision,
+                    filesystem_snapshot: filesystem_snapshot.clone(),
+                },
+            })),
+            oplog::UpdateDescription::SnapshotBased {
+                filesystem_snapshot,
+                ..
+            } => Self::SnapshotBased {
+                filesystem_snapshot: filesystem_snapshot.clone(),
+            },
+        }
+    }
 }
 
 /// A lightweight reference to a pending update whose full description is stored in the oplog.
@@ -2474,6 +2969,10 @@ pub struct PendingUpdateRef {
     pub timestamp: Timestamp,
     /// Index of the `PendingUpdate` oplog entry holding the full description.
     pub oplog_index: OplogIndex,
+    /// Durable admission identity returned to the caller. For manual updates this is the
+    /// originating `PendingAgentInvocation` index. For automatic updates it identifies the first
+    /// `PendingUpdate`, while `oplog_index` can identify the later strategy-selection entry.
+    pub admission_index: OplogIndex,
     pub target_revision: ComponentRevision,
     pub kind: PendingUpdateKind,
 }
@@ -2770,6 +3269,7 @@ mod shard_assignment_tests {
     use std::collections::HashSet;
     use std::time::{Duration, Instant};
     use test_r::test;
+    use uuid::Uuid;
 
     test_r::enable!();
 
@@ -2784,18 +3284,21 @@ mod shard_assignment_tests {
         Instant::now() + Duration::from_secs(seconds)
     }
 
+    /// The manager process behind every delivery in the tests that do not care which one sent it.
+    const MANAGER: Uuid = Uuid::from_u128(0x5eed);
+
     /// The push says "exactly these"; anything absent is dropped.
     #[test]
     fn set_shards_replaces_the_set_rather_than_merging_into_it() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
 
-        let outcome = assignment.set_shards(8, &epochs([(1, 4)]), ShardLeaseRevision(1));
+        let outcome = assignment.set_shards(8, &epochs([(1, 4)]), revision_of(MANAGER, 1));
 
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert!(!assignment.contains(&ShardId::new(0)));
         assert_eq!(assignment.epoch_of(&ShardId::new(1)), Some(ShardEpoch(4)));
         assert_eq!(assignment.len(), 1);
-        assert_eq!(assignment.revision, ShardLeaseRevision(1));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 1)));
     }
 
     /// Two deliveries can cross on the network. A renewal reply read from an
@@ -2807,17 +3310,17 @@ mod shard_assignment_tests {
     #[test]
     fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-        assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), ShardLeaseRevision(7));
+        assignment.set_shards(8, &epochs([(0, 1), (5, 2)]), revision_of(MANAGER, 7));
 
         let granted = in_secs(60);
         let outcome =
-            assignment.adopt_grant(None, &epochs([(0, 1)]), granted, ShardLeaseRevision(6));
+            assignment.adopt_grant(None, &epochs([(0, 1)]), granted, revision_of(MANAGER, 6));
 
         assert_eq!(
             outcome,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision(6),
-                applied: ShardLeaseRevision(7),
+                delivered: revision_of(MANAGER, 6),
+                applied: revision_of(MANAGER, 7),
             }
         );
         assert_eq!(
@@ -2825,7 +3328,7 @@ mod shard_assignment_tests {
             epochs([(0, 1), (5, 2)]),
             "the older delivery narrowed the set the newer one had just widened"
         );
-        assert_eq!(assignment.revision, ShardLeaseRevision(7));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 7)));
         assert_eq!(
             assignment.expires_at,
             Some(granted),
@@ -2839,11 +3342,11 @@ mod shard_assignment_tests {
     #[test]
     fn a_delivery_at_the_same_revision_is_applied() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
-        assignment.set_shards(8, &epochs([(0, 1)]), ShardLeaseRevision(7));
+        assignment.set_shards(8, &epochs([(0, 1)]), revision_of(MANAGER, 7));
 
         let refreshed = in_secs(60);
         let outcome =
-            assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, ShardLeaseRevision(7));
+            assignment.adopt_grant(None, &epochs([(0, 1)]), refreshed, revision_of(MANAGER, 7));
 
         assert_eq!(
             outcome,
@@ -2863,17 +3366,21 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1), (1, 1)]),
             granted,
-            ShardLeaseRevision(1),
+            revision_of(MANAGER, 1),
         );
 
-        assignment.set_shards(8, &epochs([(0, 1), (1, 1), (2, 1)]), ShardLeaseRevision(2));
+        assignment.set_shards(
+            8,
+            &epochs([(0, 1), (1, 1), (2, 1)]),
+            revision_of(MANAGER, 2),
+        );
         assert_eq!(
             assignment.expires_at,
             Some(granted),
             "a full-replace push must leave the lease where the grant put it"
         );
 
-        assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), ShardLeaseRevision(3));
+        assignment.revoke_shards(&HashSet::from([ShardId::new(2)]), revision_of(MANAGER, 3));
         assert_eq!(
             assignment.expires_at,
             Some(granted),
@@ -2893,14 +3400,14 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1)]),
             now + Duration::from_secs(60),
-            ShardLeaseRevision(1),
+            revision_of(MANAGER, 1),
         );
 
         assignment.adopt_grant(
             None,
             &epochs([(0, 1)]),
             now + Duration::from_secs(30),
-            ShardLeaseRevision(2),
+            revision_of(MANAGER, 2),
         );
 
         assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
@@ -2917,16 +3424,16 @@ mod shard_assignment_tests {
             Some(8),
             &epochs([(0, 1), (1, 1)]),
             expiry,
-            ShardLeaseRevision(3),
+            revision_of(MANAGER, 3),
         );
         let revoked = HashSet::from([ShardId::new(0)]);
 
-        let stale = assignment.revoke_shards(&revoked, ShardLeaseRevision(2));
+        let stale = assignment.revoke_shards(&revoked, revision_of(MANAGER, 2));
         assert_eq!(
             stale,
             ShardDeliveryOutcome::Stale {
-                delivered: ShardLeaseRevision(2),
-                applied: ShardLeaseRevision(3),
+                delivered: revision_of(MANAGER, 2),
+                applied: revision_of(MANAGER, 3),
             }
         );
         assert!(
@@ -2934,12 +3441,12 @@ mod shard_assignment_tests {
             "a revoke older than the last delivery applied must be ignored"
         );
 
-        let applied = assignment.revoke_shards(&revoked, ShardLeaseRevision(5));
+        let applied = assignment.revoke_shards(&revoked, revision_of(MANAGER, 5));
         assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
         assert!(!assignment.contains(&ShardId::new(0)));
         assert_eq!(
             assignment.revision,
-            ShardLeaseRevision(5),
+            Some(revision_of(MANAGER, 5)),
             "the revoke's revision is recorded like any other delivery's"
         );
         assert_eq!(
@@ -2952,7 +3459,7 @@ mod shard_assignment_tests {
             None,
             &epochs([(0, 1), (1, 1)]),
             in_secs(60),
-            ShardLeaseRevision(4),
+            revision_of(MANAGER, 4),
         );
         assert!(matches!(late_grant, ShardDeliveryOutcome::Stale { .. }));
         assert!(
@@ -2962,18 +3469,18 @@ mod shard_assignment_tests {
     }
 
     /// The corrective delivery: a renewal that answers with a different set
-    /// than was claimed is applied like a push, and reports the set moved so
+    /// than was held is applied like a push, and reports the set moved so
     /// the caller sweeps and recovers.
     #[test]
     fn a_renewal_that_changes_the_set_reports_it() {
         let mut assignment = ShardAssignment::unexpiring(8, [ShardId::new(0), ShardId::new(1)]);
-        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), ShardLeaseRevision(3));
+        assignment.set_shards(8, &epochs([(0, 1), (1, 1)]), revision_of(MANAGER, 3));
 
         let outcome = assignment.adopt_grant(
             None,
             &epochs([(1, 1), (2, 5)]),
             in_secs(60),
-            ShardLeaseRevision(4),
+            revision_of(MANAGER, 4),
         );
 
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
@@ -2982,7 +3489,113 @@ mod shard_assignment_tests {
             "the dropped shard is gone"
         );
         assert_eq!(assignment.epoch_of(&ShardId::new(2)), Some(ShardEpoch(5)));
-        assert_eq!(assignment.revision, ShardLeaseRevision(4));
+        assert_eq!(assignment.revision, Some(revision_of(MANAGER, 4)));
+    }
+
+    fn revision_of(incarnation: Uuid, number: u64) -> ShardLeaseRevision {
+        ShardLeaseRevision {
+            incarnation,
+            number,
+        }
+    }
+
+    /// A manager that came back on a wiped or restored store counts its revisions from far below
+    /// the last one this executor applied. Its reply is still the manager in charge speaking.
+    #[test]
+    fn a_reply_from_another_manager_process_starts_the_revisions_over() {
+        let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut assignment = ShardAssignment::default();
+        assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 4)]),
+            in_secs(60),
+            revision_of(old_manager, 10_000),
+        );
+        // what a lost lease does before the re-registration
+        assignment.clear(Instant::now());
+
+        let outcome = assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 5)]),
+            in_secs(60),
+            revision_of(new_manager, 3),
+        );
+
+        assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
+        assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(5)));
+        assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
+    }
+
+    /// Starting the revisions over must not be a way back in for the manager that was left: its
+    /// delayed push carries a revision far above the new manager's, and would win on the number.
+    #[test]
+    fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
+        let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut assignment = ShardAssignment::default();
+        assignment.adopt_grant(
+            Some(8),
+            &epochs([(0, 4)]),
+            in_secs(60),
+            revision_of(old_manager, 10_000),
+        );
+
+        // The new manager's push arrives before any reply from it: nothing says yet that it is
+        // the one in charge.
+        let early = assignment.set_shards(8, &epochs([(1, 1)]), revision_of(new_manager, 2));
+        assert_eq!(
+            early,
+            ShardDeliveryOutcome::FromAnotherManager {
+                delivered: revision_of(new_manager, 2),
+                applied: revision_of(old_manager, 10_000),
+            }
+        );
+        assert_eq!(assignment.shard_epochs, epochs([(0, 4)]));
+
+        assignment.adopt_grant(
+            None,
+            &epochs([(0, 5)]),
+            in_secs(60),
+            revision_of(new_manager, 3),
+        );
+
+        let delayed_push = assignment.set_shards(
+            8,
+            &epochs([(0, 4), (1, 4)]),
+            revision_of(old_manager, 10_001),
+        );
+        let delayed_revoke = assignment.revoke_shards(
+            &HashSet::from([ShardId::new(0)]),
+            revision_of(old_manager, 10_002),
+        );
+        for delayed in [delayed_push, delayed_revoke] {
+            assert!(
+                matches!(delayed, ShardDeliveryOutcome::FromAnotherManager { .. }),
+                "got {delayed:?}"
+            );
+        }
+        assert_eq!(assignment.shard_epochs, epochs([(0, 5)]));
+        assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
+
+        // The followed manager's own pushes are ordered by number as ever.
+        let push = assignment.set_shards(8, &epochs([(0, 5), (2, 1)]), revision_of(new_manager, 4));
+        assert_eq!(push, ShardDeliveryOutcome::Applied { set_changed: true });
+    }
+
+    /// Every delivery names the process that sent it. One that names none is malformed, not
+    /// ordered by its number alone: that would let a deposed manager's delayed push back in.
+    #[test]
+    fn a_delivery_must_name_its_manager_process() {
+        let manager = Uuid::new_v4();
+        assert_eq!(
+            ShardLeaseRevision::from_wire(&manager.to_string(), 3),
+            Ok(revision_of(manager, 3))
+        );
+        for malformed in ["", "not-a-uuid"] {
+            assert!(
+                ShardLeaseRevision::from_wire(malformed, 3).is_err(),
+                "{malformed:?} must not decode"
+            );
+        }
     }
 
     /// `clear()` lapses the lease as of `now`. `None` would mean
@@ -3004,8 +3617,8 @@ mod shard_assignment_tests {
         assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
     }
 
-    /// The single-shard implementations and the debugging service run with no
-    /// expiry at all and must never fence themselves.
+    /// The single-shard implementations run with no expiry at all and must
+    /// never fence themselves.
     #[test]
     fn a_lease_without_an_expiry_is_always_live() {
         let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);

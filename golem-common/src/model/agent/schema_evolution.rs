@@ -148,6 +148,7 @@ fn discriminant_name(typ: &SchemaType) -> &'static str {
         SchemaType::Binary { .. } => "Binary",
         SchemaType::Path { .. } => "Path",
         SchemaType::Url { .. } => "Url",
+        SchemaType::Uuid { .. } => "Uuid",
         SchemaType::Datetime { .. } => "Datetime",
         SchemaType::Duration { .. } => "Duration",
         SchemaType::Quantity { .. } => "Quantity",
@@ -542,6 +543,7 @@ mod tests {
     fn make_agent_type(name: &str, fields: Vec<(&str, SchemaType)>) -> AgentTypeSchema {
         AgentTypeSchema {
             type_name: AgentTypeName(name.to_string()),
+            kind: crate::schema::agent::AgentTypeKind::Regular,
             description: String::new(),
             source_language: String::new(),
             schema: SchemaGraph::empty(),

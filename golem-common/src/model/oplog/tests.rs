@@ -18,8 +18,9 @@ use crate::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, Card, CardHolder, CardId,
     InvocationWalletPin, PublicInvocationWalletPin, WalletVersionToken,
 };
+use crate::model::component::ComponentRevision;
 use crate::model::component::PluginPriority;
-use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
+use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::lucene::Query;
 use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::{SecretRevealAudit, SerializableDateTime};
@@ -32,24 +33,27 @@ use crate::model::oplog::public_oplog_entry::{
     CardTransferStartedParams, CardTransferredParams, CommittedRemoteTransactionParams,
     CreateParams, CreateResourceParams, DeactivatePluginParams, DropResourceParams,
     EndAtomicRegionParams, EndParams, ErrorParams, ExitedParams, FailedUpdateParams,
-    FinishSpanParams, GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
+    GrowMemoryParams, InterruptedParams, JumpParams, LogParams, NoOpParams,
     PendingAgentInvocationParams, PendingUpdateParams, PreCommitRemoteTransactionParams,
     PreRollbackRemoteTransactionParams, RemoveRetryPolicyParams, RestartParams, ResumedParams,
-    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SetSpanAttributeParams,
-    SnapshotParams, StartParams, StartSpanParams, SuccessfulUpdateParams, SuspendParams,
+    RevertParams, RolledBackRemoteTransactionParams, SetRetryPolicyParams, SnapshotConfirmedParams,
+    SnapshotParams, StartParams, SuccessfulUpdateParams, SuspendParams,
 };
 use crate::model::oplog::{
     AgentInitializationParameters, AgentInvocationOutputParameters,
-    AgentMethodInvocationParameters, AgentResourceId, AttributeMap, DurableFunctionType,
+    AgentMethodInvocationParameters, AgentResourceId, DurableFunctionType, FilesystemSnapshotName,
     JsonSnapshotData, LogLevel, MultipartPartData, MultipartSnapshotData, MultipartSnapshotPart,
     OplogEntry, OplogErrorKind, OplogPayload, PluginInstallationDescription, PublicAgentEntity,
     PublicAgentEntityKind, PublicAgentInvocation, PublicAgentInvocationResult, PublicAttribute,
     PublicAttributeValue, PublicDurableFunctionType, PublicEntityCallMode, PublicEntityInvocation,
-    PublicEntityInvocationContext, PublicEntityInvocationOperation, PublicLocalSpanData,
-    PublicOplogEntry, PublicOplogEntryAttribution, PublicOplogEntryWithIndex,
-    PublicQueuedCardEvent, PublicSnapshotData, PublicSpanData, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, QueuedCardEvent, RawSnapshotData,
-    SnapshotBasedUpdateParameters, StringAttributeValue,
+    PublicEntityInvocationContext, PublicEntityInvocationOperation,
+    PublicFailedSnapshotAssistedUpdateDetails, PublicLocalSpanData, PublicOplogEntry,
+    PublicOplogEntryAttribution, PublicOplogEntryWithIndex, PublicQueuedCardEvent,
+    PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes, PublicSpanData,
+    PublicSpanFinished, PublicSpanKind, PublicSpanLink, PublicSpanOutcome, PublicSpanStarted,
+    PublicToolInvocationOperation, PublicTypedAgentConfigEntry, PublicUpdateDescription,
+    QueuedCardEvent, RawSnapshotData, SnapshotBasedUpdateParameters, StringAttributeValue,
+    UpdateDescription,
 };
 use crate::model::regions::OplogRegion;
 use crate::model::{
@@ -74,6 +78,9 @@ fn raw_oplog_entry_fits_in_176_bytes() {
 
 #[test]
 fn start_desert_roundtrip() {
+    use crate::model::invocation_context::AttributeValue;
+    use crate::model::oplog::raw_types::{AttributeMap, SpanKind, SpanStarted};
+
     let entry = OplogEntry::Start {
         timestamp: Timestamp::now_utc().rounded(),
         parent_start_index: Some(OplogIndex::from_u64(7)),
@@ -82,11 +89,291 @@ fn start_desert_roundtrip() {
         observational_owner: Some(OplogIndex::from_u64(6)),
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: Some(Box::new(SpanStarted {
+            span_id: SpanId::generate(),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["origin=one".into()],
+            parent_span_id: Some(SpanId::generate()),
+            links: vec![],
+            started_at: Timestamp::now_utc().rounded(),
+            attributes: AttributeMap(HashMap::from([(
+                "name".into(),
+                AttributeValue::String("operation".into()),
+            )])),
+            kind: SpanKind::Client,
+        })),
     };
 
     let bytes = crate::serialization::serialize(&entry).unwrap();
     let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
     assert_eq!(decoded, entry);
+}
+
+#[test]
+fn end_and_cancelled_desert_roundtrip_with_spans() {
+    use crate::model::invocation_context::AttributeValue;
+    use crate::model::oplog::raw_types::{AttributeMap, SpanAttributes, SpanFinished, SpanOutcome};
+
+    let span_id = SpanId::generate();
+    let entries = [
+        OplogEntry::End {
+            timestamp: Timestamp::now_utc().rounded(),
+            start_index: OplogIndex::from_u64(7),
+            response: None,
+            forced_commit: false,
+            span_finished: Some(SpanFinished {
+                span_id: span_id.clone(),
+                finished_at: Timestamp::now_utc().rounded(),
+                outcome: SpanOutcome::Completed,
+            }),
+            span_attributes: Some(SpanAttributes {
+                span_id: span_id.clone(),
+                attributes: AttributeMap(HashMap::from([(
+                    "result".into(),
+                    AttributeValue::String("ok".into()),
+                )])),
+            }),
+        },
+        OplogEntry::Cancelled {
+            timestamp: Timestamp::now_utc().rounded(),
+            start_index: OplogIndex::from_u64(8),
+            partial: None,
+            span_finished: Some(SpanFinished {
+                span_id,
+                finished_at: Timestamp::now_utc().rounded(),
+                outcome: SpanOutcome::Cancelled,
+            }),
+        },
+    ];
+
+    for entry in entries {
+        let bytes = crate::serialization::serialize(&entry).unwrap();
+        let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, entry);
+    }
+}
+
+#[test]
+fn log_trace_context_binary_and_raw_protobuf_roundtrip() {
+    use crate::model::oplog::LogTraceContext;
+
+    let entry = OplogEntry::Log {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: Some(OplogIndex::from_u64(7)),
+        level: LogLevel::Info,
+        context: "request".to_string(),
+        message: "handled".to_string(),
+        trace_context: Some(LogTraceContext {
+            trace_id: TraceId::from_string("00112233445566778899aabbccddeeff").unwrap(),
+            span_id: SpanId::from_string("0123456789abcdef").unwrap(),
+        }),
+    };
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+    assert_eq!(decoded, entry);
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+}
+
+#[test]
+fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_payloads() {
+    use crate::model::durable_stream::{
+        LocalStreamId, StreamEndRecord, StreamEndResult, StreamItemsPayload, StreamItemsRecord,
+        StreamOffset, StreamRegistrationInvocation, StreamSessionFinishedRecord,
+        StreamSessionInvocationResultRecord, StreamSessionRecord, StreamTerminalAuthor,
+    };
+    use crate::model::oplog::PayloadId;
+    use crate::model::oplog::raw_types::{DurableStreamEventSummary, DurableStreamOutcome};
+
+    let stream_id = LocalStreamId(OplogIndex::from_u64(4));
+    let items = StreamItemsRecord {
+        format_version: 1,
+        stream_id,
+        first_sequence: 0,
+        nested_stream_ids: vec![],
+        newly_registered_stream_ids: vec![],
+        payload: StreamItemsPayload::Values(vec![vec![1], vec![2], vec![3]]),
+        offsets: vec![],
+    };
+    let successful_end = StreamEndRecord {
+        format_version: 1,
+        stream_id,
+        sequence: 3,
+        offset: StreamOffset::new(OplogIndex::from_u64(5), 0),
+        authored_by: StreamTerminalAuthor::Guest,
+        result: StreamEndResult::Ok,
+    };
+    let failed_end = StreamEndRecord {
+        result: StreamEndResult::ErrorContext(vec![9]),
+        ..successful_end.clone()
+    };
+    let session_key = StreamRegistrationInvocation::Local(IdempotencyKey::new("stream".into()));
+    let successful_session = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+        format_version: 1,
+        session_key: session_key.clone(),
+        result: Ok(()),
+    });
+    let failed_session = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+        format_version: 1,
+        session_key: session_key.clone(),
+        result: Err(vec![8]),
+    });
+    let session_result =
+        StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+            format_version: 1,
+            session_key: session_key.clone(),
+            result: vec![7],
+            stream_mappings: vec![],
+        });
+    let session_cancellation = StreamSessionRecord::CancelRequested(
+        crate::model::durable_stream::StreamSessionCancelRequestedRecord {
+            format_version: 1,
+            session_key: session_key.clone(),
+        },
+    );
+    let session_expired =
+        StreamSessionRecord::Expired(crate::model::durable_stream::StreamSessionExpiredRecord {
+            format_version: 1,
+            public_session_id: "public-stream".to_string(),
+            session_key: session_key.idempotency_key().clone(),
+            expected_deadline_millis: 100,
+            expired_at_millis: 100,
+        });
+    let irrelevant_session = StreamSessionRecord::ExpiryRefreshed(
+        crate::model::durable_stream::StreamSessionExpiryRefreshedRecord {
+            format_version: 1,
+            public_session_id: "public-stream".to_string(),
+            session_key: session_key.idempotency_key().clone(),
+            expected_deadline_millis: 100,
+            refreshed_at_millis: 50,
+            deadline_millis: 200,
+        },
+    );
+    let summaries = [
+        Some(DurableStreamEventSummary::Registered),
+        Some(DurableStreamEventSummary::items(&items)),
+        Some(DurableStreamEventSummary::end(&successful_end)),
+        Some(DurableStreamEventSummary::end(&failed_end)),
+        Some(DurableStreamEventSummary::Cancelled),
+        DurableStreamEventSummary::session(&successful_session),
+        DurableStreamEventSummary::session(&failed_session),
+        DurableStreamEventSummary::session(&session_result),
+        DurableStreamEventSummary::session(&session_cancellation),
+        DurableStreamEventSummary::session(&session_expired),
+        DurableStreamEventSummary::session(&irrelevant_session),
+    ];
+    assert_eq!(
+        summaries[1],
+        Some(DurableStreamEventSummary::Items { item_count: 3 })
+    );
+    assert_eq!(
+        summaries[2],
+        Some(DurableStreamEventSummary::End {
+            outcome: DurableStreamOutcome::Success
+        })
+    );
+    assert_eq!(
+        summaries[3],
+        Some(DurableStreamEventSummary::End {
+            outcome: DurableStreamOutcome::Error
+        })
+    );
+    assert_eq!(
+        summaries[5],
+        Some(DurableStreamEventSummary::SessionFinished {
+            outcome: DurableStreamOutcome::Success
+        })
+    );
+    assert_eq!(
+        summaries[6],
+        Some(DurableStreamEventSummary::SessionFinished {
+            outcome: DurableStreamOutcome::Error
+        })
+    );
+    assert_eq!(summaries[7], Some(DurableStreamEventSummary::SessionResult));
+    assert_eq!(
+        summaries[8],
+        Some(DurableStreamEventSummary::SessionCancellation)
+    );
+    assert_eq!(
+        summaries[9],
+        Some(DurableStreamEventSummary::SessionExpired)
+    );
+    assert_eq!(summaries[10], None);
+
+    for (index, summary) in summaries.into_iter().enumerate() {
+        let records = [
+            OplogPayload::External {
+                payload_id: PayloadId::new(),
+                md5_hash: vec![index as u8; 16],
+                cached: None,
+            },
+            OplogPayload::SerializedInline {
+                bytes: vec![index as u8, 0xff],
+                cached: None,
+            },
+        ];
+        for record in records {
+            let entry = OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc().rounded(),
+                entity_parent_start_index: None,
+                summary: summary.clone(),
+                record,
+            };
+            let bytes = crate::serialization::serialize(&entry).unwrap();
+            let decoded: OplogEntry = crate::serialization::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, entry);
+            let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+                entry.clone().try_into().unwrap();
+            assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
+        }
+    }
+}
+
+#[test]
+fn raw_durable_stream_summary_protobuf_rejects_invalid_fields() {
+    use crate::model::oplog::raw_types::DurableStreamEventSummary;
+    use golem_api_grpc::proto::golem::worker::RawDurableStreamEventSummary;
+    use golem_api_grpc::proto::golem::worker::raw_durable_stream_event_summary::{Kind, Outcome};
+
+    let invalid = [
+        RawDurableStreamEventSummary {
+            kind: 99,
+            item_count: None,
+            outcome: None,
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::End as i32,
+            item_count: None,
+            outcome: Some(99),
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::Items as i32,
+            item_count: None,
+            outcome: None,
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::End as i32,
+            item_count: None,
+            outcome: None,
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::Registered as i32,
+            item_count: Some(3),
+            outcome: None,
+        },
+        RawDurableStreamEventSummary {
+            kind: Kind::Cancelled as i32,
+            item_count: None,
+            outcome: Some(Outcome::Success as i32),
+        },
+    ];
+    for summary in invalid {
+        assert!(DurableStreamEventSummary::try_from(summary).is_err());
+    }
 }
 
 #[test]
@@ -100,6 +387,7 @@ fn observational_start_public_protobuf_roundtrip() {
         observational_owner: Some(owner),
         request: None,
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+        span_started: None,
     });
 
     let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
@@ -130,6 +418,8 @@ fn entity_attribution_public_protobuf_and_json_roundtrip() {
                 has_stdin: false,
                 has_stdout: true,
                 declares_stdout: true,
+                has_stderr: true,
+                declares_stderr: true,
             },
         )),
     };
@@ -190,7 +480,6 @@ fn entity_attribution_public_protobuf_rejects_invalid_start_index() {
 #[test]
 fn entity_attribution_raw_protobuf_roundtrip() {
     let parent_start_index = Some(OplogIndex::from_u64(17));
-    let span_id = SpanId::generate();
     let entries = vec![
         OplogEntry::no_op(parent_start_index),
         OplogEntry::Log {
@@ -199,29 +488,7 @@ fn entity_attribution_raw_protobuf_roundtrip() {
             level: LogLevel::Info,
             context: "entity".to_string(),
             message: "message".to_string(),
-        },
-        OplogEntry::StartSpan {
-            timestamp: Timestamp::now_utc().rounded(),
-            parent_start_index,
-            span_id: span_id.clone(),
-            parent: None,
-            linked_context_id: None,
-            attributes: AttributeMap(HashMap::from([(
-                "key".to_string(),
-                AttributeValue::String("value".to_string()),
-            )])),
-        },
-        OplogEntry::SetSpanAttribute {
-            timestamp: Timestamp::now_utc().rounded(),
-            parent_start_index,
-            span_id: span_id.clone(),
-            key: "other".to_string(),
-            value: AttributeValue::String("value".to_string()),
-        },
-        OplogEntry::FinishSpan {
-            timestamp: Timestamp::now_utc().rounded(),
-            parent_start_index,
-            span_id,
+            trace_context: None,
         },
     ];
 
@@ -355,10 +622,55 @@ fn start_serialization_poem_serde_equivalence() {
             SchemaValue::String("test".to_string()),
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
     assert_eq!(entry, deserialized);
+}
+
+#[test]
+fn start_with_span_serialization_poem_serde_equivalence() {
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "rpc".to_string(),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: Some(PublicSpanStarted {
+            span_id: SpanId::generate(),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["origin=one".into()],
+            parent_span_id: Some(SpanId::generate()),
+            links: vec![PublicSpanLink {
+                trace_id: TraceId::generate(),
+                span_id: SpanId::generate(),
+                trace_states: vec!["linked=one".into()],
+            }],
+            started_at: Timestamp::now_utc().rounded(),
+            attributes: vec![PublicAttribute {
+                key: "name".into(),
+                value: PublicAttributeValue::String(StringAttributeValue {
+                    value: "rpc".into(),
+                }),
+            }],
+            kind: PublicSpanKind::Client,
+        }),
+    });
+
+    let poem_json = entry.to_json_string();
+    let serde_json = serde_json::to_string(&entry).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&poem_json).unwrap(),
+        serde_json::from_str::<serde_json::Value>(&serde_json).unwrap()
+    );
+    assert!(poem_json.contains(r#""kind":"client""#));
+    assert_eq!(
+        serde_json::from_str::<PublicOplogEntry>(&poem_json).unwrap(),
+        entry
+    );
 }
 
 #[test]
@@ -373,6 +685,8 @@ fn end_serialization_poem_serde_equivalence() {
             },
         )),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -400,6 +714,7 @@ fn start_with_handle_serialization_poem_serde_equivalence() {
             },
         )),
         durable_function_type: PublicDurableFunctionType::WriteRemote(Empty {}),
+        span_started: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -480,6 +795,7 @@ fn start_with_complex_values_serialization_poem_serde_equivalence() {
             },
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -502,6 +818,7 @@ fn matcher_matches_payload_less_variant_case_name() {
             }),
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
     });
 
     assert!(entry.matches(&Query::parse("none").unwrap()));
@@ -524,6 +841,7 @@ fn matcher_matches_variant_payload_under_case_path() {
             }),
         )),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
     });
 
     assert!(entry.matches(&Query::parse("some").unwrap()));
@@ -548,10 +866,99 @@ fn matcher_matches_secret_reveal_request_payload() {
         observational_owner: None,
         request: Some(request),
         durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: None,
     });
 
     assert!(entry.matches(&Query::parse("reveal").unwrap()));
-    assert!(entry.matches(&Query::parse("request.secret_id.low-bits:291").unwrap()));
+    assert!(
+        entry.matches(
+            &Query::parse("request.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+        )
+    );
+}
+
+#[test]
+fn matcher_matches_span_started_trace_context() {
+    let parent_span_id = SpanId::generate();
+    let linked_trace_id = TraceId::generate();
+    let linked_span_id = SpanId::generate();
+    let entry = PublicOplogEntry::Start(StartParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        parent_start_index: None,
+        function_name: "rpc".into(),
+        invocation_id: None,
+        observational_owner: None,
+        request: None,
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        span_started: Some(PublicSpanStarted {
+            span_id: SpanId::generate(),
+            trace_id: TraceId::generate(),
+            trace_states: vec!["originstate".into()],
+            parent_span_id: Some(parent_span_id.clone()),
+            links: vec![PublicSpanLink {
+                trace_id: linked_trace_id.clone(),
+                span_id: linked_span_id.clone(),
+                trace_states: vec!["linkstate".into()],
+            }],
+            started_at: Timestamp::now_utc().rounded(),
+            attributes: vec![],
+            kind: PublicSpanKind::Client,
+        }),
+    });
+
+    for query in [
+        "originstate".to_string(),
+        parent_span_id.to_string(),
+        linked_trace_id.to_string(),
+        linked_span_id.to_string(),
+        "linkstate".to_string(),
+        "span-started.trace-states:originstate".to_string(),
+        format!("span-started.parent-span-id:{parent_span_id}"),
+        format!("span-started.links.trace-id:{linked_trace_id}"),
+        format!("span-started.links.span-id:{linked_span_id}"),
+        "span-started.links.trace-states:linkstate".to_string(),
+    ] {
+        assert!(
+            entry.matches(&Query::parse(&query).unwrap()),
+            "query: {query}"
+        );
+    }
+}
+
+#[test]
+fn matcher_matches_all_structured_span_terminal_fields() {
+    let span_id = SpanId::from_string("0000000000000001").unwrap();
+    let attribute_span_id = SpanId::from_string("0000000000000002").unwrap();
+    let entry = PublicOplogEntry::End(EndParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        start_index: OplogIndex::from_u64(1),
+        response: None,
+        forced_commit: false,
+        span_finished: Some(PublicSpanFinished {
+            span_id: span_id.clone(),
+            finished_at: Timestamp::now_utc().rounded(),
+            outcome: PublicSpanOutcome::Denied,
+        }),
+        span_attributes: Some(PublicSpanAttributes {
+            span_id: attribute_span_id.clone(),
+            attributes: vec![],
+        }),
+    });
+
+    let queries = [
+        format!("span-finished.span-id:{span_id}"),
+        format!("span-attributes.span-id:{attribute_span_id}"),
+    ];
+    let unmatched = queries
+        .into_iter()
+        .filter(|query| !entry.matches(&Query::parse(query).unwrap()))
+        .collect::<Vec<_>>();
+    assert!(unmatched.is_empty(), "unmatched queries: {unmatched:?}");
+    assert!(!entry.matches(&Query::parse(&format!("span-attributes.span-id:{span_id}")).unwrap()));
+    assert!(
+        !entry
+            .matches(&Query::parse(&format!("span-finished.span-id:{attribute_span_id}")).unwrap())
+    );
 }
 
 #[test]
@@ -585,9 +992,13 @@ fn matcher_matches_secret_revealed_response_payload() {
         start_index: OplogIndex::from_u64(2),
         response: Some(response),
         forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
     });
 
-    assert!(entry.matches(&Query::parse("response.secret_id.low-bits:291").unwrap()));
+    assert!(entry.matches(
+        &Query::parse("response.secret_id:00000000-0000-0000-0000-000000000123").unwrap()
+    ));
     assert!(entry.matches(&Query::parse("response.pinned_revision:7").unwrap()));
     assert!(entry.matches(&Query::parse("response.audit.config_key:password").unwrap()));
 }
@@ -598,6 +1009,7 @@ fn cancelled_serialization_poem_serde_equivalence() {
         timestamp: Timestamp::now_utc().rounded(),
         start_index: crate::base_model::OplogIndex::from_u64(7),
         partial: None,
+        span_finished: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -890,9 +1302,11 @@ fn pending_update_serialization_poem_serde_equivalence_1() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
             payload: "test".as_bytes().to_vec(),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         }),
     });
     let serialized = entry.to_json_string();
@@ -907,6 +1321,7 @@ fn pending_update_serialization_poem_serde_equivalence_2() {
     let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
         description: PublicUpdateDescription::Automatic(Empty {}),
     });
     let serialized = entry.to_json_string();
@@ -929,6 +1344,12 @@ fn successful_update_serialization_poem_serde_equivalence() {
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
         }]),
+        snapshot_assisted_details: Some(PublicSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: OplogIndex::from_u64(3),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -943,6 +1364,13 @@ fn failed_update_serialization_poem_serde_equivalence_1() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: Some("test".to_string()),
+        update_attempt_index: Some(OplogIndex::from_u64(7)),
+        snapshot_assisted_details: Some(PublicFailedSnapshotAssistedUpdateDetails {
+            pending_update_index: OplogIndex::from_u64(5),
+            source_component_revision: ComponentRevision::new(1).unwrap(),
+            source_revision_start_index: OplogIndex::INITIAL,
+            snapshot_index: OplogIndex::from_u64(3),
+        }),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -957,6 +1385,8 @@ fn failed_update_serialization_poem_serde_equivalence_2() {
         timestamp: Timestamp::now_utc().rounded(),
         target_revision: ComponentRevision::new(1).unwrap(),
         details: None,
+        update_attempt_index: None,
+        snapshot_assisted_details: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1009,6 +1439,7 @@ fn log_serialization_poem_serde_equivalence() {
         level: LogLevel::Stderr,
         context: "test".to_string(),
         message: "test".to_string(),
+        trace_context: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1112,51 +1543,6 @@ fn cancel_pending_invocation_serialization_poem_serde_equivalence() {
 }
 
 #[test]
-fn start_span_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::StartSpan(StartSpanParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        span_id: SpanId::generate(),
-        parent_id: Some(SpanId::generate()),
-        linked_context: Some(SpanId::generate()),
-        attributes: vec![PublicAttribute {
-            key: "test-attr".to_string(),
-            value: PublicAttributeValue::String(StringAttributeValue {
-                value: "test-value".to_string(),
-            }),
-        }],
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn finish_span_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::FinishSpan(FinishSpanParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        span_id: SpanId::generate(),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-fn set_span_attribute_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::SetSpanAttribute(SetSpanAttributeParams {
-        timestamp: Timestamp::now_utc().rounded(),
-        span_id: SpanId::generate(),
-        key: "http.method".to_string(),
-        value: PublicAttributeValue::String(StringAttributeValue {
-            value: "GET".to_string(),
-        }),
-    });
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
 fn begin_remote_transaction_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::BeginRemoteTransaction(BeginRemoteTransactionParams {
         timestamp: Timestamp::now_utc().rounded(),
@@ -1220,6 +1606,7 @@ fn snapshot_raw_serialization_poem_serde_equivalence() {
             data: vec![1, 2, 3, 4],
             mime_type: "application/octet-stream".to_string(),
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1236,6 +1623,7 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
         mime_type: "application/octet-stream".to_string(),
         active_cards,
         wallet_generation: 73,
+        filesystem_snapshot: None,
     };
 
     let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
@@ -1265,6 +1653,230 @@ fn raw_snapshot_protobuf_roundtrip_preserves_active_cards() {
             assert_eq!(wallet_generation, 73);
         }
         other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn filesystem_snapshot_name_has_kind_prefix_and_parses_back() {
+    let periodic = FilesystemSnapshotName::periodic();
+    let update = FilesystemSnapshotName::update();
+    assert!(periodic.as_str().starts_with("p-"));
+    assert!(update.as_str().starts_with("u-"));
+    assert_ne!(FilesystemSnapshotName::periodic(), periodic);
+    assert_eq!(
+        periodic.as_str().parse::<FilesystemSnapshotName>().unwrap(),
+        periodic
+    );
+    assert_eq!(
+        update
+            .to_string()
+            .parse::<FilesystemSnapshotName>()
+            .unwrap(),
+        update
+    );
+    assert!(
+        "x-6e3e9a3a-0a2c-4c8e-8a4c-2b1b4a3d5e6f"
+            .parse::<FilesystemSnapshotName>()
+            .is_err()
+    );
+    assert!("p-not-a-uuid".parse::<FilesystemSnapshotName>().is_err());
+    assert!("".parse::<FilesystemSnapshotName>().is_err());
+}
+
+#[test]
+fn filesystem_snapshot_name_binary_encoding_matches_plain_string() {
+    let name = FilesystemSnapshotName::update();
+
+    let bytes = crate::serialization::serialize(&name).unwrap();
+    assert_eq!(
+        bytes,
+        crate::serialization::serialize(&name.as_str().to_string()).unwrap()
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&bytes).unwrap(),
+        name
+    );
+}
+
+#[test]
+fn raw_snapshot_with_filesystem_snapshot_roundtrips() {
+    let name = FilesystemSnapshotName::periodic();
+    let entry = OplogEntry::Snapshot {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: OplogPayload::Inline(Box::new(vec![1, 2, 3, 4])),
+        mime_type: "application/octet-stream".to_string(),
+        active_cards: Vec::new(),
+        wallet_generation: 1,
+        filesystem_snapshot: Some(name.clone()),
+    };
+
+    fn snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
+        match entry {
+            OplogEntry::Snapshot {
+                filesystem_snapshot,
+                ..
+            } => filesystem_snapshot.clone(),
+            other => panic!("expected snapshot entry, got {other:?}"),
+        }
+    }
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(snapshot_name(&binary_decoded), Some(name.clone()));
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(snapshot_name(&decoded), Some(name));
+}
+
+#[test]
+fn raw_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
+    let name = FilesystemSnapshotName::update();
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc().rounded(),
+        description: UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: OplogPayload::Inline(Box::new(vec![9, 8, 7])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        },
+        update_attempt_index: None,
+    };
+
+    fn update_snapshot_name(entry: &OplogEntry) -> Option<FilesystemSnapshotName> {
+        match entry {
+            OplogEntry::PendingUpdate {
+                description:
+                    UpdateDescription::SnapshotBased {
+                        filesystem_snapshot,
+                        ..
+                    },
+                ..
+            } => filesystem_snapshot.clone(),
+            other => panic!("expected snapshot based pending update, got {other:?}"),
+        }
+    }
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(update_snapshot_name(&binary_decoded), Some(name.clone()));
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(update_snapshot_name(&decoded), Some(name));
+}
+
+#[test]
+fn raw_snapshot_confirmed_roundtrips_and_is_a_hint() {
+    let name = FilesystemSnapshotName::periodic();
+    let entry = OplogEntry::snapshot_confirmed(name.clone()).rounded();
+    assert!(entry.is_hint());
+
+    let bytes = crate::serialization::serialize(&entry).unwrap();
+    let binary_decoded = crate::serialization::deserialize::<OplogEntry>(&bytes).unwrap();
+    assert_eq!(binary_decoded, entry);
+
+    let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+        entry.clone().try_into().unwrap();
+    let decoded = OplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+    match decoded {
+        OplogEntry::SnapshotConfirmed {
+            filesystem_snapshot,
+            ..
+        } => assert_eq!(filesystem_snapshot, name),
+        other => panic!("expected snapshot confirmed entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn public_snapshot_with_filesystem_snapshot_roundtrips() {
+    let entry = PublicOplogEntry::Snapshot(SnapshotParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        data: PublicSnapshotData::Raw(RawSnapshotData {
+            data: vec![1, 2, 3],
+            mime_type: "application/octet-stream".to_string(),
+        }),
+        filesystem_snapshot: Some(FilesystemSnapshotName::periodic().into()),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+
+    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    match raw {
+        OplogEntry::Snapshot {
+            filesystem_snapshot,
+            ..
+        } => assert_eq!(
+            filesystem_snapshot.map(String::from),
+            match entry {
+                PublicOplogEntry::Snapshot(params) => params.filesystem_snapshot,
+                _ => unreachable!(),
+            }
+        ),
+        other => panic!("expected snapshot entry, got {other:?}"),
+    }
+}
+
+#[test]
+fn public_snapshot_based_update_with_filesystem_snapshot_roundtrips() {
+    let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        target_revision: ComponentRevision::new(1).unwrap(),
+        update_attempt_index: OplogIndex::from_u64(7),
+        description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+            payload: "test".as_bytes().to_vec(),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(FilesystemSnapshotName::update().into()),
+        }),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+}
+
+#[test]
+fn public_snapshot_confirmed_roundtrips() {
+    let entry = PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+        timestamp: Timestamp::now_utc().rounded(),
+        filesystem_snapshot: FilesystemSnapshotName::periodic().into(),
+    });
+
+    let serialized = entry.to_json_string();
+    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(entry, deserialized);
+
+    let proto: golem_api_grpc::proto::golem::worker::OplogEntry = entry.clone().try_into().unwrap();
+    let decoded = PublicOplogEntry::try_from(proto).unwrap();
+    assert_eq!(decoded, entry);
+
+    let raw = OplogEntry::try_from(entry.clone()).unwrap();
+    assert!(raw.is_hint());
+    match (raw, entry) {
+        (
+            OplogEntry::SnapshotConfirmed {
+                filesystem_snapshot,
+                ..
+            },
+            PublicOplogEntry::SnapshotConfirmed(params),
+        ) => assert_eq!(
+            String::from(filesystem_snapshot),
+            params.filesystem_snapshot
+        ),
+        other => panic!("expected snapshot confirmed entry, got {other:?}"),
     }
 }
 
@@ -1621,6 +2233,7 @@ fn snapshot_json_serialization_poem_serde_equivalence() {
         data: PublicSnapshotData::Json(JsonSnapshotData {
             data: serde_json::json!({"key": "value", "count": 42}),
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1651,6 +2264,7 @@ fn snapshot_multipart_serialization_poem_serde_equivalence() {
                 },
             ],
         }),
+        filesystem_snapshot: None,
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1726,6 +2340,7 @@ mod scope_scan {
             observational_owner: None,
             request: None,
             durable_function_type,
+            span_started: None,
         }
     }
 
@@ -1760,6 +2375,8 @@ mod scope_scan {
             start_index: idx(start),
             response: None,
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         }
     }
 
@@ -1828,6 +2445,7 @@ mod scope_scan {
                 OplogEntry::StreamSession {
                     timestamp: Timestamp::now_utc(),
                     entity_parent_start_index: Some(idx(10)),
+                    summary: None,
                     record: OplogPayload::External {
                         payload_id: PayloadId::new(),
                         md5_hash: vec![0; 16],
@@ -1848,7 +2466,23 @@ mod scope_scan {
 
     #[test]
     fn scope_projection_includes_attributed_logs_spans_and_transaction_markers() {
+        use crate::model::invocation_context::TraceId;
+        use crate::model::oplog::{SpanFinished, SpanKind, SpanOutcome, SpanStarted};
+
         let span_id = SpanId::generate();
+        let mut span_start = start(Some(10), DurableFunctionType::ReadLocal);
+        if let OplogEntry::Start { span_started, .. } = &mut span_start {
+            *span_started = Some(Box::new(SpanStarted {
+                span_id: span_id.clone(),
+                trace_id: TraceId::generate(),
+                trace_states: Vec::new(),
+                parent_span_id: None,
+                links: Vec::new(),
+                started_at: Timestamp::now_utc(),
+                attributes: AttributeMap(HashMap::new()),
+                kind: SpanKind::Internal,
+            }));
+        }
         let entries = vec![
             (10, start(None, DurableFunctionType::WriteLocal)),
             (
@@ -1859,6 +2493,7 @@ mod scope_scan {
                     level: LogLevel::Info,
                     context: "entity".to_string(),
                     message: "included".to_string(),
+                    trace_context: None,
                 },
             ),
             (
@@ -1869,26 +2504,23 @@ mod scope_scan {
                     level: LogLevel::Info,
                     context: "owner".to_string(),
                     message: "excluded".to_string(),
+                    trace_context: None,
                 },
             ),
-            (
-                13,
-                OplogEntry::StartSpan {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: Some(idx(10)),
-                    span_id: span_id.clone(),
-                    parent: None,
-                    linked_context_id: None,
-                    attributes: AttributeMap(HashMap::new()),
-                },
-            ),
+            (13, span_start),
             (
                 14,
-                OplogEntry::FinishSpan {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: Some(idx(10)),
-                    span_id,
-                },
+                OplogEntry::end(
+                    idx(13),
+                    None,
+                    false,
+                    Some(SpanFinished {
+                        span_id,
+                        finished_at: Timestamp::now_utc(),
+                        outcome: SpanOutcome::Completed,
+                    }),
+                    None,
+                ),
             ),
             (
                 15,
@@ -2022,26 +2654,31 @@ mod scope_scan {
             OplogEntry::StreamRegistered {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamItems {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamEnd {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamCancel {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: external_payload!(),
             },
             OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
                 entity_parent_start_index: None,
+                summary: None,
                 record: external_payload!(),
             },
         ];
@@ -2126,11 +2763,14 @@ mod scope_scan {
             start_index: idx(11),
             response: None,
             forced_commit: false,
+            span_finished: None,
+            span_attributes: None,
         };
         let cancelled = OplogEntry::Cancelled {
             timestamp: Timestamp::now_utc(),
             start_index: idx(12),
             partial: None,
+            span_finished: None,
         };
         let entries = vec![
             (11, start(Some(10), DurableFunctionType::WriteRemote)),
@@ -2154,4 +2794,83 @@ mod scope_scan {
         ];
         assert!(scan(10, &entries));
     }
+}
+
+/// The serialized bytes of a filesystem snapshot name, of a successful update record that holds
+/// it, and of a pending update entry that holds it. The form on the wire must not change.
+const NAME_BYTES: &str =
+    "034c702d30303030303030302d303030302d343030302d383030302d303030303030303030303031";
+const RECORD_BYTES: &str = "0300000000000000000700000000000000020000000000000005014c702d30303030303030302d303030302d343030302d383030302d3030303030303030303030310000";
+const ENTRY_BYTES: &str = "030010000000000000000007000200000000000000000200050303010203306170706c69636174696f6e2f6f637465742d73747265616d014c702d30303030303030302d303030302d343030302d383030302d30303030303030303030303100";
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_filesystem_snapshot_name_keeps_its_serialized_bytes() {
+    let name = "p-00000000-0000-4000-8000-000000000001"
+        .parse::<FilesystemSnapshotName>()
+        .unwrap();
+    let record = crate::model::SuccessfulUpdateRecord {
+        timestamp: crate::model::Timestamp::from(7),
+        target_revision: ComponentRevision::new(2).unwrap(),
+        oplog_index: crate::model::OplogIndex::from_u64(5),
+        filesystem_snapshot: Some(name.clone()),
+        pending_update: None,
+        snapshot_assisted_details: None,
+    };
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: crate::model::Timestamp::from(7),
+        description: crate::model::oplog::UpdateDescription::SnapshotBased {
+            target_revision: ComponentRevision::new(2).unwrap(),
+            payload: crate::model::oplog::OplogPayload::Inline(Box::new(vec![1, 2, 3])),
+            mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: Some(name.clone()),
+        },
+        update_attempt_index: None,
+    };
+    let written = [
+        hex(&crate::serialization::serialize(&name).unwrap()),
+        hex(&crate::serialization::serialize(&record).unwrap()),
+        hex(&crate::serialization::serialize(&entry).unwrap()),
+    ];
+
+    assert_eq!(written, [NAME_BYTES, RECORD_BYTES, ENTRY_BYTES]);
+    assert_eq!(
+        crate::serialization::deserialize::<FilesystemSnapshotName>(&unhex(NAME_BYTES)).unwrap(),
+        name
+    );
+    assert_eq!(
+        crate::serialization::deserialize::<crate::model::SuccessfulUpdateRecord>(&unhex(
+            RECORD_BYTES
+        ))
+        .unwrap(),
+        record
+    );
+    assert_eq!(
+        hex(&crate::serialization::serialize(
+            &crate::serialization::deserialize::<OplogEntry>(&unhex(ENTRY_BYTES)).unwrap()
+        )
+        .unwrap()),
+        ENTRY_BYTES
+    );
+}
+
+#[test]
+fn a_cloned_filesystem_snapshot_name_shares_its_text() {
+    let name = FilesystemSnapshotName::periodic();
+    let clone = name.clone();
+
+    assert!(std::ptr::eq(
+        name.as_str().as_ptr(),
+        clone.as_str().as_ptr()
+    ));
 }

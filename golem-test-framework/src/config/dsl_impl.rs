@@ -608,12 +608,13 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
             )
             .await?;
 
+        let agent_id = result.agent_id;
         match result.result {
             Some(typed_output) => {
                 let (_graph, value) = typed_output.into_inner().into_parts();
-                Ok(AgentResult::new(Some(value)))
+                Ok(AgentResult::new(Some(value), agent_id))
             }
-            None => Ok(AgentResult::new(None)),
+            None => Ok(AgentResult::new(None, agent_id)),
         }
     }
 
@@ -770,6 +771,31 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
     }
 
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()> {
+        let client = self
+            .deps
+            .worker_service()
+            .worker_http_client(&self.token)
+            .await;
+        client
+            .update_worker(
+                &agent_id.component_id.0,
+                &agent_id.agent_id,
+                &UpdateWorkerRequest {
+                    mode: AgentUpdateMode::Automatic,
+                    target_revision: target_revision.into(),
+                    disable_wakeup: Some(disable_wakeup),
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,
@@ -1070,9 +1096,12 @@ impl<Deps: TestDependencies> TestDslExtended for TestUserContext<Deps> {
             version: DeploymentVersion(Uuid::new_v4().to_string()),
             publish_tools: Vec::new(),
             remote_tools: Vec::new(),
+            mcp_imports: Vec::new(),
             publish_tool_middlewares: Vec::new(),
             remote_tool_middlewares: Vec::new(),
             universal_tool_middlewares: Vec::new(),
+            environment_tool_middleware_bindings: Default::default(),
+            agent_tool_middleware_bindings: Default::default(),
             agent_secret_defaults: Vec::new(),
             quota_resource_defaults: Vec::new(),
             retry_policy_defaults: Vec::new(),
@@ -1112,15 +1141,21 @@ struct HttpWorkerLogEventStream {
     read: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
 }
 
+/// Gives the URL of the WebSocket that streams the events of the agent. The agent name is one
+/// segment of the path, so the function percent-encodes it.
+fn worker_connect_url(base_url: &url::Url, agent_id: &AgentId) -> String {
+    format!(
+        "ws://{}:{}/v1/components/{}/workers/{}/connect",
+        base_url.host().unwrap(),
+        base_url.port_or_known_default().unwrap(),
+        agent_id.component_id.0,
+        agent_id.agent_name_encoded(),
+    )
+}
+
 impl HttpWorkerLogEventStream {
     async fn new(client: Arc<WorkerClientLive>, agent_id: &AgentId) -> anyhow::Result<Self> {
-        let url = format!(
-            "ws://{}:{}/v1/components/{}/workers/{}/connect",
-            client.context.base_url.host().unwrap(),
-            client.context.base_url.port_or_known_default().unwrap(),
-            agent_id.component_id.0,
-            agent_id.agent_id,
-        );
+        let url = worker_connect_url(&client.context.base_url, agent_id);
 
         let mut connection_request = url
             .into_client_request()
@@ -1192,5 +1227,33 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
                 None => return Ok(None),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_connect_url;
+    use golem_common::model::AgentId;
+    use golem_common::model::component::ComponentId;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    fn the_connect_url_percent_encodes_the_agent_name() {
+        let agent_id = AgentId {
+            component_id: ComponentId(Uuid::nil()),
+            agent_id: r#"counter("a/b?c#d%e")"#.to_string(),
+        };
+
+        assert_eq!(
+            worker_connect_url(
+                &url::Url::parse("http://localhost:9005").unwrap(),
+                &agent_id
+            ),
+            format!(
+                "ws://localhost:9005/v1/components/{}/workers/counter%28%22a%2Fb%3Fc%23d%25e%22%29/connect",
+                Uuid::nil()
+            )
+        );
     }
 }

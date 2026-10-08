@@ -15,11 +15,13 @@
 use test_r::test;
 
 use super::{
-    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent, HostRequestGolemRpcInvoke,
-    HostResponseGolemApiAgents,
+    HostRequestGolemApiGetAgents, HostRequestGolemApiRevertAgent,
+    HostRequestGolemContextSpanAttributes, HostRequestGolemContextSpanResource,
+    HostRequestGolemRpcAsyncInvokeRejection, HostRequestGolemRpcInvoke, HostResponseGolemApiAgents,
 };
 use crate::model::card::{CardId, ScopeCard};
 use crate::model::component::{ComponentId, ComponentRevision};
+use crate::model::deployment::DeploymentRevision;
 use crate::model::durable_stream::StreamInvocationId;
 use crate::model::entity::{EntityCallMode, ToolInputDecodeFailure};
 use crate::model::environment::EnvironmentId;
@@ -27,6 +29,9 @@ use crate::model::invocation_context::{AttributeValue, SpanId};
 use crate::model::oplog::host_functions::{
     GolemPermissionsDerivePersist, GolemPermissionsInstallChildPersist,
     GolemPermissionsInstallTransfer, HostFunctionName,
+};
+use crate::model::oplog::payload::types::{
+    SerializableDiscoveredTools, SerializableMcpImportDiscovery, SerializableToolDiscoverySnapshot,
 };
 use crate::model::oplog::raw_types::SpanData;
 use crate::model::oplog::types::{
@@ -89,7 +94,6 @@ use proptest::strategy::LazyJust;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::ops::Add;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::sockets::network::IpAddress;
@@ -157,6 +161,7 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
         input: SchemaValue::Tuple {
             elements: Vec::new(),
         },
+        local_denial: Some("agent:invoke denied at admission".to_string()),
         logical_streaming_origin: Some(StreamInvocationId {
             callee_environment_id: EnvironmentId::new(),
             callee: AgentId {
@@ -176,6 +181,25 @@ fn rpc_durable_request_captures_scope_card_and_logical_streaming_origin_determin
     let decoded: HostRequestGolemRpcInvoke = desert_rust::deserialize(&first).unwrap();
 
     assert_eq!(first, second);
+    assert_eq!(decoded, request);
+}
+
+#[test]
+fn async_rpc_rejection_request_roundtrips_stable_identity() {
+    let request = HostRequestGolemRpcAsyncInvokeRejection {
+        remote_agent_id: AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "counter-1".to_string(),
+        },
+        idempotency_key: IdempotencyKey::new("rejected-at-42".to_string()),
+        method_name: "increment".to_string(),
+        error: SerializableRpcError::ProtocolError {
+            details: "invalid input".to_string(),
+        },
+    };
+    let bytes = desert_rust::serialize_to_byte_vec(&request).unwrap();
+    let decoded: HostRequestGolemRpcAsyncInvokeRejection =
+        desert_rust::deserialize(&bytes).unwrap();
     assert_eq!(decoded, request);
 }
 
@@ -1368,6 +1392,7 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
         lookup_name: name.to_string(),
         definition: Tool {
             version: "1.0.0".to_string(),
+            requires_filesystem: false,
             commands: CommandTree {
                 nodes: vec![CommandNode {
                     name: name.to_string(),
@@ -1385,19 +1410,92 @@ fn discovered_tool(name: &str) -> DiscoveredTool {
 }
 
 #[test]
+fn mcp_host_payload_pairs_roundtrip() {
+    use crate::model::oplog::{
+        HostRequestMcpToolCall, HostRequestMcpToolPresence, HostResponseMcpToolCall,
+        HostResponseMcpToolPresence,
+    };
+    let request = HostRequestMcpToolCall {
+        input: "asymmetric tool input"
+            .to_string()
+            .into_typed_schema_value()
+            .unwrap(),
+    };
+    for result in [
+        Ok(br#"{"Ok":{"structuredContent":[3,7],"content":[]}}"#.to_vec()),
+        Err(SerializableToolRpcError::Cancelled),
+        Err(SerializableToolRpcError::RemoteInternalError(
+            "reauthorization required".into(),
+        )),
+    ] {
+        let response = HostResponseMcpToolCall { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolCall>(
+            request.clone(),
+            response,
+        );
+    }
+    let request = HostRequestMcpToolPresence {
+        upstream_tool_name: "Exact_Upstream.Name".into(),
+    };
+    for result in [
+        Ok(true),
+        Ok(false),
+        Err(SerializableToolRpcError::Cancelled),
+    ] {
+        let response = HostResponseMcpToolPresence { result };
+        assert_host_payload_pair_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response.clone(),
+        );
+        assert_host_payload_pair_schema_roundtrip::<host_functions::McpToolPresence>(
+            request.clone(),
+            response,
+        );
+    }
+}
+
+#[test]
 fn tool_discovery_host_payload_pairs_roundtrip() {
-    let tool = Arc::new(discovered_tool("grep"));
+    let tool = discovered_tool("dynamic-grep");
+    let revision = DeploymentRevision::try_from(17_u64).unwrap();
+    let present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: vec![
+            SerializableMcpImportDiscovery {
+                import_index: 0,
+                tools: SerializableDiscoveredTools::default(),
+                exclusions: vec![("invalid".into(), "unsupported schema".into())],
+            },
+            SerializableMcpImportDiscovery {
+                import_index: 1,
+                tools: SerializableDiscoveredTools(vec![tool.clone()]),
+                exclusions: Vec::new(),
+            },
+        ],
+    };
+    let absent = SerializableToolDiscoverySnapshot {
+        deployment_revision: None,
+        dynamic_tools: Vec::new(),
+    };
+    let empty_present = SerializableToolDiscoverySnapshot {
+        deployment_revision: Some(revision.get()),
+        dynamic_tools: Vec::new(),
+    };
 
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
         HostRequestNoInput {},
         HostResponseGolemToolTools {
-            result: Ok(vec![tool.clone()]),
+            result: Ok(present.clone()),
         },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetAllTools>(
         HostRequestNoInput {},
         HostResponseGolemToolTools {
-            result: Ok(vec![tool.clone()]),
+            result: Ok(empty_present.clone()),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetAllTools>(
@@ -1417,7 +1515,7 @@ fn tool_discovery_host_payload_pairs_roundtrip() {
             name: "grep".to_string(),
         },
         HostResponseGolemToolTool {
-            result: Ok(Some(tool.clone())),
+            result: Ok(present.clone()),
         },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
@@ -1425,20 +1523,22 @@ fn tool_discovery_host_payload_pairs_roundtrip() {
             name: "grep".to_string(),
         },
         HostResponseGolemToolTool {
-            result: Ok(Some(tool)),
+            result: Ok(present),
         },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {
             name: "missing".to_string(),
         },
-        HostResponseGolemToolTool { result: Ok(None) },
+        HostResponseGolemToolTool {
+            result: Ok(absent.clone()),
+        },
     );
     assert_host_payload_pair_schema_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {
             name: "missing".to_string(),
         },
-        HostResponseGolemToolTool { result: Ok(None) },
+        HostResponseGolemToolTool { result: Ok(absent) },
     );
     assert_host_payload_pair_roundtrip::<host_functions::GolemToolGetTool>(
         HostRequestGolemToolGetTool {
@@ -1531,6 +1631,7 @@ fn tool_predispatch_rejection_payload_roundtrips_with_selected_error() {
         input_decode_failure: Some(ToolInputDecodeFailure::InvalidSchemaValue),
         has_stdin: true,
         has_stdout: false,
+        has_stderr: true,
         call_mode: EntityCallMode::Asynchronous,
         error,
     };
@@ -1563,6 +1664,7 @@ fn named_custom_tool_error_payload_roundtrips() {
         input_decode_failure: None,
         has_stdin: false,
         has_stdout: false,
+        has_stderr: false,
         call_mode: EntityCallMode::Synchronous,
         error: error.clone(),
     };
@@ -1581,7 +1683,7 @@ fn named_custom_tool_error_payload_roundtrips() {
 }
 
 #[test]
-fn tool_operation_terminal_is_schema_native_and_excludes_stdout() {
+fn tool_operation_terminal_is_schema_native_and_excludes_output_attachments() {
     let terminal = SerializableToolOperationTerminal {
         body_execution: SerializableEntityBodyExecution::Skipped,
         result: Err(SerializableToolRpcError::ResourceExhausted(
@@ -1970,6 +2072,27 @@ proptest! {
         let serializable: SerializableStreamError = original.into();
         let roundtripped: StreamError = serializable.into();
         prop_assert!(matches!(roundtripped, StreamError::Closed));
+    }
+
+    #[test]
+    fn guest_span_lifecycle_requests_roundtrip(_dummy in Just(())) {
+        let resource = HostRequestGolemContextSpanResource {
+            creation_index: Some(OplogIndex::from_u64(42)),
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&resource).unwrap();
+        let decoded: HostRequestGolemContextSpanResource = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, resource);
+
+        let attributes = HostRequestGolemContextSpanAttributes {
+            creation_index: None,
+            attributes: vec![(
+                "key".to_string(),
+                AttributeValue::String("value".to_string()),
+            )],
+        };
+        let bytes = desert_rust::serialize_to_byte_vec(&attributes).unwrap();
+        let decoded: HostRequestGolemContextSpanAttributes = desert_rust::deserialize(&bytes).unwrap();
+        assert_eq!(decoded, attributes);
     }
 
 }

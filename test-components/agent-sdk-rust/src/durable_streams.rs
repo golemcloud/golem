@@ -1,6 +1,8 @@
 use golem_rust::agentic::{AgentStream, spawn_local};
 use golem_rust::schema::{FromSchema, IntoSchema};
-use golem_rust::{agent_definition, agent_implementation, endpoint};
+use golem_rust::{
+    FromWire, IntoWire, WireSchema, agent_definition, agent_implementation, endpoint,
+};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static INPUT_ITEMS: AtomicU64 = AtomicU64::new(0);
@@ -12,12 +14,12 @@ static OUTPUT_ERRORS: AtomicU64 = AtomicU64::new(0);
 static CONTINUATIONS: AtomicU64 = AtomicU64::new(0);
 static MARKERS: AtomicU64 = AtomicU64::new(0);
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct EchoOutput {
     pub output: AgentStream<String>,
 }
 
-#[derive(IntoSchema, FromSchema)]
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
 pub struct FramedRecord {
     pub name: String,
     pub number: u32,
@@ -44,6 +46,60 @@ pub trait DurableStreamAgent {
 
     #[endpoint(put = "/echo-bytes")]
     fn echo_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+
+    #[endpoint(
+        put = "/custom-bytes",
+        durable_streams(
+            input(
+                "input",
+                name = "uploads",
+                content_type = "application/vnd.golem.events"
+            ),
+            output(
+                "$result",
+                name = "events",
+                content_type = "application/vnd.golem.events"
+            ),
+            allow_external_writes = true,
+            allow_stream_delete = false,
+            allow_invocation_delete = false,
+            max_concurrent_readers_per_stream = 1,
+        )
+    )]
+    fn custom_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8>;
+
+    #[endpoint(
+        put = "/custom-echo",
+        durable_streams(
+            input("input", name = "messages"),
+            output("$result", name = "responses"),
+            allow_external_writes = true,
+            allow_stream_delete = false,
+            allow_invocation_delete = false,
+            max_concurrent_readers_per_stream = 1,
+            max_append_requests_per_second_per_stream = 1,
+        )
+    )]
+    #[endpoint(
+        put = "/custom-echo-secondary",
+        durable_streams(
+            input("input", name = "secondary-messages"),
+            output("$result", name = "secondary-responses"),
+            max_concurrent_readers_per_stream = 16,
+            max_append_requests_per_second_per_stream = 2,
+        )
+    )]
+    fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
+
+    #[endpoint(
+        put = "/locked-echo",
+        durable_streams(
+            input("input", name = "locked-messages"),
+            output("$result", name = "locked-responses"),
+            allow_external_writes = false,
+        )
+    )]
+    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String>;
 
     #[endpoint(put = "/echo-records")]
     fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord>;
@@ -157,6 +213,18 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
         copy_stream(input, |value| value)
     }
 
+    fn custom_bytes(&self, input: AgentStream<u8>) -> AgentStream<u8> {
+        copy_stream(input, |value| value)
+    }
+
+    fn custom_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
+        copy_stream(input, |value| value)
+    }
+
+    fn locked_echo(&self, input: AgentStream<String>) -> AgentStream<String> {
+        copy_stream(input, |value| value)
+    }
+
     fn echo_records(&self, input: AgentStream<FramedRecord>) -> AgentStream<FramedRecord> {
         copy_stream(input, |value| value)
     }
@@ -234,7 +302,7 @@ impl DurableStreamAgent for DurableStreamAgentImpl {
     }
 }
 
-fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
+fn stream_with_delay<T: IntoWire + FromWire + 'static>(
     values: impl IntoIterator<Item = T>,
     delay_ms: u64,
 ) -> AgentStream<T> {
@@ -258,8 +326,8 @@ fn stream_with_delay<T: IntoSchema + FromSchema + 'static>(
 
 fn copy_stream<T, U>(mut input: AgentStream<T>, map: impl Fn(T) -> U + 'static) -> AgentStream<U>
 where
-    T: IntoSchema + FromSchema + 'static,
-    U: IntoSchema + FromSchema + 'static,
+    T: 'static,
+    U: IntoWire + FromWire + 'static,
 {
     let (mut writer, output) = AgentStream::new();
     spawn_local(async move {
@@ -270,6 +338,30 @@ where
         }
     });
     output
+}
+
+#[agent_definition(mount = "/invalid-durable-stream-agent")]
+pub trait InvalidDurableStreamAgent {
+    fn new() -> Self;
+
+    #[endpoint(
+        put = "/text",
+        durable_streams(input("input", content_type = "text/plain"))
+    )]
+    fn text(&self, input: AgentStream<String>) -> AgentStream<String>;
+}
+
+struct InvalidDurableStreamAgentImpl;
+
+#[agent_implementation]
+impl InvalidDurableStreamAgent for InvalidDurableStreamAgentImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn text(&self, input: AgentStream<String>) -> AgentStream<String> {
+        input
+    }
 }
 
 #[agent_definition(ephemeral, mount = "/ephemeral-stream-agents")]

@@ -282,6 +282,7 @@ mod tests {
     fn tool(input: SchemaType, result: SchemaType, error_name: &str) -> Tool {
         Tool {
             version: "1".into(),
+            requires_filesystem: false,
             schema: SchemaGraph::empty(),
             commands: CommandTree {
                 nodes: vec![CommandNode {
@@ -308,6 +309,7 @@ mod tests {
                         constraints: vec![],
                         stdin: None,
                         stdout: None,
+                        stderr: None,
                         result: Some(ResultSpec {
                             type_: result,
                             doc: Default::default(),

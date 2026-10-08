@@ -12,24 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::ErasedReplayableStream;
 use crate::storage::blob::{
-    BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult, blob_file_name_to_string,
-    blob_parent_to_string, blob_path_is_root, blob_path_to_string, reject_root_blob_path,
-    validate_relative_blob_path,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+    blob_child_path, validate_range,
 };
 use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::Stream;
 use futures::stream::BoxStream;
-use futures::{Stream, TryStreamExt};
 use golem_common::model::Timestamp;
 use std::{
-    path::{Path, PathBuf},
+    collections::{BTreeMap, HashSet},
+    path::PathBuf,
     pin::Pin,
 };
+use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+/// The place of one blob, or of one directory that `create_dir` made.
+///
+/// A blob has the path of the directory that holds it and its own name. A directory has its own
+/// path and no name. A directory that only holds blobs has no key, because the keys of the blobs
+/// below it tell that it is there. S3 keeps the same record, where a key is an object key and a
+/// directory of `create_dir` is a marker object, so the two backends give the same answers.
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct Key {
     namespace: BlobStorageNamespace,
     dir: String,
@@ -38,18 +45,19 @@ struct Key {
 
 #[derive(Debug, Clone)]
 enum Entry {
+    /// A directory that `create_dir` made, with the time of the last such call.
     Directory {
         created_at: Timestamp,
     },
     File {
-        data: Vec<u8>,
+        data: Bytes,
         metadata: BlobMetadata,
     },
 }
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
-    data: scc::HashMap<Key, Entry>,
+    data: RwLock<BTreeMap<Key, Entry>>,
 }
 
 impl Default for InMemoryBlobStorage {
@@ -61,342 +69,403 @@ impl Default for InMemoryBlobStorage {
 impl InMemoryBlobStorage {
     pub fn new() -> Self {
         Self {
-            data: scc::HashMap::new(),
+            data: RwLock::new(BTreeMap::new()),
         }
+    }
+
+    fn file_entry(data: Bytes) -> Entry {
+        Entry::File {
+            metadata: BlobMetadata {
+                size: data.len() as u64,
+                last_modified_at: Timestamp::now_utc(),
+            },
+            data,
+        }
+    }
+
+    /// Gives the key of the blob at the path.
+    ///
+    /// The path is not at the root of the namespace.
+    fn blob_key(namespace: BlobStorageNamespace, path: &NormalizedBlobPath) -> Result<Key, Error> {
+        Ok(Key {
+            namespace,
+            dir: path.parent_text()?,
+            file: Some(path.file_name_text()?),
+        })
+    }
+
+    /// Gives every key in the directory, or below it at any depth.
+    ///
+    /// An empty `dir` is the root of the namespace and gives every key of the namespace. A blob at
+    /// the path of the directory is not in it, because the directory of that blob is the one above.
+    fn entries_in_dir<'a>(
+        data: &'a BTreeMap<Key, Entry>,
+        namespace: &BlobStorageNamespace,
+        dir: &str,
+    ) -> Box<dyn Iterator<Item = (&'a Key, &'a Entry)> + 'a> {
+        let namespace_start = Key {
+            namespace: namespace.clone(),
+            dir: String::new(),
+            file: None,
+        };
+
+        if dir.is_empty() {
+            let namespace = namespace.clone();
+            return Box::new(
+                data.range(namespace_start..)
+                    .take_while(move |(key, _)| key.namespace == namespace),
+            );
+        }
+
+        let exact_start = Key {
+            namespace: namespace.clone(),
+            dir: dir.to_owned(),
+            file: None,
+        };
+        let exact_namespace = namespace.clone();
+        let exact_dir = dir.to_owned();
+        let exact = data
+            .range(exact_start..)
+            .take_while(move |(key, _)| key.namespace == exact_namespace && key.dir == exact_dir);
+
+        let nested = format!("{dir}/");
+        let nested_start = Key {
+            namespace: namespace.clone(),
+            dir: nested.clone(),
+            file: None,
+        };
+        let nested_namespace = namespace.clone();
+        let descendants = data.range(nested_start..).take_while(move |(key, _)| {
+            key.namespace == nested_namespace && key.dir.starts_with(&nested)
+        });
+
+        Box::new(exact.chain(descendants))
+    }
+
+    /// Gives the paths that `list_dir` gives for the directory at the path.
+    ///
+    /// These are the blobs directly in the directory, and each directory that `create_dir` made
+    /// below it, at any depth. A blob and a directory can hold one path, and then the storage has
+    /// a key for the blob and a key for the directory. The result gives the path one time. The
+    /// path can be a root path.
+    fn listing(
+        data: &BTreeMap<Key, Entry>,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<Vec<PathBuf>, Error> {
+        let dir = path.text()?;
+        Ok(Self::entries_in_dir(data, namespace, &dir)
+            .filter_map(|(key, _)| match &key.file {
+                Some(file) if key.dir == dir => Some(blob_child_path(&dir, file).into()),
+                None if key.dir != dir => Some(PathBuf::from(&key.dir)),
+                _ => None,
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
+    /// Gives each blob in the directory at the path or below it, at any depth, with its size. A
+    /// directory that `create_dir` made is not a blob. The path can be a root path.
+    fn blobs_below(
+        data: &BTreeMap<Key, Entry>,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        Ok(Self::entries_in_dir(data, namespace, &path.text()?)
+            .filter_map(|(key, entry)| match (&key.file, entry) {
+                (Some(name), Entry::File { metadata, .. }) => Some(ListedBlob {
+                    path: blob_child_path(&key.dir, name),
+                    size: metadata.size,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Tells what the path has. The path is not at the root of the namespace.
+    ///
+    /// A blob at the path wins over a directory at the same path, because the other backends
+    /// answer that way: a key that holds bytes is a file, whatever sits below it. A directory
+    /// that only holds blobs has no key of its own, so the keys below it tell that it is there.
+    /// This is the range that `delete_dir` removes.
+    fn existence(
+        data: &BTreeMap<Key, Entry>,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<ExistsResult, Error> {
+        Ok(
+            if data.contains_key(&Self::blob_key(namespace.clone(), path)?) {
+                ExistsResult::File
+            } else if Self::entries_in_dir(data, namespace, &path.text()?)
+                .next()
+                .is_some()
+            {
+                ExistsResult::Directory
+            } else {
+                ExistsResult::DoesNotExist
+            },
+        )
+    }
+
+    /// Gives the metadata of the blob at the path, or else of the directory that `create_dir`
+    /// made at the path. The path is not at the root of the namespace.
+    ///
+    /// A directory that `create_dir` made has a size of zero and the time of that call. A
+    /// directory that only holds blobs has no key, so it has no metadata of its own.
+    fn metadata(
+        data: &BTreeMap<Key, Entry>,
+        namespace: &BlobStorageNamespace,
+        path: &NormalizedBlobPath,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        let dir_key = Key {
+            namespace: namespace.clone(),
+            dir: path.text()?,
+            file: None,
+        };
+        Ok(match data.get(&Self::blob_key(namespace.clone(), path)?) {
+            Some(Entry::File { metadata, .. }) => Some(metadata.clone()),
+            _ => match data.get(&dir_key) {
+                Some(Entry::Directory { created_at }) => Some(BlobMetadata {
+                    size: 0,
+                    last_modified_at: *created_at,
+                }),
+                _ => None,
+            },
+        })
     }
 }
 
 #[async_trait]
-impl BlobStorage for InMemoryBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for InMemoryBlobStorage {
+    async fn get_raw_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(None);
-        }
-        let dir = blob_parent_to_string(path)?;
-        let key = blob_file_name_to_string(path)?;
-
-        let key = Key {
-            namespace,
-            dir,
-            file: Some(key),
-        };
-
-        Ok(self
-            .data
-            .read_async(&key, |_, entry| match entry {
-                Entry::File { data, .. } => Some(data.clone()),
-                _ => None,
-            })
-            .await
-            .flatten())
+        let key = Self::blob_key(namespace, path)?;
+        let data = self.data.read().await;
+        Ok(data.get(&key).and_then(|entry| match entry {
+            Entry::File { data, .. } => Some(data.to_vec()),
+            Entry::Directory { .. } => None,
+        }))
     }
 
-    async fn get_stream(
+    async fn get_stream_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(None);
-        }
-        let dir = blob_parent_to_string(path)?;
-        let file = blob_file_name_to_string(path)?;
-
-        let key = Key {
-            namespace,
-            dir,
-            file: Some(file),
-        };
-
-        Ok(self
-            .data
-            .read_async(&key, |_, entry| match entry {
-                Entry::File { data, .. } => {
-                    let stream = tokio_stream::once(Ok(Bytes::from(data.clone())));
-                    let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
-                        Box::pin(stream);
-                    Some(boxed)
-                }
-                _ => None,
-            })
-            .await
-            .flatten())
+        let key = Self::blob_key(namespace, path)?;
+        let data = self.data.read().await;
+        Ok(data.get(&key).and_then(|entry| match entry {
+            Entry::File { data, .. } => {
+                let stream = tokio_stream::once(Ok(data.clone()));
+                let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =
+                    Box::pin(stream);
+                Some(boxed)
+            }
+            Entry::Directory { .. } => None,
+        }))
     }
 
-    async fn get_metadata(
+    async fn get_range_stream_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        let key = Self::blob_key(namespace, path)?;
+        let data = self
+            .data
+            .read()
+            .await
+            .get(&key)
+            .and_then(|entry| match entry {
+                Entry::File { data, .. } => Some(data.clone()),
+                Entry::Directory { .. } => None,
+            });
+        let Some(data) = data else { return Ok(None) };
+        let total_size = data.len() as u64;
+        validate_range(offset, length, total_size)?;
+        let selected = data.slice(offset as usize..(offset + length) as usize);
+        let stream = futures::stream::unfold(selected, |mut data| async {
+            if data.is_empty() {
+                return None;
+            }
+            let chunk = data.split_to(data.len().min(BLOB_STREAM_CHUNK_SIZE));
+            Some((Ok(chunk), data))
+        });
+        Ok(Some(BlobRangeStream {
+            total_size,
+            stream: Box::pin(stream),
+        }))
+    }
+
+    async fn get_metadata_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(None);
-        }
-        let dir = blob_parent_to_string(path)?;
-        let file = blob_file_name_to_string(path)?;
-
-        let key = Key {
-            namespace: namespace.clone(),
-            dir,
-            file: Some(file),
-        };
-
-        let blob = self
-            .data
-            .read_async(&key, |_, entry| match entry {
-                Entry::File { metadata, .. } => Some(metadata.clone()),
-                _ => None,
-            })
-            .await
-            .flatten();
-        if blob.is_some() {
-            return Ok(blob);
-        }
-
-        let directory = Key {
-            namespace,
-            dir: blob_path_to_string(path)?,
-            file: None,
-        };
-        Ok(self
-            .data
-            .read_async(&directory, |_, entry| match entry {
-                Entry::Directory { created_at } => Some(BlobMetadata {
-                    last_modified_at: *created_at,
-                    size: 0,
-                }),
-                Entry::File { .. } => None,
-            })
-            .await
-            .flatten())
+        Self::metadata(&*self.data.read().await, &namespace, path)
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        reject_root_blob_path(path)?;
-        let dir = blob_parent_to_string(path)?;
-        let file = blob_file_name_to_string(path)?;
-
-        let key = Key {
-            namespace: namespace.clone(),
-            dir: dir.clone(),
-            file: Some(file.clone()),
-        };
-
-        let size = data.len() as u64;
-        let entry = Entry::File {
-            data: data.to_vec(),
-            metadata: BlobMetadata {
-                size,
-                last_modified_at: Timestamp::now_utc(),
-            },
-        };
-
-        self.data.upsert_async(key, entry).await;
+        let key = Self::blob_key(namespace, path)?;
+        let entry = Self::file_entry(Bytes::copy_from_slice(data));
+        self.data.write().await.insert(key, entry);
 
         Ok(())
     }
 
-    async fn put_stream(
+    async fn copy_between_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        reject_root_blob_path(path)?;
-        let dir = blob_parent_to_string(path)?;
-        let file = blob_file_name_to_string(path)?;
-
-        let stream = stream.make_stream_erased().await?;
-        let data = stream.try_collect::<Vec<_>>().await?.concat();
-        let size = data.len() as u64;
-        let entry = Entry::File {
-            data,
-            metadata: BlobMetadata {
-                size,
-                last_modified_at: Timestamp::now_utc(),
-            },
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        let (from_key, to_key) = (
+            Self::blob_key(from_namespace, from)?,
+            Self::blob_key(to_namespace, to)?,
+        );
+        let mut data = self.data.write().await;
+        let copied = match data.get(&from_key) {
+            Some(Entry::File { data: content, .. }) => Self::file_entry(content.clone()),
+            Some(Entry::Directory { .. }) | None => return Ok(false),
         };
-
-        let key = Key {
-            namespace: namespace.clone(),
-            dir: dir.clone(),
-            file: Some(file.clone()),
-        };
-
-        self.data.upsert_async(key, entry).await;
-
-        Ok(())
+        data.insert(to_key, copied);
+        Ok(true)
     }
 
-    async fn delete(
+    async fn put_raw_if_absent_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(());
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        // A directory that `create_dir` made has a key without a file name, so only a blob at
+        // the path holds this key. The insert refuses a key that is there, in one step.
+        let key = Self::blob_key(namespace, path)?;
+        let mut entries = self.data.write().await;
+        match entries.entry(key) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Self::file_entry(Bytes::copy_from_slice(data)));
+                Ok(PutIfAbsent::Written)
+            }
+            std::collections::btree_map::Entry::Occupied(_) => Ok(PutIfAbsent::AlreadyExists),
         }
-        let dir = blob_parent_to_string(path)?;
-        let file = blob_file_name_to_string(path)?;
-
-        let key = Key {
-            namespace: namespace.clone(),
-            dir: dir.clone(),
-            file: Some(file.clone()),
-        };
-
-        self.data.remove_async(&key).await;
-        Ok(())
     }
 
-    async fn create_dir(
+    async fn delete_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(());
-        }
-        let dir = blob_path_to_string(path)?;
+        let key = Self::blob_key(namespace, path)?;
+        self.data.write().await.remove(&key);
 
+        Ok(())
+    }
+
+    async fn create_dir_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error> {
         let key = Key {
-            namespace: namespace.clone(),
-            dir: dir.clone(),
+            namespace,
+            dir: path.text()?,
             file: None,
         };
 
-        let entry = Entry::Directory {
-            created_at: Timestamp::now_utc(),
-        };
-        self.data.upsert_async(key, entry).await;
+        self.data.write().await.insert(
+            key,
+            Entry::Directory {
+                created_at: Timestamp::now_utc(),
+            },
+        );
 
         Ok(())
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
-        validate_relative_blob_path(path)?;
-        let dir = blob_path_to_string(path)?;
-
-        let mut entries = Vec::new();
-        self.data
-            .iter_async(|key, entry| {
-                if key.namespace == namespace {
-                    if key.dir == dir {
-                        if let Some(file) = &key.file {
-                            entries.push(path.join(file));
-                        }
-                    } else if key.file.is_none()
-                        && matches!(entry, Entry::Directory { .. })
-                        && Path::new(&key.dir).parent() == Some(path)
-                    {
-                        entries.push(PathBuf::from(&key.dir));
-                    }
-                }
-                true
-            })
-            .await;
-
-        Ok(entries)
+        Self::listing(&*self.data.read().await, &namespace, path)
     }
 
-    async fn delete_dir(
+    async fn list_blobs_below_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        Self::blobs_below(&*self.data.read().await, &namespace, path)
+    }
+
+    async fn delete_dir_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
-        validate_relative_blob_path(path)?;
+        let dir = path.text()?;
 
-        if blob_path_is_root(path) {
-            return Ok(false);
+        // A directory that only holds blobs has no key of its own, so the keys below it tell
+        // that it is there. They go with it, at any depth.
+        let mut data = self.data.write().await;
+        let keys = Self::entries_in_dir(&data, &namespace, &dir)
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        let deleted = !keys.is_empty();
+        for key in keys {
+            data.remove(&key);
         }
-
-        let dir = blob_path_to_string(path)?;
-
-        let nested = format!("{dir}/");
-        let mut deleted = false;
-        self.data
-            .retain_async(|below, _| {
-                let in_directory = below.namespace == namespace
-                    && (below.dir == dir || below.dir.starts_with(&nested));
-                if in_directory {
-                    deleted = true;
-                }
-                !in_directory
-            })
-            .await;
 
         Ok(deleted)
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         _target_label: &'static str,
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error> {
-        validate_relative_blob_path(path)?;
-        if blob_path_is_root(path) {
-            return Ok(ExistsResult::Directory);
-        }
-        let path_str = blob_path_to_string(path)?;
-        let file_key = Key {
-            namespace: namespace.clone(),
-            dir: blob_parent_to_string(path)?,
-            file: Some(blob_file_name_to_string(path)?),
-        };
-        if self.data.contains_async(&file_key).await {
-            return Ok(ExistsResult::File);
-        }
-        let nested = format!("{path_str}/");
-        if self
-            .data
-            .any_async(|key, _| {
-                key.namespace == namespace && (key.dir == path_str || key.dir.starts_with(&nested))
-            })
-            .await
-            .is_some()
-        {
-            Ok(ExistsResult::Directory)
-        } else {
-            Ok(ExistsResult::DoesNotExist)
-        }
+        Self::existence(&*self.data.read().await, &namespace, path)
     }
 }
+
+#[cfg(test)]
+mod tests;

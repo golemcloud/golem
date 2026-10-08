@@ -35,6 +35,18 @@ impl ReplayState {
         .await
     }
 
+    /// Drives only terminal entries, without waiting for another positional consumer. A direct
+    /// composite call can resolve a terminal-only result or a retained Start before reconstructing
+    /// its own positional entries. Readiness does not authorize live execution.
+    #[cfg(test)]
+    pub(crate) async fn resolution_ready(
+        &self,
+        handle: &ReplayCallHandle,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.drain_awaited_terminals().await?;
+        Ok(handle.resolution_ready() || self.is_live())
+    }
+
     /// Rejects a resolved delivery marker beyond the effective replay target. Debug target
     /// validation rejects such targets up front; this is defense in depth if the target changes
     /// after resolution. Fork/revert instead remove the future marker from visible history and
@@ -117,7 +129,7 @@ impl ReplayState {
         }
     }
 
-    /// Waits until the recorded replay tail is naturally exhausted and the cursor is live.
+    /// Waits until the recorded replay tail is naturally exhausted.
     ///
     /// Used to withhold the completion of a markerless successful durable call (its recorded run
     /// crashed after the `End` became durable but before the completion crossed to the guest): no
@@ -129,7 +141,7 @@ impl ReplayState {
     /// orphan terminals, scan-ahead-claimed `Start`s, trailing hints) so a tail whose remaining
     /// entries have no active reader still exhausts, then parks on cursor progress while a real
     /// entry (or a reserved delivery marker owned by another token) sits at the head.
-    pub(in crate::durable_host) async fn await_natural_tail_end(
+    pub(in crate::durable_host) async fn await_natural_tail_exhaustion(
         &self,
         activity: Option<&TailActivity>,
     ) -> Result<(), WorkerExecutorError> {
@@ -159,6 +171,13 @@ impl ReplayState {
                 progress.await;
             }
         }
+    }
+
+    pub(in crate::durable_host) async fn await_natural_tail_end(
+        &self,
+        activity: Option<&TailActivity>,
+    ) -> Result<(), WorkerExecutorError> {
+        self.await_natural_tail_exhaustion(activity).await
     }
 
     /// Awaits the resolution of the call identified by `handle`, treating end-of-replay as a hard

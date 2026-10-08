@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "isomorphicGit": {
+    "name": "isomorphic-git",
+    "version": "1.42.2",
+    "sourceTag": "https://github.com/isomorphic-git/isomorphic-git/tree/v1.42.2",
+    "registryTarball": "https://registry.npmjs.org/isomorphic-git/-/isomorphic-git-1.42.2.tgz",
+    "registryIntegrity": "sha512-Rb7czWhLO4JYqmg4an01nNomuAgFbWWK2CVfkHGBOvK5t7hrGTKOXPx/csscJ1j9o3uXFzNcC6njgvCafSmIPw==",
+    "artifactSha256": "9b01a8490da9a95175e595653d69a159de54e09d2814e2ea5c867c8dc12983b0"
+  },
+  "diff": {
+    "name": "diff",
+    "version": "8.0.2",
+    "sourceTag": "https://github.com/kpdecker/jsdiff/tree/v8.0.2",
+    "registryTarball": "https://registry.npmjs.org/diff/-/diff-8.0.2.tgz",
+    "registryIntegrity": "sha512-sSuxWU5j5SR9QQji/o2qMvqRNYRDOcBTgsJ/DeCf4iSN4gW+gNMXM7wFIP+fdXZxoNiAnHUTGjCr+TSWXdRDKg==",
+    "artifactSha256": "7bdbefb2df0f28dc9280e39e2399f2e6e84d13e9ccb098469b32ad0372c0f5e3"
+  },
+  "zod": {
+    "name": "zod",
+    "version": "4.4.3",
+    "sourceTag": "https://github.com/colinhacks/zod/tree/v4.4.3",
+    "registryTarball": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+    "registryIntegrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+    "artifactSha256": "ee38f17f533fd500610685a483ae2f413c26f4eb33a51684314563c8d60f279c"
+  }
+}

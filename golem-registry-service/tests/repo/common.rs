@@ -13,14 +13,20 @@
 // limitations under the License.
 
 use crate::repo::{Deps, TestDb, test_environment_default_card_record};
+use anyhow::Error;
 use assert2::{assert, check, let_assert};
+use async_trait::async_trait;
 use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::Empty;
-use golem_common::base_model::agent::{AgentMode, AgentTypeName, Snapshotting};
+use golem_common::base_model::agent::{
+    AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
+    HttpMethod, HttpMountDetails, LiteralSegment, PathSegment, Snapshotting,
+};
 use golem_common::base_model::component_metadata::KnownExports;
 use golem_common::model::account::{AccountEmail, AccountId, AccountRevision, AccountSetPlan};
+use golem_common::model::agent_config::CanonicalAgentConfigPath;
 use golem_common::model::agent_secret::{
     AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
 };
@@ -41,9 +47,9 @@ use golem_common::model::http_api_deployment::HttpApiDeploymentAgentOptions;
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::model::plan::PlanId;
 use golem_common::model::tool::{
-    CompiledToolBinding, HostToolId, RegisteredTool, SecretKeyScope, TOOL_METADATA_WIT_VERSION,
-    ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata, ToolFilesystemAccess, ToolName,
-    ToolProvisionConfig, ToolSource,
+    CompiledToolBinding, ConfigKeyScope, HostToolId, RegisteredTool, SecretKeyScope,
+    TOOL_METADATA_WIT_VERSION, ToolBindingInput, ToolBindingOwner, ToolDeploymentMetadata,
+    ToolFilesystemAccess, ToolName, ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
@@ -62,15 +68,15 @@ use golem_common::schema::tool::{
     CommandNode, CommandTree, Doc, Globals, Tool, ToolMiddleware, ToolMiddlewareScope,
 };
 use golem_common::schema::{
-    AgentConstructorSchema, AgentTypeSchema, InputSchema, SchemaGraph, SchemaValue,
-    TypedSchemaValue,
+    AgentConstructorSchema, AgentMethodSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+    NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue,
 };
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
 use golem_registry_service::repo::card::{CardRepo, DbCardRepo};
 use golem_registry_service::repo::component::{ComponentRepo, DbComponentRepo};
-use golem_registry_service::repo::deployment::DbDeploymentRepo;
+use golem_registry_service::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
 use golem_registry_service::repo::environment::{
     DbEnvironmentRepo, EnvironmentExtRevisionRecord, EnvironmentRevisionRecord,
     EnvironmentVisibilityFilter, EnvironmentVisibilityScope,
@@ -96,7 +102,8 @@ use golem_registry_service::repo::model::audit::{
 use golem_registry_service::repo::model::card::CardRecord;
 use golem_registry_service::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use golem_registry_service::repo::model::deployment::{
-    DeployRepoError, DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
+    CurrentDeploymentExtRevisionRecord, CurrentDeploymentRevisionRecord, DeployRepoError,
+    DeploymentAgentToolBindingRecord, DeploymentComponentRevisionRecord,
     DeploymentRegisteredAgentTypeRecord, DeploymentRegisteredToolRecord,
     DeploymentRevisionCreationRecord,
 };
@@ -128,7 +135,7 @@ use golem_registry_service::repo::permission_share::DbPermissionShareRepo;
 use golem_registry_service::repo::plan::DbPlanRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
-    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent,
+    ChangeEventId, NewRegistryChangeEvent, RegistryChangeEvent, RequiresNotificationSignal,
 };
 use golem_registry_service::repo::tool_middleware_release::{
     DbToolMiddlewareReleaseRepo, ToolMiddlewareReleaseRepoError,
@@ -158,13 +165,292 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
+};
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+
+#[derive(Debug)]
+struct FailOnceListBlobStorage {
+    inner: Arc<dyn BlobStorage>,
+    fail_next_list: AtomicBool,
+    list_attempts: AtomicUsize,
+}
+
+impl FailOnceListBlobStorage {
+    fn new(inner: Arc<dyn BlobStorage>) -> Self {
+        Self {
+            inner,
+            fail_next_list: AtomicBool::new(true),
+            list_attempts: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// Delegates each operation to the blob storage it holds, and fails the first listing of the
+/// blobs below a path, which is the call of the blob storage sweep of the account usage.
+#[async_trait]
+impl BlobStorageBackend for FailOnceListBlobStorage {
+    async fn get_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        self.inner
+            .get_raw(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> Result<Option<BlobRangeStream>, Error> {
+        self.inner
+            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
+    async fn get_metadata_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Option<BlobMetadata>, Error> {
+        self.inner
+            .get_metadata(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        self.inner
+            .put_raw(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
+        self.inner
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn delete_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error> {
+        self.inner
+            .delete(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn create_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<(), Error> {
+        self.inner
+            .create_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Vec<PathBuf>, Error> {
+        self.inner
+            .list_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.list_attempts.fetch_add(1, Ordering::AcqRel);
+        if self.fail_next_list.swap(false, Ordering::AcqRel) {
+            return Err(anyhow::anyhow!("injected reconciliation list failure"));
+        }
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        self.inner
+            .delete_dir(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<ExistsResult, Error> {
+        self.inner
+            .exists(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        match self
+            .inner
+            .copy_between(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.downcast_ref::<BlobMissingError>().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
 // Common test cases -------------------------------------------------------------------------------
+
+trait DeploymentRepoTestExt {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>;
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError>;
+}
+
+impl<T: DeploymentRepo + ?Sized> DeploymentRepoTestExt for T {
+    async fn deploy_current(
+        &self,
+        deployment_creation: DeploymentRevisionCreationRecord,
+        version_check: bool,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentExtRevisionRecord>, DeployRepoError>
+    {
+        let epoch = self
+            .get_http_routing_epoch(deployment_creation.environment_id)
+            .await?;
+        self.deploy(deployment_creation, version_check, epoch).await
+    }
+
+    async fn set_current_deployment_current(
+        &self,
+        user_account_id: Uuid,
+        environment_id: Uuid,
+        deployment_revision_id: i64,
+    ) -> Result<RequiresNotificationSignal<CurrentDeploymentRevisionRecord>, DeployRepoError> {
+        let epoch = self.get_http_routing_epoch(environment_id).await?;
+        self.set_current_deployment(
+            user_account_id,
+            environment_id,
+            deployment_revision_id,
+            epoch,
+        )
+        .await
+    }
+}
+
+fn empty_deployment_creation(
+    environment_id: Uuid,
+    deployment_revision_id: i64,
+    version: &str,
+    user_account_id: Uuid,
+) -> DeploymentRevisionCreationRecord {
+    DeploymentRevisionCreationRecord {
+        environment_id,
+        deployment_revision_id,
+        version: version.into(),
+        hash: SqlBlake3Hash::empty(),
+        components: vec![],
+        http_api_deployments: vec![],
+        mcp_deployments: vec![],
+        compiled_routes: vec![],
+        compiled_mcp: vec![],
+        registered_agent_types: vec![],
+        registered_tools: vec![],
+        agent_tool_bindings: vec![],
+        mcp_imports: vec![],
+        tool_releases: vec![],
+        registered_tool_middlewares: vec![],
+        tool_middleware_chains: vec![],
+        tool_middleware_releases: vec![],
+        universal_tool_middlewares: vec![],
+        tool_compatibility_mode: Default::default(),
+        published_tool_middlewares: vec![],
+        remote_tool_middlewares: vec![],
+        environment_tool_middleware_bindings: BTreeMap::new(),
+        agent_tool_middleware_bindings: BTreeMap::new(),
+        created_agent_secrets: vec![],
+        updated_agent_secrets: vec![],
+        replaced_agent_secrets: vec![],
+        created_resource_definitions: vec![],
+        created_retry_policies: vec![],
+        user_account_id,
+    }
+}
 
 fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
     StoredCard::Concrete(Card {
@@ -2681,6 +2967,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -2745,6 +3035,10 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
             let account_usage_service = Arc::new(AccountUsageService::new(
                 Arc::new(DbAccountUsageRepo::new(pool.clone())),
                 account_service.clone(),
+                Arc::new(DbEnvironmentRepo::new(pool.clone())),
+                Arc::new(InMemoryBlobStorage::new()),
+                false,
+                golem_registry_service::services::account_usage::BLOB_STORAGE_RECONCILIATION_INTERVAL,
             ));
             let application_service = Arc::new(ApplicationService::new(
                 Arc::new(DbApplicationRepo::new(pool.clone())),
@@ -2946,6 +3240,7 @@ pub async fn test_component_stage(deps: &Deps) {
                 ToolDeploymentMetadata {
                     definition: Tool {
                         version: "1.0.0".to_string(),
+                        requires_filesystem: false,
                         commands: CommandTree {
                             nodes: vec![CommandNode {
                                 name: "grep".to_string(),
@@ -3942,6 +4237,7 @@ pub async fn test_http_api_deployment_stage(deps: &Deps) {
         hash: SqlBlake3Hash::empty(),
         audit: DeletableRevisionAuditFields::new(user.revision.account_id),
         data: Blob::new(HttpApiDeploymentData {
+            scheme: golem_common::model::http_api_deployment::HttpApiDeploymentScheme::Http,
             agents: BTreeMap::from_iter([(
                 AgentTypeName("test-agent".to_string()),
                 HttpApiDeploymentAgentOptions::default(),
@@ -4306,6 +4602,7 @@ async fn create_disk_override_plan(deps: &Deps, account_id: Uuid, user_configura
             total_component_count: 15.into(),
             total_worker_connection_count: 25.into(),
             total_component_storage_bytes: 1000.into(),
+            total_blob_storage_bytes: 1_000_000_000_000_000_000u64.into(),
             monthly_gas_limit: 2000.into(),
             monthly_component_upload_limit_bytes: 3000.into(),
             max_memory_per_worker: 4000.into(),
@@ -4453,6 +4750,7 @@ pub async fn test_account_usage(deps: &Deps) {
             UsageType::TotalComponentCount => 15,
             UsageType::TotalWorkerConnectionCount => 25,
             UsageType::TotalComponentStorageBytes => 1000,
+            UsageType::TotalBlobStorageBytes => 1_000_000_000_000_000_000,
             UsageType::MonthlyGasLimit => 2000,
             UsageType::MonthlyComponentUploadLimitBytes => 3000,
             UsageType::MonthlyHttpCalls => 5000,
@@ -4522,6 +4820,7 @@ pub async fn test_account_usage(deps: &Deps) {
                 usage_type,
                 UsageType::MonthlyDurableAgentStorageByteSeconds
                     | UsageType::MonthlyEphemeralStorageByteSeconds
+                    | UsageType::TotalBlobStorageBytes
             );
             check!(usage.add_change(usage_type, 1000000) == within_limit);
         }
@@ -4548,6 +4847,21 @@ pub async fn test_account_usage(deps: &Deps) {
         for usage_type in UsageType::iter() {
             if usage_type.tracking() == UsageTracking::Stats {
                 check!(usage.usage(usage_type) == 1, "{usage_type:?}");
+            }
+        }
+
+        let resource_limits_usage = deps
+            .account_usage_repo
+            .get_for_resource_limits(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        for usage_type in UsageType::iter() {
+            if usage_type.tracking() == UsageTracking::Stats {
+                check!(
+                    resource_limits_usage.usage(usage_type) == usage.usage(usage_type),
+                    "{usage_type:?}"
+                );
             }
         }
     }
@@ -4624,6 +4938,215 @@ pub async fn test_account_usage(deps: &Deps) {
         check!(usage.usage(UsageType::TotalEnvCount) == 1);
         check!(usage.usage(UsageType::TotalComponentCount) == 1);
     }
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            41,
+        )
+        .await
+        .unwrap();
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            7,
+        )
+        .await
+        .unwrap();
+    let usage = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(usage.usage(UsageType::TotalBlobStorageBytes) == 7);
+
+    let application = deps.create_application(user.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let custom_namespace = golem_service_base::storage::blob::BlobStorageNamespace::CustomStorage {
+        environment_id: EnvironmentId(environment.revision.environment_id),
+    };
+    deps.blob_storage
+        .create_dir(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace.clone(),
+            std::path::Path::new("container"),
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            custom_namespace,
+            std::path::Path::new("container/object"),
+            &[1, 2, 3, 4, 5],
+        )
+        .await
+        .unwrap();
+    deps.blob_storage
+        .put_raw(
+            "test",
+            "blob_usage_reconciliation",
+            golem_service_base::storage::blob::BlobStorageNamespace::InitialAgentFiles {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+            },
+            std::path::Path::new("not-chargeable"),
+            &[0; 100],
+        )
+        .await
+        .unwrap();
+    let _ = deps
+        .environment_repo
+        .delete(EnvironmentRevisionRecord {
+            revision_id: environment.revision.revision_id + 1,
+            ..environment.revision.clone()
+        })
+        .await
+        .unwrap();
+
+    let reconciliation_interval = std::time::Duration::from_secs(1);
+    let account_usage_service =
+        deps.account_usage_service_with_reconciliation_interval(reconciliation_interval);
+    account_usage_service
+        .get_resouce_limits(
+            AccountId(user.revision.account_id),
+            &golem_service_base::model::auth::AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let reconciled = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(reconciled.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    let mut delayed_updates = std::collections::HashMap::new();
+    delayed_updates.insert(
+        AccountId(user.revision.account_id),
+        golem_registry_service::services::account_usage::ResourceUsageUpdate {
+            fuel_delta: 0,
+            http_call_count_delta: 0,
+            rpc_call_count_delta: 0,
+            durable_storage_byte_seconds_delta: 0,
+            ephemeral_storage_byte_seconds_delta: 0,
+            memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 5,
+            metering: ResourceUsageMetering::all_enabled(),
+        },
+    );
+    account_usage_service
+        .update_resource_usage(delayed_updates, &AuthCtx::System)
+        .await
+        .unwrap();
+    let temporarily_overcounted = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(temporarily_overcounted.usage(UsageType::TotalBlobStorageBytes) == 10);
+
+    tokio::time::sleep(reconciliation_interval).await;
+    account_usage_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged.usage(UsageType::TotalBlobStorageBytes) == 5);
+
+    deps.account_usage_repo
+        .set_total_usage(
+            user.revision.account_id,
+            UsageType::TotalBlobStorageBytes,
+            99,
+        )
+        .await
+        .unwrap();
+    let fail_once_storage = Arc::new(FailOnceListBlobStorage::new(deps.blob_storage.clone()));
+    let retrying_service = AccountUsageService::new(
+        deps.account_usage_repo.clone(),
+        deps.account_service(),
+        deps.environment_repo.clone(),
+        fail_once_storage.clone(),
+        true,
+        std::time::Duration::from_secs(60),
+    );
+    retrying_service
+        .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if fail_once_storage.list_attempts.load(Ordering::Acquire) > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let retained_after_failed_sweep = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(retained_after_failed_sweep.usage(UsageType::TotalBlobStorageBytes) == 99);
+
+    for _ in 0..100 {
+        retrying_service
+            .get_resouce_limits(AccountId(user.revision.account_id), &AuthCtx::System)
+            .await
+            .unwrap();
+        let usage = deps
+            .account_usage_repo
+            .get(user.revision.account_id, &now)
+            .await
+            .unwrap()
+            .unwrap();
+        if usage.usage(UsageType::TotalBlobStorageBytes) == 5 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let converged_after_retry = deps
+        .account_usage_repo
+        .get(user.revision.account_id, &now)
+        .await
+        .unwrap()
+        .unwrap();
+    check!(converged_after_retry.usage(UsageType::TotalBlobStorageBytes) == 5);
 }
 
 pub async fn test_account_usage_history(deps: &Deps) {
@@ -4731,6 +5254,7 @@ fn test_account_root_card(account_id: Uuid) -> CardRecord {
 fn make_test_agent_type(name: &str) -> AgentTypeSchema {
     AgentTypeSchema {
         type_name: AgentTypeName(name.to_string()),
+        kind: golem_common::schema::AgentTypeKind::Regular,
         description: format!("Test agent {name}"),
         source_language: String::new(),
         schema: SchemaGraph::empty(),
@@ -4749,9 +5273,245 @@ fn make_test_agent_type(name: &str) -> AgentTypeSchema {
     }
 }
 
+fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
+    let mappings = |pairs: &[(&str, &str)]| {
+        FileMapping::compile_list(pairs.iter().copied()).expect("valid persistence mappings")
+    };
+    let mount = |static_bindings, filesystem_bindings, openapi_provider_method| HttpMountDetails {
+        path_prefix: vec![PathSegment::Literal(LiteralSegment {
+            value: "assets".to_string(),
+        })],
+        auth_details: None,
+        phantom_agent: false,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        webhook_suffix: vec![],
+        static_bindings,
+        filesystem_bindings,
+        file_response_headers: vec![],
+        openapi_provider_method,
+    };
+    let endpoint = |http_method| HttpEndpointDetails {
+        http_method,
+        path_suffix: vec![],
+        header_vars: vec![],
+        query_vars: vec![],
+        auth_details: None,
+        cors_options: CorsOptions {
+            allowed_patterns: vec![],
+        },
+        durable_streams: None,
+    };
+    let router = AgentTypeSchema {
+        type_name: AgentTypeName("PersistenceRouter".to_string()),
+        kind: AgentTypeKind::HttpRouter,
+        description: "Persistence router".to_string(),
+        source_language: "test".to_string(),
+        schema: SchemaGraph::empty(),
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![
+            AgentMethodSchema {
+                name: "handle".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([NamedField::user_supplied(
+                    "request",
+                    golem_common::schema::agent::http::request_schema(),
+                )]),
+                output_schema: OutputSchema::Single(Box::new(
+                    golem_common::schema::agent::http::response_schema(),
+                )),
+                http_endpoint: vec![endpoint(HttpMethod::Any(Empty {}))],
+                read_only: None,
+            },
+            AgentMethodSchema {
+                name: "describe".to_string(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::parameters([]),
+                output_schema: OutputSchema::Single(Box::new(SchemaType::string())),
+                http_endpoint: vec![],
+                read_only: None,
+            },
+        ],
+        dependencies: vec![],
+        mode: AgentMode::Ephemeral,
+        http_mount: Some(mount(
+            mappings(&[("/logo", "/public/logo.svg"), ("/docs/*", "/site/$1")]),
+            vec![],
+            Some("describe".to_string()),
+        )),
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![],
+    };
+    let mut regular = make_test_agent_type("PersistenceRegular");
+    regular.methods.push(AgentMethodSchema {
+        name: "literal-any".to_string(),
+        description: String::new(),
+        prompt_hint: None,
+        input_schema: InputSchema::parameters([]),
+        output_schema: OutputSchema::Unit,
+        http_endpoint: vec![endpoint(HttpMethod::Custom(CustomHttpMethod {
+            value: "ANY".to_string(),
+        }))],
+        read_only: None,
+    });
+    regular.http_mount = Some(mount(
+        vec![],
+        mappings(&[
+            ("/download/*", "/data/$1"),
+            ("/manifest", "/app/manifest.json"),
+        ]),
+        None,
+    ));
+    router.validate().expect("router fixture must be valid");
+    regular.validate().expect("regular fixture must be valid");
+    vec![router, regular]
+}
+
+pub async fn test_http_agent_metadata_blob_roundtrip(deps: &Deps) {
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let component_name = format!("http-persistence-{}", new_repo_uuid());
+    let expected = make_http_persistence_agent_types();
+    let component = deps
+        .component_repo
+        .create(
+            env.revision.environment_id,
+            &component_name,
+            ComponentRevisionRecord {
+                component_id: new_repo_uuid(),
+                revision_id: 0,
+                hash: SqlBlake3Hash::empty(),
+                audit: DeletableRevisionAuditFields::new(owner.revision.account_id),
+                size: 0.into(),
+                metadata: Blob::new(ComponentMetadata::from_parts(
+                    KnownExports::default(),
+                    vec![],
+                    Some("ordinary-metadata".to_string()),
+                    Some("1.0.0".to_string()),
+                    expected.clone(),
+                    BTreeMap::new(),
+                )),
+                object_store_key: String::new(),
+                binary_hash: SqlBlake3Hash::empty(),
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let stored_component = deps
+        .component_repo
+        .get_staged_by_id(component.revision.component_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .agent_types(),
+        expected
+    );
+    assert_eq!(
+        stored_component
+            .component
+            .revision
+            .metadata
+            .value()
+            .root_package_name(),
+        &Some("ordinary-metadata".to_string())
+    );
+
+    let deployment_revision_id = 1;
+    let records = expected
+        .iter()
+        .map(|agent_type| DeploymentRegisteredAgentTypeRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id,
+            agent_type_name: agent_type.type_name.0.clone(),
+            component_id: component.revision.component_id,
+            component_revision_id: component.revision.revision_id,
+            component_name: component_name.clone(),
+            owner_account_id: owner.revision.account_id,
+            owner_account_email: owner.revision.email.clone(),
+            webhook_prefix_authority_and_path: None,
+            agent_type: Blob::new(agent_type.clone()),
+            canonical_agent_type_name: agent_type.type_name.0.to_kebab_case(),
+        })
+        .collect();
+    deps.full_deployment_repo
+        .deploy_current(
+            DeploymentRevisionCreationRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id,
+                version: "1.0.0".to_string(),
+                hash: SqlBlake3Hash::empty(),
+                components: vec![DeploymentComponentRevisionRecord {
+                    environment_id: env.revision.environment_id,
+                    deployment_revision_id,
+                    component_id: component.revision.component_id,
+                    component_revision_id: component.revision.revision_id,
+                }],
+                http_api_deployments: vec![],
+                mcp_deployments: vec![],
+                compiled_routes: vec![],
+                compiled_mcp: vec![],
+                registered_agent_types: records,
+                tool_releases: vec![],
+                registered_tools: vec![],
+                agent_tool_bindings: vec![],
+                mcp_imports: vec![],
+                registered_tool_middlewares: vec![],
+                tool_middleware_chains: vec![],
+                tool_middleware_releases: vec![],
+                universal_tool_middlewares: vec![],
+                tool_compatibility_mode: Default::default(),
+                published_tool_middlewares: vec![],
+                remote_tool_middlewares: vec![],
+                environment_tool_middleware_bindings: BTreeMap::new(),
+                agent_tool_middleware_bindings: BTreeMap::new(),
+                created_agent_secrets: vec![],
+                updated_agent_secrets: vec![],
+                replaced_agent_secrets: vec![],
+                created_resource_definitions: vec![],
+                created_retry_policies: vec![],
+                user_account_id: owner.revision.account_id,
+            },
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let stored_agents = deps
+        .full_deployment_repo
+        .list_deployment_agent_types(env.revision.environment_id, deployment_revision_id)
+        .await
+        .unwrap();
+    assert_eq!(stored_agents.len(), expected.len());
+    for expected_agent in expected {
+        let stored = stored_agents
+            .iter()
+            .find(|stored| stored.agent_type_name == expected_agent.type_name.0)
+            .unwrap();
+        assert_eq!(stored.agent_type.value(), &expected_agent);
+    }
+}
+
 fn make_test_tool(name: &str, version: &str) -> Tool {
     Tool {
         version: version.to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![CommandNode {
                 name: name.to_string(),
@@ -4931,7 +5691,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
         .await
         .unwrap();
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             DeploymentRevisionCreationRecord {
                 environment_id,
                 deployment_revision_id: 1,
@@ -4951,6 +5711,7 @@ pub async fn test_component_delete_rejects_retained_source_references(deps: &Dep
                 tool_releases: Vec::new(),
                 registered_tools: Vec::new(),
                 agent_tool_bindings: Vec::new(),
+                mcp_imports: Vec::new(),
                 registered_tool_middlewares: Vec::new(),
                 tool_middleware_chains: Vec::new(),
                 tool_middleware_releases: Vec::new(),
@@ -6094,6 +6855,13 @@ pub async fn test_tool_middleware_release_and_grant_repository_contracts(deps: &
 }
 
 pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
+    use golem_common::model::mcp_import::{
+        McpImportAuthInput, McpImportBasicAuth, McpImportCredential, McpImportDeployment,
+    };
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentMcpImportCreationRecord, DeploymentMcpImportRecord,
+    };
+
     let owner = deps.create_account().await;
     let owner_account_id = owner.revision.account_id;
     let owner_account_email = owner.revision.email.clone();
@@ -6131,6 +6899,30 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     let component_id = component.revision.component_id;
     let component_revision_id = component.revision.revision_id;
     let agent_type_name = format!("Agent{}", new_repo_uuid().simple());
+
+    let import_input = |revision: i64, index: u32| McpImportDeployment {
+        url: format!("http://upstream-{index}.example/revision-{revision}/mcp"),
+        auth: match index {
+            0 => Some(McpImportAuthInput {
+                bearer: Some(format!("private-token-{revision}")),
+                basic: None,
+            }),
+            1 => Some(McpImportAuthInput {
+                bearer: None,
+                basic: Some(McpImportBasicAuth {
+                    user: "test-user".into(),
+                    password: format!("private-password-{revision}"),
+                }),
+            }),
+            _ => None,
+        },
+        security_scheme: (index == 2)
+            .then(|| golem_common::model::security_scheme::SecuritySchemeName("test-oauth".into())),
+        prefix: Some(format!("source-{index}")),
+        include: (index == 0).then(Vec::new),
+        exclude: None,
+        version: None,
+    };
 
     let deployment_creation = |deployment_revision_id: i64,
                                component_revision_id: i64,
@@ -6261,14 +7053,35 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 metadata_version: TOOL_METADATA_WIT_VERSION.to_string(),
             }
         };
-        let installation =
-            |name: &str, sequence: i64, filesystem_access| ToolMiddlewareInstallation {
+        let installation = |name: &str, sequence: i64, filesystem_access| {
+            let concrete = |key: &str| {
+                SecretKeyScope::Keys(BTreeSet::from([CanonicalAgentSecretPath(vec![
+                    key.to_string(),
+                ])]))
+            };
+            let (secret_keys_readable, secret_keys_revealable) = match sequence {
+                1 => (None, None),
+                2 => (
+                    Some(SecretKeyScope::All),
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                ),
+                3 => (
+                    Some(SecretKeyScope::Keys(BTreeSet::new())),
+                    Some(concrete("environment-revealable")),
+                ),
+                4 => (Some(concrete("agent-readable")), Some(SecretKeyScope::All)),
+                _ => unreachable!(),
+            };
+            ToolMiddlewareInstallation {
                 name: ToolMiddlewareName::try_from(name).unwrap(),
                 version: Some("1.0.0".to_string()),
                 parameters: NormalizedJsonValue::new(serde_json::json!({ "sequence": sequence })),
                 account: Some(AccountEmail::new(owner_account_email.clone())),
+                secret_keys_readable,
+                secret_keys_revealable,
                 filesystem_access,
-            };
+            }
+        };
         let (
             registered_tool_middlewares,
             tool_middleware_chains,
@@ -6305,24 +7118,40 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                 installation("audit-u", 2, ToolFilesystemAccess::Denied),
             ];
             let alpha = ToolName::try_from("alpha").unwrap();
-            let environment_bindings = BTreeMap::from([(
-                alpha.clone(),
-                ToolBindingInput {
-                    middleware: Some(vec![installation(
-                        "remote-r",
-                        3,
-                        ToolFilesystemAccess::Unset,
-                    )]),
-                    middleware_merge_mode: None,
-                    ..Default::default()
-                },
-            )]);
+            let environment_bindings = BTreeMap::from([
+                (
+                    alpha.clone(),
+                    ToolBindingInput {
+                        config_keys_readable: ConfigKeyScope::Keys(BTreeSet::from([
+                            CanonicalAgentConfigPath(vec!["public".to_string()]),
+                        ])),
+                        middleware: Some(vec![installation(
+                            "remote-r",
+                            3,
+                            ToolFilesystemAccess::Unset,
+                        )]),
+                        middleware_merge_mode: None,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    ToolName::try_from("explicit-default-environment").unwrap(),
+                    ToolBindingInput::default(),
+                ),
+            ]);
             let agent_bindings = BTreeMap::from([(
                 AgentTypeName(agent_type_name.clone()),
                 BTreeMap::from([
                     (
                         alpha.clone(),
                         ToolBindingInput {
+                            secret_keys_readable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["token".to_string()]),
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
+                            secret_keys_revealable: SecretKeyScope::Keys(BTreeSet::from([
+                                CanonicalAgentSecretPath(vec!["visible".to_string()]),
+                            ])),
                             middleware: Some(vec![installation(
                                 "audit-u",
                                 4,
@@ -6344,12 +7173,19 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
                         ToolName::try_from("list-empty").unwrap(),
                         ToolBindingInput {
                             middleware: Some(Vec::new()),
-                            middleware_merge_mode: None,
+                            middleware_merge_mode: Some(ToolMiddlewareMergeMode::Replace),
                             ..Default::default()
                         },
                     ),
                     (
-                        ToolName::try_from("unrelated-default").unwrap(),
+                        ToolName::try_from("scope-only").unwrap(),
+                        ToolBindingInput {
+                            config_keys_readable: ConfigKeyScope::Keys(BTreeSet::new()),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        ToolName::try_from("explicit-default-agent").unwrap(),
                         ToolBindingInput::default(),
                     ),
                 ]),
@@ -6435,6 +7271,28 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             tool_releases,
             registered_tools,
             agent_tool_bindings,
+            mcp_imports: if deployment_revision_id <= 2 {
+                (0..12)
+                    .rev()
+                    .map(|index| {
+                        let (import, credential) = import_input(deployment_revision_id, index)
+                            .into_parts(EnvironmentId(environment_id))
+                            .unwrap();
+                        DeploymentMcpImportCreationRecord {
+                            deployment: DeploymentMcpImportRecord {
+                                environment_id,
+                                deployment_revision_id,
+                                import_index: i64::from(index),
+                                import_hash: import.hash().unwrap().into(),
+                                import_config: Blob::new(import),
+                            },
+                            inline_credential: credential.map(Blob::new),
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
             registered_tool_middlewares,
             tool_middleware_chains,
             tool_middleware_releases,
@@ -6469,12 +7327,12 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         first_creation.environment_tool_middleware_bindings.clone();
     let expected_agent_middleware_bindings = first_creation.agent_tool_middleware_bindings.clone();
     deps.full_deployment_repo
-        .deploy(first_creation, false)
+        .deploy_current(first_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 2,
                 component_revision_id,
@@ -6488,6 +7346,131 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
+
+    let exact_first_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 1)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let exact_second_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 2)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let alpha = ToolName::try_from("alpha").unwrap();
+    let agent_type = AgentTypeName(agent_type_name.clone());
+    for (revision, snapshot) in [(1, &exact_first_state), (2, &exact_second_state)] {
+        let expected = (0..12)
+            .map(|index| {
+                import_input(revision, index)
+                    .into_parts(EnvironmentId(environment_id))
+                    .unwrap()
+                    .0
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(snapshot.mcp_imports, expected);
+        let serialized = desert_rust::serialize_to_byte_vec(snapshot).unwrap();
+        for secret in [b"private-token".as_slice(), b"private-password".as_slice()] {
+            assert!(
+                !serialized
+                    .windows(secret.len())
+                    .any(|bytes| bytes == secret)
+            );
+        }
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 0)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Bearer {
+                token: format!("private-token-{revision}"),
+            })
+        );
+        assert_eq!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(environment_id, revision, 1)
+                .await
+                .unwrap(),
+            Some(McpImportCredential::Basic {
+                user: "test-user".into(),
+                password: format!("private-password-{revision}"),
+            })
+        );
+    }
+    for (env, revision, index) in [
+        (environment_id, 1, 2),
+        (environment_id, 1, 3),
+        (environment_id, 1, 12),
+        (environment_id, 999, 0),
+        (new_repo_uuid(), 1, 0),
+    ] {
+        assert!(
+            deps.full_deployment_repo
+                .get_deployment_mcp_import_credential(env, revision, index)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    assert_eq!(exact_first_state.deployment_revision.get(), 1);
+    let expected_agent_configuration = BTreeMap::from([(
+        AgentTypeName(agent_type_name.clone()),
+        expected_agent_middleware_bindings[&AgentTypeName(agent_type_name.clone())]
+            .iter()
+            .map(|(name, binding)| (name.clone(), binding.clone()))
+            .collect(),
+    )]);
+    assert_eq!(
+        exact_first_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration {
+            universal: expected_universal_middlewares.clone(),
+            compatibility_mode:
+                golem_common::schema::tool::compatibility::ToolCompatibilityMode::Nominal,
+            environment_bindings: expected_environment_middleware_bindings.clone(),
+            agent_bindings: expected_agent_configuration,
+        }
+    );
+    assert_eq!(
+        exact_second_state.tool_middleware_configuration,
+        golem_common::model::tool_middleware::ToolMiddlewareConfiguration::default()
+    );
+    assert_eq!(
+        exact_first_state.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone()
+        }][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 1 })
+    );
+    assert_eq!(exact_second_state.deployment_revision.get(), 2);
+    assert_eq!(
+        exact_second_state.tool_bindings[&ToolBindingOwner::AgentType {
+            agent_type_name: agent_type.clone()
+        }][&alpha]
+            .parameters
+            .0,
+        serde_json::json!({ "revision": 2 })
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(environment_id, 999)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        deps.full_deployment_repo
+            .get_tool_deployment_state(new_repo_uuid(), 1)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let first_revision = deps
         .full_deployment_repo
@@ -6543,6 +7526,22 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         vec![ToolName::try_from("zeta").unwrap()]
     );
     assert!(first_summary.remote_tools.is_empty());
+    assert_eq!(
+        first_summary
+            .mcp_imports
+            .iter()
+            .map(|entry| entry.index)
+            .collect::<Vec<_>>(),
+        (0..12).collect::<Vec<_>>()
+    );
+    for entry in &first_summary.mcp_imports {
+        assert_eq!(
+            entry.hash,
+            exact_first_state.mcp_imports[entry.index as usize]
+                .hash()
+                .unwrap()
+        );
+    }
     let first_identity = deps
         .full_deployment_repo
         .get_deployment_identity(environment_id, 1)
@@ -6553,21 +7552,21 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         first_identity.identity.middleware.environment_bindings,
         expected_environment_middleware_bindings
     );
-    let mut expected_persisted_agent_bindings = expected_agent_middleware_bindings.clone();
-    expected_persisted_agent_bindings
-        .get_mut(&AgentTypeName(agent_type_name.clone()))
-        .unwrap()
-        .remove(&ToolName::try_from("unrelated-default").unwrap());
     assert_eq!(
         first_identity.identity.middleware.agent_bindings,
-        expected_persisted_agent_bindings
+        expected_agent_middleware_bindings
     );
     let first_plan = first_identity.identity.into_plan(None).unwrap();
-    let (expected_environment_binding_inputs, expected_agent_binding_inputs) =
+    let (mut expected_environment_binding_inputs, mut expected_agent_binding_inputs) =
         diff::tool_middleware_binding_inputs(
             &expected_environment_middleware_bindings,
             &expected_agent_middleware_bindings,
         );
+    expected_environment_binding_inputs.remove(alpha.as_str());
+    expected_agent_binding_inputs
+        .get_mut(&agent_type_name)
+        .unwrap()
+        .remove(alpha.as_str());
     let expected_middleware = (
         ["audit-u".to_string()].into_iter().collect::<BTreeSet<_>>(),
         expected_universal_middlewares.clone(),
@@ -6663,6 +7662,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(current.deployment_revision.get(), 2);
+    assert_eq!(current.mcp_imports, exact_second_state.mcp_imports);
     assert_eq!(
         current.registered_tools[&ToolName::try_from("alpha").unwrap()]
             .definition
@@ -6699,7 +7699,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .await
         .unwrap();
     deps.full_deployment_repo
-        .set_current_deployment(owner_account_id, environment_id, 1)
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -6722,6 +7722,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
             .version,
         "1.0.0"
     );
+    assert_eq!(rolled_back.mcp_imports, exact_first_state.mcp_imports);
     let staged_after_component_update = deps
         .full_deployment_repo
         .get_staged_identity(environment_id)
@@ -6735,9 +7736,18 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         ["zeta".to_string()].into_iter().collect()
     );
     assert!(staged_after_component_update.remote_tools.is_empty());
+    assert_eq!(staged_after_component_update.mcp_imports.len(), 12);
+    for (index, import) in exact_first_state.mcp_imports.iter().enumerate() {
+        assert_eq!(
+            staged_after_component_update.mcp_imports[&index.to_string()]
+                .hash()
+                .unwrap(),
+            import.hash().unwrap()
+        );
+    }
 
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 3,
                 updated_component_revision_id,
@@ -6768,6 +7778,10 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_component.deployment_revision.get(), 2);
+    assert_eq!(
+        latest_for_component.mcp_imports,
+        exact_second_state.mcp_imports
+    );
     let latest_for_updated_component: golem_common::model::tool::ToolDeploymentState = deps
         .full_deployment_repo
         .get_active_tool_deployment_state_by_component_revision(
@@ -6781,6 +7795,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .try_into()
         .unwrap();
     assert_eq!(latest_for_updated_component.deployment_revision.get(), 3);
+    assert!(latest_for_updated_component.mcp_imports.is_empty());
     let republished_zeta =
         &latest_for_updated_component.registered_tools[&ToolName::try_from("zeta").unwrap()];
     assert_eq!(
@@ -6867,6 +7882,8 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         [remote_registered_tool.clone()],
         [remote_binding.clone()],
         &BTreeMap::new(),
+        &BTreeMap::new(),
+        &BTreeMap::new(),
         &BTreeSet::new(),
     )
     .unwrap()["remote-search"]
@@ -6883,7 +7900,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         remote_binding,
     )];
     deps.full_deployment_repo
-        .deploy(remote_deployment, false)
+        .deploy_current(remote_deployment, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -6892,6 +7909,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .full_deployment_repo
         .get_tool_deployment_state(environment_id, 4)
         .await
+        .unwrap()
         .unwrap()
         .try_into()
         .unwrap();
@@ -6956,7 +7974,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     ));
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -6986,7 +8004,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .push("changed-while-de-published".to_string());
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -7032,7 +8050,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     failed_publication.registered_tools[0].owner_account_id = new_repo_uuid();
     assert!(
         deps.full_deployment_repo
-            .deploy(failed_publication, false)
+            .deploy_current(failed_publication, false)
             .await
             .is_err()
     );
@@ -7075,7 +8093,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         .unwrap();
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -7194,7 +8212,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     );
     assert!(matches!(
         deps.full_deployment_repo
-            .deploy(
+            .deploy_current(
                 deployment_creation(
                     5,
                     updated_component_revision_id,
@@ -7237,7 +8255,7 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "grants belonging to deleted environments must not constrain live publications"
     );
     deps.full_deployment_repo
-        .deploy(
+        .deploy_current(
             deployment_creation(
                 5,
                 updated_component_revision_id,
@@ -7325,7 +8343,34 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
     ));
 
     deps.full_deployment_repo
-        .set_current_deployment(owner_account_id, environment_id, 1)
+        .deploy_current(
+            deployment_creation(
+                6,
+                updated_component_revision_id,
+                "6.0.0",
+                Vec::new(),
+                None,
+                true,
+            ),
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let empty_state: golem_common::model::tool::ToolDeploymentState = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .unwrap()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(empty_state.deployment_revision.get(), 6);
+    assert!(empty_state.registered_tools.is_empty());
+    assert!(empty_state.tool_bindings.is_empty());
+
+    deps.full_deployment_repo
+        .set_current_deployment_current(owner_account_id, environment_id, 1)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -7345,6 +8390,70 @@ pub async fn test_deployment_tool_snapshot_and_rollback(deps: &Deps) {
         "1.0.0"
     );
     assert_eq!(rolled_back.registered_tools.len(), 2);
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_universal_middleware_binding")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_bindings WHERE environment_id = $1 AND deployment_revision_id = 6 AND scope = 'universal'")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_universal = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing universal binding must fail");
+    assert!(
+        missing_universal
+            .to_string()
+            .contains("exactly one universal binding")
+    );
+
+    match &deps.test_db {
+        TestDb::Postgres(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+        TestDb::Sqlite(pool) => {
+            pool.with_rw("test", "delete_middleware_snapshot")
+                .execute(
+                sqlx::query("DELETE FROM deployment_tool_middleware_snapshots WHERE environment_id = $1 AND deployment_revision_id = 6")
+                    .bind(environment_id),
+            )
+            .await
+            .unwrap();
+        }
+    };
+    let missing_snapshot = deps
+        .full_deployment_repo
+        .get_tool_deployment_state(environment_id, 6)
+        .await
+        .err()
+        .expect("missing middleware snapshot must fail");
+    assert!(
+        missing_snapshot
+            .to_string()
+            .contains("missing its middleware snapshot")
+    );
 }
 
 struct ResolveTestEnv {
@@ -7466,6 +8575,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
         tool_releases: vec![],
         registered_tools: vec![],
         agent_tool_bindings: vec![],
+        mcp_imports: vec![],
         registered_tool_middlewares: Vec::new(),
         tool_middleware_chains: Vec::new(),
         tool_middleware_releases: Vec::new(),
@@ -7484,7 +8594,7 @@ async fn setup_resolve_env(deps: &Deps) -> ResolveTestEnv {
     };
 
     deps.full_deployment_repo
-        .deploy(deployment_creation, false)
+        .deploy_current(deployment_creation, false)
         .await
         .unwrap()
         .signal_new_events_available(&deps.test_registry_change_notifier());
@@ -8126,6 +9236,136 @@ pub async fn test_registry_change_mixed_event_types(deps: &Deps) {
     ));
 }
 
+pub async fn test_mcp_http_policy(deps: &Deps) {
+    use golem_common::model::card::owner::EmptyOwnerPattern;
+    use golem_common::model::card::recipient::RecipientPattern;
+    use golem_common::model::card::{
+        ClassPermissionPattern, EffectiveSurface, EnvironmentSecuritySchemeResourcePattern,
+        EnvironmentSecuritySchemeVerb, NetworkResourcePattern, NetworkVerb, PortPattern,
+    };
+    use golem_common::model::environment::Environment;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_mcp_import::transport::TransportError;
+    use golem_mcp_import::transport::sender::HttpPolicy;
+    use golem_registry_service::services::account_usage::error::AccountUsageError;
+    use golem_registry_service::services::mcp_oauth::McpOAuthError;
+    use golem_registry_service::services::mcp_oauth::http_policy::McpHttpPolicy;
+    use golem_service_base::model::auth::AuthCtx;
+    use golem_service_base::repo::SqlDateTime;
+
+    let owner = deps.create_account().await;
+    let operator = deps.create_account().await;
+    let owner_id = AccountId(owner.revision.account_id);
+    let app = deps.create_application(owner_id.0).await;
+    let environment: Environment = deps
+        .create_env(app.revision.application_id)
+        .await
+        .try_into()
+        .unwrap();
+    let usage = Arc::new(deps.account_usage_service());
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&owner.revision.email),
+    };
+    let network = PermissionPattern::Network(ClassPermissionPattern {
+        verb: Some(NetworkVerb::Connect),
+        owner: EmptyOwnerPattern,
+        recipient: recipient.clone(),
+        resource: NetworkResourcePattern::host_port("allowed.example", PortPattern::single(443)),
+    });
+    let auth = AuthCtx::agent_with_effective_surface(
+        owner_id,
+        AccountEmail::new(&owner.revision.email),
+        EffectiveSurface::from_grants(&[network], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut runtime = McpHttpPolicy::runtime(auth.clone(), &environment, usage.clone()).unwrap();
+    let allowed = "https://Allowed.Example./mcp".parse().unwrap();
+    for denied in [
+        "https://other.example/mcp",
+        "https://allowed.example:8443/mcp",
+    ] {
+        assert!(matches!(
+            runtime.admit(&denied.parse().unwrap()).await,
+            Err(McpOAuthError::Transport(TransportError::Denied))
+        ));
+    }
+    runtime.authorize(&allowed).unwrap();
+    runtime.authorize(&allowed).unwrap();
+    let mut stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(stored.add_change(UsageType::MonthlyHttpCalls, 4998));
+    deps.account_usage_repo.add(&stored).await.unwrap();
+    runtime.admit(&allowed).await.unwrap();
+
+    // Collaborator consent needs scheme Update, not an agent network grant.
+    let scheme = SecuritySchemeName("oauth".into());
+    assert!(McpHttpPolicy::operator(&auth, &environment, &scheme, usage.clone()).is_err());
+    let operator_id = AccountId(operator.revision.account_id);
+    let recipient = RecipientPattern::Account {
+        account: AccountEmail::new(&operator.revision.email),
+    };
+    let grant = PermissionPattern::EnvironmentSecurityScheme(ClassPermissionPattern {
+        verb: Some(EnvironmentSecuritySchemeVerb::Update),
+        owner: EnvironmentOwnerPattern::Environment {
+            account: AccountEmail::new(&owner.revision.email),
+            application: environment.application_name.clone(),
+            environment: environment.name.clone(),
+        },
+        recipient: recipient.clone(),
+        resource: EnvironmentSecuritySchemeResourcePattern::Any,
+    });
+    let operator_auth = AuthCtx::agent_with_effective_surface(
+        operator_id,
+        AccountEmail::new(&operator.revision.email),
+        EffectiveSurface::from_grants(&[grant], &[], &[], &[], &recipient).unwrap(),
+    );
+    let mut consent =
+        McpHttpPolicy::operator(&operator_auth, &environment, &scheme, usage.clone()).unwrap();
+    consent
+        .admit(&"https://issuer.example/token".parse().unwrap())
+        .await
+        .unwrap();
+    assert!(matches!(
+        McpHttpPolicy::runtime(operator_auth, &environment, usage.clone()),
+        Err(McpOAuthError::OwnerMismatch)
+    ));
+    assert!(matches!(
+        McpHttpPolicy::runtime(AuthCtx::System, &environment, usage.clone()),
+        Err(McpOAuthError::Transport(TransportError::Denied))
+    ));
+    for policy in [&mut runtime, &mut consent] {
+        assert!(matches!(
+            policy.admit(&allowed).await,
+            Err(McpOAuthError::AccountUsage(
+                AccountUsageError::LimitExceeded(_)
+            ))
+        ));
+    }
+    let stored = deps
+        .account_usage_repo
+        .get(owner_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 5000);
+    assert_eq!(stored.usage(UsageType::MonthlyRpcCalls), 0);
+    let stored = deps
+        .account_usage_repo
+        .get(operator_id.0, &SqlDateTime::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.usage(UsageType::MonthlyHttpCalls), 0);
+    assert!(matches!(
+        usage.record_http_call(AccountId::new()).await,
+        Err(AccountUsageError::AccountNotfound(_))
+    ));
+}
+
 pub async fn test_update_http_call_counts(deps: &Deps) {
     use golem_common::model::account::AccountId;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;
@@ -8157,6 +9397,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8191,6 +9432,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8216,6 +9458,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8240,6 +9483,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 123,
             ephemeral_storage_byte_seconds_delta: 456,
             memory_gb_seconds_delta: 12,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8257,6 +9501,7 @@ pub async fn test_update_http_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 10,
             ephemeral_storage_byte_seconds_delta: 20,
             memory_gb_seconds_delta: 3,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8316,6 +9561,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8350,6 +9596,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8375,6 +9622,7 @@ pub async fn test_update_rpc_call_counts(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8413,6 +9661,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8425,6 +9674,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8457,6 +9707,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8469,6 +9720,7 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
             durable_storage_byte_seconds_delta: 0,
             ephemeral_storage_byte_seconds_delta: 0,
             memory_gb_seconds_delta: 0,
+            blob_storage_bytes_delta: 0,
             metering: golem_service_base::clients::registry::ResourceUsageMetering::all_enabled(),
         },
     );
@@ -8501,5 +9753,710 @@ pub async fn test_update_call_counts_batch(deps: &Deps) {
     assert!(
         !result.0.contains_key(&a2),
         "a2 should not appear in RPC response"
+    );
+}
+
+pub async fn missing_security_retains_active_route_barrier(deps: &Deps) {
+    use golem_common::model::agent::AgentTypeName;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::domain_registration::Domain;
+    use golem_common::model::security_scheme::SecuritySchemeName;
+    use golem_common::schema::{InputSchema, SchemaGraph, SchemaType};
+    use golem_registry_service::model::api_definition::{
+        UnboundCompiledRoute, UnboundRouteSecurity, UnboundSecuritySchemeRouteSecurity,
+    };
+    use golem_registry_service::repo::deployment::DeploymentRepo;
+    use golem_registry_service::repo::domain_registration::{
+        DbDomainRegistrationRepo, DomainRegistrationRepo,
+    };
+    use golem_registry_service::repo::model::audit::ImmutableAuditFields;
+    use golem_registry_service::repo::model::deployment::{
+        DeploymentCompiledRouteRecord, DeploymentRevisionCreationRecord,
+    };
+    use golem_registry_service::repo::model::domain_registration::DomainRegistrationRecord;
+    use golem_registry_service::repo::model::hash::SqlBlake3Hash;
+    use golem_registry_service::services::deployment::DeployedRoutesService;
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use golem_service_base::custom_api::{
+        CompiledInputSchema, CorsOptions, HttpRouterBehaviour, PathSegment, RouteBehaviour,
+        RouteMatch, RouteSecurity,
+    };
+    use golem_service_base::repo::Blob;
+    use std::sync::Arc;
+    let (repo, domains, schemes): (
+        Arc<dyn DeploymentRepo>,
+        Box<dyn DomainRegistrationRepo>,
+        Box<dyn SecuritySchemeRepo>,
+    ) = match &deps.test_db {
+        TestDb::Sqlite(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+        TestDb::Postgres(pool) => (
+            Arc::new(DbDeploymentRepo::logged(pool.clone())),
+            Box::new(DbDomainRegistrationRepo::logged(pool.clone())),
+            Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        ),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let domain = format!("{}.example.com", new_repo_uuid());
+    let domain_registration_id = new_repo_uuid();
+    domains
+        .create(DomainRegistrationRecord {
+            domain_registration_id,
+            environment_id: env.revision.environment_id,
+            domain: domain.clone(),
+            audit: ImmutableAuditFields::new(owner.revision.account_id),
+        })
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let routes = [false, true]
+        .into_iter()
+        .enumerate()
+        .map(|(id, protected)| {
+            let route = UnboundCompiledRoute {
+                domain: Domain(domain.clone()),
+                route_id: id as i32,
+                route_match: RouteMatch::MountPrefix,
+                path: if protected {
+                    vec![PathSegment::Literal {
+                        value: "private".into(),
+                    }]
+                } else {
+                    vec![]
+                },
+                behaviour: RouteBehaviour::HttpRouter(HttpRouterBehaviour {
+                    component_id: ComponentId(new_repo_uuid()),
+                    component_revision: ComponentRevision::INITIAL,
+                    agent_type: AgentTypeName(format!("router{id}")),
+                    constructor_input: CompiledInputSchema {
+                        graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+                        input_schema: InputSchema::Parameters(vec![]),
+                    },
+                    handler: None,
+                    openapi_provider_method: None,
+                    static_bindings: if protected {
+                        vec![]
+                    } else {
+                        golem_common::base_model::agent::FileMapping::compile_list([(
+                            "/assets/*",
+                            "/public/$1",
+                        )])
+                        .unwrap()
+                    },
+                    file_index: if protected {
+                        vec![]
+                    } else {
+                        vec![RouterFileIndexEntry {
+                            path: "/public/index.html".into(),
+                            blob_key: AgentFileContentHash(golem_common::model::diff::Hash::from(
+                                blake3::hash(b"gol556-router-blob"),
+                            )),
+                            size: 556,
+                        }]
+                    },
+                    file_response_headers: vec![],
+                }),
+                security: if protected {
+                    UnboundRouteSecurity::SecurityScheme(UnboundSecuritySchemeRouteSecurity {
+                        security_scheme: SecuritySchemeName("deleted".into()),
+                    })
+                } else {
+                    UnboundRouteSecurity::None
+                },
+                cors: CorsOptions {
+                    allowed_patterns: vec![],
+                },
+            };
+            DeploymentCompiledRouteRecord {
+                environment_id: env.revision.environment_id,
+                deployment_revision_id: 1,
+                domain: domain.clone(),
+                route_id: route.route_id,
+                security_scheme: route.security_scheme().map(|s| s.0),
+                compiled_route: Blob::new(route),
+            }
+        })
+        .collect();
+    repo.deploy_current(
+        DeploymentRevisionCreationRecord {
+            environment_id: env.revision.environment_id,
+            deployment_revision_id: 1,
+            version: "test".into(),
+            hash: SqlBlake3Hash::empty(),
+            components: vec![],
+            http_api_deployments: vec![],
+            mcp_deployments: vec![],
+            compiled_routes: routes,
+            compiled_mcp: vec![],
+            registered_agent_types: vec![],
+            registered_tools: vec![],
+            agent_tool_bindings: vec![],
+            mcp_imports: vec![],
+            tool_releases: vec![],
+            registered_tool_middlewares: vec![],
+            tool_middleware_chains: vec![],
+            tool_middleware_releases: vec![],
+            universal_tool_middlewares: vec![],
+            tool_compatibility_mode: Default::default(),
+            published_tool_middlewares: vec![],
+            remote_tool_middlewares: vec![],
+            environment_tool_middleware_bindings: BTreeMap::new(),
+            agent_tool_middleware_bindings: BTreeMap::new(),
+            created_agent_secrets: vec![],
+            updated_agent_secrets: vec![],
+            replaced_agent_secrets: vec![],
+            created_resource_definitions: vec![],
+            created_retry_policies: vec![],
+            user_account_id: owner.revision.account_id,
+        },
+        false,
+    )
+    .await
+    .unwrap()
+    .signal_new_events_available(&deps.test_registry_change_notifier());
+    for expected_activation in [1, 2] {
+        let activation = repo
+            .set_current_deployment_current(
+                owner.revision.account_id,
+                env.revision.environment_id,
+                1,
+            )
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        assert_eq!(activation.revision_id, expected_activation);
+    }
+    let records = repo
+        .list_active_compiled_routes_for_domain(&domain)
+        .await
+        .unwrap();
+    assert_eq!(records.len(), 2);
+    assert!(!records[0].security_scheme_missing);
+    assert!(records[1].security_scheme_missing);
+    assert_eq!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap(),
+        vec![domain.clone()]
+    );
+    let service = DeployedRoutesService::new(repo.clone());
+    let routes = service
+        .get_currently_active_compiled_routes(&Domain(domain.clone()))
+        .await
+        .unwrap();
+    assert_eq!(routes.routes.len(), 2);
+    assert!(matches!(routes.routes[0].security, RouteSecurity::None));
+    let RouteBehaviour::HttpRouter(router) = &routes.routes[0].behavior else {
+        panic!("expected router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    let grpc: golem_api_grpc::proto::golem::customapi::CompiledRoutes = routes.into();
+    let grpc_roundtrip: golem_service_base::custom_api::CompiledRoutes = grpc.try_into().unwrap();
+    let RouteBehaviour::HttpRouter(router) = &grpc_roundtrip.routes[0].behavior else {
+        panic!("expected gRPC router")
+    };
+    assert_eq!(
+        router.static_bindings,
+        vec![FileMapping::Subtree(
+            golem_common::model::agent::SubtreeFileMapping {
+                public_prefix: vec!["assets".into()],
+                filesystem_root: "/public".into()
+            }
+        )]
+    );
+    assert_eq!(router.file_index.len(), 1);
+    assert_eq!(router.file_index[0].path, "/public/index.html");
+    assert_eq!(router.file_index[0].size, 556);
+    assert_eq!(
+        router.file_index[0].blob_key,
+        AgentFileContentHash(golem_common::model::diff::Hash::from(blake3::hash(
+            b"gol556-router-blob"
+        )))
+    );
+    assert!(matches!(
+        grpc_roundtrip.routes[1].security,
+        RouteSecurity::Unavailable
+    ));
+    use golem_common::model::agent::AgentFileContentHash;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId};
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_service_base::custom_api::RouterFileIndexEntry;
+    for _ in 0..2 {
+        let id = SecuritySchemeId::new();
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(golem_common::base_model::Empty {}),
+            "test".into(),
+            "test".into(),
+            &openidconnect::RedirectUrl::new("https://example.com/callback".into()).unwrap(),
+            &[],
+            &golem_common::model::security_scheme::SecuritySchemeLogin::Cookie(
+                golem_common::model::Empty {},
+            ),
+            golem_common::model::account::AccountId(owner.revision.account_id),
+        );
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        schemes
+            .create(
+                env.revision.environment_id,
+                epoch,
+                "deleted".into(),
+                revision.clone(),
+            )
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(
+            matches!(&routes.routes[1].security, RouteSecurity::SecurityScheme(s) if s.security_scheme_id == id)
+        );
+        assert!(routes.security_schemes.contains_key(&id));
+        revision.revision_id += 1;
+        revision.audit.deleted = true;
+        let epoch = repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        schemes
+            .delete(env.revision.environment_id, epoch, revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+        let routes = service
+            .get_currently_active_compiled_routes(&Domain(domain.clone()))
+            .await
+            .unwrap();
+        assert_eq!(routes.routes.len(), 2);
+        assert!(matches!(
+            routes.routes[1].security,
+            RouteSecurity::Unavailable
+        ));
+        assert!(routes.security_schemes.is_empty());
+    }
+
+    domains
+        .delete(domain_registration_id, owner.revision.account_id)
+        .await
+        .unwrap()
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    assert!(
+        repo.list_active_domains_for_environment(env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        repo.list_domains_for_deployment(env.revision.environment_id, 1)
+            .await
+            .unwrap(),
+        vec![domain]
+    );
+}
+
+pub async fn test_security_scheme_login_persistence(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{
+        AuthorizationCodePkceConfig, Provider, SecuritySchemeId, SecuritySchemeLogin,
+    };
+    use golem_registry_service::model::security_scheme::SecurityScheme;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use golem_registry_service::services::registry_change_notifier::RequiresNotificationSignalExt;
+    use openidconnect::{RedirectUrl, Scope};
+
+    let repo: Box<dyn SecuritySchemeRepo> = match &deps.test_db {
+        TestDb::Sqlite(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+        TestDb::Postgres(pool) => Box::new(DbSecuritySchemeRepo::logged(pool.clone())),
+    };
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let env = deps.create_env(app.revision.application_id).await;
+    let logins = [
+        SecuritySchemeLogin::Cookie(Empty {}),
+        SecuritySchemeLogin::AuthorizationCodePkce(AuthorizationCodePkceConfig {
+            redirect_uris: vec![
+                "https://app.example.test/callback".into(),
+                "http://127.0.0.1:3000/callback".into(),
+            ],
+            origins: vec![
+                "https://app.example.test".into(),
+                "http://127.0.0.1:3000".into(),
+            ],
+        }),
+    ];
+
+    for (index, login) in logins.into_iter().enumerate() {
+        let id = SecuritySchemeId::new();
+        let name = format!("login-persistence-{index}");
+        let revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[Scope::new("openid".into())],
+            &login,
+            owner.revision.account_id.into(),
+        );
+
+        let epoch = deps
+            .full_deployment_repo
+            .get_http_routing_epoch(env.revision.environment_id)
+            .await
+            .unwrap();
+        repo.create(env.revision.environment_id, epoch, name.clone(), revision)
+            .await
+            .unwrap()
+            .signal_new_events_available(&deps.test_registry_change_notifier());
+
+        let stored = repo
+            .get_for_environment_and_name(env.revision.environment_id, &name)
+            .await
+            .unwrap()
+            .expect("created security scheme should be readable");
+        let stored: SecurityScheme = stored.try_into().unwrap();
+        assert_eq!(stored.login, login);
+    }
+}
+
+pub async fn test_http_routing_mutation_epoch_serializes_scheme_and_deployment_writes(deps: &Deps) {
+    use golem_common::base_model::Empty;
+    use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeLogin};
+    use golem_registry_service::repo::model::audit::DeletableRevisionAuditFields;
+    use golem_registry_service::repo::model::security_scheme::SecuritySchemeRevisionRecord;
+    use golem_registry_service::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
+    use openidconnect::RedirectUrl;
+
+    let (deployment_a, security_a): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+    let (deployment_b, security_b): (Box<dyn DeploymentRepo>, Box<dyn SecuritySchemeRepo>) =
+        match &deps.routing_test_db {
+            TestDb::Sqlite(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+            TestDb::Postgres(pool) => (
+                Box::new(DbDeploymentRepo::new(pool.clone())),
+                Box::new(DbSecuritySchemeRepo::new(pool.clone())),
+            ),
+        };
+
+    let owner = deps.create_account().await;
+    let app = deps.create_application(owner.revision.account_id).await;
+    let make_revision = |id, revision_id| {
+        let mut revision = SecuritySchemeRevisionRecord::creation(
+            id,
+            Provider::Google(Empty {}),
+            "client-id".into(),
+            "client-secret".into(),
+            &RedirectUrl::new("https://service.example.test/auth/callback".into()).unwrap(),
+            &[],
+            &SecuritySchemeLogin::Cookie(Empty {}),
+            owner.revision.account_id.into(),
+        );
+        revision.revision_id = revision_id;
+        if revision_id > 0 {
+            revision.audit = DeletableRevisionAuditFields::new(owner.revision.account_id);
+        }
+        revision
+    };
+
+    // Deployment commits after both services validated epoch 1; the stale scheme update loses.
+    let deploy_wins_env = deps.create_env(app.revision.application_id).await;
+    let deploy_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            deploy_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(deploy_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                1,
+                "deploy-wins",
+                owner.revision.account_id,
+            ),
+            false,
+            shared_epoch,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .update(
+                deploy_wins_env.revision.environment_id,
+                shared_epoch,
+                make_revision(deploy_wins_id, 1),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(deploy_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        0
+    );
+    assert_eq!(
+        deployment_b
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        1
+    );
+
+    // Scheme update commits after both services validated epoch 1; the stale deployment loses.
+    let scheme_wins_env = deps.create_env(app.revision.application_id).await;
+    let scheme_wins_id = SecuritySchemeId::new();
+    let _ = security_a
+        .create(
+            scheme_wins_env.revision.environment_id,
+            0,
+            "auth".into(),
+            make_revision(scheme_wins_id, 0),
+        )
+        .await
+        .unwrap();
+    let shared_epoch = deployment_a
+        .get_http_routing_epoch(scheme_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_b
+        .update(
+            scheme_wins_env.revision.environment_id,
+            shared_epoch,
+            make_revision(scheme_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_a
+            .deploy(
+                empty_deployment_creation(
+                    scheme_wins_env.revision.environment_id,
+                    1,
+                    "scheme-wins",
+                    owner.revision.account_id,
+                ),
+                false,
+                shared_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment_and_name(scheme_wins_env.revision.environment_id, "auth")
+            .await
+            .unwrap()
+            .unwrap()
+            .revision
+            .revision_id,
+        1
+    );
+    assert!(
+        deployment_b
+            .get_currently_deployed_revision(scheme_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Activating an older deployment uses the same guard, and a failed write rolls the claim back.
+    let activation_epoch = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = deployment_a
+        .deploy(
+            empty_deployment_creation(
+                deploy_wins_env.revision.environment_id,
+                2,
+                "newer",
+                owner.revision.account_id,
+            ),
+            false,
+            activation_epoch,
+        )
+        .await
+        .unwrap();
+    let stale_activation_epoch = deployment_b
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .update(
+            deploy_wins_env.revision.environment_id,
+            stale_activation_epoch,
+            make_revision(deploy_wins_id, 1),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        deployment_b
+            .set_current_deployment(
+                owner.revision.account_id,
+                deploy_wins_env.revision.environment_id,
+                1,
+                stale_activation_epoch,
+            )
+            .await,
+        Err(DeployRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        deployment_a
+            .get_currently_deployed_revision(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .revision_id,
+        2
+    );
+
+    let before_failed_write = deployment_a
+        .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let history_before_failed_write = deployment_a
+        .list_deployment_history(deploy_wins_env.revision.environment_id)
+        .await
+        .unwrap();
+    let outbox_before_failed_write = deps
+        .registry_change_repo
+        .get_latest_event_id()
+        .await
+        .unwrap();
+    assert!(
+        deployment_b
+            .deploy(
+                empty_deployment_creation(
+                    deploy_wins_env.revision.environment_id,
+                    2,
+                    "duplicate-revision",
+                    owner.revision.account_id,
+                ),
+                false,
+                before_failed_write,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        deployment_a
+            .get_http_routing_epoch(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        before_failed_write
+    );
+    assert_eq!(
+        deployment_a
+            .list_deployment_history(deploy_wins_env.revision.environment_id)
+            .await
+            .unwrap(),
+        history_before_failed_write
+    );
+    assert_eq!(
+        deps.registry_change_repo
+            .get_latest_event_id()
+            .await
+            .unwrap(),
+        outbox_before_failed_write
+    );
+
+    // Same-kind stale mutations also conflict, and fresh final state is internally compatible.
+    let same_kind_env = deps.create_env(app.revision.application_id).await;
+    let same_kind_epoch = deployment_a
+        .get_http_routing_epoch(same_kind_env.revision.environment_id)
+        .await
+        .unwrap();
+    let _ = security_a
+        .create(
+            same_kind_env.revision.environment_id,
+            same_kind_epoch,
+            "first".into(),
+            make_revision(SecuritySchemeId::new(), 0),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        security_b
+            .create(
+                same_kind_env.revision.environment_id,
+                same_kind_epoch,
+                "second".into(),
+                make_revision(SecuritySchemeId::new(), 0),
+            )
+            .await,
+        Err(golem_registry_service::repo::model::security_scheme::SecuritySchemeRepoError::ConcurrentModification)
+    ));
+    assert_eq!(
+        security_a
+            .get_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        deployment_b
+            .list_active_domains_for_environment(same_kind_env.revision.environment_id)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }

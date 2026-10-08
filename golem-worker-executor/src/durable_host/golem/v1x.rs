@@ -273,13 +273,14 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -311,13 +312,14 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
 ) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
-    let agent_mode = ctx
+    let identity = ctx
         .state
         .worker_service
-        .get_agent_mode(&entry.owned_agent_id)
+        .resolve_agent_identity(&entry.owned_agent_id)
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+    let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
@@ -659,14 +661,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // Use the index returned by `add` — a concurrently running host task (a durable
             // call's terminal write, a drop-event `Cancelled`, a log hint entry) may append
             // between this `add` and a subsequent `current_oplog_index` read, so re-reading the
-            // tip would nondeterministically point past the `NoOp` entry. Debugging sessions
-            // discard writes and return `NONE` from `add`; fall back to the session's replay
-            // target there so the guest never observes an invalid index.
+            // tip would nondeterministically point past the `NoOp` entry. Fall back to the current
+            // oplog index if the write returns `NONE` so the guest never observes an invalid index.
             let marker = match self
                 .state
                 .oplog
                 .add(OplogEntry::no_op(self.entity_parent_start_index()))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -739,7 +741,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .add_and_commit_oplog(OplogEntry::jump(self.entity_parent_start_index(), jump))
-                .await;
+                .await?;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
             Err(InterruptKind::Jump.into())
@@ -757,7 +759,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             debug!("Worker committing oplog to {replicas} replicas");
             loop {
                 // Applying a timeout to make sure the worker remains interruptible
-                if self.state.oplog.wait_for_replicas(replicas, timeout).await {
+                // A refusal means the shard has a new owner, so nothing was committed and nothing
+                // can be. It surfaces as `ShardLost`, which gives the agent up without writing,
+                // instead of acknowledging a commit that did not happen or retrying one that never
+                // will.
+                let committed = self
+                    .state
+                    .oplog
+                    .wait_for_replicas(replicas, timeout)
+                    .await
+                    .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?;
+                if committed {
                     debug!("Worker committed oplog to {replicas} replicas");
                     return Ok(());
                 } else {
@@ -836,22 +848,6 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             BeginReplayToLive::Pending(pending) => pending,
                         };
 
-                        // But this is not enough, because if the retried transactional block succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: pending.replay_target().next(), // skipping the Jump entry too
-                        };
-
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(None, deleted_region))
-                            .await;
-
-                        // TODO: this recomputation should not be necessary.
-                        self.public_state.worker().reattach_worker_status().await;
-
                         self.finish_switch_to_live(pending).await?.require_live()?;
                     }
                 }
@@ -870,9 +866,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // between this `add` and a subsequent `current_oplog_index` read. Reading the tip
             // afterwards would record a begin index past the `BeginAtomicRegion` entry, making
             // `Error.retry_from` diverge from the persisted region marker and breaking the
-            // retry-budget grouping keyed on it. Debugging sessions discard writes and return
-            // `NONE` from `add`; fall back to the session's replay target there, matching the
-            // index the guest observed before.
+            // retry-budget grouping keyed on it. Fall back to the current oplog index if the write
+            // returns `NONE`, matching the index the guest observed before.
             let begin_index = match self
                 .state
                 .oplog
@@ -880,6 +875,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                 ))
                 .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?
             {
                 OplogIndex::NONE => self.state.current_oplog_index().await,
                 index => index,
@@ -944,9 +940,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     self.entity_parent_start_index(),
                     begin_index,
                 ))
-                .await;
+                .await
+                .map_err(|error| anyhow!(WorkerExecutorError::from(error)))?;
         } else {
-            let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
+            let (_, _) = get_oplog_entry!(self, OplogEntry::EndAtomicRegion)?;
         }
 
         // Same transition on live and replay: transfer surviving members to the parent region (or
@@ -1185,6 +1182,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     if let Some(status) = calculate_last_known_status_with_checkpoint(
                         &ctx.state,
                         &owned_agent_id,
+                        metadata.fingerprint,
                         agent_mode,
                         result.last_known_status,
                     )
@@ -1662,7 +1660,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
 
             let created_by = self.created_by();
             let fork_result = loop {
@@ -2411,13 +2409,14 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 let agent_type =
                     ParsedAgentId::parse_agent_type_name(&owned_agent_id.agent_id.agent_id).ok();
                 let mut current_revision = ComponentRevision::try_from(component_revision)?;
-                let agent_mode = self
+                let identity = self
                     .state
                     .worker_service
-                    .get_agent_mode(&owned_agent_id)
+                    .resolve_agent_identity(&owned_agent_id)
                     .await
                     .map_err(|err| err.to_string())?
                     .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+                let agent_mode = identity.agent_mode;
 
                 let mut result = Vec::with_capacity(entries.len());
                 for (index, entry) in entries {
@@ -2810,7 +2809,7 @@ mod tests {
             self.polls.fetch_add(1, Ordering::SeqCst);
             if self
                 .remaining_failures
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_ok()

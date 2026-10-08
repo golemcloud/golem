@@ -41,7 +41,7 @@ use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogErrorKind;
 use golem_common::model::worker::{AgentConfigEntryDto, UpdateRecord};
-use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, Timestamp};
+use golem_common::model::{AgentId, AgentResourceDescription, AgentStatus, OplogIndex, Timestamp};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -560,6 +560,32 @@ impl MessageWithFields for AgentGetView {
         let mut fields = FieldsBuilder::new();
 
         let mut update_history = String::new();
+        let update_diagnostics = |mode: &golem_common::model::worker::AgentUpdateMode,
+                                  pending_update_index: Option<OplogIndex>,
+                                  assisted: Option<
+            &golem_common::model::worker::SnapshotAssistedUpdateMetadata,
+        >| {
+            let request = pending_update_index
+                .map(|index| format!(", request oplog index {index}"))
+                .unwrap_or_default();
+            let assisted = assisted
+                .map(|details| {
+                    let filesystem_snapshot = details
+                        .filesystem_snapshot
+                        .as_ref()
+                        .map(|name| format!(", filesystem snapshot {name}"))
+                        .unwrap_or_default();
+                    format!(
+                        ", source revision {}, source revision start index {}, snapshot {} (revision {}){filesystem_snapshot}",
+                        details.source_component_revision,
+                        details.source_revision_start_index,
+                        details.snapshot_index,
+                        details.snapshot_revision,
+                    )
+                })
+                .unwrap_or_default();
+            format!(" [{mode:?}{request}{assisted}]")
+        };
         for update in &self.metadata.updates {
             match update {
                 UpdateRecord::PendingUpdate(update) => {
@@ -567,8 +593,14 @@ impl MessageWithFields for AgentGetView {
                         update_history,
                         "{}",
                         format!(
-                            "{}: Pending update to {}",
-                            update.timestamp, update.target_revision
+                            "{}: Pending update to {}{}",
+                            update.timestamp,
+                            update.target_revision,
+                            update_diagnostics(
+                                &update.mode,
+                                update.pending_update_index,
+                                update.snapshot_assisted_details.as_ref(),
+                            )
                         )
                         .bright_black()
                     );
@@ -578,8 +610,14 @@ impl MessageWithFields for AgentGetView {
                         update_history,
                         "{}",
                         format!(
-                            "{}: Successful update to {}",
-                            update.timestamp, update.target_revision
+                            "{}: Successful update to {}{}",
+                            update.timestamp,
+                            update.target_revision,
+                            update_diagnostics(
+                                &update.mode,
+                                update.pending_update_index,
+                                update.snapshot_assisted_details.as_ref(),
+                            )
                         )
                         .green()
                         .bold()
@@ -590,14 +628,19 @@ impl MessageWithFields for AgentGetView {
                         update_history,
                         "{}",
                         format!(
-                            "{}: Failed update to {}{}",
+                            "{}: Failed update to {}{}{}",
                             update.timestamp,
                             update.target_revision,
                             update
                                 .details
                                 .as_ref()
                                 .map(|details| format!(": {details}"))
-                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                            update_diagnostics(
+                                &update.mode,
+                                update.pending_update_index,
+                                update.snapshot_assisted_details.as_ref(),
+                            )
                         )
                         .yellow()
                     );

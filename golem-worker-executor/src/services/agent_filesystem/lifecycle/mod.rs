@@ -16,17 +16,20 @@ use crate::filesystem_pressure::{FilesystemWriteRecovery, FilesystemWriteRecover
 #[cfg(test)]
 use crate::sandbox_filesystem::ScriptedSandboxFilesystem;
 use crate::sandbox_filesystem::{
-    FilesystemLimits, FilesystemStorageError, InstalledLimits, SandboxAccessMode,
-    SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile, SandboxFileDisposition,
-    SandboxFilePermissions, SandboxFileUpdate, SandboxFilesystem, SandboxFilesystemAdapter,
-    SandboxFilesystemName, SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
-    SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectKind, SandboxOpenOptions,
-    SandboxOpened, SandboxPath, SandboxReadRange, SandboxResolvedNamespaceTarget,
-    SandboxSymlinkTarget, SandboxTargetIdentity, SandboxTimeChange, SandboxTimeChanges,
-    SandboxWriteAttempt, SandboxWritePlacement,
+    AgentAccounting, FilesystemLimits, FilesystemStorageError, HostDirectory, InstalledLimits,
+    LinkGroup, SandboxAccessMode, SandboxAttributes, SandboxDirectoryCoordinationKey, SandboxFile,
+    SandboxFileDisposition, SandboxFilesystem, SandboxFilesystemAdapter, SandboxFilesystemName,
+    SandboxFilesystemProvisioning, SandboxFlushLevel, SandboxFollow,
+    SandboxNamespaceCoordinationKey, SandboxNode, SandboxObjectId, SandboxObjectKind,
+    SandboxOpenOptions, SandboxOpened, SandboxPath, SandboxReadRange,
+    SandboxResolvedNamespaceTarget, SandboxSymlinkTarget, SandboxTimeChange, SandboxTimeChanges,
+    SandboxWriteAttempt, SandboxWritePlacement, SeedAccess, SeedEntry, SeedPlacement,
+    TreeExclusions,
 };
 use crate::services::active_agents::ConcurrentAgentPermit;
-use crate::services::file_loader::{FileLoader, InitialFileSource};
+use crate::services::file_loader::{
+    FileLoader, InitialFileLoadError, InitialFileLoadFailure, InitialFileSource,
+};
 use crate::services::resource_usage_metering::{
     FilesystemUsage, FilesystemUsageReader, FilesystemUsageSource, MeteringOpenError,
     ResourceUsageAccount, ResourceUsageMeter, ResourceUsageMeteringWindow, create_unbound_meter,
@@ -38,16 +41,32 @@ use golem_common::model::OwnedAgentId;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::component::{AgentFilePermissions, InitialAgentFile};
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::storage::blob::agent_path_segment;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroU64;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
 
 const WRITE_PRESSURE_RECOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+mod baseline;
+mod initial_files;
+
+pub(crate) use baseline::{
+    CaptureError, CaptureOutcome, ChangeDetection, FilesystemCapture, InitialFilesCheck,
+    InitialFilesRestore, RestoreClass, RestoreError, RestoreTree, WholeCapture, capture,
+    capture_whole, check_initial_files, materialize_baseline, tree_mark,
+};
+pub(crate) use initial_files::InitialFileConflict;
+use initial_files::{InitialFileSources, InitialFileState};
+mod inspection;
+pub(crate) use inspection::{FileInspection, open_file_for_inspection};
+mod inspection_stream;
+pub(crate) use inspection_stream::produce_file_read;
 
 mod lifecycle_stage {
     pub trait Sealed {}
@@ -109,22 +128,17 @@ impl ResolvedStorageLimits {
     }
 }
 
+/// The initial-file declarations of a component revision, with their verified content sources.
 pub(crate) struct PreparedInitialFiles {
     files: Vec<PreparedInitialFile>,
+    loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
 }
 
 struct PreparedInitialFile {
     source: InitialFileSource,
     target: PathBuf,
-    read_only: bool,
     initial_file: InitialAgentFile,
-}
-
-impl PreparedInitialFiles {
-    #[cfg(test)]
-    pub(crate) fn empty() -> Self {
-        Self { files: Vec::new() }
-    }
 }
 
 struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
@@ -132,11 +146,12 @@ struct FilesystemGeneration<Adapter: SandboxFilesystemAdapter> {
     allocation_reader: Adapter::AllocationReader,
     registry: Arc<GenerationRegistry>,
     limits: Mutex<ResolvedStorageLimits>,
-    initial_files: Mutex<HashMap<PathBuf, InitialAgentFile>>,
-    entity_provisioned_files: Mutex<HashMap<PathBuf, InitialAgentFile>>,
+    initial_files: Mutex<Arc<InitialFileState>>,
     initial_file_updates: tokio::sync::Mutex<()>,
     pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
     namespace: Arc<NamespaceCoordinator>,
+    scratch: Arc<HostDirectory>,
 }
 
 pub(crate) struct AgentFilesystem<
@@ -325,8 +340,15 @@ impl DeleteFailure {
 pub(crate) enum Error {
     Access(AccessError),
     Sandbox(FilesystemStorageError),
+    /// The blob storage could not give an initial-file source that an install or a start
+    /// loads. The load changes nothing, and a later load can pass.
+    InitialFileUnavailable(FilesystemStorageError),
+    /// An install of initial files found something other than what the old declarations left at a
+    /// path. The install changed nothing, and the generation stays valid.
+    InitialFileConflict(Box<InitialFileConflict>),
     AgentQuota(FilesystemStorageError),
     PhysicalCapacity(FilesystemStorageError),
+    Baseline(Box<RestoreError>),
     RuntimeInvalidated,
 }
 
@@ -334,15 +356,34 @@ impl Display for Error {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Access(error) => Display::fmt(error, formatter),
-            Self::Sandbox(error) | Self::AgentQuota(error) | Self::PhysicalCapacity(error) => {
-                Display::fmt(error, formatter)
-            }
+            Self::Sandbox(error)
+            | Self::InitialFileUnavailable(error)
+            | Self::AgentQuota(error)
+            | Self::PhysicalCapacity(error) => Display::fmt(error, formatter),
+            Self::InitialFileConflict(error) => Display::fmt(error, formatter),
+            Self::Baseline(error) => Display::fmt(error, formatter),
             Self::RuntimeInvalidated => formatter.write_str("agent filesystem runtime is invalid"),
         }
     }
 }
 
 impl std::error::Error for Error {}
+
+/// The error of a failed load of the initial-file source that an install or a start seeds at
+/// `path`: [`Error::InitialFileUnavailable`] when a later load can pass, and
+/// [`Error::Sandbox`] for every other failure.
+fn load_error(error: InitialFileLoadError, path: &Path) -> Error {
+    let failure = error.failure;
+    let source = FilesystemStorageError::io(
+        "load verified initial-file source",
+        path,
+        std::io::Error::other(error),
+    );
+    match failure {
+        InitialFileLoadFailure::Unavailable => Error::InitialFileUnavailable(source),
+        InitialFileLoadFailure::Failed => Error::Sandbox(source),
+    }
+}
 
 impl From<FilesystemStorageError> for Error {
     fn from(source: FilesystemStorageError) -> Self {
@@ -379,7 +420,7 @@ impl std::error::Error for AccessError {}
 /// root and must be unique; duplicate targets, inconsistent sizes for one content hash, and loader
 /// failures return `Error::Sandbox` without changing the filesystem lifecycle.
 pub(crate) async fn prepare_initial_files(
-    file_loader: &FileLoader,
+    file_loader: Arc<FileLoader>,
     environment_id: EnvironmentId,
     files: &[InitialAgentFile],
 ) -> Result<PreparedInitialFiles, Error> {
@@ -410,13 +451,7 @@ pub(crate) async fn prepare_initial_files(
                 let source = file_loader
                     .get_source(environment_id, file.content_hash, file.size)
                     .await
-                    .map_err(|error| {
-                        Error::Sandbox(FilesystemStorageError::io(
-                            "load verified initial-file source",
-                            &target,
-                            std::io::Error::other(error),
-                        ))
-                    })?;
+                    .map_err(|error| load_error(error, &target))?;
                 sources
                     .entry(file.content_hash)
                     .or_insert_with(|| source.clone())
@@ -426,59 +461,74 @@ pub(crate) async fn prepare_initial_files(
         prepared.push(PreparedInitialFile {
             source: source.clone(),
             target,
-            read_only: file.permissions == AgentFilePermissions::ReadOnly,
             initial_file: file.clone(),
         });
     }
-    Ok(PreparedInitialFiles { files: prepared })
+    Ok(PreparedInitialFiles {
+        files: prepared,
+        loader: file_loader,
+        environment_id,
+    })
 }
 
 #[cfg(test)]
 pub(crate) fn create_fresh(
     provisioning: SandboxFilesystemProvisioning,
+    scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
-    create_fresh_with::<SandboxFilesystem>(provisioning, agent, limits)
+    let accounting = provisioning.agent_accounting();
+    create_fresh_with::<SandboxFilesystem>(provisioning, scratch, agent, limits, accounting)
 }
 
 /// Creates an empty sandbox filesystem and returns it in the `Created` stage.
 ///
 /// `AgentFilesystems` calls this at worker startup with the generation's resolved limits and write
-/// pressure recovery. Creation or agent-name validation failures are returned as `CreateFailure`.
+/// pressure recovery. Each capture and each restore of the generation uses its own directory in
+/// `scratch`. Creation or agent-name validation failures are returned as `CreateFailure`.
 pub(super) fn create_fresh_with_pressure_recovery(
     provisioning: SandboxFilesystemProvisioning,
+    scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: FilesystemWriteRecovery,
 ) -> impl Future<Output = Result<CreatedFilesystem, CreateFailure>> + Send + 'static {
+    let accounting = provisioning.agent_accounting();
     create_fresh_with_recovery::<SandboxFilesystem>(
         provisioning,
+        scratch,
         agent,
         limits,
         Some(pressure_recovery),
+        accounting,
     )
 }
 
 #[cfg(test)]
 fn create_fresh_with<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
+    scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
+    accounting: AgentAccounting,
 ) -> impl Future<Output = Result<CreatedFilesystem<Adapter>, CreateFailure>> + Send + 'static {
-    create_fresh_with_recovery::<Adapter>(provisioning, agent, limits, None)
+    create_fresh_with_recovery::<Adapter>(provisioning, scratch, agent, limits, None, accounting)
 }
 
+/// Creates a generation on storage that accounts for each agent as `accounting` says.
 async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
     provisioning: Adapter::Provisioning,
+    scratch: Arc<HostDirectory>,
     agent: OwnedAgentId,
     limits: ResolvedStorageLimits,
     pressure_recovery: Option<FilesystemWriteRecovery>,
+    accounting: AgentAccounting,
 ) -> Result<CreatedFilesystem<Adapter>, CreateFailure> {
     let name = SandboxFilesystemName::new(
         agent.environment_id.to_string(),
         agent.agent_id.component_id.to_string(),
-        agent.agent_id.agent_name_encoded(),
+        agent_path_segment(&agent.agent_id),
     )
     .map_err(|source| CreateFailure { source })?;
     let sandbox = Adapter::create_fresh(provisioning, name, limits.sandbox())
@@ -491,11 +541,12 @@ async fn create_fresh_with_recovery<Adapter: SandboxFilesystemAdapter>(
             allocation_reader,
             registry: Arc::new(GenerationRegistry::new()),
             limits: Mutex::new(limits),
-            initial_files: Mutex::new(HashMap::new()),
-            entity_provisioned_files: Mutex::new(HashMap::new()),
+            initial_files: Mutex::new(Arc::default()),
             initial_file_updates: tokio::sync::Mutex::new(()),
             pressure_recovery,
+            accounting,
             namespace: Arc::new(NamespaceCoordinator::new()),
+            scratch,
         })),
         stage: Some(Created),
     })
@@ -554,112 +605,6 @@ pub(crate) fn bind_configured_resource_usage_metering<Adapter: SandboxFilesystem
             initial_files_materialized: false,
             replay_drained: false,
         }),
-    })
-}
-
-/// Copies prepared initial files into a `Reconstructing` filesystem.
-///
-/// Callers run this once, before replay access is requested. Targets are rooted at the generation;
-/// successful materialization records their permissions and enables replay access. Any seeding,
-/// quota, capacity, or lifecycle failure seals the returned filesystem for cleanup.
-pub(crate) fn materialize_initial_files<Adapter: SandboxFilesystemAdapter>(
-    filesystem: ReconstructingFilesystem<Adapter>,
-    prepared: PreparedInitialFiles,
-) -> impl Future<Output = Result<ReconstructingFilesystem<Adapter>, ReconstructionFailure<Adapter>>>
-+ Send
-+ 'static {
-    let (generation, stage) = filesystem.into_parts();
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    spawn_module_task(async move {
-        let result = complete_initial_materialization(generation, stage, prepared).await;
-        if let Err(unobserved) = sender.send(result) {
-            drop(unobserved);
-        }
-    });
-    async move {
-        receiver
-            .await
-            .expect("module-owned initial-file materialization stopped unexpectedly")
-    }
-}
-
-async fn complete_initial_materialization<Adapter: SandboxFilesystemAdapter>(
-    generation: Arc<FilesystemGeneration<Adapter>>,
-    mut stage: Reconstructing,
-    prepared: PreparedInitialFiles,
-) -> Result<ReconstructingFilesystem<Adapter>, ReconstructionFailure<Adapter>> {
-    if stage.initial_files_materialized || stage.replay_drained {
-        return Err(ReconstructionFailure {
-            filesystem: sealed_filesystem(generation, stage.meter),
-            source: Error::RuntimeInvalidated,
-        });
-    }
-
-    let mut materialized = HashMap::new();
-    for file in prepared.files {
-        let PreparedInitialFile {
-            source,
-            target,
-            read_only,
-            initial_file,
-        } = file;
-        let seed_result = async {
-            let sandbox = generation
-                .sandbox
-                .read()
-                .await
-                .as_ref()
-                .cloned()
-                .ok_or(Error::RuntimeInvalidated)?;
-            let mut budget = RetryBudget::new(2);
-            loop {
-                let error = match sandbox
-                    .seed_file(
-                        source.path(),
-                        SandboxPath::at_root(target.clone()),
-                        sandbox_file_permissions(read_only),
-                    )
-                    .await
-                {
-                    Ok(()) => break Ok(()),
-                    Err(error) => error,
-                };
-                match decide_write_effect(&generation, &error, EffectEvidence::NoEffect, budget)
-                    .await
-                {
-                    EffectDecision::RetryAfterProvenNoEffect if budget.consume() => continue,
-                    EffectDecision::ReturnFailure(cause) => {
-                        break Err(classified_error(cause, error));
-                    }
-                    EffectDecision::ReclaimCapacityThenRetry => {
-                        break Err(Error::PhysicalCapacity(error));
-                    }
-                    EffectDecision::Invalidate
-                    | EffectDecision::RetryAfterProvenNoEffect
-                    | EffectDecision::RetryUnwrittenSuffix
-                    | EffectDecision::Succeed => {
-                        generation.invalidate();
-                        break Err(Error::RuntimeInvalidated);
-                    }
-                }
-            }
-        }
-        .await;
-        if let Err(source) = seed_result {
-            return Err(ReconstructionFailure {
-                filesystem: sealed_filesystem(generation, stage.meter),
-                source,
-            });
-        }
-        materialized.insert(target, initial_file);
-    }
-
-    *generation.initial_files.lock().unwrap() = materialized;
-    stage.initial_files_materialized = true;
-    generation.registry.enable_replay_access();
-    Ok(AgentFilesystem {
-        generation: Some(generation),
-        stage: Some(stage),
     })
 }
 
@@ -727,31 +672,92 @@ pub(crate) fn filesystem_activity<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
-/// Returns the configured initial-file permission for a generation-relative path.
+/// Starts to check whether `target`, the object that a stat at the generation-relative `path`
+/// reads, is the read-only initial file of the declaration at `path`.
 ///
-/// Host adapters use this for preopen policy checks during replay or residence. Paths absent from
-/// the initial-file map are read-write. A revoked or wrong-phase handle returns `AccessError`.
-pub(crate) fn path_permissions<Adapter: SandboxFilesystemAdapter>(
+/// Gives `None`, and reads nothing, when no component or entity-provisioned declaration at `path`
+/// is read-only. Otherwise the call gives whether the object is Golem's file: a regular file
+/// without write permission whose content equals the declaration. The object that an install put
+/// at `path` passes without a read of its content (`InstalledFile`). Any other object passes only
+/// when it is the object at `path` and its content has the declared hash. Nothing at `target`
+/// gives `false`.
+///
+/// The agent can delete and rename a read-only initial file and put its own file at `path`, so
+/// the declaration alone does not tell what is there. The answer reads only the tree and the
+/// declarations, so a replay gives the answer of the live call. Host adapters use this check when
+/// they decide whether volatile file timestamps can be removed and the remaining metadata derived
+/// without an oplog entry.
+pub(crate) fn is_immutable_initial_file<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
     path: &std::path::Path,
-) -> Result<AgentFilePermissions, AccessError> {
+    target: Target<'_>,
+) -> Result<Option<FilesystemCall<bool>>, AccessError> {
     let generation = admit(generation_handle)?;
-    let initial_permission = generation
-        .initial_files
-        .lock()
-        .unwrap()
-        .get(path)
-        .map(|file| file.permissions);
-    Ok(initial_permission
-        .or_else(|| {
-            generation
-                .entity_provisioned_files
-                .lock()
-                .unwrap()
-                .get(path)
-                .map(|file| file.permissions)
-        })
-        .unwrap_or(AgentFilePermissions::ReadWrite))
+    let state = generation.initial_files.lock().unwrap().clone();
+    let Some(declared) = [&state.initial, &state.provisioned]
+        .into_iter()
+        .filter_map(|declarations| declarations.get(path))
+        .find(|file| file.permissions == AgentFilePermissions::ReadOnly)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    let installed = state.installed.get(path).cloned();
+    let target = sandbox_target(&generation, target)?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
+    let path: Box<Path> = path.into();
+    Ok(Some(FilesystemCall::new(lease, async move {
+        let sandbox = generation.sandbox.read().await;
+        let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
+        holds_golems_file(
+            sandbox.as_ref(),
+            &path,
+            &declared,
+            installed.as_ref(),
+            target,
+        )
+        .await
+        .map_err(|source| classify_query_error(&generation, source))
+    })))
+}
+
+/// Tells whether `target` is the initial file of `declared` at the root-relative `path`
+/// (`is_immutable_initial_file`). Nothing at `target`, or a file above it, gives `false`.
+async fn holds_golems_file<Adapter: SandboxFilesystemAdapter>(
+    sandbox: &Adapter,
+    path: &Path,
+    declared: &InitialAgentFile,
+    installed: Option<&initial_files::InstalledFile>,
+    target: AttributeTarget,
+) -> Result<bool, FilesystemStorageError> {
+    let attributes = match read_sandbox_attributes(sandbox, target).await {
+        Ok(attributes) => attributes,
+        Err(error)
+            if matches!(
+                error.io_kind(),
+                Some(std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory)
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match initial_files::initial_file_match(declared, installed, &attributes) {
+        initial_files::InitialFileMatch::Differs => Ok(false),
+        initial_files::InitialFileMatch::Matches => Ok(true),
+        // The content is read at `path`, so it tells about `target` only when `target` is the
+        // object at `path`.
+        initial_files::InitialFileMatch::MatchesIfContentHash(expected) => {
+            let at_path = initial_files::read_path(sandbox, path).await?;
+            if at_path.is_some_and(|at_path| at_path.object == attributes.object) {
+                initial_files::content_hash(sandbox, path)
+                    .await
+                    .map(|hash| hash == *expected)
+            } else {
+                Ok(false)
+            }
+        }
+    }
 }
 
 /// Adds activation-provisioned files to an active owner filesystem.
@@ -759,260 +765,60 @@ pub(crate) fn path_permissions<Adapter: SandboxFilesystemAdapter>(
 /// Entity Stores call this inside their owner invocation scope before guest execution. Identical
 /// declarations are idempotent, while a path already owned by another initial-file declaration
 /// must describe the same file. Provisioned declarations remain part of the generation across
-/// component initial-file updates.
-pub(crate) fn provision_initial_files(
-    generation_handle: &FilesystemGenerationHandle,
+/// component initial-file updates. The new files follow the initial-file rule, as in
+/// [`update_initial_files`].
+pub(crate) fn provision_initial_files<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
     file_loader: Arc<FileLoader>,
     environment_id: EnvironmentId,
     files: Vec<InitialAgentFile>,
 ) -> Result<FilesystemCall<()>, Error> {
     let generation = admit(generation_handle).map_err(Error::Access)?;
-    let lease = generation.registry.lease_call().map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
     Ok(FilesystemCall::new(lease, async move {
-        complete_initial_file_provisioning(generation, file_loader, environment_id, files).await
-    }))
-}
-
-/// Starts reconciliation of a resident generation's initial files with a new component revision.
-///
-/// Update handling calls this through a valid generation handle. Paths are relative to the root;
-/// writable files are preserved, while read-only files may be replaced or removed. Admission
-/// errors are immediate, and loading or sandbox update failures are produced by the returned call.
-pub(crate) fn update_initial_files(
-    generation_handle: &FilesystemGenerationHandle,
-    file_loader: Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    files: Vec<InitialAgentFile>,
-) -> Result<FilesystemCall<()>, Error> {
-    let generation = admit(generation_handle).map_err(Error::Access)?;
-    let lease = generation.registry.lease_call().map_err(Error::Access)?;
-    Ok(FilesystemCall::new(lease, async move {
-        complete_initial_file_update(generation, file_loader, environment_id, files).await
-    }))
-}
-
-async fn complete_initial_file_update(
-    generation: Arc<FilesystemGeneration<SandboxFilesystem>>,
-    file_loader: Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    files: Vec<InitialAgentFile>,
-) -> Result<(), Error> {
-    let _update = generation.initial_file_updates.lock().await;
-    let current_initial = generation.initial_files.lock().unwrap().clone();
-    let provisioned = generation.entity_provisioned_files.lock().unwrap().clone();
-    let current = merge_initial_file_declarations(&current_initial, &provisioned);
-    let desired_initial =
-        initial_file_declarations(files, "materialize unique initial-file update target")?;
-    validate_compatible_initial_file_declarations(&desired_initial, &provisioned)?;
-    let desired = merge_initial_file_declarations(&desired_initial, &provisioned);
-    apply_initial_file_update(
-        Arc::clone(&generation),
-        file_loader,
-        environment_id,
-        current,
-        desired,
-    )
-    .await?;
-    *generation.initial_files.lock().unwrap() = desired_initial;
-    Ok(())
-}
-
-async fn complete_initial_file_provisioning(
-    generation: Arc<FilesystemGeneration<SandboxFilesystem>>,
-    file_loader: Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    files: Vec<InitialAgentFile>,
-) -> Result<(), Error> {
-    let _update = generation.initial_file_updates.lock().await;
-    let initial = generation.initial_files.lock().unwrap().clone();
-    let current_provisioned = generation.entity_provisioned_files.lock().unwrap().clone();
-    let requested =
-        initial_file_declarations(files, "materialize unique entity-provisioned file target")?;
-    let current = merge_initial_file_declarations(&initial, &current_provisioned);
-    validate_compatible_initial_file_declarations(&requested, &current)?;
-
-    let mut desired_provisioned = current_provisioned.clone();
-    desired_provisioned.extend(requested);
-    if desired_provisioned == current_provisioned {
-        return Ok(());
-    }
-    let desired = merge_initial_file_declarations(&initial, &desired_provisioned);
-    apply_initial_file_update(
-        Arc::clone(&generation),
-        file_loader,
-        environment_id,
-        current,
-        desired,
-    )
-    .await?;
-    *generation.entity_provisioned_files.lock().unwrap() = desired_provisioned;
-    Ok(())
-}
-
-fn initial_file_declarations(
-    files: Vec<InitialAgentFile>,
-    duplicate_operation: &'static str,
-) -> Result<HashMap<PathBuf, InitialAgentFile>, Error> {
-    let mut declarations = HashMap::new();
-    for file in files {
-        let relative = PathBuf::from(file.path.to_rel_string());
-        if declarations.insert(relative.clone(), file).is_some() {
-            return Err(Error::Sandbox(FilesystemStorageError::verification(
-                duplicate_operation,
-                &relative,
-            )));
-        }
-    }
-    Ok(declarations)
-}
-
-fn validate_compatible_initial_file_declarations(
-    requested: &HashMap<PathBuf, InitialAgentFile>,
-    existing: &HashMap<PathBuf, InitialAgentFile>,
-) -> Result<(), Error> {
-    for (relative, file) in requested {
-        if existing
-            .get(relative)
-            .is_some_and(|existing| existing != file)
-        {
-            return Err(Error::Sandbox(FilesystemStorageError::verification(
-                "resolve conflicting owner filesystem provision declarations at",
-                relative,
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn merge_initial_file_declarations(
-    initial: &HashMap<PathBuf, InitialAgentFile>,
-    provisioned: &HashMap<PathBuf, InitialAgentFile>,
-) -> HashMap<PathBuf, InitialAgentFile> {
-    let mut merged = initial.clone();
-    for (relative, file) in provisioned {
-        match merged.get(relative) {
-            Some(existing) => debug_assert_eq!(existing, file),
-            None => {
-                merged.insert(relative.clone(), file.clone());
-            }
-        }
-    }
-    merged
-}
-
-async fn apply_initial_file_update(
-    generation: Arc<FilesystemGeneration<SandboxFilesystem>>,
-    file_loader: Arc<FileLoader>,
-    environment_id: EnvironmentId,
-    current: HashMap<PathBuf, InitialAgentFile>,
-    desired: HashMap<PathBuf, InitialAgentFile>,
-) -> Result<(), Error> {
-    let sandbox = generation
-        .sandbox
-        .read()
+        initial_files::provision(
+            &generation,
+            InitialFileSources::new(file_loader, environment_id),
+            files,
+        )
         .await
-        .as_ref()
-        .cloned()
-        .ok_or(Error::RuntimeInvalidated)?;
-    let update_result = async {
-        for (relative, file) in &desired {
-            if current.get(relative).is_some_and(|existing| {
-                existing.permissions == AgentFilePermissions::ReadWrite
-                    && file.permissions == AgentFilePermissions::ReadOnly
-            }) {
-                return Err(FilesystemStorageError::verification(
-                    "replace read-write initial file with read-only content",
-                    relative,
-                ));
-            }
-        }
-
-        let preserve_candidates = desired
-            .iter()
-            .filter(|(relative, file)| {
-                !current.contains_key(*relative)
-                    && file.permissions == AgentFilePermissions::ReadWrite
-            })
-            .map(|(relative, _)| relative.clone())
-            .collect();
-        let preserved = sandbox.existing_file_targets(preserve_candidates).await?;
-        let mut sources: HashMap<AgentFileContentHash, InitialFileSource> = HashMap::new();
-        let mut staged = Vec::new();
-        for (relative, file) in &desired {
-            match current.get(relative) {
-                Some(existing)
-                    if existing.permissions == AgentFilePermissions::ReadWrite
-                        && file.permissions == AgentFilePermissions::ReadWrite => {}
-                Some(existing)
-                    if existing.permissions == AgentFilePermissions::ReadOnly
-                        && existing.content_hash == file.content_hash
-                        && file.permissions == AgentFilePermissions::ReadOnly => {}
-                None if preserved.contains(relative) => {}
-                _ => {
-                    let source = match sources.get(&file.content_hash) {
-                        Some(source) if source.size() == file.size => source,
-                        Some(_) => {
-                            return Err(FilesystemStorageError::verification(
-                                "verify consistent initial-file update source size",
-                                relative,
-                            ));
-                        }
-                        None => {
-                            let source = file_loader
-                                .get_source(environment_id, file.content_hash, file.size)
-                                .await
-                                .map_err(|error| {
-                                    FilesystemStorageError::io(
-                                        "load verified initial-file update source",
-                                        relative,
-                                        std::io::Error::other(error),
-                                    )
-                                })?;
-                            sources.entry(file.content_hash).or_insert(source)
-                        }
-                    };
-                    staged.push(SandboxFileUpdate::new(
-                        relative.clone(),
-                        source.path().to_path_buf(),
-                        sandbox_file_permissions(
-                            file.permissions == AgentFilePermissions::ReadOnly,
-                        ),
-                    ));
-                }
-            }
-        }
-
-        let removals = current
-            .iter()
-            .filter(|(relative, existing)| {
-                existing.permissions == AgentFilePermissions::ReadOnly
-                    && !desired.contains_key(*relative)
-            })
-            .map(|(relative, _)| relative.clone())
-            .collect();
-        sandbox
-            .update_files(current.keys().cloned().collect(), staged, removals)
-            .await?;
-        Ok(())
-    }
-    .await;
-
-    match update_result {
-        Ok(()) => Ok(()),
-        Err(source) => {
-            record_initial_file_update_failure(&generation.registry, &source);
-            Err(Error::Sandbox(source))
-        }
-    }
+    }))
 }
 
-fn record_initial_file_update_failure(
-    registry: &GenerationRegistry,
-    source: &FilesystemStorageError,
-) {
-    if source.cleanup_failed() || source.is_terminal_failure() {
-        registry.invalidate();
-    }
+/// Starts to apply the initial files of a new component revision to a generation.
+///
+/// Update handling calls this through a valid generation handle. The call applies the initial-file
+/// rule from the current declarations to the declarations of the new revision and the provisioned
+/// declarations. At a path whose declaration changes, the call expects the initial file of the
+/// current declaration where the current declarations have the path, and nothing where they do
+/// not. It puts the new file there, or removes the initial file of the current declaration. An
+/// empty path that the new declarations do not have stays empty. Anything else at such a path is a
+/// conflict. A conflict fails the call with an [`Error::InitialFileConflict`] that names the path
+/// and what is at it, and changes nothing. A failure after the plan passes and the sources load
+/// invalidates the generation. Admission errors are immediate, and loading or sandbox failures are
+/// produced by the returned call.
+pub(crate) fn update_initial_files<Adapter: SandboxFilesystemAdapter>(
+    generation_handle: &FilesystemGenerationHandle<Adapter>,
+    file_loader: Arc<FileLoader>,
+    environment_id: EnvironmentId,
+    files: Vec<InitialAgentFile>,
+) -> Result<FilesystemCall<()>, Error> {
+    let generation = admit(generation_handle).map_err(Error::Access)?;
+    let lease = generation
+        .registry
+        .lease_call(CallEffect::Installs)
+        .map_err(Error::Access)?;
+    Ok(FilesystemCall::new(lease, async move {
+        initial_files::update(
+            &generation,
+            InitialFileSources::new(file_loader, environment_id),
+            files,
+        )
+        .await
+    }))
 }
 
 impl ResidentFilesystemActivity {
@@ -1594,11 +1400,225 @@ struct GenerationRegistry {
     last_effect_completion_millis: std::sync::atomic::AtomicU64,
 }
 
+/// What an entry point of the lifecycle can do to the tree. Each entry point gives it when it
+/// takes its call lease.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CallEffect {
+    /// The call does not change the tree.
+    Read,
+    /// The call can change the tree, and the kernel gives each object that it changes the time of
+    /// the change.
+    Changes,
+    /// The call can put an existing or a chosen modification time at a path: a rename or a hard
+    /// link.
+    ChoosesTimes,
+    /// The call installs initial files. The seeds copy the modification times of the cached
+    /// files.
+    Installs,
+    /// The call decides after a check if it changes the tree, and records the change itself with
+    /// [`GenerationRegistry::record`] before its first change.
+    Decides,
+}
+
+impl CallEffect {
+    /// What the lease of a call with this effect counts. A call that decides after a check counts
+    /// its change itself, so its lease counts nothing.
+    fn counted(self) -> Option<Counted> {
+        match self {
+            Self::Read | Self::Decides => None,
+            Self::Changes => Some(Counted::Fresh),
+            Self::ChoosesTimes => Some(Counted::Chosen),
+            Self::Installs => Some(Counted::Installed),
+        }
+    }
+}
+
+/// A change that the counters of a generation count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Counted {
+    /// The kernel gives each changed object the time of the change.
+    Fresh,
+    /// An install of initial files. The seeds copy the modification times of the cached files.
+    Installed,
+    /// The change puts an existing or a chosen modification time at a path outside an install.
+    Chosen,
+    /// The times that a stat recorded are put back at a path, live or in a replay. A start from
+    /// initial files does not hold such a time, but the agent did not choose it either: a replay
+    /// of the same history puts it back again, so it does not count as a chosen time.
+    Replayed,
+}
+
+/// Who asks for a change of the times of an object.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TimeOrigin {
+    /// A call of the agent.
+    Call,
+    /// The times that a stat recorded, put back live or in a replay.
+    Replay,
+}
+
+/// The modification times that a restored baseline holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestoredTimes {
+    /// The times of a save. `kept` tells whether the tree keeps them, which is false when the
+    /// initial-file rule changes the tree.
+    Saved { kept: bool },
+    /// The times of an install of initial files.
+    Installed,
+}
+
+impl RestoredTimes {
+    /// The times of a restored tree that holds the times of a save when `saved_times` is true,
+    /// and whose declarations did not change at the restore when `unchanged` is true.
+    fn of(saved_times: bool, unchanged: bool) -> Self {
+        if saved_times {
+            Self::Saved { kept: unchanged }
+        } else {
+            Self::Installed
+        }
+    }
+}
+
+/// The counters of the tree of one generation. They only grow.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TreeCounters {
+    /// The number of changes that could change the tree.
+    changes: u64,
+    /// The number of those changes that could put an existing or a chosen modification time at a
+    /// path.
+    carried: u64,
+    /// The number of changes that could put a chosen modification time at a path outside an
+    /// install of initial files: a rename, a hard link, a set of a given time by a call of the
+    /// agent, and a restore of the times of a save. A time that a stat recorded and that is put
+    /// back does not count.
+    chosen: u64,
+    /// Whether the baseline is a restored tree with the modification times of its save.
+    restored_times: bool,
+}
+
+impl TreeCounters {
+    /// The counters after one more change of the kind `counted`.
+    fn after(self, counted: Counted) -> Self {
+        let (carried, chosen) = match counted {
+            Counted::Fresh => (0, 0),
+            Counted::Installed | Counted::Replayed => (1, 0),
+            Counted::Chosen => (1, 1),
+        };
+        Self {
+            changes: self.changes + 1,
+            carried: self.carried + carried,
+            chosen: self.chosen + chosen,
+            ..self
+        }
+    }
+
+    /// The counters after a restore of the baseline that holds `times`. A tree with the
+    /// modification times of a save holds times that a start without the restore does not give,
+    /// so its restore counts as a chosen time. A tree with the times of an install of initial
+    /// files holds what a start without the restore gives, so its restore counts as an install.
+    fn after_restore(self, times: RestoredTimes) -> Self {
+        match times {
+            RestoredTimes::Saved { kept } => Self {
+                restored_times: kept,
+                ..self.after(Counted::Chosen)
+            },
+            RestoredTimes::Installed => self.after(Counted::Installed),
+        }
+    }
+
+    /// The mark of the tree of the generation `generation` at these counters, for a tree that no
+    /// capture copied.
+    fn mark(self, generation: u64) -> TreeMark {
+        TreeMark {
+            generation,
+            changes: self.changes,
+            carried: self.carried,
+            saved_times: self.restored_times,
+        }
+    }
+
+    /// The mark of the tree of the generation `generation` at these counters, for a tree that a
+    /// capture copies.
+    fn captured_mark(self, generation: u64) -> TreeMark {
+        TreeMark {
+            saved_times: true,
+            ..self.mark(generation)
+        }
+    }
+
+    /// Whether a change put a chosen modification time at a path outside an install.
+    fn has_chosen_times(self) -> bool {
+        self.chosen != 0
+    }
+}
+
+/// What a change of the times of an object with the modification time `before_modified` counts,
+/// when `origin` asks for it. A snapshot keeps no access time, so only a change of the modification
+/// time changes the tree. A given time is a chosen time when a call of the agent asks for it, and a
+/// replayed time when it is a time that a stat recorded, put back live or in a replay.
+fn set_times_change(
+    before_modified: Option<std::time::SystemTime>,
+    requested: TimeChange,
+    origin: TimeOrigin,
+) -> Option<Counted> {
+    if time_change_satisfied(before_modified, before_modified, requested, None) {
+        return None;
+    }
+    Some(match (requested, origin) {
+        (TimeChange::Set(_), TimeOrigin::Call) => Counted::Chosen,
+        (TimeChange::Set(_), TimeOrigin::Replay) => Counted::Replayed,
+        (TimeChange::Now | TimeChange::Keep, _) => Counted::Fresh,
+    })
+}
+
+/// The state of the tree of one generation at one moment, as the counters of the lifecycle give
+/// it.
+///
+/// The counters only grow, and each generation has its own number, so a mark never matches a
+/// later tree that differs from it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TreeMark {
+    generation: u64,
+    changes: u64,
+    carried: u64,
+    /// Whether the tree at this mark has the modification times that a save of the tree keeps. A
+    /// capture gives such a mark. A baseline gives one only when it is a restored tree that the
+    /// initial-file rule did not change.
+    saved_times: bool,
+}
+
+impl TreeMark {
+    /// Whether `self` and `other` are marks of one generation.
+    pub(crate) fn same_generation(&self, other: &TreeMark) -> bool {
+        self.generation == other.generation
+    }
+}
+
+/// Gives a mark of a new generation and a later mark of the same generation, for tests of the
+/// callers of the lifecycle.
+#[cfg(test)]
+pub(crate) fn test_tree_marks() -> (TreeMark, TreeMark) {
+    let generation = NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mark = |changes| TreeMark {
+        generation,
+        changes,
+        carried: 0,
+        saved_times: true,
+    };
+    (mark(0), mark(1))
+}
+
+/// The source of the generation numbers of [`TreeMark`].
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 struct RegistryState {
     admission: AdmissionState,
     replay_access: bool,
     calls: usize,
     nodes: usize,
+    /// The number of the generation, unique in the process.
+    generation: u64,
+    counters: TreeCounters,
 }
 
 impl GenerationRegistry {
@@ -1609,13 +1629,17 @@ impl GenerationRegistry {
                 replay_access: false,
                 calls: 0,
                 nodes: 0,
+                generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                counters: TreeCounters::default(),
             }),
             changed: tokio::sync::Notify::new(),
             last_effect_completion_millis: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    fn lease_call(self: &Arc<Self>) -> Result<CallLease, AccessError> {
+    /// Admits a call, and counts its effect on the tree. A capture reads the counters only when no
+    /// call holds a lease, so it sees each change whose effect can be on disk.
+    fn lease_call(self: &Arc<Self>, effect: CallEffect) -> Result<CallLease, AccessError> {
         let mut state = self.state.lock().unwrap();
         match state.admission {
             AdmissionState::Open => {}
@@ -1628,9 +1652,38 @@ impl GenerationRegistry {
             .calls
             .checked_add(1)
             .expect("filesystem call count overflowed");
+        if let Some(counted) = effect.counted() {
+            state.counters = state.counters.after(counted);
+        }
         Ok(CallLease {
             registry: Arc::clone(self),
         })
+    }
+
+    /// Counts a change that a call with [`CallEffect::Decides`] makes. The call records it while
+    /// it holds its lease, before its first change.
+    fn record(&self, counted: Counted) {
+        let mut state = self.state.lock().unwrap();
+        state.counters = state.counters.after(counted);
+    }
+
+    /// Records that the baseline is a restored tree with `times`, as
+    /// [`TreeCounters::after_restore`] tells.
+    fn record_restore(&self, times: RestoredTimes) {
+        let mut state = self.state.lock().unwrap();
+        state.counters = state.counters.after_restore(times);
+    }
+
+    /// The number of the generation and its counters now.
+    fn counters(&self) -> (u64, TreeCounters) {
+        let state = self.state.lock().unwrap();
+        (state.generation, state.counters)
+    }
+
+    /// The mark of the tree now, for a tree that no capture copied.
+    fn baseline_mark(&self) -> TreeMark {
+        let (generation, counters) = self.counters();
+        counters.mark(generation)
     }
 
     fn lease_internal_call(self: &Arc<Self>) -> CallLease {
@@ -2281,6 +2334,10 @@ pub(crate) enum ObjectKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AccessMode {
     Read,
+    /// Reads, and changes the times of the object that the open pinned. A guest open never asks
+    /// for this. The lifecycle uses it for a followed attribute change, where the change must
+    /// land on the object that the read-only check was decided against.
+    ReadAndSetTimes,
     Write,
     ReadWrite,
 }
@@ -2367,6 +2424,8 @@ pub(crate) struct Attributes {
     pub(crate) size: u64,
     pub(crate) accessed: Option<std::time::SystemTime>,
     pub(crate) modified: Option<std::time::SystemTime>,
+    /// Whether the object has no write permission.
+    pub(crate) read_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2403,7 +2462,13 @@ pub(crate) fn open<Adapter: SandboxFilesystemAdapter>(
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
     let opened_access = open_access(options);
-    let lease = generation.registry.lease_call()?;
+    let lease = generation
+        .registry
+        .lease_call(if open_changes_filesystem(options) {
+            CallEffect::Changes
+        } else {
+            CallEffect::Read
+        })?;
     Ok(FilesystemCall::new(lease, async move {
         execute_coordinated_open(generation, target.sandbox, options, opened_access).await
     }))
@@ -2420,7 +2485,7 @@ pub(crate) fn read_file<Adapter: SandboxFilesystemAdapter>(
     range: ReadRange,
 ) -> Result<FilesystemCall<ReadResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -2452,7 +2517,7 @@ pub(crate) fn attributes<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<Attributes>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
         let sandbox = sandbox.as_ref().ok_or(Error::RuntimeInvalidated)?;
@@ -2479,7 +2544,7 @@ pub(crate) fn is_same_object<Adapter: SandboxFilesystemAdapter>(
     if right_ownership.generation_id != left_ownership.generation_id {
         return Err(AccessError::WrongGeneration);
     }
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let left = left_ownership.sandbox().clone();
     let right = right_ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
@@ -2502,7 +2567,7 @@ pub(crate) fn list_directory<Adapter: SandboxFilesystemAdapter>(
     directory: &Directory,
 ) -> Result<FilesystemCall<DirectoryEntries>, AccessError> {
     let generation = admit_node(generation_handle, directory.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let SandboxNode::Directory(directory) = directory.ownership.sandbox() else {
         unreachable!("directory wrapper must contain a sandbox directory")
     };
@@ -2534,7 +2599,7 @@ pub(crate) fn symlink_target<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<SymlinkTarget>, AccessError> {
     let generation = admit(generation_handle)?;
     validate_path_generation(&generation, &target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let path = target.sandbox.clone();
     Ok(FilesystemCall::new(lease, async move {
         let sandbox = generation.sandbox.read().await;
@@ -2559,7 +2624,7 @@ pub(crate) fn write<Adapter: SandboxFilesystemAdapter>(
     bytes: Bytes,
 ) -> Result<FilesystemCall<WriteResult>, AccessError> {
     let generation = admit_node(generation_handle, file.ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Changes)?;
     let SandboxNode::File(file) = file.ownership.sandbox() else {
         unreachable!("file wrapper must contain a sandbox file")
     };
@@ -2586,7 +2651,7 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
         Target::Open(_) => None,
     };
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
         match coordinated_path {
             Some((target, follow)) => {
@@ -2598,10 +2663,10 @@ pub(crate) fn set_attributes<Adapter: SandboxFilesystemAdapter>(
     }))
 }
 
-/// Restores recorded timestamps on an open or path target during durable replay.
+/// Puts back the times that a stat recorded on an open or path target, live or in a replay.
 ///
 /// Replay adapters call this with a reconstruction handle after replaying the matching metadata
-/// operation. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
+/// operation. A live stat calls it too, and then the times already match, so nothing changes. Path targets obey `Follow`; `Keep` leaves a timestamp unchanged. Generation and
 /// admission errors are immediate, while restoration or invalidation errors are deferred.
 pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
     generation_handle: &FilesystemGenerationHandle<Adapter>,
@@ -2610,9 +2675,9 @@ pub(crate) fn restore_times<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let generation = admit(generation_handle)?;
     let target = sandbox_target(&generation, target)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Decides)?;
     Ok(FilesystemCall::new(lease, async move {
-        execute_set_times(generation, target, times).await
+        execute_set_times(generation, target, times, TimeOrigin::Replay).await
     }))
 }
 
@@ -2629,7 +2694,10 @@ pub(crate) fn edit_namespace<Adapter: SandboxFilesystemAdapter>(
     let generation = admit(generation_handle)?;
     validate_namespace_generation(&generation, &edit)?;
     authorize_namespace_edit(&edit)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(match edit {
+        NamespaceEdit::Insert { .. } | NamespaceEdit::Remove { .. } => CallEffect::Changes,
+        NamespaceEdit::Link { .. } | NamespaceEdit::Move { .. } => CallEffect::ChoosesTimes,
+    })?;
     Ok(FilesystemCall::new(lease, async move {
         execute_namespace_edit(generation, edit).await
     }))
@@ -2647,7 +2715,7 @@ pub(crate) fn flush<Adapter: SandboxFilesystemAdapter>(
 ) -> Result<FilesystemCall<()>, AccessError> {
     let ownership = node_ownership(node);
     let generation = admit_node(generation_handle, ownership.generation_id)?;
-    let lease = generation.registry.lease_call()?;
+    let lease = generation.registry.lease_call(CallEffect::Read)?;
     let node = ownership.sandbox().clone();
     Ok(FilesystemCall::new(lease, async move {
         execute_flush(generation, node, level).await
@@ -2721,6 +2789,15 @@ impl<Adapter: SandboxFilesystemAdapter> FilesystemGeneration<Adapter> {
     }
 }
 
+/// Opens the object at `target` under the coordination that `options` need, and registers the
+/// opened node in the generation.
+///
+/// An open that changes the object or its contents is authorized from a resolution made under the
+/// coordination on the entry. That check runs before the open. With a final symlink, an edit of
+/// other entries can put a read-only file at the referent between the check and the open, and the
+/// coordination on the entry does not stop it. The open pins one object, and the adapter reports
+/// whether that object is a regular file without write permission. That fact binds the check to
+/// the object that the caller gets: the function closes such an object and refuses the open.
 async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
@@ -2731,28 +2808,36 @@ async fn execute_coordinated_open<Adapter: SandboxFilesystemAdapter>(
         let opened = execute_open(Arc::clone(&generation), target, options).await?;
         return generation.register_opened(opened, opened_access).await;
     };
+    let follow = match options {
+        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => follow,
+    };
+    let change = open_requires_mutable_target(options).then(|| sandbox_follow(follow));
     loop {
-        let resolved = resolve_namespace_target(&generation, target.clone()).await?;
-        let mut coordination = generation
-            .namespace
-            .coordinate(kind, vec![resolved.coordination_key()])
-            .await;
-        authorize_resolved_open(&generation, &resolved, options).await?;
+        let Some(CoordinatedTarget {
+            mut coordination,
+            resolved,
+        }) = coordinated_target(&generation, &target, kind, change).await?
+        else {
+            continue;
+        };
+        let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
+        if change.is_some()
+            && let Err(refusal) = refuse_read_only_change(opened.is_read_only_file())
+        {
+            // A node of the guest open path closes through `execute_close`, which retries the
+            // close and decides the effect of a failed close on the generation.
+            execute_close(Arc::clone(&generation), opened.into_node()).await?;
+            return Err(refusal);
+        }
         if open_returns_directory(options) {
-            let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
             let directory_key = opened
                 .directory_coordination_key()
                 .expect("sandbox directory open must carry a coordination identity");
-            if !coordination.extend(vec![directory_key.clone()]) {
+            if !coordination.extend(vec![directory_key]) {
                 drop(opened);
                 continue;
             }
-            return generation.register_opened(opened, opened_access).await;
         }
-        if !coordination.extend(Vec::new()) {
-            continue;
-        }
-        let opened = execute_open(Arc::clone(&generation), resolved.target(), options).await?;
         return generation.register_opened(opened, opened_access).await;
     }
 }
@@ -2769,51 +2854,75 @@ async fn resolve_namespace_target<Adapter: SandboxFilesystemAdapter>(
         .map_err(|source| classify_query_error(generation, source))
 }
 
-async fn authorize_resolved_open<Adapter: SandboxFilesystemAdapter>(
-    generation: &FilesystemGeneration<Adapter>,
-    target: &SandboxResolvedNamespaceTarget,
-    options: OpenOptions,
-) -> Result<(), Error> {
-    if !open_requires_mutable_target(options) {
-        return Ok(());
-    }
-    let follow = match options {
-        OpenOptions::Existing { follow, .. } | OpenOptions::File { follow, .. } => follow,
-    };
-    let target = resolved_policy_target(generation, target, sandbox_follow(follow))?;
-    authorize_policy_target(generation, &target).await
+/// A namespace entry under coordination, with a resolution of the entry.
+struct CoordinatedTarget {
+    coordination: NamespaceCoordination,
+    resolved: SandboxResolvedNamespaceTarget,
 }
 
-fn resolved_policy_target<Adapter: SandboxFilesystemAdapter>(
+/// Coordinates the entry at `target` with `kind`, and gives a resolution of the entry.
+///
+/// `change` gives the follow of an operation that changes the contents or the times of the object
+/// at the entry. The entry is then resolved again under the coordination, and the change is
+/// authorized from that resolution: an edit of the entry can complete between the first
+/// resolution and the coordination, so the first resolution can be stale. Without a change, the
+/// first resolution is given. The result is `None` when the coordination could not be installed,
+/// or when the key of the entry changed between the two resolutions; the caller starts again.
+async fn coordinated_target<Adapter: SandboxFilesystemAdapter>(
+    generation: &FilesystemGeneration<Adapter>,
+    target: &SandboxPath,
+    kind: NamespaceCoordinationKind,
+    change: Option<SandboxFollow>,
+) -> Result<Option<CoordinatedTarget>, Error> {
+    let resolved = resolve_namespace_target(generation, target.clone()).await?;
+    let key = resolved.coordination_key();
+    let mut coordination = generation
+        .namespace
+        .coordinate(kind, vec![key.clone()])
+        .await;
+    if !coordination.extend(Vec::new()) {
+        return Ok(None);
+    }
+    let Some(follow) = change else {
+        return Ok(Some(CoordinatedTarget {
+            coordination,
+            resolved,
+        }));
+    };
+    let resolved = resolve_namespace_target(generation, target.clone()).await?;
+    if resolved.coordination_key() != key {
+        return Ok(None);
+    }
+    authorize_writable_target(generation, &resolved, follow)?;
+    Ok(Some(CoordinatedTarget {
+        coordination,
+        resolved,
+    }))
+}
+
+/// Refuses a change to the contents or times of a regular file without write permission.
+///
+/// The check reads the permission of the file itself. It therefore follows the file after a
+/// rename, a hard link, or a move of a directory above it.
+fn authorize_writable_target<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     target: &SandboxResolvedNamespaceTarget,
     follow: SandboxFollow,
-) -> Result<SandboxTargetIdentity, Error> {
-    target
-        .target_identity(follow)
-        .map_err(|source| classify_query_error(generation, source))
+) -> Result<(), Error> {
+    match target.is_read_only_file(follow) {
+        Ok(read_only) => refuse_read_only_change(read_only),
+        Err(source) => Err(classify_query_error(generation, source)),
+    }
 }
 
-async fn authorize_policy_target<Adapter: SandboxFilesystemAdapter>(
-    generation: &FilesystemGeneration<Adapter>,
-    target: &SandboxTargetIdentity,
-) -> Result<(), Error> {
-    let read_only_paths = generation
-        .initial_files
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(_, file)| file.permissions == AgentFilePermissions::ReadOnly)
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    for path in read_only_paths {
-        let policy = resolve_namespace_target(generation, SandboxPath::at_root(path)).await?;
-        let policy = resolved_policy_target(generation, &policy, SandboxFollow::Yes)?;
-        if target.matches(&policy) {
-            return Err(Error::Access(AccessError::NotPermitted));
-        }
+/// Refuses a change to the contents or times of a regular file without write permission.
+/// `read_only` tells whether the object is such a file.
+fn refuse_read_only_change(read_only: bool) -> Result<(), Error> {
+    if read_only {
+        Err(Error::Access(AccessError::NotPermitted))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 async fn execute_open<Adapter: SandboxFilesystemAdapter>(
@@ -2848,7 +2957,9 @@ async fn execute_open<Adapter: SandboxFilesystemAdapter>(
                             options = existing_open_after_postcondition(options);
                             continue;
                         }
-                        Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
+                        Err(postcondition_error)
+                            if invalidates_generation(&postcondition_error) =>
+                        {
                             generation.invalidate();
                             return Err(Error::RuntimeInvalidated);
                         }
@@ -2943,7 +3054,9 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     changes: AttributeChanges,
 ) -> Result<(), Error> {
     match changes {
-        AttributeChanges::Times(times) => execute_set_times(generation, target, times).await,
+        AttributeChanges::Times(times) => {
+            execute_set_times(generation, target, times, TimeOrigin::Call).await
+        }
         AttributeChanges::File { size, times } => {
             let AttributeTarget::Open(SandboxNode::File(file)) = target else {
                 return Err(Error::Access(AccessError::WrongGeneration));
@@ -2953,42 +3066,97 @@ async fn execute_attribute_changes<Adapter: SandboxFilesystemAdapter>(
                 generation,
                 AttributeTarget::Open(SandboxNode::File(file)),
                 times,
+                TimeOrigin::Call,
             )
             .await
         }
     }
 }
 
+/// Changes the attributes of the object that the entry at `target` names, under the coordination on
+/// the entry.
+///
+/// With `Follow::No` the change goes to the entry itself. The coordination stops an edit of the
+/// entry until the change is done. So the check of the permission and the change see one object.
+/// With `Follow::Yes` the change goes to the object that a final
+/// symlink at the entry names. An edit of other entries can put another object at that name while
+/// the change runs, and the coordination on the entry does not stop it. So the function opens the
+/// named object, and the check of its permission and the change go through the open descriptor to
+/// one object. That descriptor is not registered in the generation; it closes when the function
+/// returns.
 async fn execute_coordinated_path_attribute_changes<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: SandboxPath,
     follow: Follow,
     changes: AttributeChanges,
 ) -> Result<(), Error> {
+    // The open of the followed object expects the kind that a read gave. A change of the object
+    // between the read and the open makes the open fail, and the operation starts again a bounded
+    // number of times.
+    let mut budget = RetryBudget::new(2);
     loop {
-        let resolved = resolve_namespace_target(&generation, target.clone()).await?;
-        let mut coordination = generation
-            .namespace
-            .coordinate(
-                NamespaceCoordinationKind::Observe,
-                vec![resolved.coordination_key()],
-            )
-            .await;
-        if !coordination.extend(Vec::new()) {
-            continue;
-        }
-        let policy_target = resolved_policy_target(&generation, &resolved, sandbox_follow(follow))?;
-        authorize_policy_target(&generation, &policy_target).await?;
-        return execute_attribute_changes(
-            generation,
-            AttributeTarget::Path {
-                target: resolved.target(),
-                follow: sandbox_follow(follow),
-            },
-            changes,
+        let Some(CoordinatedTarget {
+            coordination: _coordination,
+            resolved,
+        }) = coordinated_target(
+            &generation,
+            &target,
+            NamespaceCoordinationKind::Observe,
+            Some(sandbox_follow(follow)),
         )
-        .await;
+        .await?
+        else {
+            continue;
+        };
+        let target = match follow {
+            Follow::No => AttributeTarget::Path {
+                target: resolved.target(),
+                follow: SandboxFollow::No,
+            },
+            Follow::Yes => match open_followed_object(&generation, resolved.target()).await {
+                Ok(node) => AttributeTarget::Open(node),
+                Err(Error::Sandbox(error))
+                    if error.io_kind() == Some(std::io::ErrorKind::InvalidInput)
+                        && budget.consume() =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            },
+        };
+        return execute_attribute_changes(generation, target, changes).await;
     }
+}
+
+/// Opens the object that `target` names through a final symlink, for a change of its attributes,
+/// and refuses a regular file without write permission. The adapter reports that fact from the
+/// object that the open pinned.
+///
+/// The open expects the kind that a read of the object gives. When the open finds another kind,
+/// the object changed between the read and the open, and the open fails with an `InvalidInput`
+/// storage error.
+async fn open_followed_object<Adapter: SandboxFilesystemAdapter>(
+    generation: &Arc<FilesystemGeneration<Adapter>>,
+    target: SandboxPath,
+) -> Result<SandboxNode, Error> {
+    let read = mutation_attributes(
+        generation,
+        AttributeTarget::Path {
+            target: target.clone(),
+            follow: SandboxFollow::Yes,
+        },
+    )
+    .await?;
+    let options = OpenOptions::Existing {
+        expected: agent_object_kind(read.kind),
+        access: AccessMode::ReadAndSetTimes,
+        follow: Follow::Yes,
+    };
+    let opened = execute_open(Arc::clone(generation), target, options).await?;
+    // The node is not registered and is used only in this operation, so a refusal drops it, as
+    // the end of the operation does.
+    refuse_read_only_change(opened.is_read_only_file())?;
+    Ok(opened.into_node())
 }
 
 async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
@@ -3001,6 +3169,7 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
     if before.size == size {
         return Ok(());
     }
+    generation.registry.record(Counted::Fresh);
     let growing = size > before.size;
     let mut budget = RetryBudget::new(2);
     loop {
@@ -3013,14 +3182,14 @@ async fn execute_set_size<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        let observed = match mutation_attributes_sandbox(&generation, target.clone()).await {
-            Ok(observed) => observed,
-            Err(_) => {
-                generation.invalidate();
-                return Err(Error::RuntimeInvalidated);
+        let evidence = if error_proves_no_effect(&error) {
+            EffectEvidence::NoEffect
+        } else {
+            match mutation_attributes_sandbox(&generation, target.clone()).await {
+                Ok(observed) => resize_postcondition_evidence(before.size, observed.size, size),
+                Err(_) => mutation_failure_evidence(&error),
             }
         };
-        let evidence = resize_postcondition_evidence(before.size, observed.size, size);
         if evidence == EffectEvidence::DesiredPostconditionSatisfied {
             return Ok(());
         }
@@ -3048,6 +3217,7 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     target: AttributeTarget,
     times: TimeChanges,
+    origin: TimeOrigin,
 ) -> Result<(), Error> {
     if time_changes_are_noop(times) {
         return Ok(());
@@ -3055,6 +3225,9 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
     let before = mutation_attributes(&generation, target.clone()).await?;
     if time_changes_satisfied(&before, &before, times, None) {
         return Ok(());
+    }
+    if let Some(counted) = set_times_change(before.modified, times.modified, origin) {
+        generation.registry.record(counted);
     }
     let mut budget = RetryBudget::new(2);
     loop {
@@ -3074,15 +3247,16 @@ async fn execute_set_times<Adapter: SandboxFilesystemAdapter>(
             Ok(()) => return Ok(()),
             Err(error) => error,
         };
-        let observed = match mutation_attributes_sandbox(&generation, target.clone()).await {
-            Ok(observed) => observed,
-            Err(_) => {
-                generation.invalidate();
-                return Err(Error::RuntimeInvalidated);
+        let evidence = if error_proves_no_effect(&error) {
+            EffectEvidence::NoEffect
+        } else {
+            match mutation_attributes_sandbox(&generation, target.clone()).await {
+                Ok(observed) => {
+                    timestamp_postcondition_evidence(&before, &observed, times, (started, finished))
+                }
+                Err(_) => mutation_failure_evidence(&error),
             }
         };
-        let evidence =
-            timestamp_postcondition_evidence(&before, &observed, times, (started, finished));
         if evidence == EffectEvidence::DesiredPostconditionSatisfied {
             return Ok(());
         }
@@ -3326,7 +3500,6 @@ async fn execute_namespace_edit<Adapter: SandboxFilesystemAdapter>(
                 resolved.coordination_keys(),
             )
             .await;
-        authorize_resolved_namespace_edit(&generation, &resolved).await?;
         let directory_keys = refresh_namespace_directory_keys(&generation, &resolved).await?;
         if !coordination.extend(directory_keys) {
             continue;
@@ -3352,29 +3525,6 @@ enum ResolvedNamespaceEdit {
         target: SandboxResolvedNamespaceTarget,
         expected: ObjectKind,
     },
-}
-
-async fn authorize_resolved_namespace_edit<Adapter: SandboxFilesystemAdapter>(
-    generation: &FilesystemGeneration<Adapter>,
-    edit: &ResolvedNamespaceEdit,
-) -> Result<(), Error> {
-    let targets = match edit {
-        ResolvedNamespaceEdit::Insert { destination, .. } => vec![destination],
-        ResolvedNamespaceEdit::Link {
-            source,
-            destination,
-        }
-        | ResolvedNamespaceEdit::Move {
-            source,
-            destination,
-        } => vec![source, destination],
-        ResolvedNamespaceEdit::Remove { target, .. } => vec![target],
-    };
-    for target in targets {
-        let target = resolved_policy_target(generation, target, SandboxFollow::No)?;
-        authorize_policy_target(generation, &target).await?;
-    }
-    Ok(())
 }
 
 impl ResolvedNamespaceEdit {
@@ -3511,10 +3661,6 @@ async fn execute_create_directory<Adapter: SandboxFilesystemAdapter>(
                 .await
             {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3562,10 +3708,6 @@ async fn execute_create_symlink<Adapter: SandboxFilesystemAdapter>(
         } else {
             match symlink_postcondition(&generation, target.clone(), &desired).await {
                 Ok(after) => insert_postcondition_evidence(&before, &after),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3613,10 +3755,6 @@ async fn execute_hard_link<Adapter: SandboxFilesystemAdapter>(
                 Ok(destination_after) => {
                     hard_link_postcondition_evidence(&destination_before, &destination_after)
                 }
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3662,12 +3800,6 @@ async fn execute_rename<Adapter: SandboxFilesystemAdapter>(
             match (source_after, destination_after) {
                 (Ok(source_after), Ok(destination_after)) => {
                     move_postcondition_evidence(&source_before, &source_after, &destination_after)
-                }
-                (Err(postcondition_error), _) | (_, Err(postcondition_error))
-                    if postcondition_error.is_terminal_failure() =>
-                {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
                 }
                 _ => EffectEvidence::Unknown {
                     known_completed_prefix: 0,
@@ -3731,10 +3863,6 @@ async fn execute_remove<Adapter: SandboxFilesystemAdapter>(
         } else {
             match namespace_path_state(&generation, target.clone()).await {
                 Ok(after) => remove_postcondition_evidence(&before, &after, expected),
-                Err(postcondition_error) if postcondition_error.is_terminal_failure() => {
-                    generation.invalidate();
-                    return Err(Error::RuntimeInvalidated);
-                }
                 Err(_) => mutation_failure_evidence(&error),
             }
         };
@@ -3944,6 +4072,11 @@ fn namespace_kind_mismatch_error(
     )
 }
 
+/// Flushes `node` to stable storage, and invalidates the generation on every error.
+///
+/// After a failed flush, the data that earlier writes gave to the storage can be lost, so the
+/// agent cannot safely continue on this generation. So every error of a flush, also a permission
+/// error, invalidates the generation, and the call gives `RuntimeInvalidated`.
 async fn execute_flush<Adapter: SandboxFilesystemAdapter>(
     generation: Arc<FilesystemGeneration<Adapter>>,
     node: SandboxNode,
@@ -3999,6 +4132,11 @@ async fn execute_close<Adapter: SandboxFilesystemAdapter>(
     }
 }
 
+/// Gives the evidence of a mutation that failed, when the read of its postcondition failed too.
+///
+/// The read runs only when the error of the mutation does not prove that nothing changed. The
+/// evidence is then unknown, and an unknown effect invalidates the generation. So a read that
+/// fails needs no check of its own.
 fn mutation_failure_evidence(error: &FilesystemStorageError) -> EffectEvidence {
     if error_proves_no_effect(error) {
         EffectEvidence::NoEffect
@@ -4013,11 +4151,11 @@ fn classify_query_error<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     source: FilesystemStorageError,
 ) -> Error {
-    if source.is_terminal_failure() {
+    if invalidates_generation(&source) {
         generation.invalidate();
         Error::RuntimeInvalidated
     } else {
-        Error::Sandbox(source)
+        returned_storage_error(source)
     }
 }
 
@@ -4028,6 +4166,7 @@ fn agent_attributes(attributes: SandboxAttributes) -> Attributes {
         size: attributes.size,
         accessed: attributes.accessed,
         modified: attributes.modified,
+        read_only: attributes.read_only,
     }
 }
 
@@ -4084,6 +4223,19 @@ async fn decide_generation_effect<Adapter: SandboxFilesystemAdapter>(
     decide_effect(cause, evidence, decision_budget)
 }
 
+/// Whether a write that found no space, on storage with `accounting` that reports no usage of
+/// the agent, goes to pressure recovery.
+///
+/// Production storage without per-agent accounting has no agent quota to exhaust, so the volume is
+/// full, and pressure recovery can free space. Development storage keeps the failure of the call.
+/// Storage with project quotas reports the usage, so it never asks.
+fn unreported_usage_goes_to_pressure_recovery(accounting: AgentAccounting) -> bool {
+    match accounting {
+        AgentAccounting::Unaccounted => true,
+        AgentAccounting::ProjectQuotas | AgentAccounting::Development => false,
+    }
+}
+
 async fn decide_write_effect<Adapter: SandboxFilesystemAdapter>(
     generation: &FilesystemGeneration<Adapter>,
     error: &FilesystemStorageError,
@@ -4099,6 +4251,11 @@ async fn decide_write_effect<Adapter: SandboxFilesystemAdapter>(
     }
 
     let quota_exhausted = match generation.observe_usage_sandbox().await {
+        Ok(FilesystemUsage::Unsupported)
+            if unreported_usage_goes_to_pressure_recovery(generation.accounting) =>
+        {
+            false
+        }
         Ok(FilesystemUsage::Unsupported) => {
             return EffectDecision::ReturnFailure(FailureCause::UnclassifiedIo);
         }
@@ -4169,8 +4326,20 @@ fn classified_error(cause: FailureCause, source: FilesystemStorageError) -> Erro
         FailureCause::PhysicalCapacity => Error::PhysicalCapacity(source),
         FailureCause::TerminalInfrastructure => Error::RuntimeInvalidated,
         FailureCause::Guest | FailureCause::TransientBackend | FailureCause::UnclassifiedIo => {
-            Error::Sandbox(source)
+            returned_storage_error(source)
         }
+    }
+}
+
+/// Gives the error that a call returns for a storage error that leaves the generation valid.
+///
+/// A permission error gives `AccessError::NotPermitted`, as the read-only checks of the lifecycle
+/// do. Another error gives `Error::Sandbox` with its source.
+fn returned_storage_error(source: FilesystemStorageError) -> Error {
+    if source.io_kind() == Some(std::io::ErrorKind::PermissionDenied) {
+        Error::Access(AccessError::NotPermitted)
+    } else {
+        Error::Sandbox(source)
     }
 }
 
@@ -4380,16 +4549,9 @@ fn sandbox_object_kind(kind: ObjectKind) -> SandboxObjectKind {
 fn sandbox_access_mode(mode: AccessMode) -> SandboxAccessMode {
     match mode {
         AccessMode::Read => SandboxAccessMode::Read,
+        AccessMode::ReadAndSetTimes => SandboxAccessMode::ReadAndSetTimes,
         AccessMode::Write => SandboxAccessMode::Write,
         AccessMode::ReadWrite => SandboxAccessMode::ReadWrite,
-    }
-}
-
-fn sandbox_file_permissions(read_only: bool) -> SandboxFilePermissions {
-    if read_only {
-        SandboxFilePermissions::ReadOnly
-    } else {
-        SandboxFilePermissions::ReadWrite
     }
 }
 
@@ -4518,7 +4680,7 @@ struct FailureFacts {
 }
 
 fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> FailureCause {
-    if error.is_terminal_failure() {
+    if invalidates_generation(error) {
         FailureCause::TerminalInfrastructure
     } else if error.is_storage_exhaustion() && facts.quota_exhausted {
         FailureCause::AgentQuota
@@ -4532,13 +4694,24 @@ fn classify_failure(error: &FilesystemStorageError, facts: FailureFacts) -> Fail
             | Some(std::io::ErrorKind::InvalidFilename)
             | Some(std::io::ErrorKind::IsADirectory)
             | Some(std::io::ErrorKind::NotADirectory)
-            | Some(std::io::ErrorKind::CrossesDevices) => FailureCause::Guest,
+            | Some(std::io::ErrorKind::CrossesDevices)
+            | Some(std::io::ErrorKind::PermissionDenied) => FailureCause::Guest,
             Some(std::io::ErrorKind::WouldBlock) | Some(std::io::ErrorKind::Interrupted) => {
                 FailureCause::TransientBackend
             }
             _ => FailureCause::UnclassifiedIo,
         }
     }
+}
+
+/// Tells whether a storage error in the tree of the agent invalidates the generation.
+///
+/// A terminal failure of the storage invalidates the generation. A permission error does not
+/// invalidate it, although `FilesystemStorageError::is_terminal_failure` counts it. A permission
+/// error refuses only one operation in the tree, and that operation returns it. The usage reads
+/// after a storage exhaustion read the storage of the executor, so they use `is_terminal_failure`.
+fn invalidates_generation(error: &FilesystemStorageError) -> bool {
+    error.io_kind() != Some(std::io::ErrorKind::PermissionDenied) && error.is_terminal_failure()
 }
 
 fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {
@@ -4552,6 +4725,7 @@ fn error_proves_no_effect(error: &FilesystemStorageError) -> bool {
             | Some(std::io::ErrorKind::IsADirectory)
             | Some(std::io::ErrorKind::NotADirectory)
             | Some(std::io::ErrorKind::CrossesDevices)
+            | Some(std::io::ErrorKind::PermissionDenied)
             | Some(std::io::ErrorKind::StorageFull)
             | Some(std::io::ErrorKind::QuotaExceeded)
     )

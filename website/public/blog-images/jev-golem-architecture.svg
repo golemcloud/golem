@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="880" viewBox="0 100 1600 880" role="img" aria-labelledby="title description">
+  <title id="title">Jev and Golem log incident processing architecture</title>
+  <desc id="description">Log producers send plain text or structured logs to per-source ingress agents on Golem. Jev classifies each line. Matching lines and surrounding context are routed to per-category incident agents, then per-incident jobs ask OpenAI for summaries and update the incident stores.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#182522" flood-opacity="0.12"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#435853"/>
+    </marker>
+    <marker id="arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d9654c"/>
+    </marker>
+    <style>
+      .zone-title { font: 700 16px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: 2px; text-transform: uppercase; }
+      .box-title { font: 700 22px Inter, ui-sans-serif, system-ui, sans-serif; fill: #172421; }
+      .box-subtitle { font: 600 15px Inter, ui-sans-serif, system-ui, sans-serif; fill: #4c625d; }
+      .body { font: 400 16px Inter, ui-sans-serif, system-ui, sans-serif; fill: #43534f; }
+      .small { font: 500 14px Inter, ui-sans-serif, system-ui, sans-serif; fill: #576964; }
+      .label { font: 600 14px Inter, ui-sans-serif, system-ui, sans-serif; fill: #435853; }
+      .pill { font: 700 13px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .4px; }
+      .flow { fill: none; stroke: #435853; stroke-width: 3; marker-end: url(#arrow); }
+      .flow-coral { fill: none; stroke: #d9654c; stroke-width: 3; marker-end: url(#arrow-coral); }
+      .callback { fill: none; stroke: #697a75; stroke-width: 2.5; stroke-dasharray: 8 7; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="980" fill="#fbfaf7"/>
+
+  <!-- Zones -->
+  <rect x="45" y="130" width="260" height="790" rx="24" fill="#f1f0eb" stroke="#d9ddd8" stroke-width="2"/>
+  <text x="70" y="168" class="zone-title" fill="#66736f">LOG SOURCES</text>
+
+  <rect x="340" y="130" width="925" height="790" rx="24" fill="#edf7f3" stroke="#bad8cc" stroke-width="2"/>
+  <text x="365" y="168" class="zone-title" fill="#28725e">GOLEM · DURABLE AGENT RUNTIME</text>
+
+  <rect x="1300" y="130" width="255" height="790" rx="24" fill="#fff2ed" stroke="#efc1b4" stroke-width="2"/>
+  <text x="1325" y="168" class="zone-title" fill="#b75440">AI SERVICES</text>
+
+  <!-- Sources -->
+  <g filter="url(#shadow)">
+    <rect x="70" y="230" width="210" height="125" rx="16" fill="#ffffff"/>
+    <circle cx="102" cy="270" r="13" fill="#e8a749"/>
+    <path d="M95 270h14M102 263v14" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+    <text x="125" y="275" class="box-title">Plain text</text>
+    <text x="95" y="306" class="body">POST</text>
+    <text x="95" y="329" class="small">/plain/{source}/logs</text>
+    <text x="95" y="347" class="small">message + attributes</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="445" width="210" height="125" rx="16" fill="#ffffff"/>
+    <circle cx="102" cy="485" r="13" fill="#4f9c86"/>
+    <path d="M95 480h14M95 485h14M95 490h14" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+    <text x="125" y="490" class="box-title">Structured</text>
+    <text x="95" y="522" class="body">POST</text>
+    <text x="95" y="545" class="small">/sources/{source}/logs</text>
+    <text x="95" y="562" class="small">timestamp · content · attrs</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="70" y="720" width="210" height="120" rx="16" fill="#ffffff"/>
+    <text x="95" y="762" class="box-title">Operators</text>
+    <text x="95" y="792" class="body">GET recent logs</text>
+    <text x="95" y="815" class="body">GET incidents</text>
+    <text x="95" y="836" class="small">and their summaries</text>
+  </g>
+
+  <!-- Plain text facade -->
+  <g filter="url(#shadow)">
+    <rect x="385" y="215" width="275" height="150" rx="18" fill="#ffffff" stroke="#d4e5df"/>
+    <rect x="405" y="234" width="96" height="25" rx="12" fill="#e7ebe9"/>
+    <text x="453" y="252" text-anchor="middle" class="pill" fill="#5c6b67">EPHEMERAL</text>
+    <text x="405" y="292" class="box-title">PlainTextLogFacade</text>
+    <text x="405" y="322" class="body">Parse timestamp, normalize line</text>
+    <text x="405" y="346" class="small">one instance per request</text>
+  </g>
+
+  <!-- Log ingress -->
+  <g filter="url(#shadow)">
+    <rect x="735" y="250" width="420" height="300" rx="20" fill="#ffffff" stroke="#9bc7b7" stroke-width="2"/>
+    <rect x="757" y="271" width="76" height="25" rx="12" fill="#dff2ea"/>
+    <text x="795" y="289" text-anchor="middle" class="pill" fill="#28725e">DURABLE</text>
+    <text x="850" y="290" class="box-subtitle">one per source</text>
+    <text x="757" y="331" class="box-title">LogIngress(source)</text>
+
+    <rect x="757" y="355" width="172" height="73" rx="12" fill="#f1f7f4"/>
+    <text x="773" y="380" class="box-subtitle">Rolling log buffer</text>
+    <text x="773" y="405" class="small">sequence + recent lines</text>
+
+    <rect x="945" y="355" width="185" height="73" rx="12" fill="#f1f7f4"/>
+    <text x="961" y="380" class="box-subtitle">Pending matches</text>
+    <text x="961" y="405" class="small">category + probability</text>
+
+    <path d="M757 450h373" stroke="#d3e3dd" stroke-width="2"/>
+    <circle cx="776" cy="479" r="6" fill="#4f9c86"/>
+    <text x="793" y="485" class="body">Dispatch after ½ buffer of following lines</text>
+    <circle cx="776" cy="516" r="6" fill="#e8a749"/>
+    <text x="793" y="522" class="body">or when the scheduled TTL expires</text>
+  </g>
+
+  <!-- Category agent -->
+  <g filter="url(#shadow)">
+    <rect x="385" y="640" width="390" height="220" rx="20" fill="#ffffff" stroke="#9bc7b7" stroke-width="2"/>
+    <rect x="407" y="661" width="76" height="25" rx="12" fill="#dff2ea"/>
+    <text x="445" y="679" text-anchor="middle" class="pill" fill="#28725e">DURABLE</text>
+    <text x="500" y="680" class="box-subtitle">one per source + category</text>
+    <text x="407" y="724" class="box-title">CategoryIncidents</text>
+    <text x="407" y="756" class="body">Store context, status, summary/error</text>
+    <rect x="407" y="783" width="344" height="50" rx="10" fill="#f1f7f4"/>
+    <text x="579" y="813" text-anchor="middle" class="box-subtitle">pending → summarized / failed</text>
+  </g>
+
+  <!-- Job -->
+  <g filter="url(#shadow)">
+    <rect x="855" y="660" width="300" height="180" rx="20" fill="#ffffff" stroke="#9bc7b7" stroke-width="2"/>
+    <rect x="877" y="681" width="76" height="25" rx="12" fill="#dff2ea"/>
+    <text x="915" y="699" text-anchor="middle" class="pill" fill="#28725e">DURABLE</text>
+    <text x="970" y="700" class="box-subtitle">one per incident</text>
+    <text x="877" y="744" class="box-title">SummarizationJob</text>
+    <text x="877" y="776" class="body">Prompt with matched category</text>
+    <text x="877" y="800" class="body">and surrounding log context</text>
+  </g>
+
+  <!-- External APIs -->
+  <g filter="url(#shadow)">
+    <rect x="1325" y="285" width="205" height="150" rx="18" fill="#ffffff" stroke="#efc1b4"/>
+    <rect x="1346" y="306" width="47" height="25" rx="12" fill="#ffe2d8"/>
+    <text x="1369" y="324" text-anchor="middle" class="pill" fill="#b75440">JEV</text>
+    <text x="1346" y="366" class="box-title">TypeSafe API</text>
+    <text x="1346" y="397" class="body">Binary decision for</text>
+    <text x="1346" y="420" class="body">each watched category</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1325" y="675" width="205" height="140" rx="18" fill="#ffffff" stroke="#efc1b4"/>
+    <rect x="1346" y="696" width="74" height="25" rx="12" fill="#ffe2d8"/>
+    <text x="1383" y="714" text-anchor="middle" class="pill" fill="#b75440">OPENAI</text>
+    <text x="1346" y="756" class="box-title">Language model</text>
+    <text x="1346" y="783" class="body">Generate incident</text>
+    <text x="1346" y="806" class="body">summary</text>
+  </g>
+
+  <!-- Main data flow -->
+  <path class="flow" d="M280 292 H385"/>
+  <text x="332" y="279" text-anchor="middle" class="label">text</text>
+
+  <path class="flow" d="M660 290 H695 Q715 290 715 310 V365 Q715 385 735 385"/>
+  <text x="697" y="275" text-anchor="middle" class="label">LogLine</text>
+
+  <path class="flow" d="M280 507 H695 Q715 507 715 487 V465 Q715 445 735 445"/>
+  <text x="482" y="494" text-anchor="middle" class="label">LogLine</text>
+
+  <path class="flow-coral" d="M1155 345 H1325"/>
+  <text x="1240" y="330" text-anchor="middle" class="label">classify line</text>
+  <path class="flow-coral" d="M1325 405 H1195 Q1175 405 1175 425 V458 Q1175 478 1155 478"/>
+  <text x="1238" y="462" text-anchor="middle" class="label">0..N matches</text>
+
+  <path class="flow" d="M880 550 V589 Q880 609 860 609 H795 Q775 609 775 629 V688 Q775 708 755 708"/>
+  <text x="843" y="594" text-anchor="middle" class="label">incident + context</text>
+
+  <path class="flow" d="M775 750 H855"/>
+  <text x="815" y="736" text-anchor="middle" class="label">trigger</text>
+
+  <path class="flow-coral" d="M1155 730 H1325"/>
+  <text x="1240" y="715" text-anchor="middle" class="label">summarize</text>
+
+  <path class="callback" d="M1325 790 H1190 Q1170 790 1170 810 H1155"/>
+  <text x="1238" y="778" text-anchor="middle" class="label">summary / error</text>
+  <path class="callback" d="M855 815 H775"/>
+  <text x="815" y="802" text-anchor="middle" class="label">status</text>
+
+  <!-- Query paths -->
+  <path d="M280 762 H315 Q335 762 335 742 V580 Q335 560 355 560 H715 Q735 560 735 540" fill="none" stroke="#80908b" stroke-width="2.5" stroke-dasharray="7 7" marker-end="url(#arrow)"/>
+  <text x="535" y="550" text-anchor="middle" class="label">recent logs</text>
+  <path d="M280 812 H385" fill="none" stroke="#80908b" stroke-width="2.5" stroke-dasharray="7 7" marker-end="url(#arrow)"/>
+  <text x="332" y="800" text-anchor="middle" class="label">incidents</text>
+
+  <!-- Cardinality footer -->
+  <rect x="385" y="185" width="744" height="2" fill="#cce2da"/>
+  <text x="800" y="952" text-anchor="middle" class="small">Agent state and scheduled calls survive failures and restarts through Golem's durable execution.</text>
+</svg>

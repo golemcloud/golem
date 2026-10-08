@@ -31,12 +31,21 @@ import {
   type SchemaValue,
   t,
   type TypedSchemaValue,
+  typedSchemaValueToWit,
+  typedSchemaValueToWitAsync,
   v,
   validateSchemaGraph,
   encodeChild,
   isolateCapabilityRoot,
 } from '../schema-model';
-import { CodecShapeMismatchError, type SchemaCodec } from '../../schema/codec';
+import {
+  CodecShapeMismatchError,
+  directTypedSchemaValueToWit,
+  relinquishSchemaValueCapabilities,
+  type SchemaCodec,
+  withDirectCodec,
+} from '../../schema/codec';
+import { SchemaEncodeError } from '../schema-model/errors';
 import { toolBuildError } from './errors';
 
 export type {
@@ -100,6 +109,7 @@ export interface ExtendedCommandBody {
   readonly constraints: readonly ExtendedConstraint[];
   readonly stdin?: StreamSpec;
   readonly stdout?: StreamSpec;
+  readonly stderr?: StreamSpec;
   readonly result?: ExtendedResultSpec;
   readonly errors: readonly ExtendedErrorCase[];
   readonly annotations?: CommandAnnotations;
@@ -262,8 +272,9 @@ export class CanonicalInputModel {
         }),
       );
     };
-    this.codec = {
+    this.codec = withDirectCodec({
       graph,
+      fields: fields.map((entry) => ({ name: entry.name, codec: entry.codec })),
       toValue: isolateCapabilityRoot(toValue),
       fromValue: (input) => {
         if (input.tag !== 'record') {
@@ -278,7 +289,7 @@ export class CanonicalInputModel {
           fields.map((entry, index) => [entry.name, entry.codec.fromValue(input.fields[index])]),
         );
       },
-    };
+    });
   }
 
   encode(input: Record<string, unknown>): SchemaValue {
@@ -287,6 +298,43 @@ export class CanonicalInputModel {
 
   encodeTyped(input: Record<string, unknown>): TypedSchemaValue {
     return { graph: this.codec.graph, value: this.encode(input) };
+  }
+
+  /** Encode the ordinary invocation carrier without allocating the owned schema-value model. */
+  encodeWire(input: Record<string, unknown>) {
+    return this.codec.direct
+      ? directTypedSchemaValueToWit(this.codec, input)
+      : typedSchemaValueToWit(this.encodeTyped(input));
+  }
+
+  encodeWireForStartedInvocation(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return typedSchemaValueToWit(encoded);
+    } catch (error) {
+      if (
+        !(error instanceof SchemaEncodeError) ||
+        !error.message.includes('native schema value streams require asynchronous encoding')
+      ) {
+        throw error;
+      }
+      return typedSchemaValueToWitAsync(encoded).catch((asyncError) => {
+        relinquishSchemaValueCapabilities(encoded.value);
+        throw asyncError;
+      });
+    }
+  }
+
+  async encodeWireAsync(input: Record<string, unknown>) {
+    if (this.codec.direct) return directTypedSchemaValueToWit(this.codec, input);
+    const encoded = this.encodeTyped(input);
+    try {
+      return await typedSchemaValueToWitAsync(encoded);
+    } catch (error) {
+      relinquishSchemaValueCapabilities(encoded.value);
+      throw error;
+    }
   }
 
   decode(input: SchemaValue): Record<string, unknown> {
@@ -424,6 +472,7 @@ export class ExtendedToolType {
   constructor(
     readonly version: string,
     readonly root: ExtendedCommandNode,
+    readonly requiresFilesystem = false,
   ) {}
 
   get toolName(): string {
@@ -703,8 +752,10 @@ function isRepeatable(shape: ExtendedOptionShape): boolean {
  */
 export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
   if (resolveCodecRoot(inner).body.tag === 'option') return inner;
-  return {
+  return withDirectCodec({
     graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
+    optionInner: inner,
+    optionKind: 'optional',
     toValue: isolateCapabilityRoot((input) =>
       v.option(input === undefined ? undefined : encodeChild(inner, input)),
     ),
@@ -712,7 +763,7 @@ export function optionalCanonicalFieldCodec(inner: SchemaCodec): SchemaCodec {
       if (input.tag !== 'option') throw new Error('expected an optional tool input value');
       return input.value === undefined ? undefined : inner.fromValue(input.value);
     },
-  };
+  });
 }
 
 function unwrappedCarrierGraph(graph: SchemaGraph, optionalCarrier: boolean): SchemaGraph {
@@ -777,7 +828,7 @@ export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
     }
     return v.list(input.map((item) => encodeChild(itemCodec, item)));
   };
-  return {
+  return withDirectCodec({
     graph: { defs: itemCodec.graph.defs, root: t.list(itemCodec.graph.root) },
     listItem: itemCodec,
     toValue: isolateCapabilityRoot(toValue),
@@ -785,7 +836,7 @@ export function listCodec(itemCodec: SchemaCodec): SchemaCodec {
       if (input.tag !== 'list') throw new Error('expected a list schema value');
       return input.elements.map((item) => itemCodec.fromValue(item));
     },
-  };
+  });
 }
 
 export function flagCodec(flag: FlagSpec): SchemaCodec {

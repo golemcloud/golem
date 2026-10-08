@@ -44,10 +44,11 @@ object Uuid {
   }
 
   def fromStandardString(s: String): Either[String, Uuid] = {
-    val parts = s.split('-')
-    if (parts.length != 5) Left(s"Invalid UUID string: $s")
+    if (!s.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"))
+      Left(s"Invalid UUID string: $s")
     else
       try {
+        val parts = s.split('-')
         val p1 = BigInt(parts(0), 16)
         val p2 = BigInt(parts(1), 16)
         val p3 = BigInt(parts(2), 16)

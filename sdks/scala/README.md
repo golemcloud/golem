@@ -27,9 +27,10 @@ returns the selected arguments, input schema, result schema, and declared errors
 Use `ToolCommand.invokeJson` for canonical JSON or `invokeValue` for schema-native values. Both
 validate inputs before opening RPC and check declared results after invocation.
 
-`startValue` and `startJson` return pending invocations with stdout, result, `collect`, and
-`cancel`. Use them when a command requires caller-readable stdout. `collect` drains stdout while
-awaiting the result. `triggerValue` and `triggerJson` reject commands with required stdout.
+`startValue` and `startJson` return pending invocations with independent stdout, stderr, result,
+`collect`, and `cancel`. Use them when a command requires either caller-readable output. `collect`
+drains both outputs concurrently while awaiting the result. `triggerValue` and `triggerJson`
+reject commands with required stdout or stderr.
 `DynamicToolClient` accepts a caller-packed `TypedSchemaValue` and a command path when no
 descriptor is available; it does not infer or validate a deployed schema. Reflected and dynamic
 calls return recoverable `ToolError` values, including malformed remote output.
@@ -264,7 +265,7 @@ trait MyAgent {
 
 ## Running on Golem
 
-The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the ordinary, pure-middleware, and combined base guest runtimes to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
+The sbt/Mill plugins are **build adapters**: they generate the Scala.js bundle and write the default base guest runtime to `.generated/`. **`golem-cli` is the driver** for build/deploy/invoke/repl.
 
 ```bash
 cd <your-app-dir>
@@ -277,13 +278,7 @@ See `golem/example/` for a standalone example or `golem/test-agents/` for the mo
 
 ### Base guest runtimes
 
-The SDK embeds three artifacts in both build plugins and writes them to `.generated/` when Scala.js is compiled or linked:
-
-- `agent_guest.wasm` for ordinary agent/tool components;
-- `tool_middleware_guest.wasm` for pure tool-middleware components;
-- `agent_tool_middleware_guest.wasm` for combined agent/tool/middleware components.
-
-Select them through the `scala`, `scala-tool-middleware`, and `scala-agent-tool-middleware` component templates respectively. User projects do not manage these files directly. See [Tool middleware](docs/tool-middleware.md) for role selection and authoring examples.
+The SDK embeds `agent_guest.wasm` in both build plugins and writes it to `.generated/` when Scala.js is compiled or linked. The `scala` component template uses this world for ordinary, standalone-middleware, and combined components. User projects do not manage this file directly. See [Tool middleware](docs/tool-middleware.md) for authoring examples.
 
 To regenerate when upgrading Golem/WIT versions:
 

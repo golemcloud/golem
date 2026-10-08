@@ -131,18 +131,18 @@ fn params_sig(params : Array[(String, ParamType)]) -> String {
 }
 
 ///|
-/// Renders the `@agents.encode_invocation_input([...])` expression that encodes
+/// Renders the `@agents.encode_wire_input([...])` expression that encodes
 /// the user-supplied parameters (in declared order) into a wire input record.
 fn encode_input_expr(params : Array[(String, ParamType)]) -> String {
-  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
-  "@agents.encode_invocation_input([\{parts}])"
+  let parts = params.map(fn(p) { p.0 }).join(", ")
+  "@agents.encode_wire_input([\{parts}])"
 }
 
 ///|
 /// Renders the async input encoder used only by awaited RPC methods.
 fn encode_input_async_expr(params : Array[(String, ParamType)]) -> String {
-  let parts = params.map(fn(p) { "@schema.to_value_as(\{p.0})" }).join(", ")
-  "@agents.encode_invocation_input_async([\{parts}])"
+  let parts = params.map(fn(p) { p.0 }).join(", ")
+  "@agents.encode_wire_input_async([\{parts}])"
 }
 
 ///|
@@ -159,6 +159,9 @@ pub fn generate_client_code(
   }
   let buf = StringBuilder()
   for agent in agents {
+    if agent.is_http_router() {
+      continue
+    }
     match stream_bearing_constructor_param(agent, value_types_by_name) {
       Some(param) =>
         raise AgentParseError(
@@ -374,9 +377,9 @@ fn emit_client_method(
       buf.write_string("  match result {\n")
       buf.write_string(
         if durable {
-          "    Some(tree) => @agents.decode_output(tree, \"\{ctx}\")\n"
+          "    Some(tree) => @agents.decode_wire_output(tree, \"\{ctx}\")\n"
         } else {
-          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_output(tree, \"\{ctx}\") }\n"
+          "    Some(tree) => { metadata: response.metadata, value: @agents.decode_wire_output(tree, \"\{ctx}\") }\n"
         },
       )
       buf.write_string(

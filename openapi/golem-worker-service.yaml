@@ -18,7 +18,6 @@ tags:
 - name: Application
 - name: Card
 - name: Component
-- name: Debugging
 - name: Deployment
 - name: Environment
 - name: EnvironmentPluginGrants
@@ -1992,7 +1991,7 @@ paths:
       - Agent
       summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
       description: |-
-        Uses normal invocation permissions, queueing and idempotency. Byte stdin and stdout
+        Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
       parameters:
       - name: Idempotency-Key
@@ -3931,6 +3930,11 @@ components:
           allOf:
           - $ref: '#/components/schemas/StreamSpec'
           - nullable: true
+        stderr:
+          nullable: true
+          allOf:
+          - $ref: '#/components/schemas/StreamSpec'
+          - nullable: true
         result:
           nullable: true
           allOf:
@@ -4337,35 +4341,74 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/AgentResourceDescription'
+    ExternalBinaryValuePayload:
+      type: object
+      required:
+      - bytes
+      properties:
+        bytes:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        mimeType:
+          type: string
+    ExternalDurationValuePayload:
+      type: object
+      required:
+      - nanoseconds
+      properties:
+        nanoseconds:
+          type: string
+    ExternalQuantityValue:
+      type: object
+      required:
+      - mantissa
+      - scale
+      - unit
+      properties:
+        mantissa:
+          type: string
+        scale:
+          type: integer
+          format: int32
+        unit:
+          type: string
     ExternalResultValuePayload:
       type: object
       oneOf:
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - ok
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
       - type: object
         required:
         - tag
+        - value
         properties:
           tag:
             type: string
             enum:
             - err
           value:
-            nullable: true
-            allOf:
+            oneOf:
             - $ref: '#/components/schemas/ExternalSchemaValue'
-            - nullable: true
+            - type: object
+              enum:
+              - null
+              nullable: true
     ExternalSchemaValue:
       type: object
       oneOf:
@@ -4426,8 +4469,7 @@ components:
             enum:
             - s64
           value:
-            type: integer
-            format: int64
+            type: string
       - type: object
         required:
         - kind
@@ -4474,8 +4516,7 @@ components:
             enum:
             - u64
           value:
-            type: integer
-            format: uint64
+            type: string
       - type: object
         required:
         - kind
@@ -4486,8 +4527,18 @@ components:
             enum:
             - f32
           value:
-            type: number
-            format: float
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -4498,8 +4549,18 @@ components:
             enum:
             - f64
           value:
-            type: number
-            format: double
+            oneOf:
+            - type: number
+            - type: object
+              required:
+              - $float
+              properties:
+                $float:
+                  type: string
+                  enum:
+                  - nan
+                  - positive-infinity
+                  - negative-infinity
       - type: object
         required:
         - kind
@@ -4522,6 +4583,18 @@ components:
             - string
           value:
             type: string
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
       - type: object
         required:
         - kind
@@ -4673,12 +4746,16 @@ components:
             - option
           value:
             type: object
+            required:
+            - inner
             properties:
               inner:
-                nullable: true
-                allOf:
+                oneOf:
                 - $ref: '#/components/schemas/ExternalSchemaValue'
-                - nullable: true
+                - type: object
+                  enum:
+                  - null
+                  nullable: true
       - type: object
         required:
         - kind
@@ -4700,7 +4777,7 @@ components:
             enum:
             - text
           value:
-            $ref: '#/components/schemas/TextValuePayload'
+            $ref: '#/components/schemas/ExternalTextValuePayload'
       - type: object
         required:
         - kind
@@ -4711,7 +4788,7 @@ components:
             enum:
             - binary
           value:
-            $ref: '#/components/schemas/BinaryValuePayload'
+            $ref: '#/components/schemas/ExternalBinaryValuePayload'
       - type: object
         required:
         - kind
@@ -4771,7 +4848,7 @@ components:
             enum:
             - duration
           value:
-            $ref: '#/components/schemas/DurationValuePayload'
+            $ref: '#/components/schemas/ExternalDurationValuePayload'
       - type: object
         required:
         - kind
@@ -4782,7 +4859,7 @@ components:
             enum:
             - quantity
           value:
-            $ref: '#/components/schemas/QuantityValue'
+            $ref: '#/components/schemas/ExternalQuantityValue'
       - type: object
         required:
         - kind
@@ -4794,6 +4871,15 @@ components:
             - union
           value:
             $ref: '#/components/schemas/ExternalUnionValuePayload'
+    ExternalTextValuePayload:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
+        language:
+          type: string
     ExternalToolInvocationParameters:
       type: object
       title: ExternalToolInvocationParameters
@@ -4865,16 +4951,14 @@ components:
           type: integer
           format: uint32
         payload:
-          nullable: true
-          allOf:
-          - $ref: '#/components/schemas/ExternalSchemaValue'
-          - nullable: true
+          $ref: '#/components/schemas/ExternalSchemaValue'
     FailedUpdate:
       type: object
       title: FailedUpdate
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -4884,6 +4968,13 @@ components:
           format: uint64
         details:
           type: string
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     FallibleResultParameters:
       type: object
       title: FallibleResultParameters
@@ -5110,6 +5201,17 @@ components:
       - Warn
       - Error
       - Critical
+    LogTraceContext:
+      type: object
+      title: LogTraceContext
+      required:
+      - traceId
+      - spanId
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
     ManualUpdateParameters:
       type: object
       title: ManualUpdateParameters
@@ -5583,6 +5685,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -5590,6 +5693,13 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     PermissionCardSpec:
       type: object
       required:
@@ -6143,6 +6253,27 @@ components:
             - Failure
             example: Failure
       - $ref: '#/components/schemas/SerializableToolRpcError'
+    PublicFailedSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicFailedSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
     PublicInvocationWalletPin:
       type: object
       title: PublicInvocationWalletPin
@@ -6238,9 +6369,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RevertParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-      - $ref: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -6268,6 +6396,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       discriminator:
         propertyName: type
         mapping:
@@ -6300,9 +6429,6 @@ components:
           DeactivatePlugin: '#/components/schemas/PublicOplogEntry_r#DeactivatePluginParams'
           Revert: '#/components/schemas/PublicOplogEntry_r#RevertParams'
           CancelPendingInvocation: '#/components/schemas/PublicOplogEntry_r#CancelPendingInvocationParams'
-          StartSpan: '#/components/schemas/PublicOplogEntry_r#StartSpanParams'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_r#FinishSpanParams'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_r#SetSpanAttributeParams'
           BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#BeginRemoteTransactionParams'
           PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreCommitRemoteTransactionParams'
           PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_r#PreRollbackRemoteTransactionParams'
@@ -6330,6 +6456,7 @@ components:
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
     PublicOplogEntryAttribution:
       type: object
       oneOf:
@@ -6727,18 +6854,6 @@ components:
             - FailedUpdate
             example: FailedUpdate
       - $ref: '#/components/schemas/r#FailedUpdateParams'
-    PublicOplogEntry_r#FinishSpanParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - FinishSpan
-            example: FinishSpan
-      - $ref: '#/components/schemas/r#FinishSpanParams'
     PublicOplogEntry_r#GrowMemoryParams:
       allOf:
       - type: object
@@ -6955,7 +7070,7 @@ components:
             - SetRetryPolicy
             example: SetRetryPolicy
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
-    PublicOplogEntry_r#SetSpanAttributeParams:
+    PublicOplogEntry_r#SnapshotConfirmedParams:
       allOf:
       - type: object
         required:
@@ -6964,9 +7079,9 @@ components:
           type:
             type: string
             enum:
-            - SetSpanAttribute
-            example: SetSpanAttribute
-      - $ref: '#/components/schemas/r#SetSpanAttributeParams'
+            - SnapshotConfirmed
+            example: SnapshotConfirmed
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -6991,18 +7106,6 @@ components:
             - Start
             example: Start
       - $ref: '#/components/schemas/r#StartParams'
-    PublicOplogEntry_r#StartSpanParams:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - StartSpan
-            example: StartSpan
-      - $ref: '#/components/schemas/r#StartSpanParams'
     PublicOplogEntry_r#StreamCancelParams:
       allOf:
       - type: object
@@ -7366,6 +7469,27 @@ components:
             - Wrapper
             example: Wrapper
       - $ref: '#/components/schemas/PublicRetryPolicyStateWrapper'
+    PublicSnapshotAssistedUpdateDetails:
+      type: object
+      title: PublicSnapshotAssistedUpdateDetails
+      required:
+      - pendingUpdateIndex
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      properties:
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
     PublicSnapshotData:
       type: object
       oneOf:
@@ -7414,6 +7538,19 @@ components:
             - Raw
             example: Raw
       - $ref: '#/components/schemas/RawSnapshotData'
+    PublicSpanAttributes:
+      type: object
+      title: PublicSpanAttributes
+      required:
+      - spanId
+      - attributes
+      properties:
+        spanId:
+          type: string
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
     PublicSpanData:
       type: object
       oneOf:
@@ -7448,6 +7585,86 @@ components:
             - LocalSpan
             example: LocalSpan
       - $ref: '#/components/schemas/PublicLocalSpanData'
+    PublicSpanFinished:
+      type: object
+      title: PublicSpanFinished
+      required:
+      - spanId
+      - finishedAt
+      - outcome
+      properties:
+        spanId:
+          type: string
+        finishedAt:
+          type: string
+          format: date-time
+        outcome:
+          $ref: '#/components/schemas/PublicSpanOutcome'
+    PublicSpanKind:
+      type: string
+      enum:
+      - internal
+      - client
+      - server
+    PublicSpanLink:
+      type: object
+      title: PublicSpanLink
+      required:
+      - traceId
+      - spanId
+      - traceStates
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+    PublicSpanOutcome:
+      type: string
+      enum:
+      - completed
+      - failed
+      - cancelled
+      - abandoned
+      - denied
+    PublicSpanStarted:
+      type: object
+      title: PublicSpanStarted
+      required:
+      - spanId
+      - traceId
+      - traceStates
+      - links
+      - startedAt
+      - attributes
+      - kind
+      properties:
+        spanId:
+          type: string
+        traceId:
+          type: string
+        traceStates:
+          type: array
+          items:
+            type: string
+        parentSpanId:
+          type: string
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicSpanLink'
+        startedAt:
+          type: string
+          format: date-time
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicAttribute'
+        kind:
+          $ref: '#/components/schemas/PublicSpanKind'
     PublicToolInvocationOperation:
       type: object
       title: PublicToolInvocationOperation
@@ -7456,6 +7673,8 @@ components:
       - hasStdin
       - hasStdout
       - declaresStdout
+      - hasStderr
+      - declaresStderr
       properties:
         commandPath:
           type: array
@@ -7472,6 +7691,14 @@ components:
         declaresStdout:
           type: boolean
           description: Whether the tool declares stdout support. Stdout bytes are not recorded in the oplog.
+        hasStderr:
+          type: boolean
+          description: |-
+            Whether a live stderr attachment was requested. Stderr bytes are not recorded in the
+            oplog.
+        declaresStderr:
+          type: boolean
+          description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
     PublicTypedAgentConfigEntry:
       type: object
       title: PublicTypedAgentConfigEntry
@@ -7493,11 +7720,13 @@ components:
       type: object
       oneOf:
       - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
       - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
       discriminator:
         propertyName: type
         mapping:
           Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotAssistedAutomatic: '#/components/schemas/PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters'
           SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
     PublicUpdateDescription_Empty:
       allOf:
@@ -7511,6 +7740,18 @@ components:
             - Automatic
             example: Automatic
       - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotAssistedAutomaticUpdateParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SnapshotAssistedAutomatic
+            example: SnapshotAssistedAutomatic
+      - $ref: '#/components/schemas/SnapshotAssistedAutomaticUpdateParameters'
     PublicUpdateDescription_SnapshotBasedUpdateParameters:
       allOf:
       - type: object
@@ -8385,6 +8626,20 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: object
+            properties:
+              metadata:
+                $ref: '#/components/schemas/MetadataEnvelope'
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -8932,6 +9187,18 @@ components:
           kind:
             type: string
             enum:
+            - uuid
+          value:
+            type: string
+            format: uuid
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
             - datetime
           value:
             type: object
@@ -9205,6 +9472,35 @@ components:
             - ResourceExhausted
           value:
             type: string
+    SnapshotAssistedAutomaticUpdateParameters:
+      type: object
+      title: SnapshotAssistedAutomaticUpdateParameters
+    SnapshotAssistedUpdateMetadata:
+      type: object
+      title: SnapshotAssistedUpdateMetadata
+      required:
+      - sourceComponentRevision
+      - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
+      properties:
+        sourceComponentRevision:
+          type: integer
+          format: uint64
+        sourceRevisionStartIndex:
+          type: integer
+          format: uint64
+        snapshotIndex:
+          type: integer
+          format: uint64
+        snapshotRevision:
+          type: integer
+          format: uint64
+        filesystemSnapshot:
+          type: string
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -9218,6 +9514,8 @@ components:
             type: integer
             format: uint8
         mimeType:
+          type: string
+        filesystemSnapshot:
           type: string
     StoredCard:
       type: object
@@ -9290,6 +9588,7 @@ components:
       required:
       - timestamp
       - targetRevision
+      - mode
       properties:
         timestamp:
           type: string
@@ -9297,6 +9596,13 @@ components:
         targetRevision:
           type: integer
           format: uint64
+        pendingUpdateIndex:
+          type: integer
+          format: uint64
+        mode:
+          $ref: '#/components/schemas/AgentUpdateMode'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/SnapshotAssistedUpdateMetadata'
     TailPositional:
       type: object
       required:
@@ -9363,10 +9669,13 @@ components:
       type: object
       required:
       - version
+      - requires_filesystem
       - commands
       properties:
         version:
           type: string
+        requires_filesystem:
+          type: boolean
         commands:
           $ref: '#/components/schemas/CommandTree'
         schema:
@@ -9512,6 +9821,12 @@ components:
     UpdateWorkerResponse:
       type: object
       title: UpdateWorkerResponse
+      required:
+      - updateAttemptIndex
+      properties:
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     UrlRestrictions:
       type: object
       properties:
@@ -9749,6 +10064,8 @@ components:
           format: uint64
         partial:
           $ref: '#/components/schemas/TypedSchemaValue'
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
     r#CardDerivedParams:
       type: object
       title: r#CardDerivedParams
@@ -10146,6 +10463,10 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         forcedCommit:
           type: boolean
+        spanFinished:
+          $ref: '#/components/schemas/PublicSpanFinished'
+        spanAttributes:
+          $ref: '#/components/schemas/PublicSpanAttributes'
     r#ErrorParams:
       type: object
       title: r#ErrorParams
@@ -10194,18 +10515,11 @@ components:
           format: uint64
         details:
           type: string
-    r#FinishSpanParams:
-      type: object
-      title: r#FinishSpanParams
-      required:
-      - timestamp
-      - spanId
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicFailedSnapshotAssistedUpdateDetails'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#GrowMemoryParams:
       type: object
       title: r#GrowMemoryParams
@@ -10277,6 +10591,8 @@ components:
           type: string
         message:
           type: string
+        traceContext:
+          $ref: '#/components/schemas/LogTraceContext'
     r#NoOpParams:
       type: object
       title: r#NoOpParams
@@ -10332,6 +10648,7 @@ components:
       - timestamp
       - targetRevision
       - description
+      - updateAttemptIndex
       properties:
         timestamp:
           type: string
@@ -10341,6 +10658,9 @@ components:
           format: uint64
         description:
           $ref: '#/components/schemas/PublicUpdateDescription'
+        updateAttemptIndex:
+          type: integer
+          format: uint64
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams
@@ -10443,24 +10763,18 @@ components:
           format: date-time
         policy:
           $ref: '#/components/schemas/PublicNamedRetryPolicy'
-    r#SetSpanAttributeParams:
+    r#SnapshotConfirmedParams:
       type: object
-      title: r#SetSpanAttributeParams
+      title: r#SnapshotConfirmedParams
       required:
       - timestamp
-      - spanId
-      - key
-      - value
+      - filesystemSnapshot
       properties:
         timestamp:
           type: string
           format: date-time
-        spanId:
+        filesystemSnapshot:
           type: string
-        key:
-          type: string
-        value:
-          $ref: '#/components/schemas/PublicAttributeValue'
     r#SnapshotParams:
       type: object
       title: r#SnapshotParams
@@ -10473,6 +10787,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
     r#StartParams:
       type: object
       title: r#StartParams
@@ -10499,27 +10815,8 @@ components:
           $ref: '#/components/schemas/TypedSchemaValue'
         durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
-    r#StartSpanParams:
-      type: object
-      title: r#StartSpanParams
-      required:
-      - timestamp
-      - spanId
-      - attributes
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        spanId:
-          type: string
-        parentId:
-          type: string
-        linkedContext:
-          type: string
-        attributes:
-          type: array
-          items:
-            $ref: '#/components/schemas/PublicAttribute'
+        spanStarted:
+          $ref: '#/components/schemas/PublicSpanStarted'
     r#StreamCancelParams:
       type: object
       title: r#StreamCancelParams
@@ -10602,6 +10899,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationDescription'
+        snapshotAssistedDetails:
+          $ref: '#/components/schemas/PublicSnapshotAssistedUpdateDetails'
     r#SuspendParams:
       type: object
       title: r#SuspendParams

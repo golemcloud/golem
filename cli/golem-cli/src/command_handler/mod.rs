@@ -15,10 +15,12 @@
 use self::resource_definition::ResourceDefinitionCommandHandler;
 use self::retry_policy::RetryPolicyCommandHandler;
 use self::secret::SecretCommandHandler;
+use self::ssh::SshCommandHandler;
 use self::tool::ToolCommandHandler;
 use crate::command::agent_type::AgentTypeSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
+use crate::command::tool::ToolSubcommand;
 use crate::command::{
     GolemCliCommand, GolemCliCommandParseResult, GolemCliFallbackCommand, GolemCliGlobalFlags,
     GolemCliSubcommand,
@@ -43,9 +45,12 @@ use crate::command_handler::plugin::PluginCommandHandler;
 use crate::command_handler::profile::ProfileCommandHandler;
 use crate::command_handler::profile::config::ProfileConfigCommandHandler;
 use crate::command_handler::repl::ReplHandler;
+use crate::command_handler::ssh::NOT_RUN_EXIT;
 use crate::context::Context;
 use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit, PipedExitCode};
-use crate::log::{Output, log_anyhow_error, logln, set_log_output};
+use crate::log::{
+    Output, RawOutputReservation, TracingSuppression, log_anyhow_error, logln, set_log_output,
+};
 use crate::model::format::Format;
 use crate::{command_name, init_tracing};
 use anyhow::anyhow;
@@ -58,6 +63,8 @@ use std::marker::PhantomData;
 use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::{Level, debug};
+
+pub(crate) use app::tool_middleware::ResolvedToolMiddlewareGrants;
 
 mod account;
 mod agent;
@@ -77,6 +84,7 @@ mod repl;
 mod resource_definition;
 mod retry_policy;
 mod secret;
+mod ssh;
 pub(crate) mod template;
 mod tool;
 
@@ -145,6 +153,13 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     ) -> ExitCode {
         let result = match command_parse_result {
             GolemCliCommandParseResult::FullMatch(command) => {
+                let raw_outputs = raw_tool_outputs(&command.subcommand);
+                let _raw_output_guard = raw_outputs.map(|(raw_stdout, raw_stderr)| {
+                    RawOutputReservation::new(raw_stdout, raw_stderr)
+                });
+                let _tracing_suppression = raw_outputs
+                    .is_some_and(|(_, raw_stderr)| raw_stderr)
+                    .then(TracingSuppression::new);
                 #[cfg(feature = "server-commands")]
                 let verbosity = if matches!(command.subcommand, GolemCliSubcommand::Server { .. }) {
                     Hooks::override_verbosity(command.global_flags.verbosity())
@@ -165,12 +180,17 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
+                // `golem ssh` follows ssh: 255 says that the command did not run, whatever
+                // stopped it.
+                let follows_ssh = matches!(command.subcommand, GolemCliSubcommand::Ssh { .. });
+
                 let mut lazy_context = LazyContext::new(command.global_flags.clone(), hooks);
                 let result = Self::handle_subcommand(&mut lazy_context, command.subcommand)
                     .await
                     .map(|()| ExitCode::SUCCESS);
+                let succeeded = result.is_ok();
 
-                match result {
+                let handled = match result {
                     Ok(result) => Ok(result),
                     Err(error) => {
                         set_log_output(Output::Stderr);
@@ -182,6 +202,14 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                             Err(error)
                         }
                     }
+                };
+                match handled {
+                    Err(error) if follows_ssh && !error.is::<PipedExitCode>() => {
+                        log_anyhow_error(&error);
+                        Ok(ExitCode::from(NOT_RUN_EXIT))
+                    }
+                    Ok(_) if follows_ssh && !succeeded => Ok(ExitCode::from(NOT_RUN_EXIT)),
+                    handled => handled,
                 }
             }
             GolemCliCommandParseResult::ErrorWithPartialMatch {
@@ -273,11 +301,20 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     component_name,
                     agent_type_name,
                     output_dir,
+                    derive_rule,
+                    rust_dependency,
                 } => {
                     ctx.get_or_init()
                         .await?
                         .bridge_handler()
-                        .cmd_generate_bridge(language, component_name, agent_type_name, output_dir)
+                        .cmd_generate_bridge(
+                            language,
+                            component_name,
+                            agent_type_name,
+                            output_dir,
+                            derive_rule,
+                            rust_dependency,
+                        )
                         .await
                 }
                 GolemCliSubcommand::Repl {
@@ -303,6 +340,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                             !disable_stream,
                             disable_auto_imports,
                         )
+                        .await
+                }
+                GolemCliSubcommand::Ssh {
+                    agent_id,
+                    command,
+                    tool,
+                    cwd,
+                    timeout,
+                } => {
+                    ctx.get_or_init()
+                        .await?
+                        .ssh_handler()
+                        .cmd_ssh(agent_id, command, tool, cwd, timeout)
                         .await
                 }
                 GolemCliSubcommand::Deploy {
@@ -520,6 +570,19 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
     }
 }
 
+fn raw_tool_outputs(subcommand: &GolemCliSubcommand) -> Option<(bool, bool)> {
+    let GolemCliSubcommand::Tool {
+        subcommand: ToolSubcommand::Invoke(args),
+    } = subcommand
+    else {
+        return None;
+    };
+    Some((
+        args.stdout && args.output.is_none(),
+        args.stderr && args.stderr_output.is_none(),
+    ))
+}
+
 #[cfg(feature = "server-commands")]
 pub fn requires_executor_runtime(command_parse_result: &GolemCliCommandParseResult) -> bool {
     matches!(
@@ -604,6 +667,7 @@ pub trait Handlers {
     fn component_handler(&self) -> ComponentCommandHandler;
     fn environment_handler(&self) -> EnvironmentCommandHandler;
     fn tool_handler(&self) -> ToolCommandHandler;
+    fn ssh_handler(&self) -> SshCommandHandler;
     fn error_handler(&self) -> ErrorHandler;
     fn interactive_handler(&self) -> InteractiveHandler;
     fn log_handler(&self) -> LogHandler;
@@ -673,6 +737,10 @@ impl Handlers for Arc<Context> {
 
     fn tool_handler(&self) -> ToolCommandHandler {
         ToolCommandHandler::new(self.clone())
+    }
+
+    fn ssh_handler(&self) -> SshCommandHandler {
+        SshCommandHandler::new(self.clone())
     }
 
     fn error_handler(&self) -> ErrorHandler {
@@ -760,5 +828,44 @@ mod tests {
         ]));
         assert!(!requires_executor_runtime_for(&["golem", "templates"]));
         assert!(!requires_executor_runtime_for(&["golem"]));
+    }
+}
+
+#[cfg(test)]
+mod raw_tool_output_tests {
+    use super::raw_tool_outputs;
+    use crate::command::GolemCliCommand;
+    use clap::Parser;
+    use test_r::test;
+
+    #[test]
+    fn raw_tool_fds_are_reserved_before_context_and_tracing_initialization() {
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--output",
+            "stdout.bin",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((false, true)));
+
+        let command = GolemCliCommand::try_parse_from([
+            "golem",
+            "tool",
+            "invoke",
+            "--component",
+            "example:component",
+            "--stdout",
+            "--stderr",
+            "native",
+        ])
+        .unwrap();
+        assert_eq!(raw_tool_outputs(&command.subcommand), Some((true, true)));
     }
 }

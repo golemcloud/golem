@@ -1,0 +1,111 @@
+# Durable Streams in MoonBit
+
+Durable Streams is the resumable HTTP protocol around typed invocation stream slots. It differs
+from generic agent RPC streaming: `@schema.AgentStream[T]` is the method value; Durable Streams
+adds stable URLs for sessions and slots that external clients can append, resume, cancel, and fork.
+
+## Expose a Stream-Bearing Method
+
+```moonbit nocheck
+#derive.agent
+#derive.mount("/pipes/{name}")
+struct Pipe { name : String }
+
+fn Pipe::new(name : String) -> Pipe { { name } }
+
+#derive.endpoint(post="/uppercase")
+#derive.durable_stream_slot(input="input", name="inbox")
+#derive.durable_stream_slot(output="$result", name="outbox")
+#derive.durable_streams(
+  allow_external_writes=true,
+  allow_stream_delete=true,
+  allow_invocation_delete=true,
+  max_concurrent_readers_per_stream=8,
+  max_append_requests_per_second_per_stream=25,
+)
+pub fn Pipe::uppercase(
+  self : Self,
+  input : @schema.AgentStream[String],
+) -> @schema.AgentStream[String] {
+  // Produce lazily; read input and write transformed items.
+  ...
+}
+```
+
+Slots are top-level stream parameters/outputs. `$result` selects a direct stream or scalar result;
+an all-stream record output gets one slot per field. Public names replace canonical URL names.
+Only direct `@schema.AgentStream[Byte]` slots may set `content_type`; other slots use JSON. Add the
+agent to an `httpApi` deployment. Never edit generated `.mbt` files.
+
+Paths are `<base>`, `<base>/invocations/<session>`, and
+`<base>/invocations/<session>/streams/<slot>`; fork paths insert `/forks/<fork>`. PUT
+creates/ensures, GET/HEAD reads, POST appends to writable inputs, and DELETE cooperatively cancels.
+Create a session first if any non-stream method argument is not path/query-bound.
+
+## Protocol Rules
+
+- JSON POST arrays are batches; wrap an array-valued message in another array. Byte slots use raw
+  bytes. `Stream-Closed: true` atomically appends and closes; empty means close-only.
+- Send `Producer-Id`, `Producer-Epoch`, and `Producer-Seq` together and retry an uncertain append
+  with exactly the same tuple and body. Offsets and cursors are opaque strings.
+- Read `offset=-1`, or resolve `now` once and continue from the returned offset. A 204 long-poll or
+  empty/up-to-date response is not EOF. Up-to-date plus `Stream-Closed: true` is EOF; missing,
+  gone, cancelled, decoding, and transport outcomes are errors.
+- Slot DELETE tombstones it; session DELETE cancels open slots without interrupting arbitrary agent
+  work. Limits return 429/413; honor `Retry-After` and do not retry oversized payloads unchanged.
+- Fork creation is a slot PUT with `Stream-Forked-From` and optional offset/sub-offset, initial
+  body, and closure. The source must have the same route/base, session ID, and public slot name as
+  the target, either at the origin or in another fork. A normal Golem fork instead copies
+  checkpoints and producer identity, so divergent branches can collide unless intentionally
+  assigned independent producers.
+
+## Consume External Compatible URLs
+
+Import `golemcloud/golem_sdk/durable_streams`:
+
+```moonbit nocheck
+async fn read_all(url : String) -> Array[String] {
+  let reader : @durable_streams.Reader[String] =
+    @durable_streams.json_reader(url)
+  defer reader.close()
+  let values = []
+  while reader.read() is Some(value) {
+    values.push(value)
+  }
+  values
+}
+
+async fn append_all(url : String, values : Array[String]) -> Unit {
+  let writer : @durable_streams.Writer[String] =
+    @durable_streams.json_writer(
+      url,
+      producer_id="orders-v1",
+      epoch=1,
+    )
+  defer writer.drop()
+  ignore(writer.append(values, close=true))
+}
+```
+
+Use `byte_reader`, `byte_writer`, and `append_bytes` for bytes; append and HTTP batch boundaries
+disappear. Readers expose `read`, `checkpoint`, `close`, and one-time `into_stream`. Options cover
+opaque offset/cursor, catch-up then `LONG_POLL`/`SSE`, attempt deadline, idle delay, and retries.
+
+Writers retain one immutable uncertain producer tuple, encoded body, and close flag. Cancellation
+does not erase it. Call `retry_pending()` before different data; exact acknowledgement alone
+advances sequence, and an absent `next_offset` is valid. `drop()` releases locally without closing
+or undoing a remote append.
+
+Only timeout, transport, rate-limit, and unavailable failures retry with bounded exponential
+backoff, durable timers, and Retry-After. Protocol, fencing, conflict, gone, and size failures do
+not. Replay rebuilds checkpoints, buffered positions, pending data, producer progress, and retry
+budgets and does not repeat completed HTTP effects. Do not add custom durability/atomic wrappers.
+
+Pass a raw `@types.Secret` capability as `auth`; the host pins it and sends the Bearer token. Never
+reveal it or place credentials in the URL. HTTPS is required except when the host is exactly
+`localhost` or a loopback IP; a name such as `app.localhost` is not exempt. Redirects are rejected.
+
+```shell
+golem build
+golem deploy --yes
+```

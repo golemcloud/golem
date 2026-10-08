@@ -193,7 +193,7 @@ migrate the state.
 
 ## Update Checklist
 
-1. Keep the agent `mode` durable.
+1. Keep the agent `mode` durable. An ephemeral agent takes no snapshots.
 2. Declare all persisted state in the schema passed to `Snapshot.define`.
 3. Select an explicit policy appropriate to recovery frequency.
 4. Select `Snapshot.ref<Saved>()` and route all state reads and writes through its `Ref`.

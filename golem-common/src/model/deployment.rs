@@ -55,6 +55,11 @@ impl DeploymentPlan {
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
                 .collect(),
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|import| (import.index.to_string(), import.hash.into()))
+                .collect(),
             remote_tools,
             published_tools: self
                 .published_tools
@@ -126,6 +131,15 @@ impl DeploymentPlanAmbientToolEntry {
             provision: self.provision.clone(),
             component_bindings,
             bindings,
+            environment_middleware_binding: Some((&self.environment_binding).into()),
+            component_middleware_bindings: component_overrides
+                .iter()
+                .map(|(component, binding)| (component.0.clone(), binding.into()))
+                .collect(),
+            agent_middleware_bindings: overrides
+                .iter()
+                .map(|(agent, binding)| (agent.clone(), binding.into()))
+                .collect(),
         }
     }
 }
@@ -147,6 +161,11 @@ impl DeploymentSummary {
                 .mcp_deployments
                 .iter()
                 .map(|mcd| (mcd.domain.0.clone(), mcd.hash.into()))
+                .collect(),
+            mcp_imports: self
+                .mcp_imports
+                .iter()
+                .map(|import| (import.index.to_string(), import.hash.into()))
                 .collect(),
             remote_tools: self
                 .remote_tools

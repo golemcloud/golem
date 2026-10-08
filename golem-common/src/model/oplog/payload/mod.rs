@@ -34,7 +34,8 @@ use crate::model::oplog::payload::types::{
     FileSystemError, ObjectMetadata, PermissionCardRevokeError, SecretRevealAudit,
     SecretRevealError, SerializableDateTime, SerializableFileTimes, SerializableP3FileSystemError,
     SerializableP3IpSocketAddress, SerializableP3SocketErrorCode, SerializableP3UdpDatagram,
-    SerializableSocketError, SerializableWebsocketError, SerializableWebsocketMessage,
+    SerializableSocketError, SerializableToolDiscoverySnapshot, SerializableWebsocketError,
+    SerializableWebsocketMessage,
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
@@ -55,7 +56,6 @@ use crate::model::{
 };
 use crate::oplog_payload;
 use crate::schema::schema_value::SecretValuePayload;
-use crate::schema::tool::DiscoveredTool;
 use crate::schema::{RegisteredAgentTypeSchema, SchemaGraph, SchemaValue, TypedSchemaValue};
 use crate::serialization::serialize;
 use desert_rust::{
@@ -175,6 +175,8 @@ oplog_payload! {
             method_name: String,
             input: SchemaValue,
             #[schema(skip)]
+            local_denial: Option<String>,
+            #[schema(skip)]
             logical_streaming_origin: Option<StreamInvocationId>,
             #[schema(skip)]
             #[transient(None::<AgentTypeName>)]
@@ -288,6 +290,22 @@ oplog_payload! {
         GolemRpcCreate {
             remote_agent_id: AgentId
         },
+        GolemRpcResource {
+            creation_index: OplogIndex
+        },
+        GolemRpcAsyncInvokeRejection {
+            remote_agent_id: AgentId,
+            idempotency_key: IdempotencyKey,
+            method_name: String,
+            error: SerializableRpcError
+        },
+        GolemContextSpanResource {
+            creation_index: Option<OplogIndex>
+        },
+        GolemContextSpanAttributes {
+            creation_index: Option<OplogIndex>,
+            attributes: Vec<(String, crate::model::invocation_context::AttributeValue)>
+        },
         KVCacheKey {
             key: String
         },
@@ -310,6 +328,9 @@ oplog_payload! {
         P3HttpClientSend {
             request: SerializableP3HttpClientSend
         },
+        P3HttpSpanCleanup {
+            send_start_index: OplogIndex
+        },
         /// Payload of a `HostStreamFrame` hint oplog entry recording one frame of a
         /// P3 HTTP outgoing request body. Not a host-call request: these frames are
         /// persisted as standalone hint entries under the send's `Start`, never as a
@@ -326,6 +347,12 @@ oplog_payload! {
         },
         GolemToolGetTool {
             name: String
+        },
+        McpToolCall {
+            input: TypedSchemaValue
+        },
+        McpToolPresence {
+            upstream_tool_name: String
         },
         GolemApiOplogRead {
             agent_id: AgentId,
@@ -383,6 +410,7 @@ oplog_payload! {
             input_decode_failure: Option<ToolInputDecodeFailure>,
             has_stdin: bool,
             has_stdout: bool,
+            has_stderr: bool,
             call_mode: EntityCallMode,
             error: SerializableToolRpcError,
         },
@@ -675,10 +703,16 @@ oplog_payload! {
             result: Result<(), CardInstallFailure>,
         },
         GolemToolTools {
-            result: Result<Vec<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
         },
         GolemToolTool {
-            result: Result<Option<Arc<DiscoveredTool>>, String>
+            result: Result<SerializableToolDiscoverySnapshot, String>
+        },
+        McpToolCall {
+            result: Result<Vec<u8>, SerializableToolRpcError>
+        },
+        McpToolPresence {
+            result: Result<bool, SerializableToolRpcError>
         },
         GolemApiOplogChunk {
             result: Result<Option<Vec<u8>>, String>,
@@ -905,6 +939,12 @@ pub mod host_functions {
         (GolemApiRetryGetRetryPolicyByName => "golem::api::retry", "get_retry_policy_by_name", GolemRetryPolicyByName, GolemRetryNamedPolicy),
         (GolemApiRetryResolveRetryPolicy => "golem::api::retry", "resolve_retry_policy", GolemRetryResolvePolicy, GolemRetryResolvedPolicy),
         (GolemRpcWasmRpcNew => "golem::rpc::wasm-rpc", "new", GolemRpcCreate, GolemRpcCreate),
+        (GolemRpcWasmRpcDrop => "golem::rpc::wasm-rpc", "drop", GolemRpcResource, GolemRpcUnit),
+        (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
+        (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
+        (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
+        (GolemContextSpanDrop => "golem::api::context::span", "drop", GolemContextSpanResource, GolemApiUnit),
+        (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),
         (P3KeyvalueCacheGet => "keyvalue::cache", "get", KVCacheKey, KVGet),
         (P3KeyvalueCacheExists => "keyvalue::cache", "exists", KVCacheKey, KVDelete),
         (P3KeyvalueCacheSet => "keyvalue::cache", "set", KVCacheKeyValueAndTtl, KVUnit),
@@ -934,6 +974,7 @@ pub mod host_functions {
         (P3SocketsTypesUdpSocketSend => "sockets::types::udp-socket", "send", P3SocketsUdpSend, P3SocketsUdpSend),
         (P3SocketsTypesUdpSocketReceive => "sockets::types::udp-socket", "receive", NoInput, P3SocketsUdpReceive),
         (P3HttpClientSend => "http::client", "send", P3HttpClientSend, P3HttpClientSendResult),
+        (P3HttpSpanCleanup => "http::client", "span-cleanup", P3HttpSpanCleanup, GolemApiUnit),
         (P3HttpClientConsumeBody => "http::types::response", "consume-body", NoInput, P3HttpClientConsumeBodyResult),
         (P3HttpClientConsumeBodyChunk => "http::types::response", "consume-body-chunk", NoInput, P3HttpClientConsumeBodyChunk),
         (P3HttpClientRequestBodyTransmission => "http::types::request", "body-transmission", NoInput, P3HttpClientRequestBodyTransmission),
@@ -970,6 +1011,8 @@ pub mod host_functions {
         (GolemToolResponseSecretHoldAdmission => "golem::tool::internal", "response-secret-hold-admission", GolemToolResponseSecretHoldAdmission, GolemToolResponseSecretHoldAdmission),
         (GolemEntityInvoke => "golem::entity", "invoke", EntityInvocation, EntityInvocation),
         (GolemToolInvocationRejected => "golem::tool::internal", "invocation-rejected", GolemToolInvocationRejected, EntityInvocation),
+        (McpToolCall => "golem::tool::mcp", "call", McpToolCall, McpToolCall),
+        (McpToolPresence => "golem::tool::mcp", "presence", McpToolPresence, McpToolPresence),
         (GolemAgentGetAgentTypeByAgentId => "golem::agent", "get_agent_type_by_agent_id", GolemAgentGetAgentTypeByAgentId, GolemAgentAgentType)
     }
 }

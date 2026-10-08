@@ -49,6 +49,7 @@ import {
 import {
   assertGuestSecretHandleCanLiftFromWire,
   GuestSecretHandle,
+  isGuestSecretHandle,
   liftGuestSecretHandleFromWire,
   peekGuestSecretHandle,
   takeGuestSecretHandleToWire,
@@ -57,7 +58,7 @@ import { SECRET_INTERNAL } from "./secretInternal.js"
 import {
   abandonGuestQuotaTokenWireHandle,
   assertGuestQuotaTokenHandleCanLiftFromWire,
-  GuestQuotaTokenHandle,
+  isGuestQuotaTokenHandle,
   liftGuestQuotaTokenHandleFromWire,
   peekGuestQuotaTokenHandle,
   takeGuestQuotaTokenHandleToWire,
@@ -68,7 +69,7 @@ import { STREAM_INTERNAL } from "./streamInternal.js"
 import {
   abandonGuestPermissionCardWireHandle,
   assertGuestPermissionCardHandleCanLiftFromWire,
-  GuestPermissionCardHandle,
+  isGuestPermissionCardHandle,
   liftGuestPermissionCardHandleFromWire,
   peekGuestPermissionCardHandle,
   takeGuestPermissionCardHandleToWire,
@@ -260,6 +261,8 @@ export class GraphEncoder {
         return { tag: "path-type", val: body.spec }
       case "url":
         return { tag: "url-type", val: body.restrictions }
+      case "uuid":
+        return { tag: "uuid-type" }
       case "datetime":
         return { tag: "datetime-type" }
       case "duration":
@@ -444,6 +447,8 @@ export function schemaGraphRootsFromWit(
         return { tag: "path", spec: body.val }
       case "url-type":
         return { tag: "url", restrictions: body.val }
+      case "uuid-type":
+        return { tag: "uuid" }
       case "datetime-type":
         return { tag: "datetime" }
       case "duration-type":
@@ -603,6 +608,18 @@ export function assertSchemaValueRepresentable(
           )
         }
         return
+      case "uuid":
+        if (
+          typeof v.value.highBits !== "bigint" ||
+          typeof v.value.lowBits !== "bigint" ||
+          v.value.highBits < 0n ||
+          v.value.highBits > (1n << 64n) - 1n ||
+          v.value.lowBits < 0n ||
+          v.value.lowBits > (1n << 64n) - 1n
+        ) {
+          throw new SchemaEncodeError("uuid value must contain two unsigned 64-bit integers")
+        }
+        return
       case "datetime": {
         const ns = v.value.nanoseconds
         if (!Number.isInteger(ns) || ns < 0 || ns >= 1_000_000_000) {
@@ -629,7 +646,7 @@ export function assertSchemaValueRepresentable(
         }
         return
       case "secret": {
-        if (!(v.handle instanceof GuestSecretHandle)) {
+        if (!isGuestSecretHandle(v.handle)) {
           throw new SchemaEncodeError("secret value contains an invalid secret handle")
         }
         assertCapabilityReady(v.handle)
@@ -648,7 +665,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "quota-token": {
-        if (!(v.handle instanceof GuestQuotaTokenHandle)) {
+        if (!isGuestQuotaTokenHandle(v.handle)) {
           throw new SchemaEncodeError("quota-token value contains an invalid quota-token handle")
         }
         assertCapabilityReady(v.handle)
@@ -688,7 +705,7 @@ export function assertSchemaValueRepresentable(
         return
       }
       case "permission-card": {
-        if (!(v.handle instanceof GuestPermissionCardHandle)) {
+        if (!isGuestPermissionCardHandle(v.handle)) {
           throw new SchemaEncodeError(
             "permission-card value contains an invalid permission-card handle",
           )
@@ -876,6 +893,8 @@ export function schemaValueToWit(value: SchemaValue): WitSchemaValueTree {
         return { tag: "path-value", val: v.value }
       case "url":
         return { tag: "url-value", val: v.value }
+      case "uuid":
+        return { tag: "uuid-value", val: v.value }
       case "datetime":
         return { tag: "datetime-value", val: v.value }
       case "duration":
@@ -1222,6 +1241,10 @@ export function preflightWitValueTree(nodes: WitSchemaValueNode[], root: ValueNo
       case "url-value":
         string(n.val, `${n.tag}.val`)
         return
+      case "uuid-value":
+        rangedBigint(n.val.highBits, "uuid-value.val.highBits", 0n, (1n << 64n) - 1n)
+        rangedBigint(n.val.lowBits, "uuid-value.val.lowBits", 0n, (1n << 64n) - 1n)
+        return
       case "enum-value":
         integer(n.val, "enum-value.val", 0, 0xffff_ffff)
         return
@@ -1537,6 +1560,8 @@ export function schemaValueFromWit(
         return { tag: "path", value: n.val }
       case "url-value":
         return { tag: "url", value: n.val }
+      case "uuid-value":
+        return { tag: "uuid", value: n.val }
       case "datetime-value":
         if (
           typeof n.val.seconds !== "bigint" ||

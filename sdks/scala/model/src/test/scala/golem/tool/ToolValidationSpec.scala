@@ -27,7 +27,7 @@ object ToolValidationSpec extends ZIOSpecDefault {
   private def strGraph(): SchemaGraph              = graph(t.string)
   private def u32Graph(): SchemaGraph              = graph(t.u32)
   private def emptyBody(): ExtendedCommandBody     =
-    ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, Nil, None)
+    ExtendedCommandBody(ExtendedPositionals.empty, Nil, Nil, Nil, None, None, None, None, Nil, None)
   private def leafToolWithBody(body: ExtendedCommandBody): ExtendedToolType =
     ExtendedToolType("0.1.0", Vector(ExtendedCommandNode("t", Nil, doc(""), ExtendedGlobals.empty, Nil, Some(body))))
   private def mapConfigOption(constraints: List[ExtendedConstraint]): ExtendedCommandBody =

@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::future::Future;
+
 pub mod account;
 pub mod account_resource_override;
 pub mod account_usage;
 pub mod agent_secret;
 pub mod application;
 pub mod auth;
+pub mod builtin_artifact;
 pub mod builtin_plugin_provisioner;
 pub mod builtin_tool_provisioner;
 pub mod card;
@@ -34,6 +37,8 @@ pub mod environment_tool_grant;
 pub mod environment_tool_middleware_grant;
 pub mod http_api_deployment;
 pub mod mcp_deployment;
+pub mod mcp_import;
+pub mod mcp_oauth;
 pub mod native_tool_catalog;
 pub mod oauth2;
 pub mod oauth2_github_client;
@@ -50,6 +55,26 @@ pub mod token;
 pub mod tool_middleware_release;
 pub mod tool_release;
 
+pub(crate) async fn capture_http_routing_epoch_before_snapshot<
+    E,
+    T,
+    EpochFuture,
+    Snapshot,
+    SnapshotFuture,
+>(
+    epoch: EpochFuture,
+    snapshot: Snapshot,
+) -> Result<(Option<i64>, T), E>
+where
+    EpochFuture: Future<Output = Result<Option<i64>, E>>,
+    Snapshot: FnOnce() -> SnapshotFuture,
+    SnapshotFuture: Future<Output = Result<T, E>>,
+{
+    let epoch = epoch.await?;
+    let snapshot = snapshot().await?;
+    Ok((epoch, snapshot))
+}
+
 /// Run CPU-heavy work on the global Rayon pool, returning a Future
 pub async fn run_cpu_bound_work<F, R>(f: F) -> R
 where
@@ -65,4 +90,34 @@ where
     });
 
     rx.await.expect("Rayon task panicked or channel closed")
+}
+
+#[cfg(test)]
+mod http_routing_snapshot_tests {
+    use super::capture_http_routing_epoch_before_snapshot;
+    use std::sync::{Arc, Mutex};
+    use test_r::test;
+
+    #[test]
+    async fn captures_epoch_before_reading_validation_snapshot() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let epoch_calls = calls.clone();
+        let snapshot_calls = calls.clone();
+        let (epoch, snapshot) = capture_http_routing_epoch_before_snapshot(
+            async move {
+                epoch_calls.lock().unwrap().push("epoch");
+                Ok::<_, ()>(Some(41))
+            },
+            || async move {
+                snapshot_calls.lock().unwrap().push("snapshot");
+                Ok::<_, ()>("validated")
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(epoch, Some(41));
+        assert_eq!(snapshot, "validated");
+        assert_eq!(*calls.lock().unwrap(), ["epoch", "snapshot"]);
+    }
 }

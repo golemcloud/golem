@@ -22,7 +22,9 @@ use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::{agent_id, data_value};
-use golem_test_framework::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
+use golem_test_framework::benchmark::{
+    Benchmark, BenchmarkRecorder, BenchmarkResultValue, RunConfig,
+};
 use golem_test_framework::config::benchmark::TestMode;
 use golem_test_framework::config::dsl_impl::TestUserContext;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
@@ -63,8 +65,8 @@ impl Benchmark for ColdStartUnknownSmall {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ColdStartUnknownBenchmark::new(
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(ColdStartUnknownBenchmark::new(
             "benchmark_agent_rust_release",
             "RustBenchmarkAgent",
             mode,
@@ -73,30 +75,33 @@ impl Benchmark for ColdStartUnknownSmall {
             disable_compilation_cache,
             otlp,
         )
-        .await
+        .await)
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
+        benchmark_context.cleanup().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
+        Ok(benchmark_context.setup_iteration(&self.config).await)
     }
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         _context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(&self.config).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.warmup(&self.config).await;
+        Ok(())
     }
 
     async fn run(
@@ -104,16 +109,19 @@ impl Benchmark for ColdStartUnknownSmall {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.run(context, recorder).await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
+        benchmark_context.cleanup_iteration(context, recorder).await;
+        Ok(())
     }
 }
 
@@ -142,8 +150,8 @@ impl Benchmark for ColdStartUnknownMedium {
         cluster_size: usize,
         disable_compilation_cache: bool,
         otlp: bool,
-    ) -> Self::BenchmarkContext {
-        ColdStartUnknownBenchmark::new(
+    ) -> BenchmarkResultValue<Self::BenchmarkContext> {
+        Ok(ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
             "BenchmarkAgent",
             mode,
@@ -152,30 +160,33 @@ impl Benchmark for ColdStartUnknownMedium {
             disable_compilation_cache,
             otlp,
         )
-        .await
+        .await)
     }
 
-    async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.cleanup().await
+    async fn cleanup(benchmark_context: Self::BenchmarkContext) -> BenchmarkResultValue {
+        benchmark_context.cleanup().await;
+        Ok(())
     }
 
-    async fn create(_mode: &TestMode, config: RunConfig) -> Self {
-        Self { config }
+    async fn create(_mode: &TestMode, config: RunConfig) -> BenchmarkResultValue<Self> {
+        Ok(Self { config })
     }
 
     async fn setup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
-    ) -> Self::IterationContext {
-        benchmark_context.setup_iteration(&self.config).await
+        _recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue<Self::IterationContext> {
+        Ok(benchmark_context.setup_iteration(&self.config).await)
     }
 
     async fn warmup(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         _context: &Self::IterationContext,
-    ) {
-        benchmark_context.warmup(&self.config).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.warmup(&self.config).await;
+        Ok(())
     }
 
     async fn run(
@@ -183,16 +194,19 @@ impl Benchmark for ColdStartUnknownMedium {
         benchmark_context: &Self::BenchmarkContext,
         context: &Self::IterationContext,
         recorder: BenchmarkRecorder,
-    ) {
-        benchmark_context.run(context, recorder).await
+    ) -> BenchmarkResultValue {
+        benchmark_context.run(context, recorder).await;
+        Ok(())
     }
 
     async fn cleanup_iteration(
         &self,
         benchmark_context: &Self::BenchmarkContext,
         context: Self::IterationContext,
-    ) {
-        benchmark_context.cleanup_iteration(context).await
+        recorder: BenchmarkRecorder,
+    ) -> BenchmarkResultValue {
+        benchmark_context.cleanup_iteration(context, recorder).await;
+        Ok(())
     }
 }
 
@@ -303,20 +317,24 @@ impl ColdStartUnknownBenchmark {
         }
     }
 
-    pub async fn cleanup_iteration(&self, iteration: IterationContext) {
+    pub async fn cleanup_iteration(
+        &self,
+        iteration: IterationContext,
+        recorder: BenchmarkRecorder,
+    ) {
         let agent_ids: Vec<AgentId> = iteration
             .agents
             .iter()
             .filter_map(|(component, agent_id)| AgentId::from_agent_id(component.id, agent_id).ok())
             .collect();
-        delete_workers(&iteration.user, &agent_ids).await;
+        delete_workers(&iteration.user, &agent_ids, &recorder).await;
         // Clean up each env/app individually, then delete the account once.
         // This avoids the account being deleted on the first env cleanup and
         // causing subsequent cleanup calls to fail (since the user token would
         // be invalid after account deletion).
         for env_id in &iteration.env_ids {
-            cleanup_env_and_app(&iteration.user, env_id).await;
+            cleanup_env_and_app(&iteration.user, env_id, &recorder).await;
         }
-        cleanup_account(&iteration.user).await;
+        cleanup_account(&iteration.user, &recorder).await;
     }
 }

@@ -17,27 +17,21 @@ import { AgentType, Principal } from 'golem:agent/common@2.0.0';
 import { SchemaValueTree, uuidToString, parseUuid } from 'golem:core/types@2.0.0';
 import type { Snapshot } from 'golem:api/host@1.5.0';
 import type { InvocationResult, Tool, ToolError, TypedSchemaValue } from 'golem:tool/common@0.1.0';
-import type { ByteStreamItem, ToolStdoutWriter } from 'golem:tool/streams@0.1.0';
-import { schemaValueConforms, type ExtendedCommandBody } from './internal/tool';
-import {
-  schemaValueFromWit,
-  t,
-  typedSchemaValueFromWit,
-  typedSchemaValueToWit,
-  v,
-} from './internal/schema-model';
+import type { ByteStreamItem, ToolOutputWriter } from 'golem:tool/streams@0.1.0';
+import type { ExtendedCommandBody } from './internal/tool';
 import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getRawSelfAgentId } from './host/hostapi';
 import { AgentInitiator } from './internal/agentInitiator';
 import { setAgentId } from './internal/registry/agentId';
 import { encodeMultipart, decodeMultipart } from './internal/multipart';
+import { decodeSnapshotDatabases, SnapshotDatabases } from './internal/databaseSnapshot';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import { ToolRegistry } from './internal/registry/toolRegistry';
 import { sdkPrincipalFromHost } from './principal';
 import {
   encodeDeclaredToolErrorPayload,
-  encodeToolValue,
+  encodeToolValueAsync,
   invalidToolResult,
   isDeclaredToolError,
 } from './internal/tool/invocationResult';
@@ -68,6 +62,7 @@ export * as oplog from './host/oplog';
 export * from './host/guard';
 export { acquireQuotaToken, QuotaToken, Reservation, withReservation } from './host/quota';
 export type { FailedReservation } from './host/quota';
+export type { GuestPermissionCardHandle as PermissionCard } from './internal/schema-model/permissionCardHandle';
 export * from './host/retry';
 export * from './host/result';
 export * from './host/saga';
@@ -75,6 +70,23 @@ export * from './host/checkpoint';
 export * from './host/durable';
 
 export { defineAgent } from './defineAgent';
+export { defineHttpRouter } from './defineHttpRouter';
+export type {
+  HttpRouterBuilder,
+  HttpRouterOptions,
+  HttpRouterContext,
+  WebHttpRouterContext,
+  HttpRouterHandler,
+  RawHttpRouterHandler,
+} from './defineHttpRouter';
+export { withRawHeaders } from './httpRouterWeb';
+export type {
+  HttpRequest,
+  HttpResponse,
+  HttpHeader,
+  FileExposure,
+  FileResponseHeaders,
+} from './httpRouterContract';
 export type {
   AgentDefinition,
   MethodOnlyAgentClientDefinition,
@@ -119,7 +131,7 @@ export {
   toolDefinition,
   universalToolMiddleware,
 } from './tool';
-export { toolClientDefinition, ToolCallError } from './toolClient';
+export { client, toolClientDefinition, ToolCallError } from './toolClient';
 export type { ToolClientDefinition } from './toolClient';
 export type {
   CamelCase,
@@ -216,7 +228,7 @@ export {
   getToolType as getReflectedToolType,
 } from './reflection';
 export type { ReflectedInvocation, ReflectedPhantomClient } from './reflection';
-export type { StartedToolInvocation } from './bridge/tool';
+export type { CollectedToolInvocation, StartedToolInvocation } from './bridge/tool';
 export { ToolStreamError } from './internal/tool/startedToolInvocation';
 
 let initializedAgent: { agent: ResolvedAgent; principal: Principal } | undefined;
@@ -240,7 +252,8 @@ interface GolemToolGuest {
     commandPath: string[],
     input: TypedSchemaValue,
     stdin: AsyncIterable<ByteStreamItem> | undefined,
-    stdout: ToolStdoutWriter | undefined,
+    stdout: ToolOutputWriter | undefined,
+    stderr: ToolOutputWriter | undefined,
     principal: Principal,
   ): Promise<InvocationResult>;
 }
@@ -280,9 +293,7 @@ async function initialize(
 
   setAgentId(getRawSelfAgentId());
 
-  const initiateResult = await (initiator.initiateFromWit
-    ? initiator.initiateFromWit(input, principal)
-    : initiator.initiate(schemaValueFromWit(input), principal));
+  const initiateResult = await initiator.initiate(input, principal);
 
   if (initiateResult.tag === 'ok') {
     initializedAgent = { agent: initiateResult.val, principal };
@@ -331,11 +342,13 @@ async function invokeTool(
   commandPath: string[],
   input: TypedSchemaValue,
   stdin: AsyncIterable<ByteStreamItem> | undefined,
-  stdout: ToolStdoutWriter | undefined,
+  stdout: ToolOutputWriter | undefined,
+  stderr: ToolOutputWriter | undefined,
   principal: Principal,
 ): Promise<InvocationResult> {
   let inputAdapter: ToolInputStreamAdapter | undefined;
-  let outputAdapter: ToolOutputStreamAdapter | undefined;
+  let stdoutAdapter: ToolOutputStreamAdapter | undefined;
+  let stderrAdapter: ToolOutputStreamAdapter | undefined;
   let inputCleanup: Promise<void> | undefined;
   const disposeInput = async (reason?: unknown): Promise<void> => {
     if (!inputCleanup) {
@@ -347,14 +360,12 @@ async function invokeTool(
   try {
     const resolved = ToolRegistry.resolveInvocation(toolName, commandPath);
 
-    let decodedInput;
+    let prepared;
     try {
-      decodedInput = typedSchemaValueFromWit(input);
+      prepared = resolved.prepareWire(input);
     } catch (error) {
       throw invalidToolInput(`malformed invocation input: ${errorMessage(error)}`);
     }
-
-    const prepared = resolved.prepare(decodedInput);
     const body = resolved.command.body;
     if (!body) throw { tag: 'invalid-command-path', val: [...commandPath] } satisfies ToolError;
 
@@ -376,23 +387,40 @@ async function invokeTool(
         throw invalidToolInput('tool invocation did not contain declared stdout stream');
       }
       if (stdout) {
-        outputAdapter = createToolOutputStream(stdout);
-        context.stdout = outputAdapter.stream;
+        stdoutAdapter = createToolOutputStream(stdout);
+        context.stdout = stdoutAdapter.stream;
+      }
+    }
+
+    if (body.stderr) {
+      if (!stderr && body.stderr.required) {
+        throw invalidToolInput('tool invocation did not contain declared stderr stream');
+      }
+      if (stderr) {
+        stderrAdapter = createToolOutputStream(stderr);
+        context.stderr = stderrAdapter.stream;
       }
     }
 
     const outcome = await prepared.invoke(context);
-    await outputAdapter?.finish();
-    const result = projectToolOutcome(body, outcome);
+    await Promise.all([stdoutAdapter?.finish(), stderrAdapter?.finish()]);
+    const result = await projectToolOutcome(body, outcome);
     await disposeInput();
     return result;
   } catch (error) {
-    await Promise.allSettled([outputAdapter?.abort(error), disposeInput(error)]);
+    await Promise.allSettled([
+      stdoutAdapter?.abort(error),
+      stderrAdapter?.abort(error),
+      disposeInput(error),
+    ]);
     throw error;
   }
 }
 
-function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): InvocationResult {
+async function projectToolOutcome(
+  body: ExtendedCommandBody,
+  outcome: unknown,
+): Promise<InvocationResult> {
   if (!isRecord(outcome) || typeof outcome.tag !== 'string') {
     throw invalidToolResult('tool handler returned an invalid outcome');
   }
@@ -408,7 +436,7 @@ function projectToolOutcome(body: ExtendedCommandBody, outcome: unknown): Invoca
       return { result: undefined };
     }
     return {
-      result: encodeToolValue(body.result.codec, outcome.value, 'tool result'),
+      result: await encodeToolValueAsync(body.result.codec, outcome.value, 'tool result'),
     };
   }
 
@@ -528,7 +556,7 @@ async function pullInput(
   }
 }
 
-function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapter {
+function createToolOutputStream(writer: ToolOutputWriter): ToolOutputStreamAdapter {
   const invocationCompleted = new Error('tool invocation completed');
   let activeOperation: Promise<void> | undefined;
   let controller: WritableStreamDefaultController | undefined;
@@ -626,7 +654,11 @@ function createToolOutputStream(writer: ToolStdoutWriter): ToolOutputStreamAdapt
       controller?.error(invocationCompleted);
       if (!terminated) {
         terminated = true;
-        await writer.finish();
+        try {
+          await writer.finish();
+        } catch {
+          // The writer's selected or drop terminal reports completion failure independently.
+        }
       }
     },
     abort,
@@ -785,10 +817,28 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     throw new Error('Failed to save agent snapshot: agent is not initialized');
   }
 
-  const { data: agentSnapshot, mimeType } = await initializedAgent.agent.saveSnapshot();
+  const saved = await initializedAgent.agent.saveSnapshot();
   const principal = initializedAgent.principal;
   const serializedPrincipal = serializePrincipal(principal);
 
+  if (saved.kind === 'custom') {
+    // Custom snapshot: version-2 binary envelope with principal. A custom save owns its
+    // databases, so it has no file-backed databases to record.
+    const principalJson = JSON.stringify(serializedPrincipal);
+    const principalBytes = new TextEncoder().encode(principalJson);
+
+    const totalLength = 1 + 4 + principalBytes.length + saved.data.length;
+    const fullSnapshot = new Uint8Array(totalLength);
+    const view = new DataView(fullSnapshot.buffer);
+    view.setUint8(0, 2); // version
+    view.setUint32(1, principalBytes.length, false); // big-endian
+    fullSnapshot.set(principalBytes, 5);
+    fullSnapshot.set(saved.data, 5 + principalBytes.length);
+
+    return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
+  }
+
+  const { data: agentSnapshot, mimeType, fileDatabases } = saved;
   if (mimeType.startsWith('multipart/mixed')) {
     // Multipart snapshot: the state JSON part already contains agent properties.
     // We need to inject version and principal into the state part.
@@ -805,7 +855,12 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
     }
 
     const stateJson = JSON.parse(new TextDecoder().decode(parts[stateIdx].body));
-    const envelope = { version: 1, principal: serializedPrincipal, state: stateJson };
+    const envelope = {
+      version: 1,
+      principal: serializedPrincipal,
+      state: stateJson,
+      fileDatabases,
+    };
     parts[stateIdx] = {
       ...parts[stateIdx],
       body: new TextEncoder().encode(JSON.stringify(envelope)),
@@ -817,28 +872,15 @@ async function save(): Promise<{ payload: Uint8Array; mimeType: string }> {
       mimeType: `multipart/mixed; boundary=${newBoundary}`,
     };
   } else if (mimeType === 'application/json') {
-    // JSON snapshot: wrap in envelope { version, principal, state }
+    // JSON snapshot: wrap in envelope { version, principal, state, fileDatabases }
     const state = JSON.parse(new TextDecoder().decode(agentSnapshot));
-    const envelope = { version: 1, principal: serializedPrincipal, state };
+    const envelope = { version: 1, principal: serializedPrincipal, state, fileDatabases };
     return {
       payload: new TextEncoder().encode(JSON.stringify(envelope)),
       mimeType: 'application/json',
     };
-  } else {
-    // Binary snapshot: version-2 binary envelope with principal
-    const principalJson = JSON.stringify(serializedPrincipal);
-    const principalBytes = new TextEncoder().encode(principalJson);
-
-    const totalLength = 1 + 4 + principalBytes.length + agentSnapshot.length;
-    const fullSnapshot = new Uint8Array(totalLength);
-    const view = new DataView(fullSnapshot.buffer);
-    view.setUint8(0, 2); // version
-    view.setUint32(1, principalBytes.length, false); // big-endian
-    fullSnapshot.set(principalBytes, 5);
-    fullSnapshot.set(agentSnapshot, 5 + principalBytes.length);
-
-    return { payload: fullSnapshot, mimeType: 'application/octet-stream' };
   }
+  throw new Error(`Unexpected typed snapshot type ${mimeType}`);
 }
 
 async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promise<void> {
@@ -848,7 +890,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
     throw `Agent is already initialized in this container`;
   }
 
-  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsed();
+  const [agentTypeName, agentParameters] = getRawSelfAgentId().parsedWire();
   const registrationError = AgentTypeRegistry.getRegistrationError(agentTypeName);
   if (registrationError) {
     // The snapshot WIT interface returns `result<_, string>`, not AgentError.
@@ -858,7 +900,7 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
   let agentSnapshot: Uint8Array;
   let agentSnapshotMimeType: string | undefined;
   let principal: Principal;
-  let databases: Array<{ name: string; bytes: Uint8Array }> = [];
+  let databases: SnapshotDatabases = { inMemory: [], fileDatabases: {} };
 
   const decodeJsonEnvelope = (data: Uint8Array, description: string) => {
     const envelope = JSON.parse(new TextDecoder().decode(data));
@@ -899,15 +941,14 @@ async function load(snapshot: { payload: Uint8Array; mimeType: string }): Promis
 
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
-    databases = parts
-      .filter((part) => part.name.startsWith('db:'))
-      .map((part) => ({ name: part.name.slice(3), bytes: part.body }));
+    databases = decodeSnapshotDatabases(parts, envelope, 'multipart state part');
   } else if (snapshot.mimeType === 'application/json') {
-    // JSON snapshot: unwrap envelope { version, principal, state }
+    // JSON snapshot: unwrap envelope { version, principal, state, fileDatabases }
     const envelope = decodeJsonEnvelope(bytes, 'JSON snapshot');
     principal = deserializePrincipal(envelope.principal);
     agentSnapshot = new TextEncoder().encode(JSON.stringify(envelope.state));
     agentSnapshotMimeType = 'application/json';
+    databases = decodeSnapshotDatabases([], envelope, 'JSON snapshot');
   } else {
     // Custom binary snapshot with version envelope
     if (bytes.byteLength < 1) {

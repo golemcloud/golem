@@ -104,6 +104,15 @@ pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream
     agentic::agent_implementation_impl(attr, item)
 }
 
+/// Registers an implementation of the SDK's `HttpRouter` trait.
+#[cfg(not(test))]
+#[proc_macro_attribute]
+pub fn http_router(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agentic::http_router::expand(attr.into(), item.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
 #[cfg(not(test))]
 #[proc_macro_attribute]
 pub fn agent_client(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -159,7 +168,8 @@ pub fn universal_tool_middleware(attr: TokenStream, item: TokenStream) -> TokenS
 #[cfg(not(test))]
 #[proc_macro_derive(ToolError, attributes(tool_error, example))]
 pub fn derive_tool_error(input: TokenStream) -> TokenStream {
-    tool::derive_tool_error_impl(input, &get_tool_schema_crate_ident())
+    let guest = crate_name("golem-rust").is_ok() || crate_name("golem-native-tool").is_err();
+    tool::derive_tool_error_impl(input, &get_tool_schema_crate_ident(), guest)
 }
 
 fn get_tool_schema_crate_ident() -> syn::Ident {

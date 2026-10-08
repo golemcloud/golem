@@ -253,9 +253,9 @@ impl TemplateHandler {
                         .map(|component_name| {
                             let component = app_ctx.application().component(&component_name);
                             let existing_component = ExistingComponent {
-                                language: component.guess_language().ok_or_else(|| {
+                                language: component.guest_language().ok_or_else(|| {
                                     anyhow!(
-                                        "Failed to determine language for component {}",
+                                        "Failed to determine language for component {}: none of its component templates declare a guestLanguage",
                                         component_name
                                     )
                                 })?,

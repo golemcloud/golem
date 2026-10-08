@@ -38,6 +38,7 @@ pub mod quota;
 mod random;
 pub mod rdbms;
 pub(crate) mod replay_state;
+pub(crate) mod revision_update;
 pub mod schema_value_stream;
 mod secrets;
 pub use schema_value_stream::CoreTypesHost;
@@ -55,25 +56,122 @@ tokio::task_local! {
     static ENTITY_CANCELLATION_MASKED: ();
 }
 
+/// The recorded function name of a batched-write durable scope `Start`. A discriminator makes the
+/// name unique among concurrent sibling scopes of the same durable function type; a discriminated
+/// claim never matches a plain-named scope and vice versa.
+pub(crate) fn batched_write_scope_name(discriminator: Option<&str>) -> HostFunctionName {
+    match discriminator {
+        Some(discriminator) => {
+            HostFunctionName::Custom(format!("<scope:batched-write:{discriminator}>"))
+        }
+        None => HostFunctionName::Custom(PLAIN_BATCHED_WRITE_SCOPE_NAME.to_string()),
+    }
+}
+
+const PLAIN_BATCHED_WRITE_SCOPE_NAME: &str = "<scope:batched-write>";
+
+/// The per-call quota an outbound durable call is charged against: the per-invocation call
+/// limits and the monthly account budgets exist for outgoing HTTP and for agent RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaClass {
+    Http,
+    Rpc,
+}
+
+impl QuotaClass {
+    /// The quota class a recorded durable call is charged against, or `None` when calls of this
+    /// kind are not quota-charged. This is the single mapping from recorded call kind to quota:
+    /// the charging sites name their class directly, and the replay cursor uses this to report
+    /// which classes still have an unclaimed retained `Start` waiting for its owner (see
+    /// `WorkerState::durable_call_is_fresh`), so the two must agree on the recorded kinds.
+    ///
+    /// P2 HTTP (`wasi:http/outgoing-handler.handle`) is recorded as a plain batched-write scope,
+    /// a name it shares with rdbms transactions; a retained scope of that name therefore counts as
+    /// a possibly-HTTP one.
+    pub(crate) fn of_recorded_call(function_name: &HostFunctionName) -> Option<Self> {
+        match function_name {
+            HostFunctionName::P3HttpClientSend
+            | HostFunctionName::McpToolCall
+            | HostFunctionName::GolemAgentDurableStreamReaderRead
+            | HostFunctionName::GolemAgentDurableStreamWriterAppend => Some(Self::Http),
+            HostFunctionName::GolemRpcWasmRpcInvoke
+            | HostFunctionName::GolemRpcWasmRpcInvokeAndAwaitResult => Some(Self::Rpc),
+            HostFunctionName::Custom(name) if name == PLAIN_BATCHED_WRITE_SCOPE_NAME => {
+                Some(Self::Http)
+            }
+            _ => None,
+        }
+    }
+}
+
 pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Output {
     ENTITY_CANCELLATION_MASKED.scope((), future).await
+}
+
+/// Appends one `Jump` per `deleted_region` while a durable context recovers from an incomplete
+/// recorded attempt (batched-write scope, remote transaction or atomic region) by re-executing it
+/// live, and makes the Jumps effective in the shared replay cursor before the caller finishes the
+/// replay-to-live switch. Future replays skip the abandoned attempt, and any `Start` of that
+/// attempt the cursor still retains is dropped so the live re-execution neither claims it nor is
+/// blamed for leaving it unconsumed. Worker status is recomputed because the folded deleted
+/// regions changed.
+///
+/// A `Jump` the fence refuses returns before the cursor registers anything: the abandoned attempt
+/// is left for the shard's new owner to replay, and the caller must not re-execute it.
+pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
+    worker: &Worker<Ctx>,
+    replay_state: &ReplayState,
+    entity_parent_start_index: Option<OplogIndex>,
+    deleted_regions: Vec<OplogRegion>,
+) -> Result<(), WorkerExecutorError> {
+    for region in &deleted_regions {
+        worker
+            .add_and_commit_oplog(OplogEntry::jump(entity_parent_start_index, region.clone()))
+            .await?;
+    }
+    replay_state.register_replay_jump(deleted_regions).await?;
+    Ok(())
+}
+
+#[cfg(feature = "test-utils")]
+#[doc(hidden)]
+pub async fn test_commit_jumps_with_failed_registration<Ctx: WorkerCtx>(
+    worker: &Worker<Ctx>,
+    regions: Vec<OplogRegion>,
+) -> Result<(), WorkerExecutorError> {
+    let status = worker.get_last_known_status().await;
+    let replay = ReplayState::new_for_owner(
+        worker.owned_agent_id().clone(),
+        worker.oplog(),
+        status.skipped_regions.clone(),
+        None,
+        tool::operation::OwnerToolOperations::new(),
+    )
+    .await?;
+    replay.fail_completion_delivery(
+        OplogIndex::INITIAL,
+        OplogIndex::INITIAL,
+        "test registration failure",
+    );
+    commit_replay_jumps(worker, &replay, None, regions).await
 }
 
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::durability::collect_named_retry_policies;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::{
-    OplogEntryLookupResult, ReplayState, ReplayToLiveOutcome, ReplayToLiveRole,
+    OplogEntryLookupResult, ReplayStartClaimOutcome, ReplayState, ReplayToLiveOutcome,
+    ReplayToLiveRole, StartClaim,
 };
 use crate::metrics::ephemeral::record_non_suspending_failure;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    AgentConfig, ExecutionStatus, InvocationContext, LastError, ReadFileResult, SnapshotSource,
-    TrapType,
+    AgentConfig, ExecutionStatus, HydratedUpdate, InvocationContext, LastError,
+    SnapshotReplayPurpose, TrapType,
 };
 use crate::services::active_agents::MemoryGrant;
-use crate::services::agent_filesystem::{FilesystemGenerationHandle, update_initial_files};
+use crate::services::agent_filesystem::FilesystemGenerationHandle;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::agent_webhooks::AgentWebhooksService;
 use crate::services::blob_store::BlobStoreService;
@@ -87,7 +185,9 @@ use crate::services::key_value::KeyValueService;
 use crate::services::linear_memory::{
     LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
 };
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
+};
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;
 use crate::services::rdbms::RdbmsService;
@@ -105,14 +205,15 @@ use crate::services::{
 use crate::services::{HasComponentService, HasOplogService, HasWorkerService};
 use crate::wasi_filesystem::AgentDescriptor;
 use crate::wasi_host;
-use crate::worker::agent_config::{effective_agent_config, validate_agent_config};
+use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, GuestCallSettlementError, InvocationMode, InvokeResult,
-    invocation_uses_streams, invoke_observed_and_traced, load_load_snapshot_guest,
-    lower_invocation, run_guest_call_settled,
+    AgentExportFuncs, InvocationMode, InvokeResult, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
+    materialize_streaming_result,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
+use crate::worker::start_outcome::{self, BaselineRole, SnapshotRecoveryResult};
 use crate::worker::status::{
     calculate_last_known_status_with_checkpoint, calculate_pending_card_events,
 };
@@ -147,12 +248,12 @@ use golem_common::model::entity::{
 #[cfg(test)]
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
-    AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
+    InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::host_functions::HostFunctionName;
 use golem_common::model::oplog::{
     AgentError, AgentResourceId, DurableFunctionType, HostRequestHttpRequest, LogLevel, OplogEntry,
-    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, TimestampedUpdateDescription,
+    OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, SnapshotAssistedUpdateDetails,
     UpdateDescription,
 };
 use golem_common::model::regions::OplogRegion;
@@ -161,7 +262,8 @@ use golem_common::model::worker::TypedAgentConfigEntry;
 use golem_common::model::{
     AgentFilter, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationResult,
     AgentMetadata, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
-    PendingCardEventRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction, Timestamp,
+    PendingCardEventRef, PendingUpdateRef, RetryContext, RetryVerdict, ScanCursor, ScheduledAction,
+    Timestamp,
 };
 use golem_common::model::{PredicateValue, RetryPolicyState, RetryProperties};
 use golem_common::resource_runtime::Uri;
@@ -181,6 +283,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -455,6 +558,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     _owner_resources: Arc<OwnerRuntimeResources>,
     entity_reconstruction_claim_hook:
         Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>>,
+    replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     filesystem_generation_handle: FilesystemGenerationHandle,
@@ -712,7 +816,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            .await
+            .expect("test oplog commit was refused");
     }
 
     #[cfg(feature = "test-utils")]
@@ -739,6 +844,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         has_stdin: false,
                         has_stdout: false,
                         declares_stdout: false,
+                        has_stderr: false,
+                        declares_stderr: false,
                         output_contract: golem_common::model::entity::ToolOutputContract {
                             result: None,
                             errors: Vec::new(),
@@ -765,6 +872,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self,
     ) -> Option<Arc<dyn crate::workerctx::EntityReconstructionClaimHook>> {
         self.entity_reconstruction_claim_hook.clone()
+    }
+
+    pub(crate) fn replay_admission_hook(
+        &self,
+    ) -> Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>> {
+        self.replay_admission_hook.clone()
     }
 
     pub(crate) fn is_live(&self) -> bool {
@@ -894,7 +1007,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<HttpConnectionPool>,
         websocket_connection_pool: websocket::WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
@@ -905,6 +1018,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         entity_reconstruction_claim_hook: Option<
             Arc<dyn crate::workerctx::EntityReconstructionClaimHook>,
         >,
+        replay_admission_hook: Option<Arc<dyn crate::workerctx::ReplayAdmissionHook>>,
         filesystem_capability: FilesystemCapability,
         executable: crate::workerctx::WorkerCtxExecutable,
         entity_activation: Option<Arc<golem_common::model::entity::EntityActivation>>,
@@ -1115,7 +1229,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 owner_execution
                     .begin_replay_generation(
                         worker_config.skipped_regions.clone(),
-                        worker_config.last_snapshot_index,
+                        worker_config.replay.snapshot.map(|(index, _)| index),
                     )
                     .await?
             }
@@ -1158,18 +1272,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             tail_work,
             component_metadata,
             worker_config.owner_component_metadata,
-            worker_config.agent_effective_surface,
             worker_fork,
             file_loader,
             worker_config.created_by,
             worker_config.created_by_email,
             worker_config.initial_agent_config,
             agent_config,
+            worker_config.authority_wallet,
             shard_service,
             pending_update,
             original_phantom_id,
-            worker_config.last_snapshot_index,
-            worker_config.last_snapshot_source,
+            worker_config.replay.snapshot.map(|(index, _)| index),
+            worker_config.replay.role.clone(),
             per_invocation_http_call_limit,
             per_invocation_rpc_call_limit,
             resource_limits.clone(),
@@ -1208,6 +1322,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owner_execution,
             _owner_resources: owner_resources,
             entity_reconstruction_claim_hook,
+            replay_admission_hook,
             websocket_connection_pool,
             public_state: PublicDurableWorkerState {
                 promise_service: promise_service.clone(),
@@ -1251,13 +1366,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.reset_invocation_call_counts();
     }
 
-    /// Records one outgoing HTTP call against the monthly account quota.
+    /// Records one outgoing HTTP call against the monthly account quota when it is fresh live
+    /// work (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyHttpCallBudgetExhausted)` if the monthly budget
     /// is exhausted. This trap maps to `RetryDecision::TryStop`; the worker is
     /// suspended and resumed when the registry replenishes the budget.
     pub fn record_monthly_http_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_http_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Http)
+            && !self.state.resource_limit_entry.record_http_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyHttpCallBudgetExhausted
             ))
@@ -1266,12 +1384,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Records one outgoing RPC call against the monthly account quota.
+    /// Records one outgoing RPC call against the monthly account quota when it is fresh live work
+    /// (see `WorkerState::durable_call_is_fresh`).
     ///
     /// Returns `Err(WorkerMonthlyRpcCallBudgetExhausted)` if the monthly budget
     /// is exhausted.
     pub fn record_monthly_rpc_call(&mut self) -> anyhow::Result<()> {
-        if self.state.is_live() && !self.state.resource_limit_entry.record_rpc_call() {
+        if self.state.durable_call_is_fresh(QuotaClass::Rpc)
+            && !self.state.resource_limit_entry.record_rpc_call()
+        {
             Err(anyhow!(
                 GolemSpecificWasmTrap::WorkerMonthlyRpcCallBudgetExhausted
             ))
@@ -1364,6 +1485,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )),
             _ => {
                 if let Some(scope) = &scope {
+                    if let Some(started) = scope.span_started() {
+                        let span = InvocationContextSpan::local()
+                            .with_span_id(started.span_id.clone())
+                            .with_start(started.started_at)
+                            .parent(started.parent_span_id.as_ref().map(|span_id| {
+                                InvocationContextSpan::external_parent(span_id.clone())
+                            }))
+                            .with_attributes(started.attributes.0.clone())
+                            .build();
+                        let stack = InvocationContextStack::new(
+                            started.trace_id.clone(),
+                            span,
+                            started.trace_states.clone(),
+                        )
+                        .limit_depth(self.state.config.limits.max_invocation_context_stack_depth);
+                        let (context, current_span_id) = InvocationContext::from_stack(stack)
+                            .map_err(WorkerExecutorError::runtime)?;
+                        self.state.invocation_context.switch_to(context);
+                        self.state.current_span_id = current_span_id;
+                    }
                     self.state
                         .set_current_idempotency_key(scope.idempotency_key().clone());
                     self.state.assume_idempotence = scope.assume_idempotence();
@@ -1519,6 +1660,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.created_by
     }
 
+    pub(crate) fn account_resource_limits(&self) -> Arc<AtomicResourceEntry> {
+        self.resource_limits.clone()
+    }
+
     pub fn created_by_email(&self) -> &AccountEmail {
         &self.state.created_by_email
     }
@@ -1576,7 +1721,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             return Ok(self.agent_wallet_cards_snapshot());
         }
 
-        self.public_state.worker().reattach_worker_status().await;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
+            .await?;
         self.check_post_replay_wallet_liveness().await?;
         self.drain_card_events_at_boundary().await?;
         let pending_revoked_cards = self
@@ -2118,11 +2266,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn pending_card_events_at_boundary(
         &mut self,
     ) -> Result<Vec<PendingCardEventRef>, WorkerExecutorError> {
-        let status = self
-            .public_state
-            .worker()
-            .get_attached_last_known_status()
-            .await;
+        let status = self.public_state.worker().get_last_known_status().await;
         let status_idx = status.oplog_idx;
         let status_pending = status.pending_card_events.clone();
 
@@ -2223,7 +2367,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         card_id,
                         reason,
                     ))
-                    .await;
+                    .await?;
             }
             Ok(Err(reason))
         } else {
@@ -2235,7 +2379,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     Box::new(card),
                     self.state.wallet_generation,
                 ))
-                .await;
+                .await?;
             Ok(Ok(()))
         }
     }
@@ -2258,7 +2402,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     reason,
                 ))
-                .await;
+                .await?;
             return Ok(Err(reason));
         }
 
@@ -2275,7 +2419,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 Box::new(card),
                 self.state.wallet_generation,
             ))
-            .await;
+            .await?;
         Ok(Ok(()))
     }
 
@@ -2307,7 +2451,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     self.state.wallet_generation,
                 ))
-                .await;
+                .await?;
         }
 
         Ok(())
@@ -2353,9 +2497,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             local_wallet_generation: self.state.wallet_generation,
         };
         if commit_immediately {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(entry)
+                .await?;
         } else {
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state.worker().add_to_oplog(entry).await?;
         }
 
         Ok(())
@@ -2394,7 +2541,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     card_id,
                     wallet_generation,
                 ))
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -2665,10 +2812,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if self.is_live() {
                 return Ok(None);
             }
+            if let Some(hook) = &self.replay_admission_hook {
+                hook.before_positional_replay_read(expected);
+            }
             match self
                 .state
                 .replay_state
-                .get_oplog_entry_or_replay_end()
+                .get_oplog_entry_or_replay_end(self.entity_parent_start_index())
                 .await?
             {
                 PositionalRead::Entry(index, entry) => {
@@ -2771,6 +2921,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.linear_memory.memory_grow_failed();
     }
 
+    /// The retry of an error trap during a speculative replay: the fixed decision of the trap
+    /// when it retries, as for an out-of-memory. Any other error, and a trap that is not an
+    /// error, gives `None`.
+    pub(crate) fn speculative_retry(trap_type: &TrapType) -> Option<RetryDecision> {
+        match trap_type {
+            TrapType::Error { .. } => Self::fixed_decision_for_trap_type(trap_type)
+                .filter(|decision| *decision != RetryDecision::None),
+            TrapType::Interrupt(_) | TrapType::Exit => None,
+        }
+    }
+
+    /// The retry of a start whose load of an application snapshot ended with `result`: the fixed
+    /// decision of an interrupt, and the retry of an error trap that every invocation retries, as
+    /// [`Self::speculative_retry`] gives it. Any other result gives `None`.
+    pub(crate) fn load_retry(result: &InvokeResult) -> Option<RetryDecision> {
+        match result {
+            InvokeResult::Interrupted { interrupt_kind, .. } => {
+                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(*interrupt_kind))
+            }
+            result => result
+                .as_trap_type::<Ctx>()
+                .as_ref()
+                .and_then(Self::speculative_retry),
+        }
+    }
+
     /// Returns the deterministic, policy-independent recovery decision for a
     /// trap type — i.e. the cases where the answer does not depend on retry
     /// state or any retry policy. For trap-error variants whose decision is
@@ -2783,6 +2959,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(ts)) => Some(RetryDecision::TryStop(*ts)),
             TrapType::Interrupt(InterruptKind::Restart) => Some(RetryDecision::Immediate),
             TrapType::Interrupt(InterruptKind::Jump) => Some(RetryDecision::Immediate),
+            // Never retried here: a retry in place would reopen the oplog with the same stale
+            // epoch. The worker service resumes the agent on the shard's owner.
+            TrapType::Interrupt(InterruptKind::ShardLost) => Some(RetryDecision::None),
             TrapType::Exit => Some(RetryDecision::None),
             TrapType::Error {
                 error: AgentError::OutOfMemory,
@@ -3047,6 +3226,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn emit_log_event(&self, event: InternalWorkerEvent) {
+        let trace_context = self
+            .state
+            .invocation_context
+            .span_origin(&self.state.current_span_id)
+            .map(
+                |(trace_id, _)| golem_common::model::oplog::LogTraceContext {
+                    trace_id,
+                    span_id: self.state.current_span_id.clone(),
+                },
+            );
         logging::policy::emit_log_event_with_state::<Ctx>(
             event,
             self.owner_component_metadata()
@@ -3058,6 +3247,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &self.state.oplog,
             self.state.is_live(),
             self.entity_parent_start_index(),
+            trace_context,
         )
         .await;
     }
@@ -3066,10 +3256,38 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
+        self.begin_function_impl(function_type, None)
+            .await
+            .map(|(index, _)| index)
+    }
+
+    pub async fn begin_function_with_span(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: golem_common::model::oplog::SpanStarted,
+    ) -> Result<(OplogIndex, golem_common::model::oplog::SpanStarted), WorkerExecutorError> {
+        let (index, recorded) = self
+            .begin_function_impl(function_type, Some(span_started))
+            .await?;
+        let recorded = recorded.ok_or_else(|| {
+            WorkerExecutorError::unexpected_oplog_entry(
+                "durable scope Start carrying span_started",
+                format!("durable scope Start at {index} without span metadata"),
+            )
+        })?;
+        Ok((index, recorded))
+    }
+
+    async fn begin_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        span_started: Option<golem_common::model::oplog::SpanStarted>,
+    ) -> Result<(OplogIndex, Option<golem_common::model::oplog::SpanStarted>), WorkerExecutorError>
+    {
         if self.state.durability_is_suppressed() {
             let begin_index = self.state.current_oplog_index().await;
             self.state.current_retry_point = begin_index;
-            return Ok(begin_index);
+            return Ok((begin_index, span_started));
         }
 
         if self.state.opens_durable_scope(function_type) {
@@ -3079,28 +3297,30 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // and only stored when the scope continues replaying (not when recovery switches to live
             // and re-runs the body, which appends a fresh `End` live).
             let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let result = if self.is_live() {
-                // Durable scopes are siblings rather than nested under other durable scopes. In an
-                // entity body they are direct children of the outer entity invocation; their own
-                // host calls point back at the scope Start through `child_parent_start_index`.
-                let entry = OplogEntry::Start {
-                    timestamp: Timestamp::now_utc(),
-                    parent_start_index: self.entity_parent_start_index(),
-                    function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
-                    invocation_id: None,
-                    observational_owner: None,
-                    request: None,
-                    durable_function_type: function_type.clone(),
-                };
-                let begin_index = self.public_state.worker().add_and_commit_oplog(entry).await;
-                Ok(begin_index)
+            let scope_name = batched_write_scope_name(None);
+            // A scope opened after the live transition may still own a recorded scope `Start`
+            // the cursor retained for it (see `WorkerState::durable_call_is_live`), so it claims
+            // first and appends a new `Start` only once replay reports none remains.
+            let claimed_scope = if self.state.durable_call_is_live() {
+                None
             } else {
-                let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
-                let (begin_index, scope_handle) = self
-                    .state
-                    .replay_state
-                    .claim_scope_start(&scope_name, function_type, self.entity_parent_start_index())
-                    .await?;
+                self.claim_durable_scope_start(&scope_name, function_type)
+                    .await?
+            };
+            let mut recorded_span_started = span_started.clone();
+            let result = if let Some((begin_index, scope_handle)) = claimed_scope {
+                // The recorded span metadata is authoritative on replay: the owning host path
+                // restores `SpanStarted` from the claimed scope `Start` rather than from the
+                // live caller's value.
+                recorded_span_started = match self.state.oplog.read(begin_index).await {
+                    OplogEntry::Start { span_started, .. } => span_started.map(|span| *span),
+                    other => {
+                        return Err(WorkerExecutorError::unexpected_oplog_entry(
+                            "durable scope Start",
+                            format!("{other:?}"),
+                        ));
+                    }
+                };
                 // The begin-side completion / legality probe stays a non-consuming forward scan: it
                 // decides whether the scope is safe to continue replaying or must be retried *before*
                 // the scope body is replayed. Only the `End` *consumption* moves to the resolver.
@@ -3159,54 +3379,91 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
-                        } if self.state.assume_idempotence => {
-                            let pending = match self.begin_switch_to_live().await? {
-                                BeginReplayToLive::ReplayResumed => {
-                                    return Err(WorkerExecutorError::runtime(
-                                        "replay target grew while a batched write was settling",
-                                    ));
-                                }
-                                BeginReplayToLive::Pending(pending) => pending,
-                            };
-
-                            // But this is not enough, because if the retried batched write operation succeeds,
-                            // and later we replay it, we need to skip the first attempt and only replay the second.
-                            // Se we add a Jump entry to the oplog that registers a deleted region.
-                            let deleted_region = OplogRegion {
-                                start: begin_index.next(), // keep the durable scope `Start` at `begin_index`
-                                end: pending.replay_target().next(), // skipping the Jump entry too
-                            };
-
-                            self.public_state
-                                .worker()
-                                .add_and_commit_oplog(OplogEntry::jump(
-                                    self.entity_parent_start_index(),
-                                    deleted_region,
-                                ))
+                        } => {
+                            let recovery_failure = self
+                                .state
+                                .replay_state
+                                .lookup_oplog_entry_with_condition_and_state(
+                                    begin_index,
+                                    |entry, _, state: &ScopeScanState| {
+                                        matches!(
+                                            entry,
+                                            OplogEntry::Error {
+                                                kind: OplogErrorKind::Recovery,
+                                                retry_from,
+                                                ..
+                                            } if *retry_from == begin_index
+                                                || state.descendants.contains(retry_from)
+                                        )
+                                    },
+                                    OplogEntry::no_concurrent_side_effect,
+                                    ScopeScanState::new(begin_index),
+                                    OplogEntry::track_scope_membership,
+                                )
                                 .await;
-
-                            // TODO: this recomputation should not be necessary.
-                            self.public_state.worker().reattach_worker_status().await;
-
-                            self.finish_switch_to_live(pending).await?.require_live()?;
-                            // Switched to live and re-running the body: the scope `End` will be
-                            // appended live by `end_function`, so do not store the (now incomplete)
-                            // replay handle.
-                            Ok(begin_index)
-                        }
-                        OplogEntryLookupResult::NotFound { .. } => {
-                            // assume_idempotence is false and the operation was not completed —
-                            // we cannot safely retry a non-idempotent batched write.
-                            self.switch_to_live().await?;
-                            Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
+                            if matches!(recovery_failure, OplogEntryLookupResult::Found { .. }) {
+                                scope_replay_handle = Some(scope_handle);
+                                Ok(begin_index)
+                            } else if self.state.assume_idempotence
+                                && !self
+                                    .state
+                                    .replay_state
+                                    .has_attempt_suffix(begin_index)
+                                    .await
+                            {
+                                self.switch_to_live().await?;
+                                Ok(begin_index)
+                            } else if self.state.assume_idempotence {
+                                // Destructive recovery belongs to the worker generation boundary.
+                                // Keep the scope Start, abandon the complete suffix, and discard
+                                // this Store before any sibling can publish against erased history.
+                                self.public_state
+                                    .worker()
+                                    .request_runtime_jump(begin_index.next())
+                                    .await;
+                                Err(WorkerExecutorError::Interrupted {
+                                    kind: InterruptKind::Jump,
+                                })
+                            } else {
+                                // Recovery retains the original HTTP scope so method-level repair
+                                // can decide whether resending is safe. Without Recovery, an
+                                // incomplete batched write still requires the worker-level
+                                // idempotence override before the whole scope may be reexecuted.
+                                self.switch_to_live().await?;
+                                Err(WorkerExecutorError::runtime(
+                                    "Non-idempotent remote write operation was not completed, cannot retry",
+                                ))
+                            }
                         }
                     }
                 } else {
                     scope_replay_handle = Some(scope_handle);
                     Ok(begin_index)
                 }
+            } else {
+                // Durable scopes are siblings rather than nested under other durable scopes. In an
+                // entity body they are direct children of the outer entity invocation; their own
+                // host calls point back at the scope Start through `child_parent_start_index`.
+                let entry = OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: self.entity_parent_start_index(),
+                    function_name: scope_name,
+                    invocation_id: None,
+                    observational_owner: None,
+                    request: None,
+                    durable_function_type: function_type.clone(),
+                    span_started: span_started.map(Box::new),
+                };
+                // The scope's side effect runs as soon as this returns. A `Start` the storage
+                // refused has to stop it here: the shard's new owner has no record of the scope,
+                // so nothing would stop it running the effect a second time.
+                let begin_index = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog(entry)
+                    .await
+                    .map_err(WorkerExecutorError::from)?;
+                Ok(begin_index)
             }?;
 
             // A durable scope (remote write / HTTP request) is now open until the matching
@@ -3226,8 +3483,27 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // The effective retry point now derives from the open scope; keep the global fallback
             // pointing at the scope `Start` so it survives the scope being closed.
             self.state.current_retry_point = result;
-            Ok(result)
+            Ok((result, recorded_span_started))
         } else {
+            // No scope opens, so nothing is written before the side effect runs and a fence
+            // already latched would only surface at the commit after it - by which time the
+            // effect has happened and the shard's new owner, having no record of it, runs it
+            // again. Reading the latch costs no storage round trip, so a write whose effect is
+            // about to run is refused here instead. It does not close the window where the shard
+            // moves *during* the call: that one needs a round trip per call, which is exactly what
+            // an idempotent write is declared to avoid.
+            if self.state.is_live()
+                && matches!(
+                    function_type,
+                    DurableFunctionType::WriteRemote
+                        | DurableFunctionType::WriteRemoteBatched(_)
+                        | DurableFunctionType::WriteRemoteTransaction(_)
+                )
+                && let Some(fence) = self.state.oplog.fence()
+            {
+                return Err(WorkerExecutorError::from(OplogError::Fenced(fence)));
+            }
+
             // When there is no scope `Start` entry, the current retry point can only
             // point to the last written non-hint entry. Hint entries must be ignored
             // because they are nondeterministic.
@@ -3253,7 +3529,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             };
             self.state.current_retry_point = new_retry_point;
 
-            Ok(begin_index)
+            Ok((begin_index, span_started))
         }
     }
 
@@ -3262,27 +3538,40 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
+        self.end_function_impl(function_type, begin_index, None)
+            .await
+    }
+
+    async fn end_function_impl(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
+    ) -> Result<(), WorkerExecutorError> {
         if self.state.durability_is_suppressed() {
             return Ok(());
         }
 
         if self.state.opens_durable_scope(function_type) {
-            if self.is_live() {
+            if self.state.durable_scope_replays(begin_index) {
+                // The scope `End` was folded into the resolver at scope-open, so consume it
+                // through the resolver (never positionally, which under overlap could steal a
+                // concurrently-replaying sibling call's terminal). This also repairs a
+                // crash-induced half-pair and closes the in-memory scope.
+                self.close_durable_scope_replay(begin_index, span_finished)
+                    .await?;
+            } else {
                 let entry = OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
+                    span_finished,
+                    span_attributes: None,
                 };
-                self.state.oplog.add(entry).await;
+                self.state.oplog.add(entry).await?;
                 // The durable scope opened in `begin_function` is now closed.
                 self.state.remove_durable_scope(begin_index)?;
-            } else {
-                // The scope `End` was folded into the resolver at scope-open, so consume it
-                // through the resolver (never positionally, which under overlap could steal a
-                // concurrently-replaying sibling call's terminal). This also repairs a
-                // crash-induced half-pair and closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
             }
             Ok(())
         } else {
@@ -3290,10 +3579,57 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Replay-side admission of a durable scope `Start`: claims the recorded scope `Start`
+    /// (including one the cursor retained for this scope), or continues this Store live when
+    /// replay reports that no scope `Start` remains, in which case `None` is returned and the
+    /// caller appends a fresh live scope `Start`. A matching `Start` inside a deleted replay
+    /// region remains divergence, as for every other scope claim.
+    async fn claim_durable_scope_start(
+        &mut self,
+        scope_name: &HostFunctionName,
+        function_type: &DurableFunctionType,
+    ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
+        loop {
+            let claim =
+                StartClaim::scope(scope_name, function_type, self.entity_parent_start_index());
+            let expected = claim.expected_description();
+            let store_continued_live = self.state.store_continued_live();
+            match self
+                .state
+                .replay_state
+                .claim_start_for_store(claim, store_continued_live)
+                .await?
+            {
+                ReplayStartClaimOutcome::Claimed { handle, .. } => {
+                    return Ok(Some((handle.start_idx(), handle)));
+                }
+                ReplayStartClaimOutcome::DeletedRegion => {
+                    return Err(WorkerExecutorError::unexpected_oplog_entry(
+                        expected,
+                        "matching Start belongs to a deleted replay region".to_string(),
+                    ));
+                }
+                outcome @ (ReplayStartClaimOutcome::ReplayEnded
+                | ReplayStartClaimOutcome::StoreAlreadyLive) => {
+                    if self
+                        .continue_live_at_replay_tail(
+                            matches!(outcome, ReplayStartClaimOutcome::ReplayEnded),
+                            expected,
+                        )
+                        .await?
+                    {
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+
     /// Closes a durable scope during replay by awaiting its `End` through the resolver, then
     /// removing the in-memory scope. The scope `End` was registered as a resolver awaiter when its
-    /// `Start` was claimed (`claim_scope_start`), so it is delivered here whether it is the entry at
-    /// the cursor head or was already auto-drained to this scope's handle by another cursor driver.
+    /// `Start` was claimed (`claim_durable_scope_start`), so it is delivered here whether it is the
+    /// entry at the cursor head or was already auto-drained to this scope's handle by another
+    /// cursor driver.
     ///
     /// A crash between a scope's terminal marker and its `End` (`add_pair` gives contiguity, not
     /// crash atomicity) truncates the oplog at the marker, so the awaited `End` resolves as
@@ -3303,6 +3639,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn close_durable_scope_replay(
         &mut self,
         begin_index: OplogIndex,
+        span_finished: Option<golem_common::model::oplog::SpanFinished>,
     ) -> Result<(), WorkerExecutorError> {
         match self.state.take_durable_scope_replay_handle(begin_index) {
             Some(handle) => {
@@ -3351,8 +3688,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 start_index: begin_index,
                                 response: None,
                                 forced_commit: true,
+                                span_finished,
+                                span_attributes: None,
                             })
-                            .await;
+                            .await?;
                     }
                 }
             }
@@ -3382,15 +3721,31 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn begin_transaction_function<Tx, Err>(
         &mut self,
         handler: impl RemoteTransactionHandler<Tx, Err>,
-    ) -> Result<(OplogIndex, Tx), Err>
+    ) -> Result<ControlFlow<InterruptKind, (OplogIndex, Tx)>, Err>
     where
         Err: From<WorkerExecutorError>,
     {
         if self.state.durability_is_suppressed() {
             let (_, tx) = handler.create_new().await?;
             let begin_index = self.state.current_oplog_index().await;
-            Ok((begin_index, tx))
-        } else if self.is_live() {
+            return Ok(ControlFlow::Continue((begin_index, tx)));
+        }
+
+        let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
+        // A transaction begun after the live transition claims first while unclaimed retained
+        // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
+        // transaction only once replay reports that no scope `Start` remains.
+        let claimed_scope = if self.state.durable_call_is_live() {
+            None
+        } else {
+            self.claim_durable_scope_start(
+                &scope_name,
+                &DurableFunctionType::WriteRemoteTransaction(None),
+            )
+            .await?
+        };
+
+        let Some((scope_start_index, scope_handle)) = claimed_scope else {
             let (tx_id, tx) = handler.create_new().await?;
             // A transaction is a durable scope: append the scope `Start` and the
             // `BeginRemoteTransaction` marker atomically so the pair is never split across a crash
@@ -3400,11 +3755,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let scope_start = OplogEntry::Start {
                 timestamp: Timestamp::now_utc(),
                 parent_start_index: self.entity_parent_start_index(),
-                function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+                function_name: scope_name,
                 invocation_id: None,
                 observational_owner: None,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemoteTransaction(None),
+                span_started: None,
             };
             let (begin_index, _) = self
                 .public_state
@@ -3414,11 +3770,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     scope_start,
                     Box::new(move |_start_index| OplogEntry::begin_remote_transaction(tx_id, None)),
                 )
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            // The pair is only buffered until this commit. If the storage refused it, the
+            // transaction must not be handed out, so `tx` is dropped here before any statement
+            // has run through it.
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+                .map_err(WorkerExecutorError::from)?;
 
             // The transaction scope is now open until commit/rollback; block checkpoints. Opened
             // live, so there is no recorded scope `End` to await on close.
@@ -3426,203 +3787,168 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .push_durable_scope(begin_index, DurableScopeKind::Transaction, None);
             self.state.current_retry_point = begin_index;
 
-            Ok((begin_index, tx))
-        } else {
-            // The transaction scope `Start` is preserved across restarts, so its index is the
-            // stable original begin index that keys every transaction marker. Its `End` is folded
-            // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
-            // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
-            // interleaved oplog fails here instead of silently driving the recovery logic with the
-            // wrong scope), and registers an awaiter the transaction terminal awaits instead of
-            // reading the scope `End` positionally. The handle is stored only when the transaction
-            // continues replaying (not when recovery restarts it live).
-            let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
-            let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
-            let (scope_start_index, scope_handle) = self
-                .state
-                .replay_state
-                .claim_scope_start(
-                    &scope_name,
-                    &DurableFunctionType::WriteRemoteTransaction(None),
-                    self.entity_parent_start_index(),
-                )
-                .await?;
-            let (begin_index, begin_entry) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::BeginRemoteTransaction
-            )?;
-            // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
-            // transaction (`original_begin_index: None`) or, after a restart, points back at this
-            // scope `Start`.
-            if let OplogEntry::BeginRemoteTransaction {
-                original_begin_index: Some(idx),
-                ..
-            } = &begin_entry
-                && *idx != scope_start_index
-            {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
+            return Ok(ControlFlow::Continue((begin_index, tx)));
+        };
+
+        // The transaction scope `Start` is preserved across restarts, so its index is the
+        // stable original begin index that keys every transaction marker. Its `End` is folded
+        // into the resolver: `claim_scope_start` consumes the `Start`, validates the exact
+        // `<scope:transaction>` shape `begin_transaction_function` writes (so a corrupt or
+        // interleaved oplog fails here instead of silently driving the recovery logic with the
+        // wrong scope), and registers an awaiter the transaction terminal awaits instead of
+        // reading the scope `End` positionally. The handle is stored only when the transaction
+        // continues replaying (not when recovery restarts it live).
+        let mut scope_replay_handle: Option<concurrent::ReplayCallHandle> = None;
+        if !self
+            .state
+            .replay_state
+            .has_attempt_suffix(scope_start_index)
+            .await
+        {
+            // A runtime cut intentionally preserves the transaction scope Start but removes its
+            // Begin marker. Only that precisely empty retained scope starts a replacement
+            // transaction; a malformed recorded Begin is still rejected below.
+            self.switch_to_live().await?;
+            let (tx_id, tx) = handler.create_new().await?;
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                    tx_id,
+                    Some(scope_start_index),
+                ))
+                .await
+                .map_err(WorkerExecutorError::from)?;
+            self.state
+                .push_durable_scope(scope_start_index, DurableScopeKind::Transaction, None);
+            self.state.current_retry_point = scope_start_index;
+            return Ok(ControlFlow::Continue((scope_start_index, tx)));
+        }
+        let (begin_index, begin_entry) =
+            crate::get_oplog_entry!(self, OplogEntry::BeginRemoteTransaction)?;
+        // The `BeginRemoteTransaction` right after the scope `Start` either starts a fresh
+        // transaction (`original_begin_index: None`) or, after a restart, points back at this
+        // scope `Start`.
+        if let OplogEntry::BeginRemoteTransaction {
+            original_begin_index: Some(idx),
+            ..
+        } = &begin_entry
+            && *idx != scope_start_index
+        {
+            return Err(WorkerExecutorError::unexpected_oplog_entry(
                     format!(
                         "BeginRemoteTransaction {{ original_begin_index: None | Some({scope_start_index}) }}"
                     ),
                     format!("BeginRemoteTransaction {{ original_begin_index: Some({idx}) }}"),
                 )
                 .into());
-            }
-            let original_begin_index = scope_start_index;
+        }
+        let original_begin_index = scope_start_index;
 
-            let assume_idempotence = self.state.assume_idempotence;
+        let assume_idempotence = self.state.assume_idempotence;
 
-            let pre_entry = self
-                .state
-                .replay_state
-                .lookup_oplog_entry_with_condition_and_state(
-                    original_begin_index,
-                    OplogEntry::is_pre_remote_transaction_s,
-                    OplogEntry::no_concurrent_side_effect,
-                    ScopeScanState::new(original_begin_index),
-                    OplogEntry::track_scope_membership,
-                )
-                .await;
-
-            let tx_id = try_match!(
-                begin_entry,
-                OplogEntry::BeginRemoteTransaction { transaction_id, .. }
+        let pre_entry = self
+            .state
+            .replay_state
+            .lookup_oplog_entry_with_condition_and_state(
+                original_begin_index,
+                OplogEntry::is_pre_remote_transaction_s,
+                OplogEntry::no_concurrent_side_effect,
+                ScopeScanState::new(original_begin_index),
+                OplogEntry::track_scope_membership,
             )
-            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+            .await;
 
-            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+        let tx_id = try_match!(
+            begin_entry,
+            OplogEntry::BeginRemoteTransaction { transaction_id, .. } => transaction_id
+        )
+        .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
 
-            let mut should_restart = false;
+        let (tx_id, tx) = handler.create_replay(&tx_id).await?;
 
-            match pre_entry {
-                OplogEntryLookupResult::Found {
-                    entry: pre_entry, ..
-                } => {
-                    let end_entry = self
-                        .state
-                        .replay_state
-                        .lookup_oplog_entry_with_condition_and_state(
-                            original_begin_index,
-                            OplogEntry::is_end_remote_transaction_s,
-                            OplogEntry::no_concurrent_side_effect,
-                            ScopeScanState::new(original_begin_index),
-                            OplogEntry::track_scope_membership,
-                        )
-                        .await;
+        let mut should_restart = false;
 
-                    match end_entry {
-                        OplogEntryLookupResult::Found { .. } => {}
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: false,
-                        } => {
-                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
-                                // if we can not confirm the transaction was committed, we need to restart
-                                should_restart = !handler.is_committed(&tx_id).await?;
-                            } else if pre_entry
-                                .is_pre_rollback_remote_transaction(original_begin_index)
-                            {
-                                // if we can not confirm the transaction was rolled back, we need to restart
-                                should_restart = !handler.is_rolled_back(&tx_id).await?;
-                            }
+        match pre_entry {
+            OplogEntryLookupResult::Found {
+                entry: pre_entry, ..
+            } => {
+                let end_entry = self
+                    .state
+                    .replay_state
+                    .lookup_oplog_entry_with_condition_and_state(
+                        original_begin_index,
+                        OplogEntry::is_end_remote_transaction_s,
+                        OplogEntry::no_concurrent_side_effect,
+                        ScopeScanState::new(original_begin_index),
+                        OplogEntry::track_scope_membership,
+                    )
+                    .await;
+
+                match end_entry {
+                    OplogEntryLookupResult::Found { .. } => {}
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: false,
+                    } => {
+                        if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
+                            // if we can not confirm the transaction was committed, we need to restart
+                            should_restart = !handler.is_committed(&tx_id).await?;
+                        } else if pre_entry.is_pre_rollback_remote_transaction(original_begin_index)
+                        {
+                            // if we can not confirm the transaction was rolled back, we need to restart
+                            should_restart = !handler.is_rolled_back(&tx_id).await?;
                         }
-                        OplogEntryLookupResult::NotFound {
-                            violates_for_all: true,
-                        } => {
-                            // Must switch to live mode before failing to be able to commit an Error entry
-                            self.switch_to_live().await?;
-                            return Err(WorkerExecutorError::runtime(
+                    }
+                    OplogEntryLookupResult::NotFound {
+                        violates_for_all: true,
+                    } => {
+                        // Must switch to live mode before failing to be able to commit an Error entry
+                        self.switch_to_live().await?;
+                        return Err(WorkerExecutorError::runtime(
                                 "Transaction overlapped with other side effects was not completed, cannot retry",
                             ).into());
-                        }
                     }
                 }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: false,
-                } => {
-                    should_restart = true;
-                }
-                OplogEntryLookupResult::NotFound {
-                    violates_for_all: true,
-                } => {
-                    // Must switch to live mode before failing to be able to commit an Error entry
-                    self.switch_to_live().await?;
-                    return Err(WorkerExecutorError::runtime(
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: false,
+            } => {
+                should_restart = true;
+            }
+            OplogEntryLookupResult::NotFound {
+                violates_for_all: true,
+            } => {
+                // Must switch to live mode before failing to be able to commit an Error entry
+                self.switch_to_live().await?;
+                return Err(WorkerExecutorError::runtime(
                         "Transaction overlapped with other side effects was not completed, cannot retry",
                     ).into());
-                }
-            };
+            }
+        };
 
-            let (result, tx) = if should_restart {
-                let pending = match self.begin_switch_to_live().await? {
-                    BeginReplayToLive::ReplayResumed => {
-                        return Err(WorkerExecutorError::runtime(
-                            "replay target grew while a remote transaction was settling",
-                        )
-                        .into());
-                    }
-                    BeginReplayToLive::Pending(pending) => pending,
-                };
-
-                if !assume_idempotence {
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-                    Err(WorkerExecutorError::runtime(
-                        "Non-idempotent remote write operation was not completed, cannot retry",
-                    ))
-                } else {
-                    // But this is not enough, because if the retried batched write operation succeeds,
-                    // and later we replay it, we need to skip the first attempt and only replay the second.
-                    // Se we add a Jump entry to the oplog that registers a deleted region.
-                    let deleted_region = OplogRegion {
-                        // Delete the previous `BeginRemoteTransaction` entry (and everything after),
-                        // because we'll get a new tx id. The transaction scope `Start` lives at
-                        // `scope_start_index < begin_index`, so it is preserved.
-                        start: begin_index,
-                        end: pending.replay_target().next(), // skipping the Jump entry too
-                    };
-
-                    self.public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::jump(
-                            self.entity_parent_start_index(),
-                            deleted_region,
-                        ))
-                        .await;
-
-                    // TODO: this recomputation should not be necessary.
-                    self.public_state.worker().reattach_worker_status().await;
-
-                    self.finish_switch_to_live(pending).await?.require_live()?;
-
-                    let (tx_id, tx) = handler.create_new().await?;
-                    let _ = self
-                        .public_state
-                        .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
-                            tx_id,
-                            Some(original_begin_index),
-                        ))
-                        .await;
-
-                    // Restarted live (jump + fresh `BeginRemoteTransaction`): the scope `End` will
-                    // be appended live by the transaction terminal, so do not store the (now
-                    // incomplete) replay handle.
-                    Ok((original_begin_index, tx))
-                }
+        let (result, tx) = if should_restart {
+            if !assume_idempotence {
+                self.switch_to_live().await?;
+                Err(WorkerExecutorError::runtime(
+                    "Non-idempotent remote write operation was not completed, cannot retry",
+                ))
             } else {
-                scope_replay_handle = Some(scope_handle);
-                Ok((original_begin_index, tx))
-            }?;
+                self.public_state
+                    .worker()
+                    .request_runtime_jump(begin_index)
+                    .await;
+                return Ok(ControlFlow::Break(InterruptKind::Jump));
+            }
+        } else {
+            scope_replay_handle = Some(scope_handle);
+            Ok((original_begin_index, tx))
+        }?;
 
-            // The (possibly re-begun) transaction scope is open until commit/rollback.
-            self.state.push_durable_scope(
-                result,
-                DurableScopeKind::Transaction,
-                scope_replay_handle,
-            );
-            self.state.current_retry_point = original_begin_index;
+        // The (possibly re-begun) transaction scope is open until commit/rollback.
+        self.state
+            .push_durable_scope(result, DurableScopeKind::Transaction, scope_replay_handle);
+        self.state.current_retry_point = original_begin_index;
 
-            Ok((result, tx))
-        }
+        Ok(ControlFlow::Continue((result, tx)))
     }
 
     pub async fn pre_commit_transaction_function(
@@ -3636,20 +3962,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_commit_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreCommitRemoteTransaction
-            )?;
+            let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreCommitRemoteTransaction)?;
             Ok(())
         }
     }
@@ -3665,20 +3987,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
             self.state
                 .oplog
-                .fallible_add(OplogEntry::pre_rollback_remote_transaction(begin_index))
-                .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .add(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await?;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
             Ok(())
         } else {
-            let (_, _) = crate::get_oplog_entry!(
-                self.state.replay_state,
-                OplogEntry::PreRollbackRemoteTransaction
-            )?;
+            let (_, _) = crate::get_oplog_entry!(self, OplogEntry::PreRollbackRemoteTransaction)?;
             Ok(())
         }
     }
@@ -3704,7 +4022,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external commit succeeded, but the process crashed before persisting the
                 // marker pair. The preceding pre-commit marker exhausted replay, so repair the
@@ -3716,10 +4034,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
                 .await?;
             } else {
-                let (_, _) = crate::get_oplog_entry!(
-                    self.state.replay_state,
-                    OplogEntry::CommittedRemoteTransaction
-                )?;
+                let (_, _) = crate::get_oplog_entry!(self, OplogEntry::CommittedRemoteTransaction)?;
                 unreachable!("the speculative marker read left a matching entry unconsumed");
             }
         }
@@ -3752,7 +4067,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             if marker.is_some() {
                 // The scope `End` was folded into the resolver at scope-open, so await it (the
                 // terminal marker stays positional). Also closes the in-memory scope.
-                self.close_durable_scope_replay(begin_index).await?;
+                self.close_durable_scope_replay(begin_index, None).await?;
             } else if self.state.replay_state.is_live() {
                 // The external rollback succeeded, but the process crashed before persisting the
                 // marker pair. Repair the missing local terminal without issuing the rollback again.
@@ -3763,10 +4078,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 )
                 .await?;
             } else {
-                let (_, _) = crate::get_oplog_entry!(
-                    self.state.replay_state,
-                    OplogEntry::RolledBackRemoteTransaction
-                )?;
+                let (_, _) =
+                    crate::get_oplog_entry!(self, OplogEntry::RolledBackRemoteTransaction)?;
                 unreachable!("the speculative marker read left a matching entry unconsumed");
             }
         }
@@ -3788,21 +4101,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         // successful append can never leave one without the other.
         self.state
             .oplog
-            .fallible_add_pair(
+            .add_pair(
                 marker,
-                OplogEntry::End {
+                Box::new(move |_| OplogEntry::End {
                     timestamp: Timestamp::now_utc(),
                     start_index: begin_index,
                     response: None,
                     forced_commit: true,
-                },
+                    span_finished: None,
+                    span_attributes: None,
+                }),
             )
-            .await
-            .map_err(WorkerExecutorError::runtime)?;
+            .await?;
         self.public_state
             .worker()
             .commit_oplog_and_update_state(CommitLevel::Always)
-            .await;
+            .await?;
         self.state.remove_durable_scope(begin_index)?;
         Ok(())
     }
@@ -3823,201 +4137,48 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .take();
         match pending_update {
-            Some(TimestampedUpdateDescription {
+            Some(HydratedUpdate {
+                reference,
                 description: description @ UpdateDescription::SnapshotBased { .. },
-                ..
             }) => {
                 let target_revision = *description.target_revision();
 
                 debug!("Finalizing snapshot update to revision {target_revision}");
 
-                match store
-                    .as_context_mut()
-                    .data_mut()
-                    .get_public_state()
-                    .oplog()
-                    .get_upload_description_payload(description)
-                    .await
+                if let Err(result) =
+                    Self::load_manual_update_snapshot(instance, store, description).await
                 {
-                    Ok(Some((data, mime_type))) => {
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let idempotency_key = IdempotencyKey::fresh();
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_idempotency_key(idempotency_key.clone())
-                            .await;
-
-                        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
-                            idempotency_key,
-                            snapshot: RawSnapshotData { data, mime_type },
-                        };
-                        let agent_id = store.as_context().data().parsed_agent_id();
-                        let lowered = match lower_invocation(
-                            load_snapshot_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        ) {
-                            Ok(lowered) => lowered,
-                            Err(err) => {
-                                store
-                                    .as_context_mut()
-                                    .data_mut()
-                                    .on_worker_update_failed(
-                                        target_revision,
-                                        Some(format!(
-                                            "Manual update failed to lower load-snapshot invocation: {err}"
-                                        )),
-                                    )
-                                    .await;
-                                return Ok(Some(RetryDecision::Immediate));
-                            }
-                        };
-
-                        let invocation_context = InvocationContextStack::fresh();
-                        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
-                        if let Err(err) = store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .set_current_invocation_context(invocation_context)
-                            .await
-                        {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(
-                                    target_revision,
-                                    Some(format!(
-                                        "Manual update failed to install invocation context: {err}"
-                                    )),
-                                )
-                                .await;
-                            return Ok(Some(RetryDecision::Immediate));
-                        }
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .begin_call_snapshotting_function();
-
-                        let load_result = invoke_observed_and_traced(
-                            lowered,
-                            store,
-                            instance,
-                            InvocationMode::Replay,
-                        )
-                        .await;
-
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .durable_ctx_mut()
-                            .end_call_snapshotting_function_if_active();
-
-                        for span_id in local_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-                        for span_id in inherited_span_ids {
-                            let _ = store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .remove_span(&span_id);
-                        }
-
-                        let failed = match load_result {
-                            Err(error) => {
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Failed { error, .. }) => {
-                                let stderr = store
-                                    .as_context()
-                                    .data()
-                                    .get_public_state()
-                                    .event_service()
-                                    .get_last_invocation_errors();
-                                let error = error.to_string(&stderr);
-                                Some(format!("Manual update failed to load snapshot: {error}"))
-                            }
-                            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
-                                AgentInvocationResult::LoadSnapshot { error } => error
-                                    .map(|e| format!("Manual update failed to load snapshot: {e}")),
-                                _ => Some(
-                                    "Unexpected result value from the snapshot load function"
-                                        .to_string(),
-                                ),
-                            },
-                            _ => None,
-                        };
-
-                        if let Some(error) = failed {
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_failed(target_revision, Some(error))
-                                .await;
-                            Ok(Some(RetryDecision::Immediate))
-                        } else {
-                            let component_metadata =
-                                store.as_context().data().component_metadata().clone();
-                            let agent_type_provision_config = store
-                                .as_context()
-                                .data()
-                                .agent_type_provision_config()
-                                .cloned();
-
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .on_worker_update_succeeded(
-                                    target_revision,
-                                    component_metadata.component_size,
-                                    HashSet::from_iter(
-                                        agent_type_provision_config
-                                            .into_iter()
-                                            .flat_map(|c| c.plugins)
-                                            .map(|installation| {
-                                                installation.environment_plugin_grant_id
-                                            }),
-                                    ),
-                                )
-                                .await;
-                            Ok(None)
-                        }
-                    }
-                    Ok(None) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(
-                                target_revision,
-                                Some("Failed to find snapshot data for update".to_string()),
-                            )
-                            .await;
-                        Ok(Some(RetryDecision::Immediate))
-                    }
-                    Err(error) => {
-                        store
-                            .as_context_mut()
-                            .data_mut()
-                            .on_worker_update_failed(target_revision, Some(error))
-                            .await;
-                        Ok(Some(RetryDecision::Immediate))
+                    match store.as_context().data().durable_ctx().start_action(
+                        Some(&reference),
+                        start_outcome::RawStartError::ManualLoad(&result),
+                    ) {
+                        start_outcome::StartAction::Succeed => {}
+                        action => return Self::perform_start_action(store, action).await,
                     }
                 }
+                let component_metadata = store.as_context().data().component_metadata().clone();
+                let agent_type_provision_config = store
+                    .as_context()
+                    .data()
+                    .agent_type_provision_config()
+                    .cloned();
+
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .on_worker_update_succeeded(
+                        target_revision,
+                        component_metadata.component_size,
+                        HashSet::from_iter(
+                            agent_type_provision_config
+                                .into_iter()
+                                .flat_map(|c| c.plugins)
+                                .map(|installation| installation.environment_plugin_grant_id),
+                        ),
+                        start_outcome::success_details_of(&reference),
+                    )
+                    .await?;
+                Ok(None)
             }
             _ => Err(WorkerExecutorError::runtime(
                 "`finalize_pending_snapshot_update` can only be called with a snapshot update description",
@@ -4025,14 +4186,215 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// Loads the application snapshot of the pending snapshot-based update `description`. An
+    /// interrupted load and an exited guest give `ManualLoadResult::Interrupted`.
+    async fn load_manual_update_snapshot(
+        instance: &Instance,
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        description: UpdateDescription,
+    ) -> Result<(), start_outcome::ManualLoadResult> {
+        use start_outcome::ManualLoadResult;
+        let (data, mime_type) = match store
+            .as_context_mut()
+            .data_mut()
+            .get_public_state()
+            .oplog()
+            .get_upload_description_payload(description)
+            .await
+        {
+            Ok(Some(payload)) => payload,
+            Ok(None) => {
+                return Err(ManualLoadResult::Failed(
+                    "Failed to find snapshot data for update".to_string(),
+                ));
+            }
+            Err(error) => return Err(ManualLoadResult::Failed(error)),
+        };
+        let component_metadata = store
+            .as_context()
+            .data()
+            .component_metadata()
+            .metadata
+            .clone();
+
+        let idempotency_key = IdempotencyKey::fresh();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_idempotency_key(idempotency_key.clone())
+            .await;
+
+        let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
+            idempotency_key,
+            snapshot: RawSnapshotData { data, mime_type },
+        };
+        let agent_id = store.as_context().data().parsed_agent_id();
+        let lowered = lower_invocation(
+            load_snapshot_invocation,
+            &component_metadata,
+            agent_id.as_ref(),
+        )
+        .map_err(|err| {
+            ManualLoadResult::Failed(format!(
+                "Manual update failed to lower load-snapshot invocation: {err}"
+            ))
+        })?;
+
+        let invocation_context = InvocationContextStack::fresh();
+        let (local_span_ids, inherited_span_ids) = invocation_context.span_ids();
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .set_current_invocation_context(invocation_context)
+            .await
+            .map_err(|err| {
+                ManualLoadResult::Failed(format!(
+                    "Manual update failed to install invocation context: {err}"
+                ))
+            })?;
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .begin_call_snapshotting_function();
+
+        let load_result =
+            invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
+
+        store
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .end_call_snapshotting_function_if_active();
+
+        local_span_ids
+            .into_iter()
+            .chain(inherited_span_ids)
+            .for_each(|span_id| {
+                let _ = store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .remove_span(&span_id);
+            });
+
+        match load_result {
+            Err(error) => Err(ManualLoadResult::Failed(format!(
+                "Manual update failed to load snapshot: {error}"
+            ))),
+            Ok(InvokeResult::Failed { error, .. }) => {
+                let stderr = store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .event_service()
+                    .get_last_invocation_errors();
+                let error = error.to_string(&stderr);
+                Err(ManualLoadResult::Failed(format!(
+                    "Manual update failed to load snapshot: {error}"
+                )))
+            }
+            Ok(InvokeResult::Succeeded { result, .. }) => match *result {
+                AgentInvocationResult::LoadSnapshot { error: None } => Ok(()),
+                AgentInvocationResult::LoadSnapshot { error: Some(e) } => Err(
+                    ManualLoadResult::Failed(format!("Manual update failed to load snapshot: {e}")),
+                ),
+                _ => Err(ManualLoadResult::Failed(
+                    "Unexpected result value from the snapshot load function".to_string(),
+                )),
+            },
+            Ok(InvokeResult::Interrupted { .. } | InvokeResult::Exited { .. }) => {
+                Err(ManualLoadResult::Interrupted)
+            }
+        }
+    }
+
+    /// What the start does with the failure `error` with the pending update `head`, as
+    /// [`start_outcome::decide`] decides for the baseline of this start.
+    fn start_action(
+        &self,
+        head: Option<&PendingUpdateRef>,
+        error: start_outcome::RawStartError<'_>,
+    ) -> start_outcome::StartAction {
+        start_outcome::decide(
+            &self.state.baseline_role,
+            head,
+            error,
+            &self.owned_agent_id.agent_id,
+            self.public_state.worker().retired_for_lost_shard(),
+        )
+    }
+
+    /// Performs `action` of a failed start: it writes a failed update and starts again on the
+    /// source revision, skips or rejects a periodic record and starts again, or ends the start
+    /// with an error.
+    async fn perform_start_action(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        action: start_outcome::StartAction,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        match action {
+            start_outcome::StartAction::FailUpdate { entry, reject } => {
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .on_worker_update_failed(entry)
+                    .await?;
+                if let Some(index) = reject {
+                    store
+                        .as_context()
+                        .data()
+                        .get_public_state()
+                        .worker()
+                        .reject_periodic(index);
+                }
+                debug!("Retrying prepare_instance after failed update attempt");
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::SkipPeriodic(index) => {
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .mark_periodic_unavailable(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::RejectPeriodic(index) => {
+                warn!(
+                    snapshot_index = %index,
+                    "The application snapshot of a periodic record does not load; the start selects its baseline again without this record: the previous usable periodic record, or else the authoritative baseline"
+                );
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .reject_periodic(index);
+                Ok(Some(RetryDecision::Immediate))
+            }
+            start_outcome::StartAction::Error(error) => Err(error),
+            start_outcome::StartAction::Retry(decision) => Ok(Some(decision)),
+            start_outcome::StartAction::Succeed => Ok(None),
+            start_outcome::StartAction::ShardLost => Err(WorkerExecutorError::Interrupted {
+                kind: InterruptKind::ShardLost,
+            }),
+        }
+    }
+
     async fn try_load_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
     ) -> SnapshotRecoveryResult {
-        let (snapshot_index, snapshot_source) = {
-            let state = &store.as_context().data().durable_ctx().state;
-            (state.last_snapshot_index, state.last_snapshot_source)
-        };
+        let snapshot_index = store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .last_snapshot_index;
 
         let snapshot_index = match snapshot_index {
             Some(idx) => idx,
@@ -4079,11 +4441,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .oplog()
-            .download_payload(data_payload)
+            .download_payload_classified(data_payload)
             .await
         {
             Ok(data) => data,
             Err(err) => {
+                let lost = matches!(err, OplogPayloadDownloadError::Corrupt(_));
                 let error =
                     format!("Failed to download snapshot payload at {snapshot_index}: {err}");
                 Self::emit_snapshot_recovery_event(
@@ -4092,17 +4455,25 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     false,
                     Some(error.clone()),
                 );
-                if snapshot_source == Some(SnapshotSource::Automatic) {
+                let result = payload_download_failure(
+                    store
+                        .as_context()
+                        .data()
+                        .durable_ctx()
+                        .state
+                        .snapshot_replay_purpose,
+                    lost,
+                    error,
+                );
+                if matches!(result, SnapshotRecoveryResult::Retry(_)) {
                     store
                         .as_context()
                         .data()
                         .get_public_state()
                         .worker()
-                        .unavailable_periodic_snapshot_through
-                        .fetch_max(snapshot_index.into(), Ordering::AcqRel);
-                    return SnapshotRecoveryResult::Retry(RetryDecision::Immediate);
+                        .mark_periodic_unavailable(snapshot_index);
                 }
-                return SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error));
+                return result;
             }
         };
 
@@ -4177,6 +4548,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let load_result =
             invoke_observed_and_traced(lowered, store, instance, InvocationMode::Replay).await;
+        store.as_context_mut().data().set_suspended();
 
         store
             .as_context_mut()
@@ -4202,14 +4574,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let snapshot_divergence = load_result
             .as_ref()
             .is_ok_and(InvokeResult::is_snapshot_replay_divergence);
+        if let Some(decision) = load_result.as_ref().ok().and_then(Self::load_retry) {
+            return SnapshotRecoveryResult::Retry(decision);
+        }
         let failed = match load_result {
             Err(error) => return SnapshotRecoveryResult::Unavailable(error),
-            Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                return SnapshotRecoveryResult::Retry(
-                    Self::fixed_decision_for_trap_type(&TrapType::Interrupt(interrupt_kind))
-                        .expect("interrupts have a fixed retry decision"),
-                );
-            }
             Ok(InvokeResult::Failed { error, .. }) if !snapshot_divergence => {
                 return SnapshotRecoveryResult::Unavailable(
                     WorkerExecutorError::InvocationFailed {
@@ -4248,22 +4617,39 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         } else {
             debug!("Snapshot loaded successfully from oplog index {snapshot_index}");
             Self::emit_snapshot_recovery_event(store, snapshot_index, true, None);
-            if snapshot_source == Some(SnapshotSource::Automatic) {
-                store
-                    .as_context_mut()
-                    .data_mut()
-                    .durable_ctx_mut()
-                    .state
-                    .replaying_automatic_snapshot_tail = true;
-            }
             SnapshotRecoveryResult::Success
         }
     }
 
-    /// Recreates the instance from the authoritative baseline, excluding this periodic snapshot.
+    /// Whether the replay after the application snapshot of this start, which diverged from the
+    /// oplog with `error`, rejects its record now, as [`start_outcome::decide`] decides: only a
+    /// periodic record, and only while the start still replays it.
+    fn rejects_diverged_record(
+        store: &mut (impl AsContextMut<Data = Ctx> + Send),
+        error: &WorkerExecutorError,
+    ) -> bool {
+        let ctx = store.as_context().data().durable_ctx();
+        ctx.state.snapshot_replay_purpose == SnapshotReplayPurpose::PeriodicRecovery
+            && !ctx.is_live()
+            && matches!(
+                ctx.start_action(
+                    None,
+                    start_outcome::RawStartError::Replay {
+                        error,
+                        diverged: true,
+                    },
+                ),
+                start_outcome::StartAction::RejectPeriodic(_)
+            )
+    }
+
+    /// Rejects this periodic snapshot for the starts of this incarnation and gives an immediate
+    /// retry. The next start selects its baseline again without this record: the previous usable
+    /// periodic record, or else the authoritative baseline.
     fn abandon_diverged_automatic_snapshot(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         error: &impl std::fmt::Display,
+        emit_failure: bool,
     ) -> RetryDecision {
         let snapshot_index = store
             .as_context()
@@ -4273,15 +4659,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .last_snapshot_index
             .expect("an automatic snapshot tail is only replayed after loading a snapshot");
         let error = format!(
-            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying from the authoritative baseline"
+            "Snapshot recovery at {snapshot_index} diverged from the recorded oplog: {error}; retrying without this snapshot, from the previous usable periodic record or else the authoritative baseline"
         );
         warn!(%error, "Abandoning periodic snapshot");
-        if store
-            .as_context()
-            .data()
-            .durable_ctx()
-            .state
-            .replaying_automatic_snapshot_tail
+        if emit_failure
+            && store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .snapshot_replay_purpose
+                == SnapshotReplayPurpose::PeriodicRecovery
         {
             Self::emit_snapshot_recovery_event(store, snapshot_index, false, Some(error));
         }
@@ -4290,8 +4678,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .rejected_periodic_snapshot_through
-            .fetch_max(snapshot_index.into(), Ordering::AcqRel);
+            .reject_periodic(snapshot_index);
         RetryDecision::Immediate
     }
 
@@ -4301,6 +4688,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         succeeded: bool,
         error: Option<String>,
     ) {
+        if store
+            .as_context()
+            .data()
+            .durable_ctx()
+            .state
+            .snapshot_replay_purpose
+            == SnapshotReplayPurpose::AssistedUpdate
+        {
+            return;
+        }
         store
             .as_context_mut()
             .data_mut()
@@ -4318,14 +4715,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 true,
             );
     }
-}
-
-enum SnapshotRecoveryResult {
-    Success,
-    NotAttempted,
-    Failed(WorkerExecutorError),
-    Unavailable(WorkerExecutorError),
-    Retry(RetryDecision),
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -4540,6 +4929,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.state.snapshotting_mode {
+            return Ok(());
+        }
         loop {
             let boundary_guard = self
                 .state
@@ -4558,6 +4950,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     async fn process_pending_replay_events_locked(&mut self) -> Result<(), WorkerExecutorError> {
+        if self.state.snapshotting_mode {
+            return Ok(());
+        }
         let replay_events = self.state.replay_state.take_new_replay_events();
         if !replay_events.is_empty() {
             debug!("Applying pending side effects accumulated during replay");
@@ -4567,7 +4962,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::UpdateReplayed { new_revision } => {
                     debug!("Updating worker state to component metadata revision {new_revision}");
                     self.update_state_to_new_component_revision(new_revision)
-                        .await?;
+                        .await
+                        .map_err(|error| error.to_worker_executor_error())?;
                 }
                 ReplayEvent::ForkReplayed { new_phantom_id } => {
                     debug!("Updating the replay's current phantom id to {new_phantom_id}");
@@ -4718,52 +5114,51 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
                     let pending_update = self.state.pending_update.lock().await.take();
-                    if let Some(pending_update) = pending_update {
-                        match pending_update.description {
-                            UpdateDescription::Automatic { target_revision } => {
-                                debug!("Finalizing pending automatic update");
-
-                                if let Err(error) = self
-                                    .update_state_to_new_component_revision(target_revision)
-                                    .await
-                                {
-                                    let stringified_error =
-                                        format!("Applying worker update failed: {error}");
-
-                                    self.on_worker_update_failed(
-                                        target_revision,
-                                        Some(stringified_error),
-                                    )
-                                    .await;
-
-                                    Err(error)?
-                                };
-
-                                let component_metadata = self.component_metadata().clone();
-
-                                self.on_worker_update_succeeded(
-                                    target_revision,
-                                    component_metadata.component_size,
-                                    HashSet::from_iter({
-                                        self.agent_type_provision_config()
-                                            .map(|c| c.plugins.as_slice())
-                                            .unwrap_or_default()
-                                            .iter()
-                                            .map(|installation| {
-                                                installation.environment_plugin_grant_id
-                                            })
-                                    }),
-                                )
-                                .await;
-
-                                debug!("Finalizing automatic update to revision {target_revision}");
-                            }
-                            _ => {
-                                return Err(WorkerExecutorError::runtime(
-                                    "pending replay event finalization expected an automatic update description",
-                                ));
-                            }
+                    if let Some(HydratedUpdate {
+                        reference,
+                        description,
+                    }) = pending_update
+                    {
+                        if matches!(description, UpdateDescription::SnapshotBased { .. }) {
+                            return Err(WorkerExecutorError::runtime(
+                                "pending replay event finalization expected an automatic update description",
+                            ));
                         }
+                        let target_revision = *description.target_revision();
+                        debug!("Finalizing pending automatic update");
+
+                        if let Err(error) = self
+                            .update_state_to_new_component_revision(target_revision)
+                            .await
+                        {
+                            let action = self.start_action(
+                                Some(&reference),
+                                start_outcome::RawStartError::UpdateState(&error),
+                            );
+                            return Err(perform_at_update_point(
+                                &self.public_state.worker(),
+                                action,
+                            )
+                            .await);
+                        };
+
+                        let component_metadata = self.component_metadata().clone();
+
+                        self.on_worker_update_succeeded(
+                            target_revision,
+                            component_metadata.component_size,
+                            HashSet::from_iter({
+                                self.agent_type_provision_config()
+                                    .map(|c| c.plugins.as_slice())
+                                    .unwrap_or_default()
+                                    .iter()
+                                    .map(|installation| installation.environment_plugin_grant_id)
+                            }),
+                            start_outcome::success_details_of(&reference),
+                        )
+                        .await?;
+
+                        debug!("Finalizing automatic update to revision {target_revision}");
                     }
 
                     self.check_post_replay_wallet_liveness().await?;
@@ -4802,7 +5197,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.public_state
             .worker()
             .queue_card_revocations_locked(&revoked_card_ids)
-            .await;
+            .await?;
 
         Ok(())
     }
@@ -4818,84 +5213,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn update_state_to_new_component_revision(
         &mut self,
         new_revision: ComponentRevision,
-    ) -> Result<(), WorkerExecutorError> {
-        let current_metadata = self.component_metadata();
-
-        if new_revision <= current_metadata.revision {
+    ) -> Result<(), revision_update::UpdateStateError> {
+        if new_revision <= self.component_metadata().revision {
             debug!("Update {new_revision} was already applied, skipping");
             return Ok(());
         };
-
-        let new_metadata = self
-            .component_service()
-            .get_metadata(self.owned_agent_id.component_id(), Some(new_revision))
-            .await?;
-
-        let new_agent_type_provision_configs = self.parsed_agent_id().and_then(|aid| {
-            new_metadata
-                .metadata
-                .agent_type_provision_configs()
-                .get(&aid.agent_type)
-                .cloned()
-        });
-
-        let updated_agent_state = if let Some(agent_id) = self.parsed_agent_id() {
-            let agent_type = new_metadata
-                .metadata
-                .find_agent_type_by_name_ref(&agent_id.agent_type)
-                .ok_or_else(|| {
-                    WorkerExecutorError::invalid_request(format!(
-                        "Agent type {} not found in updated agent metadata",
-                        agent_id.agent_type
-                    ))
-                })?;
-
-            let updated_agent_config = effective_agent_config(
-                self.state.initial_agent_config.clone(),
-                new_agent_type_provision_configs
-                    .as_ref()
-                    .map(|c| c.config.clone())
-                    .unwrap_or_default(),
-            )?;
-
-            validate_agent_config(&updated_agent_config, agent_type)?;
-
-            let initial_card =
-                agent_initial_card_from_component_metadata(&new_metadata, &agent_id)?;
-            let initial_wallet_cards = BTreeMap::from([(initial_card.card_id(), initial_card)]);
-            Some((updated_agent_config, initial_wallet_cards))
-        } else {
-            None
-        };
-
-        update_initial_files(
-            &self.filesystem_generation_handle,
-            Arc::clone(&self.state.file_loader),
-            self.owned_agent_id.environment_id,
-            new_agent_type_provision_configs
-                .as_ref()
-                .map(|c| c.files.clone())
-                .unwrap_or_default(),
-        )
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-        .await
-        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-
-        self.state.component_metadata = new_metadata.clone();
-        self.executable = crate::workerctx::WorkerCtxExecutable::Component(Box::new(new_metadata));
-
-        if let Some((updated_agent_config, initial_wallet_cards)) = updated_agent_state {
-            self.state.agent_config = updated_agent_config;
-            self.state.cached_agent_config_retry_policies = None;
-            replace_wallet_cards(
-                &mut self.state.agent_wallet_cards,
-                &mut self.state.wallet_generation,
-                initial_wallet_cards,
-            )?;
-            self.rederive_agent_effective_surface_from_wallet();
-        };
-
-        Ok(())
+        let inputs = revision_update::RevisionUpdateInputs::of(self);
+        let this = &mut *self;
+        let update = revision_update::prepare_revision_update(inputs, new_revision, move || {
+            revision_update::AgentInputs::of(this)
+        })
+        .await?;
+        revision_update::apply_revision_update(self, update)
+            .map_err(revision_update::UpdateStateError::WalletCards)
     }
 }
 
@@ -5046,7 +5376,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     async fn on_agent_invocation_started(
         &mut self,
-        mut invocation: AgentInvocation,
+        invocation: AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         if !self.state.durability_is_suppressed() {
             let stack = self.get_current_invocation_context().await;
@@ -5081,29 +5411,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 return Err(WorkerExecutorError::permission_denied("permission denied"));
             }
 
-            match &mut invocation {
-                AgentInvocation::AgentInitialization {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                AgentInvocation::AgentMethod {
-                    invocation_context, ..
-                }
-                | AgentInvocation::ExternalTool {
-                    invocation_context, ..
-                } => {
-                    *invocation_context = stack;
-                }
-                _ => {}
-            }
-
             let start_index = self
                 .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_started_with_index(
                     invocation,
+                    stack,
                     InvocationWalletPin {
                         wallet_token: WalletVersionToken {
                             wallet_id_hash: self.state.wallet_id_hash,
@@ -5114,18 +5428,24 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     },
                 )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
+                .map_err(|err| match err {
+                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
+                    err => panic!(
                         "could not encode agent invocation on {}: {err}",
                         self.agent_id()
-                    )
-                });
+                    ),
+                })?;
             self.primary_invocation_start_index = Some(start_index);
+
+            #[cfg(feature = "test-utils")]
+            self.owner_execution
+                .test_after_invocation_started_buffered()
+                .await;
 
             self.public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await?;
         }
         Ok(())
     }
@@ -5141,11 +5461,38 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     ) -> RetryDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
 
+        // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
+        // lost shard's oplog belongs to another executor now. Like `Restart` and `Jump`, a
+        // `ShardLost` trap records nothing - not the drain, not an entry, not a status change - and
+        // the shard's new owner replays the invocation and records its outcome itself.
+        if let TrapType::Interrupt(kind) = trap_type
+            && self
+                .public_state
+                .worker()
+                .retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind: *kind })
+        {
+            return RetryDecision::None;
+        }
+
+        // The abandoned runtime is torn down structurally by the owner loop. Do not perform the
+        // ordinary semantic dropped-call close, which could await replay scopes or append
+        // terminals into the suffix the accepted cut is about to erase.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            return RetryDecision::Immediate;
+        }
+
         if self.state.is_live()
             && !self.state.snapshotting_mode
             && let Err(err) = concurrent::drain_queued_dropped_call_events(self).await
         {
-            error!("failed to drain dropped durable calls before invocation failure entry: {err}");
+            error!(
+                error = %err,
+                "Failed to drain dropped durable calls before the invocation failure entry"
+            );
+            // A `Cancelled` refused by a fence latched during the drain gives the agent up, so
+            // the stop that follows drops this generation instead of leaving it cached to be
+            // restarted in place.
+            self.public_state.worker().retire_if_shard_lost(&err.source);
             return RetryDecision::None;
         }
 
@@ -5164,16 +5511,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             }
         }
 
-        // Special case: jumping is always immediate and may not have a non-detached status.
-        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
-            return RetryDecision::Immediate;
-        }
-
-        let latest_status_before = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status_before = self.public_state.worker().get_last_known_status().await;
         let (decision, retry_policy_state) = self
             .get_recovery_decision_on_trap_with_semantic(
                 &latest_status_before.current_retry_state,
@@ -5193,7 +5531,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             },
         ) = (&current_idempotency_key, trap_type)
         {
-            self.state
+            let denial_persisted = self
+                .state
                 .oplog
                 .add_pair(
                     OplogEntry::cancel_pending_invocation(idempotency_key.clone()),
@@ -5215,10 +5554,30 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     }),
                 )
                 .await;
-            self.public_state
+            match denial_persisted {
+                Ok(_) => {}
+                Err(crate::services::oplog::OplogError::Fenced(fence)) => {
+                    // The shard moved while this failure was being recorded. Retire the agent
+                    // exactly as the `ShardLost` arm above does: nothing further may be written
+                    // to an oplog that belongs to another executor now.
+                    self.public_state.worker().record_retirement(
+                        InterruptKind::ShardLost,
+                        crate::worker::RetirementReason::Fenced(Some(fence)),
+                    );
+                    return RetryDecision::None;
+                }
+                Err(error) => panic!("oplog write: {error}"),
+            }
+            // Refused, like the add above: the shard is lost.
+            if self
+                .public_state
                 .worker()
                 .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .await
+                .is_err()
+            {
+                return RetryDecision::None;
+            }
             true
         } else {
             false
@@ -5229,6 +5588,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Suspend(_)) => Some(OplogEntry::suspend()),
             TrapType::Interrupt(InterruptKind::Jump) => None,
             TrapType::Interrupt(InterruptKind::Restart) => None,
+            // The oplog is the new owner's; a stale writer must leave no trace in it.
+            TrapType::Interrupt(InterruptKind::ShardLost) => None,
             TrapType::Exit => Some(OplogEntry::exited()),
             TrapType::Error {
                 error: AgentError::PermissionDenied(_),
@@ -5252,15 +5613,20 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             )),
         };
 
-        if let Some(entry) = oplog_entry {
-            self.public_state.worker().add_and_commit_oplog(entry).await;
+        // Refused, the shard is lost: no failure is published for its invocation, which
+        // the shard's new owner runs.
+        if let Some(entry) = oplog_entry
+            && self
+                .public_state
+                .worker()
+                .add_and_commit_oplog(entry)
+                .await
+                .is_err()
+        {
+            return RetryDecision::None;
         };
 
-        let latest_status = self
-            .public_state
-            .worker()
-            .get_non_detached_last_known_status()
-            .await;
+        let latest_status = self.public_state.worker().get_last_known_status().await;
 
         let giving_up = trap_type.is_invocation_rejection()
             || matches!(
@@ -5343,8 +5709,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
         if !is_live {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
-            // (e.g. `DropEvent::FinishSpan` for a p3 HTTP response dropped unconsumed) must consume
-            // their positional entries (recorded by the live drain at this same point) before the
+            // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
+            // their durable operations before the
             // `AgentInvocationFinished` entry is read.
             concurrent::drain_queued_dropped_call_events(self)
                 .await
@@ -5380,6 +5746,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         }
 
         if is_live && !self.state.durability_is_suppressed() {
+            if self.state.entity_execution_mode.is_none() {
+                self.state
+                    .replay_state
+                    .release_retained_starts_at_live_invocation_end()
+                    .await?;
+            }
+            // Serialize the final live publication with destructive-cut acceptance. Everything
+            // that can await entity or dropped-call settlement has already happened above; keep
+            // this gate through Finished commit and completion publication.
+            let worker = self.public_state.worker();
+            let runtime_jump_gate = worker.runtime_jump_publication_gate().await;
+            if runtime_jump_gate.is_some() {
+                return Err(WorkerExecutorError::Interrupted {
+                    kind: InterruptKind::Jump,
+                });
+            }
             let component_revision = output.component_revision.ok_or_else(|| {
                 WorkerExecutorError::runtime(
                     "component_revision missing in AgentInvocationOutput during replay",
@@ -5413,7 +5795,8 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 _ => None,
             };
 
-            self.public_state
+            let finished_index = self
+                .public_state
                 .worker()
                 .oplog()
                 .add_agent_invocation_finished(
@@ -5423,14 +5806,21 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     component_revision,
                 )
                 .await
-                .unwrap_or_else(|err| {
-                    panic!("could not encode function result for {full_function_name}: {err}")
-                });
+                .map_err(|err| match err {
+                    OplogError::Fenced(fence) => self.public_state.worker().retired_by(fence),
+                    err => {
+                        panic!("could not encode function result for {full_function_name}: {err}")
+                    }
+                })?;
 
+            let commit_level = match self.public_state.worker().agent_mode() {
+                AgentMode::Durable => CommitLevel::Always,
+                AgentMode::Ephemeral => CommitLevel::Deferred,
+            };
             self.public_state
                 .worker()
-                .commit_oplog_and_update_state(CommitLevel::Always)
-                .await;
+                .commit_oplog_before_status_update(commit_level)
+                .await?;
 
             // Bump the read-only cache epoch after the
             // `AgentInvocationFinished` entry is committed, but *before*
@@ -5448,13 +5838,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             // worker's per-instance fingerprint, so the response carries
             // an unambiguous identification of the agent state it was
             // produced from.
-            output.oplog_index = Some(
-                self.public_state
-                    .worker()
-                    .oplog()
-                    .current_oplog_index()
-                    .await,
-            );
+            output.oplog_index = Some(finished_index);
             output.agent_fingerprint = Some(
                 self.public_state
                     .worker()
@@ -5474,6 +5858,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                     is_live,
                 );
             }
+            drop(runtime_jump_gate);
         }
         debug!("Function {full_function_name} finished");
 
@@ -5508,7 +5893,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                 resource_id,
                 name.clone(),
             );
-            self.public_state.worker().add_to_oplog(entry).await;
+            self.public_state
+                .worker()
+                .add_to_oplog_or_retire(entry)
+                .await;
         }
         id
     }
@@ -5523,7 +5911,10 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     id,
                     resource_type_id.clone(),
                 );
-                self.public_state.worker().add_to_oplog(entry).await;
+                self.public_state
+                    .worker()
+                    .add_to_oplog_or_retire(entry)
+                    .await;
             }
         }
         result
@@ -5563,17 +5954,12 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-    ) {
-        let entry = OplogEntry::failed_update(target_revision, details.clone());
-        self.public_state.worker().add_and_commit_oplog(entry).await;
-
-        warn!(
-            "Worker failed to update to {}: {}, update attempt aborted",
-            target_revision,
-            details.unwrap_or_else(|| "?".to_string())
-        );
+        failed_update: OplogEntry,
+    ) -> Result<(), WorkerExecutorError> {
+        warn!(?failed_update, "Worker update attempt aborted");
+        let worker = self.public_state.worker();
+        worker.add_and_commit_oplog(failed_update).await?;
+        Ok(())
     }
 
     async fn on_worker_update_succeeded(
@@ -5583,7 +5969,8 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         new_active_plugins: HashSet<
             golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId,
         >,
-    ) {
+        snapshot_assisted_details: Option<SnapshotAssistedUpdateDetails>,
+    ) -> Result<(), WorkerExecutorError> {
         info!("Worker update to {} finished successfully", target_revision);
         let worker = self.public_state.worker();
         worker
@@ -5592,108 +5979,15 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
                 target_revision,
                 new_component_size,
                 new_active_plugins,
+                snapshot_assisted_details,
             )
-            .await;
+            .await?;
+        Ok(())
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
-    async fn start_span(
-        &mut self,
-        initial_attributes: &[(String, AttributeValue)],
-        activate: bool,
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let span_id = self.state.current_span_id.clone();
-        let span = self.start_child_span(&span_id, initial_attributes).await?;
-        if activate {
-            self.state.current_span_id = span.span_id().clone();
-        }
-        Ok(span)
-    }
-
-    async fn start_child_span(
-        &mut self,
-        parent: &SpanId,
-        initial_attributes: &[(String, AttributeValue)],
-    ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
-        let current_span_id = self.state.current_span_id.clone();
-
-        let replay_entry = self.get_oplog_entry_or_continue_live("StartSpan").await?;
-        let continued_live = replay_entry.is_none();
-
-        let span = if continued_live {
-            self.state
-                .invocation_context
-                .start_span(parent, None)
-                .map_err(WorkerExecutorError::runtime)?
-        } else {
-            let (_, entry) = replay_entry.expect("replay entry was checked above");
-
-            let (timestamp, span_id) = match entry {
-                OplogEntry::StartSpan {
-                    timestamp, span_id, ..
-                } => (timestamp, span_id),
-                other => {
-                    return Err(WorkerExecutorError::unexpected_oplog_entry(
-                        "StartSpan",
-                        format!("{other:?}"),
-                    ));
-                }
-            };
-
-            let parent_span = self.state.invocation_context.get(parent).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "parent span {parent} missing during StartSpan replay: {err}"
-                ))
-            })?;
-            let span = InvocationContextSpan::local()
-                .with_span_id(span_id)
-                .with_start(timestamp)
-                .with_parent(parent_span)
-                .build();
-            self.state.invocation_context.add_span(span.clone());
-            span
-        };
-
-        if &current_span_id != parent
-            && !self
-                .state
-                .invocation_context
-                .has_in_stack(&current_span_id, parent)
-        {
-            // The parent span is not in the current invocation stack. This can happen if it was created in a previous
-            // invocation and stored in some global state.
-            // To preserve the current invocation context stack but also have the information from the desired parent
-            // span, we add a _link_ to the newly created span.
-
-            self.state
-                .invocation_context
-                .add_link(span.span_id(), parent)
-                .map_err(WorkerExecutorError::runtime)?;
-        };
-
-        for (name, value) in initial_attributes {
-            span.set_attribute(name.clone(), value.clone());
-        }
-
-        if continued_live {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::StartSpan {
-                    timestamp: span.start().unwrap_or(Timestamp::now_utc()),
-                    parent_start_index: self.entity_parent_start_index(),
-                    span_id: span.span_id().clone(),
-                    parent: Some(parent.clone()),
-                    linked_context_id: span.linked_context().map(|link| link.span_id().clone()),
-                    attributes: HashMap::from_iter(initial_attributes.iter().cloned()).into(),
-                })
-                .await;
-        }
-
-        Ok(span)
-    }
-
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if &self.state.current_span_id == span_id {
             // Walk up to the parent if it still exists in the invocation context;
@@ -5717,77 +6011,6 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         Ok(())
     }
 
-    async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
-        if let Some((_, entry)) = self.get_oplog_entry_or_continue_live("FinishSpan").await? {
-            if !matches!(entry, OplogEntry::FinishSpan { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "FinishSpan",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::finish_span(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                ))
-                .await;
-        }
-
-        if &self.state.current_span_id == span_id {
-            let span = self.state.invocation_context.get(span_id).map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "span {span_id} missing during finish_span replay: {err}"
-                ))
-            })?;
-            self.state.current_span_id = span
-                .parent()
-                .map(|p| p.span_id().clone())
-                .unwrap_or_else(|| self.state.invocation_context.root.span_id().clone());
-        }
-        let _ = self
-            .state
-            .invocation_context
-            .finish_span(span_id)
-            .map_err(WorkerExecutorError::runtime);
-        Ok(())
-    }
-
-    async fn set_span_attribute(
-        &mut self,
-        span_id: &SpanId,
-        key: &str,
-        value: AttributeValue,
-    ) -> Result<(), WorkerExecutorError> {
-        self.state
-            .invocation_context
-            .set_attribute(span_id, key.to_string(), value.clone())
-            .map_err(WorkerExecutorError::runtime)?;
-        if let Some((_, entry)) = self
-            .get_oplog_entry_or_continue_live("SetSpanAttribute")
-            .await?
-        {
-            if !matches!(entry, OplogEntry::SetSpanAttribute { .. }) {
-                return Err(WorkerExecutorError::unexpected_oplog_entry(
-                    "SetSpanAttribute",
-                    format!("{entry:?}"),
-                ));
-            }
-        } else {
-            self.public_state
-                .worker()
-                .add_to_oplog(OplogEntry::set_span_attribute(
-                    self.entity_parent_start_index(),
-                    span_id.clone(),
-                    key.to_string(),
-                    value,
-                ))
-                .await;
-        }
-        Ok(())
-    }
-
     fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
         self.state
             .invocation_context
@@ -5796,29 +6019,16 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     }
 }
 
-pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
-    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
-    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
-    type ExtraDeps = Ctx::ExtraDeps;
-
-    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
-    }
-
-    async fn resume_replay(
+impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
+    /// Replays the recorded invocations of the start, as `resume_replay` does. A failure says
+    /// whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    async fn replay(
         store: &mut Store<Ctx>,
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, ReplayFailure> {
+        let mut diverged = false;
         let result = async {
         let mut number_of_replayed_functions = 0;
 
@@ -5905,43 +6115,62 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                             ));
                         }
 
-                        let component_metadata = store
-                            .as_context()
-                            .data()
-                            .component_metadata()
-                            .metadata
-                            .clone();
-
-                        let worker = store.as_context().data().get_public_state().worker();
-                        let agent_id = store.as_context().data().parsed_agent_id();
-                        let uses_streams = invocation_uses_streams(
-                            &agent_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        );
-                        let agent_invocation = if uses_streams {
-                            worker
-                                .rehydrate_durable_streaming_invocation(agent_invocation)
-                                .await?
-                        } else {
-                            agent_invocation
-                        };
-                        let lowered = lower_invocation(
-                            agent_invocation,
-                            &component_metadata,
-                            agent_id.as_ref(),
-                        )?;
-                        let full_function_name = lowered.display_name.clone();
-
-                        let mut store_context = store.as_context_mut();
-                        let durable_ctx = store_context.data_mut().durable_ctx_mut();
-                        durable_ctx
+                        store
+                            .as_context_mut()
+                            .data_mut()
+                            .durable_ctx_mut()
                             .install_invocation_scope_card(scope_card, Vec::new())
                             .await;
-                        if let Err(error) = durable_ctx.process_pending_replay_events().await {
-                            durable_ctx.clear_invocation_scope_card().await;
-                            break Err(error);
+
+                        let preparation = async {
+                            store
+                                .as_context_mut()
+                                .data_mut()
+                                .durable_ctx_mut()
+                                .process_pending_replay_events()
+                                .await?;
+
+                            let component_metadata = store
+                                .as_context()
+                                .data()
+                                .component_metadata()
+                                .metadata
+                                .clone();
+                            let worker = store.as_context().data().get_public_state().worker();
+                            let agent_id = store.as_context().data().parsed_agent_id();
+                            let uses_streams = invocation_uses_streams(
+                                &agent_invocation,
+                                &component_metadata,
+                                agent_id.as_ref(),
+                            );
+                            let agent_invocation = if uses_streams {
+                                worker
+                                    .rehydrate_durable_streaming_invocation(agent_invocation)
+                                    .await?
+                            } else {
+                                agent_invocation
+                            };
+                            let lowered = lower_invocation(
+                                agent_invocation,
+                                &component_metadata,
+                                agent_id.as_ref(),
+                            )?;
+                            Ok::<_, WorkerExecutorError>((worker, uses_streams, lowered))
                         }
+                        .await;
+                        let (worker, uses_streams, lowered) = match preparation {
+                            Ok(preparation) => preparation,
+                            Err(error) => {
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .clear_invocation_scope_card()
+                                    .await;
+                                break Err(error);
+                            }
+                        };
+                        let full_function_name = lowered.display_name.clone();
 
                         debug!("Replaying function {}", &full_function_name);
                         debug!(
@@ -5994,10 +6223,14 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                         .instrument(span)
                         .await;
 
-                        // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
-                        // the oplog processor should assume that spans implicitly created by AgentInvocationStarted
-                        // are finished at AgentInvocationFinished.
+                        let invoke_result = if uses_streams {
+                            materialize_streaming_result(store, invoke_result, &full_function_name, &idempotency_key).await
+                        } else {
+                            invoke_result
+                        };
+
+                        // Invocation-owned spans are closed by AgentInvocationFinished in the
+                        // oplog processor; removing their resident context records no transition.
                         for span_id in local_span_ids {
                             store.as_context_mut().data_mut().remove_span(&span_id)?;
                         }
@@ -6007,74 +6240,9 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
                         match invoke_result {
                             Ok(InvokeResult::Succeeded {
-                                result: mut invocation_result,
+                                result: invocation_result,
                                 consumed_fuel,
                             }) => {
-                                if uses_streams
-                                    && let AgentInvocationResult::AgentMethod { output } =
-                                        &mut *invocation_result
-                                {
-                                    let (graph, root, component_revision) = {
-                                        let component = store.data().component_metadata();
-                                        let agent_id = store.data().parsed_agent_id();
-                                        let agent_type = agent_id
-                                            .as_ref()
-                                            .and_then(|agent_id| {
-                                                component
-                                                    .metadata
-                                                    .find_agent_type_by_name_ref(
-                                                        &agent_id.agent_type,
-                                                    )
-                                            })
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result schema is unavailable",
-                                                )
-                                            })?;
-                                        let method = agent_type
-                                            .methods
-                                            .iter()
-                                            .find(|method| method.name == full_function_name)
-                                            .ok_or_else(|| {
-                                                WorkerExecutorError::runtime(
-                                                    "durable invocation result method schema is unavailable",
-                                                )
-                                            })?;
-                                        (
-                                            agent_type.schema.clone(),
-                                            method.output_schema.schema().cloned().unwrap_or_else(
-                                                || {
-                                                    golem_common::schema::SchemaType::tuple(
-                                                        Vec::new(),
-                                                    )
-                                                },
-                                            ),
-                                            component.revision,
-                                        )
-                                    };
-                                    let worker = worker.clone();
-                                    let result_value = output.clone();
-                                    let replay_idempotency_key = idempotency_key.clone();
-                                    *output = store.run_concurrent(async move |_accessor| {
-                                            worker
-                                                .materialize_durable_streaming_result(
-                                                    &replay_idempotency_key,
-                                                    result_value,
-                                                    &graph,
-                                                    &root,
-                                                    component_revision,
-                                                )
-                                                .await
-                                        })
-                                        .await
-                                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))??;
-                                    run_guest_call_settled(&mut store.as_context_mut(), async |_accessor| ())
-                                        .await
-                                        .map_err(|error| match error {
-                                            GuestCallSettlementError::Infrastructure(error) => error,
-                                            GuestCallSettlementError::Trap(error) | GuestCallSettlementError::Interrupted(error) => WorkerExecutorError::runtime(error.to_string()),
-                                        })?;
-                                }
                                 let component_revision =
                                     store.as_context().data().component_metadata().revision;
                                 let mut output = AgentInvocationOutput {
@@ -6116,10 +6284,25 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                         break Err(error);
                                     }
                                 }
+                                if store.as_context().data().durable_ctx().is_live() {
+                                    worker.reset_infrastructure_recovery_backoff();
+                                }
                                 number_of_replayed_functions += 1;
                                 continue;
                             }
                             _ => {
+                                if let Some(error) = selected_replay_recovery_error(
+                                    store
+                                        .as_context()
+                                        .data()
+                                        .durable_ctx()
+                                        .selected_tool_owner_failure()
+                                        .is_some(),
+                                    store.as_context().data().agent_mode(),
+                                    &invoke_result,
+                                ) {
+                                    break Err(error.clone());
+                                }
                                 let details = format!("{invoke_result:?}");
                                 let snapshot_divergence = match &invoke_result {
                                     Ok(result) => result.is_snapshot_replay_divergence(),
@@ -6137,47 +6320,59 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             store.as_context().data().agent_mode(),
                                         ))
                                     }
-                                };
+                                }
+;
                                 let decision = match trap_type {
                                     // A recorded invocation that fails while its entries are still
                                     // being replayed after an automatic snapshot load most likely
                                     // diverged from the recorded execution because the guest state
                                     // restored from the snapshot differs from the original one. The
                                     // recorded oplog is authoritative, so instead of committing the
-                                    // failure the snapshot is abandoned and the worker replays from
+                                    // failure the snapshot is rejected and the worker starts again
+                                    // without it, from an earlier usable periodic record or from
                                     // its authoritative baseline.
                                     Some(TrapType::Error { error, .. })
                                         if snapshot_divergence
-                                            && store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .state
-                                                .replaying_automatic_snapshot_tail
-                                            && !store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .is_live() =>
+                                            && Self::rejects_diverged_record(
+                                                store,
+                                                &WorkerExecutorError::runtime(error.message()),
+                                            ) =>
                                     {
                                         Some(Self::abandon_diverged_automatic_snapshot(
                                             store,
                                             &error.message(),
+                                            true,
                                         ))
                                     }
                                     Some(trap_type)
-                                        if store.as_context().data().durable_ctx().state.replaying_automatic_snapshot_tail
+                                        if store.as_context().data().durable_ctx().state.snapshot_replay_purpose
+                                            != SnapshotReplayPurpose::None
                                             && !store.as_context().data().durable_ctx().is_live() =>
                                     {
-                                        // Speculative reconstruction failures must not append an
-                                        // authoritative invocation Error for already recorded work.
+                                        // Speculative reconstruction failures, after a snapshot or
+                                        // in the replay for a pending automatic update, must not
+                                        // append an authoritative invocation Error for already
+                                        // recorded work: the start decides what the failure means.
+                                        // The failure of the replay says whether it diverged.
+                                        diverged = snapshot_divergence;
                                         match trap_type {
+                                            // A trap that every invocation retries, such as an
+                                            // out-of-memory under the memory admission, keeps its
+                                            // retry: it says nothing about the replay.
+                                            TrapType::Error { .. } if let Some(retry) = Self::speculative_retry(&trap_type) => Some(retry),
                                             TrapType::Error { error, .. } => break Err(WorkerExecutorError::InvocationFailed {
                                                 error,
                                                 stderr: store.as_context().data().get_public_state().event_service().get_last_invocation_errors(),
                                             }),
-                                            TrapType::Interrupt(kind) => Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind)),
-                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during snapshot replay")),
+                                            TrapType::Interrupt(kind) => {
+                                                // `on_invocation_failure` is skipped on this path,
+                                                // so a lost shard is recorded here: its `None`
+                                                // decision alone would stop the agent as an
+                                                // ordinary one, left cached to restart in place.
+                                                worker.retire_if_shard_lost(&WorkerExecutorError::Interrupted { kind });
+                                                Self::fixed_decision_for_trap_type(&TrapType::Interrupt(kind))
+                                            }
+                                            TrapType::Exit => break Err(WorkerExecutorError::runtime("Process exited during a speculative replay")),
                                         }
                                     }
                                     Some(trap_type) => {
@@ -6191,15 +6386,31 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                                             // Like the invocation loop, permanently fail the
                                             // durable Stream Session of an invocation that was
                                             // interrupted by a crash and cannot be retried.
+                                            // A fresh interrupt is authoritative even before live
+                                            // publication; already-finished sessions stay unchanged.
+                                            // Not for a lost shard, however the loss
+                                            // reached the trap: the shard's new owner resumes that
+                                            // invocation.
+                                            let shard_lost = matches!(
+                                                trap_type,
+                                                TrapType::Interrupt(InterruptKind::ShardLost)
+                                            );
                                             if uses_streams
-                                                && store.as_context().data().durable_ctx().is_live()
+                                                && !shard_lost
+                                                && (matches!(trap_type, TrapType::Interrupt(_))
+                                                    || store.as_context().data().durable_ctx().is_live())
                                             {
-                                                let _ = worker
+                                                // A refused write means the shard has moved:
+                                                // record it before the startup result is published.
+                                                if let Err(error) = worker
                                                     .fail_durable_streaming_session(
                                                         &idempotency_key,
                                                         details,
                                                     )
-                                                    .await;
+                                                    .await
+                                                {
+                                                    worker.retire_if_shard_lost(&error);
+                                                }
                                             }
                                             // Cannot retry so we need to fail
                                             match trap_type {
@@ -6258,26 +6469,51 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .data_mut()
                 .durable_ctx_mut()
                 .state
-                .replaying_automatic_snapshot_tail = false;
+                .snapshot_replay_purpose = SnapshotReplayPurpose::None;
         }
 
         resume_result
         }.await;
+        store.data().set_suspended();
         // Result validation can consume the final recorded entry before detecting a mismatch.
         // Its typed replay error, rather than the resulting live cursor, identifies divergence.
         if let Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) = &result
-            && store
-                .as_context()
-                .data()
-                .durable_ctx()
-                .state
-                .replaying_automatic_snapshot_tail
+            && Self::rejects_diverged_record(store, error)
         {
             return Ok(Some(Self::abandon_diverged_automatic_snapshot(
-                store, error,
+                store, error, true,
             )));
         }
-        result
+        result.map_err(|error| ReplayFailure { error, diverged })
+    }
+}
+
+pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
+    fn durable_ctx(&self) -> &DurableWorkerCtx<Ctx>;
+    fn durable_ctx_mut(&mut self) -> &mut DurableWorkerCtx<Ctx>;
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
+    type ExtraDeps = Ctx::ExtraDeps;
+
+    async fn get_last_error_and_retry_count<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        latest_worker_status: &AgentStatusRecord,
+    ) -> Option<LastError> {
+        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+    }
+
+    async fn resume_replay(
+        store: &mut Store<Ctx>,
+        instance: &Instance,
+        refresh_replay_target: bool,
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
+        Self::replay(store, instance, refresh_replay_target)
+            .await
+            .map_err(|failure| failure.error)
     }
 
     async fn prepare_instance(
@@ -6312,7 +6548,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                     .get_public_state()
                     .oplog()
                     .add(OplogEntry::restart())
-                    .await;
+                    .await?;
 
                 Ok(None)
             } else {
@@ -6330,163 +6566,114 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 .clone();
 
             match pending_update {
-                Some(timestamped_update) => {
-                    match &timestamped_update.description {
-                        UpdateDescription::SnapshotBased { .. } => {
-                            // If a snapshot based update is pending, no replay should be necessary
-                            if !store.as_context().data().durable_ctx().is_live() {
-                                return Err(WorkerExecutorError::runtime(
-                                    "snapshot-based pending update expected replay state to already be live",
-                                ));
-                            }
-
-                            Self::finalize_pending_snapshot_update(instance, store).await
+                Some(hydrated) => match &hydrated.description {
+                    UpdateDescription::SnapshotBased { .. } => {
+                        // If a snapshot based update is pending, no replay should be necessary
+                        if !store.as_context().data().durable_ctx().is_live() {
+                            return Err(WorkerExecutorError::runtime(
+                                "snapshot-based pending update expected replay state to already be live",
+                            ));
                         }
-                        UpdateDescription::Automatic {
-                            target_revision, ..
-                        } => {
-                            let replay_result = async {
-                                match Self::try_load_snapshot(store, instance).await {
-                                    SnapshotRecoveryResult::Failed(error)
-                                    | SnapshotRecoveryResult::Unavailable(error) => {
-                                        return Err(error);
-                                    }
-                                    SnapshotRecoveryResult::Retry(decision) => {
-                                        return Ok(Some(decision));
-                                    }
-                                    SnapshotRecoveryResult::Success
-                                    | SnapshotRecoveryResult::NotAttempted => {}
-                                };
-                                // automatic update will be succeeded as part of the replay.
-                                let result = Self::resume_replay(store, instance, false).await?;
 
-                                record_resume_worker(start.elapsed());
-
-                                Ok(result)
+                        Self::finalize_pending_snapshot_update(instance, store).await
+                    }
+                    UpdateDescription::Automatic { .. }
+                    | UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                        let assisted = matches!(
+                            hydrated.description,
+                            UpdateDescription::SnapshotAssistedAutomatic { .. }
+                        );
+                        let attempt = async {
+                            match Self::try_load_snapshot(store, instance).await {
+                                SnapshotRecoveryResult::Success => {}
+                                SnapshotRecoveryResult::NotAttempted if !assisted => {}
+                                failure => return Err(AttemptFailure::Load(failure)),
                             }
-                            .await;
+                            // An automatic update succeeds at the end of the replay.
+                            let result = Self::replay(store, instance, assisted)
+                                .await
+                                .map_err(AttemptFailure::Replay)?;
+                            record_resume_worker(start.elapsed());
+                            Ok(result)
+                        }
+                        .await;
 
-                            match replay_result {
-                                Err(error) => {
-                                    // replay failed. There are two cases here:
-                                    // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
-                                    // 2. We failed after the update has succeeded. In this case we can the original failure.
-                                    let final_pending_update = store
-                                        .as_context_mut()
-                                        .data_mut()
-                                        .durable_ctx_mut()
-                                        .state
-                                        .pending_update
-                                        .lock()
-                                        .await
-                                        .take();
-
-                                    match final_pending_update {
-                                        Some(_) => {
-                                            // We failed before the update has succeeded. Mark the update as failed and retry
+                        match attempt {
+                            Ok(result) => Ok(result),
+                            Err(failure) => {
+                                // A failure before the update point fails the update or retries
+                                // it, as the outcome table decides. A failure after the update
+                                // point consumed the update: the update point performed the
+                                // outcome of its own failure, and its error ends the start.
+                                let pending = store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .state
+                                    .pending_update
+                                    .lock()
+                                    .await
+                                    .take();
+                                match pending {
+                                    Some(pending) => {
+                                        let action = {
+                                            let raw = match &failure {
+                                                AttemptFailure::Load(result) => {
+                                                    start_outcome::RawStartError::Load(result)
+                                                }
+                                                AttemptFailure::Replay(ReplayFailure {
+                                                    error,
+                                                    diverged,
+                                                }) => start_outcome::RawStartError::Replay {
+                                                    error,
+                                                    diverged: *diverged,
+                                                },
+                                            };
                                             store
-                                                .as_context_mut()
-                                                .data_mut()
-                                                .on_worker_update_failed(
-                                                    *target_revision,
-                                                    Some(format!(
-                                                        "Automatic update failed: {error}"
-                                                    )),
-                                                )
-                                                .await;
-
-                                            debug!(
-                                                "Retrying prepare_instance after failed update attempt"
-                                            );
-
-                                            Ok(Some(RetryDecision::Immediate))
-                                        }
-                                        _ => Err(error),
+                                                .as_context()
+                                                .data()
+                                                .durable_ctx()
+                                                .start_action(Some(&pending.reference), raw)
+                                        };
+                                        Self::perform_start_action(store, action).await
                                     }
+                                    None => Err(failure.into_error()),
                                 }
-                                _ => replay_result,
                             }
                         }
                     }
-                }
+                },
                 None => match Self::try_load_snapshot(store, instance).await {
                     SnapshotRecoveryResult::Success | SnapshotRecoveryResult::NotAttempted => {
                         let result = Self::resume_replay(store, instance, false).await;
                         record_resume_worker(start.elapsed());
                         result
                     }
-                    SnapshotRecoveryResult::Failed(error) => {
-                        if store
+                    failure => {
+                        let action = store
                             .as_context()
                             .data()
                             .durable_ctx()
-                            .state
-                            .last_snapshot_source
-                            == Some(SnapshotSource::Automatic)
-                        {
-                            Ok(Some(Self::abandon_diverged_automatic_snapshot(
-                                store, &error,
-                            )))
-                        } else {
-                            Err(WorkerExecutorError::InvocationFailed {
-                                error: AgentError::InternalError(error.to_string()),
-                                stderr: String::new(),
-                            })
-                        }
+                            .start_action(None, start_outcome::RawStartError::Load(&failure));
+                        Self::perform_start_action(store, action).await
                     }
-                    SnapshotRecoveryResult::Unavailable(error) => {
-                        if store
-                            .as_context()
-                            .data()
-                            .durable_ctx()
-                            .state
-                            .last_snapshot_source
-                            == Some(SnapshotSource::ManualUpdate)
-                        {
-                            Err(WorkerExecutorError::InvocationFailed {
-                                error: AgentError::InternalError(error.to_string()),
-                                stderr: String::new(),
-                            })
-                        } else {
-                            Err(error)
-                        }
-                    }
-                    SnapshotRecoveryResult::Retry(decision) => Ok(Some(decision)),
                 },
             }
         };
         match prepare_result {
             Ok(None) => {
-                let worker = store.as_context().data().get_public_state().worker();
-                let rejected = worker
-                    .rejected_periodic_snapshot_through
-                    .load(Ordering::Acquire);
-                if rejected != 0 {
-                    let metadata = worker.get_initial_worker_metadata();
-                    worker
-                        .worker_service()
-                        .reject_periodic_snapshots_through(
-                            &metadata.owned_agent_id(),
-                            metadata.fingerprint,
-                            OplogIndex::from_u64(rejected),
-                        )
-                        .await?;
-                }
-                worker
-                    .unavailable_periodic_snapshot_through
-                    .store(0, Ordering::Release);
+                store
+                    .as_context()
+                    .data()
+                    .get_public_state()
+                    .worker()
+                    .settle_exclusions_after_prepare()
+                    .await?;
                 store.as_context_mut().data_mut().set_suspended();
                 Ok(None)
             }
             Ok(other) => Ok(other),
-            Err(
-                error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
-                | WorkerExecutorError::PreviousInvocationExited),
-            ) => Err(error),
-            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                agent_id.clone(),
-                error,
-            )),
+            Err(error) => Err(prepare_failure(agent_id, error)),
         }
     }
 
@@ -6496,9 +6683,17 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         this.oplog_processor_plugin()
             .on_shard_assignment_changed()
             .await?;
+        let snapshots = this.agent_filesystem_snapshots();
+        let on_stale = |agent: &OwnedAgentId, fingerprint| {
+            // Only a durable agent has a member in the recovery index.
+            snapshots.delete_all_snapshots(
+                &crate::filesystem_snapshot::AgentSnapshots::agent(agent, fingerprint),
+                AgentMode::Durable,
+            )
+        };
         let workers = this
             .worker_service()
-            .get_running_workers_in_shards()
+            .get_running_workers_in_shards(&on_stale)
             .await?;
 
         debug!(workers = ?workers, "Recovering running workers");
@@ -6513,6 +6708,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
                 calculate_last_known_status_with_checkpoint(
                     this,
                     &owned_agent_id,
+                    worker.initial_worker_metadata.fingerprint,
                     agent_mode,
                     worker.last_known_status,
                 )
@@ -6524,22 +6720,30 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
 
             // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
             if should_restart_after_shard_assignment_change(&latest_worker_status) {
-                Worker::get_or_create_running(
+                let expected_fingerprint = worker.initial_worker_metadata.fingerprint;
+                let activation = Worker::get_existing_running_with_fingerprint(
                     this,
                     &owned_agent_id,
-                    None,
-                    Vec::new(),
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                    Principal::anonymous(),
+                    expected_fingerprint,
                 )
-                .await
-                .map_err(|error| {
-                    anyhow!(
-                        "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
-                    )
-                })?;
+                .await;
+                match activation {
+                    Ok(_) => {}
+                    Err(error @ WorkerExecutorError::AgentNotFound { .. }) => {
+                        if this
+                            .worker_service()
+                            .remove_if_stale(&owned_agent_id, expected_fingerprint, &on_stale)
+                            .await?
+                        {
+                            continue;
+                        }
+                        return Err(anyhow!(
+                            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+                        ));
+                    }
+                    // A shard that left the assignment mid-recovery is skipped, not fatal.
+                    Err(error) => recovered_restart(&owned_agent_id, Err::<(), _>(error))?,
+                }
             }
         }
 
@@ -6948,6 +7152,31 @@ fn recovered_status(
     }
 }
 
+/// The outcome of restarting one recovered agent, drawing the same line as [`recovered_status`].
+///
+/// `ShardingNotReady` means the agent's shard left this executor's assignment while recovery was
+/// running: a later delivery revoked it, and the worker was refused an epoch rather than opened
+/// unfenced. `OplogFenced` means another executor claimed the agent's oplog at a newer epoch
+/// before this one wrote to it. Either way the agent belongs to the shard's new owner, which
+/// recovers it there. This is a skip, like an oplog that is gone. Failing the whole assignment for
+/// it would stop every other agent in the scan from being resumed. Any other restart failure still
+/// fails the assignment.
+fn recovered_restart<W>(
+    owned_agent_id: &OwnedAgentId,
+    restarted: Result<W, WorkerExecutorError>,
+) -> Result<(), anyhow::Error> {
+    match restarted {
+        Ok(_) => Ok(()),
+        Err(WorkerExecutorError::ShardingNotReady | WorkerExecutorError::OplogFenced { .. }) => {
+            debug!(agent_id = %owned_agent_id, "Worker's shard left the assignment during shard-assignment recovery; skipping agent");
+            Ok(())
+        }
+        Err(error) => Err(anyhow!(
+            "failed to restart {owned_agent_id} during shard-assignment recovery: {error}"
+        )),
+    }
+}
+
 fn should_restart_after_shard_assignment_change(status: &AgentStatusRecord) -> bool {
     status.status != AgentStatus::Interrupted
         && (matches!(
@@ -7013,6 +7242,7 @@ impl FinishReplayToLive {
 
 #[must_use = "replay cleanup must finish before live attachment admission is finalized"]
 pub(crate) struct PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     replay_target: OplogIndex,
     role: ReplayToLiveRole,
     replaying_incomplete_entity: bool,
@@ -7022,6 +7252,7 @@ pub(crate) struct PendingReplayToLive {
 }
 
 impl PendingReplayToLive {
+    #[allow(dead_code)] // The fixed transition target remains available for diagnostics.
     pub(crate) fn replay_target(&self) -> OplogIndex {
         self.replay_target
     }
@@ -7194,6 +7425,150 @@ async fn begin_local_live_continuation<Ctx: WorkerCtx>(
     })
 }
 
+fn selected_replay_recovery_error(
+    owner_failure_selected: bool,
+    agent_mode: AgentMode,
+    result: &Result<InvokeResult, WorkerExecutorError>,
+) -> Option<&WorkerExecutorError> {
+    if owner_failure_selected || agent_mode != AgentMode::Durable {
+        return None;
+    }
+    match result {
+        Err(error @ WorkerExecutorError::RecoveryRequired { .. }) => Some(error),
+        _ => None,
+    }
+}
+
+/// What a start gets when the payload of the application snapshot of its baseline does not
+/// download for `purpose`, with `error` as the text. `lost` tells that the payload is missing or
+/// does not decode, rather than that its store failed. A periodic record is skipped for the start
+/// attempt and the start retries at once (the caller marks it unavailable). A snapshot-assisted
+/// attempt whose store failed retries with the same record through the recovery path, and
+/// nothing marks the record; one whose payload is lost reports the selected record as lost. The
+/// replay for a pending automatic update retries a failed store through the recovery path too,
+/// and gets the runtime error for a lost payload. Any other baseline gets the runtime error.
+fn payload_download_failure(
+    purpose: SnapshotReplayPurpose,
+    lost: bool,
+    error: String,
+) -> SnapshotRecoveryResult {
+    match purpose {
+        SnapshotReplayPurpose::PeriodicRecovery => {
+            SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+        }
+        SnapshotReplayPurpose::AssistedUpdate if lost => {
+            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
+        }
+        SnapshotReplayPurpose::AssistedUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::AutomaticUpdate if !lost => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired {
+                retry_from: None,
+                details: error,
+            })
+        }
+        SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::runtime(error))
+        }
+    }
+}
+
+/// Performs `action`, the outcome of a failure of the update of the instance at the update point
+/// of a start, on the p2 and the p3 path, and gives the error that ends the start. The update
+/// point consumed the pending update, so a start that runs again starts on the source revision:
+/// a written failed update, a skipped or a rejected record end the start with `Restart`, an
+/// internal retry signal that records no interruption. A failed write ends it with the error of
+/// the write, a lost shard with `ShardLost`, and an error of the table with the error that
+/// `start_outcome::update_point_error` gives for it.
+pub(crate) async fn perform_at_update_point<Ctx: WorkerCtx>(
+    worker: &Arc<Worker<Ctx>>,
+    action: start_outcome::StartAction,
+) -> WorkerExecutorError {
+    let restart = WorkerExecutorError::Interrupted {
+        kind: InterruptKind::Restart,
+    };
+    match action {
+        start_outcome::StartAction::FailUpdate { entry, reject } => {
+            warn!(?entry, "Worker update attempt aborted");
+            match worker.add_and_commit_oplog(entry).await {
+                Ok(_) => {
+                    if let Some(index) = reject {
+                        worker.reject_periodic(index);
+                    }
+                    restart
+                }
+                Err(error) => WorkerExecutorError::from(error),
+            }
+        }
+        start_outcome::StartAction::SkipPeriodic(index) => {
+            worker.mark_periodic_unavailable(index);
+            restart
+        }
+        start_outcome::StartAction::RejectPeriodic(index) => {
+            worker.reject_periodic(index);
+            restart
+        }
+        start_outcome::StartAction::Error(error) => start_outcome::update_point_error(error),
+        start_outcome::StartAction::ShardLost => WorkerExecutorError::Interrupted {
+            kind: InterruptKind::ShardLost,
+        },
+        start_outcome::StartAction::Retry(decision) => WorkerExecutorError::runtime(format!(
+            "the update point has no snapshot load to retry ({decision:?})"
+        )),
+        start_outcome::StartAction::Succeed => {
+            WorkerExecutorError::runtime("the update point cannot apply an update that failed")
+        }
+    }
+}
+
+/// The error of a failed `prepare_instance`. A failure of the previous invocation and an
+/// interrupt keep their form: the invocation loop handles an interrupt as an interrupted start and
+/// records no recovery failure for it. Every other error is a failure to resume the agent.
+fn prepare_failure(agent_id: &AgentId, error: WorkerExecutorError) -> WorkerExecutorError {
+    match error {
+        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+        | WorkerExecutorError::PreviousInvocationExited
+        | WorkerExecutorError::Interrupted { .. }) => error,
+        error => WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), error),
+    }
+}
+
+/// A failed replay of the recorded invocations of a start.
+struct ReplayFailure {
+    error: WorkerExecutorError,
+    /// Whether the replay after an application snapshot diverged from the oplog with a typed
+    /// divergence while the start still replayed it.
+    diverged: bool,
+}
+
+/// Why a pending automatic update did not reach the end of its replay.
+enum AttemptFailure {
+    /// The application snapshot of the baseline did not load.
+    Load(SnapshotRecoveryResult),
+    /// The replay failed.
+    Replay(ReplayFailure),
+}
+
+impl AttemptFailure {
+    fn into_error(self) -> WorkerExecutorError {
+        match self {
+            Self::Load(
+                SnapshotRecoveryResult::Failed(error)
+                | SnapshotRecoveryResult::Unavailable(error)
+                | SnapshotRecoveryResult::Lost(error),
+            )
+            | Self::Replay(ReplayFailure { error, .. }) => error,
+            Self::Load(_) => WorkerExecutorError::runtime(
+                "Snapshot-assisted automatic update did not attempt its required snapshot",
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7215,7 +7590,265 @@ mod tests {
     use std::collections::HashSet;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
+
     use test_r::test;
+
+    /// A payload of an application snapshot that does not download skips a periodic record for
+    /// the start attempt. A snapshot-assisted attempt whose payload store fails retries with the
+    /// same record through the recovery path: the outcome table writes no failed update and
+    /// rejects nothing for it. A snapshot-assisted attempt whose payload is missing or does not
+    /// decode fails the update as a lost record and rejects the record.
+    #[test]
+    fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_store_failed() {
+        use golem_common::model::{
+            AssistedSelection, PendingUpdateKind, PendingUpdateRef, UsableAutomaticSnapshot,
+        };
+        let head = PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind: PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            })),
+        };
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "payload".to_string(),
+        };
+        let decide = |result: &SnapshotRecoveryResult| {
+            start_outcome::decide(
+                &start_outcome::BaselineRole::AssistedPending(Arc::new(head.clone())),
+                Some(&head),
+                start_outcome::RawStartError::Load(result),
+                &agent_id,
+                false,
+            )
+        };
+        let unavailable = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            false,
+            "blob store unavailable".to_string(),
+        );
+        let lost = payload_download_failure(
+            SnapshotReplayPurpose::AssistedUpdate,
+            true,
+            "referenced oplog payload is missing".to_string(),
+        );
+
+        [false, true].iter().for_each(|lost| {
+            assert!(matches!(
+                payload_download_failure(
+                    SnapshotReplayPurpose::PeriodicRecovery,
+                    *lost,
+                    "down".to_string()
+                ),
+                SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+            ));
+            assert!(matches!(
+                payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
+                SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+            ));
+        });
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                false,
+                "blob store unavailable".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            payload_download_failure(
+                SnapshotReplayPurpose::AutomaticUpdate,
+                true,
+                "referenced oplog payload is missing".to_string()
+            ),
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. })
+        ));
+        assert!(matches!(
+            unavailable,
+            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        assert!(matches!(
+            decide(&unavailable),
+            start_outcome::StartAction::Error(WorkerExecutorError::RecoveryRequired { .. })
+        ));
+        match decide(&lost) {
+            start_outcome::StartAction::FailUpdate {
+                entry:
+                    OplogEntry::FailedUpdate {
+                        details,
+                        snapshot_assisted_details: Some(assisted),
+                        snapshot_fault,
+                        ..
+                    },
+                reject,
+            } => {
+                assert!(
+                    details
+                        .as_deref()
+                        .is_some_and(|details| details
+                            .starts_with(start_outcome::UPDATE_SNAPSHOT_UNAVAILABLE)),
+                    "{details:?}"
+                );
+                assert_eq!(assisted.snapshot_index, OplogIndex::from_u64(7));
+                assert_eq!(
+                    snapshot_fault,
+                    Some(golem_common::model::oplog::SnapshotFault::Unavailable)
+                );
+                assert_eq!(reject, Some(OplogIndex::from_u64(7)));
+            }
+            other => panic!("a lost payload fails the update, got {other:?}"),
+        }
+    }
+
+    /// An out-of-memory trap while the application snapshot loads retries the start with its
+    /// permits reacquired, as during any invocation, in a snapshot-assisted attempt and in the
+    /// start of a plain automatic update after a promoted baseline: the outcome table writes no
+    /// failed update for it. An interrupt keeps its fixed decision; any other trap does not retry.
+    #[test]
+    fn an_out_of_memory_trap_during_the_load_of_an_application_snapshot_retries_the_start() {
+        let failed = |error: AgentError| InvokeResult::Failed {
+            consumed_fuel: 0,
+            error,
+            timed_out: false,
+            retry_from: OplogIndex::INITIAL,
+            in_atomic_region: false,
+            atomic_region_had_side_effects: false,
+            semantic_trap_retry_override: None,
+        };
+        let retry = |result: &InvokeResult| {
+            DurableWorkerCtx::<crate::workerctx::default::Context>::load_retry(result)
+        };
+        let pending = |kind: PendingUpdateKind| PendingUpdateRef {
+            timestamp: Timestamp::from(1_000),
+            oplog_index: OplogIndex::from_u64(12),
+            admission_index: OplogIndex::from_u64(10),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            kind,
+        };
+        let assisted = pending(PendingUpdateKind::SnapshotAssistedAutomatic(Box::new(
+            golem_common::model::AssistedSelection {
+                source_revision_start_index: OplogIndex::from_u64(4),
+                snapshot: golem_common::model::UsableAutomaticSnapshot {
+                    index: OplogIndex::from_u64(7),
+                    component_revision: ComponentRevision::new(2).unwrap(),
+                    filesystem_snapshot: None,
+                },
+            },
+        )));
+        let automatic = pending(PendingUpdateKind::Automatic);
+        let agent_id = AgentId {
+            component_id: golem_common::model::component::ComponentId::new(),
+            agent_id: "load".to_string(),
+        };
+        let out_of_memory = SnapshotRecoveryResult::Retry(
+            retry(&failed(AgentError::OutOfMemory)).expect("an out-of-memory trap retries"),
+        );
+        let decide = |role: start_outcome::BaselineRole, head: &PendingUpdateRef| {
+            start_outcome::decide(
+                &role,
+                Some(head),
+                start_outcome::RawStartError::Load(&out_of_memory),
+                &agent_id,
+                false,
+            )
+        };
+
+        assert_eq!(
+            [
+                retry(&failed(AgentError::OutOfMemory)),
+                retry(&failed(AgentError::InternalError("diverged".to_string()))),
+                retry(&failed(AgentError::Unknown("transient".to_string()))),
+                retry(&InvokeResult::Interrupted {
+                    consumed_fuel: 0,
+                    interrupt_kind: InterruptKind::Restart,
+                }),
+                retry(&InvokeResult::Exited { consumed_fuel: 0 }),
+            ],
+            [
+                Some(RetryDecision::ReacquirePermits),
+                None,
+                None,
+                Some(RetryDecision::Immediate),
+                None,
+            ]
+        );
+        assert!(matches!(
+            decide(
+                start_outcome::BaselineRole::AssistedPending(Arc::new(assisted.clone())),
+                &assisted
+            ),
+            start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+        ));
+        [
+            start_outcome::BaselineRole::AssistedPromoted,
+            start_outcome::BaselineRole::ManualPromoted,
+        ]
+        .into_iter()
+        .for_each(|role| {
+            assert!(matches!(
+                decide(role, &automatic),
+                start_outcome::StartAction::Retry(RetryDecision::ReacquirePermits)
+            ))
+        });
+    }
+
+    /// An interrupt that ends a start, for example the restart of a revert while the start after
+    /// a failed update replays, keeps its form, so the invocation loop handles it as an interrupted
+    /// start and writes no recovery failure. A failure of the previous invocation keeps its form
+    /// too; every other error is a failure to resume the agent.
+    #[test]
+    fn a_prepare_failure_keeps_an_interrupt_and_a_previous_invocation_failure() {
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "prepare".to_string(),
+        };
+        let interrupt = WorkerExecutorError::Interrupted {
+            kind: InterruptKind::Restart,
+        };
+        let previous = WorkerExecutorError::PreviousInvocationFailed {
+            error: AgentError::Unknown("trap".to_string()),
+            stderr: String::new(),
+        };
+        let runtime = WorkerExecutorError::runtime("boom");
+        assert_eq!(
+            [
+                prepare_failure(&agent_id, interrupt.clone()),
+                prepare_failure(&agent_id, previous.clone()),
+                prepare_failure(&agent_id, WorkerExecutorError::PreviousInvocationExited),
+                prepare_failure(&agent_id, runtime.clone()),
+            ],
+            [
+                interrupt,
+                previous,
+                WorkerExecutorError::PreviousInvocationExited,
+                WorkerExecutorError::failed_to_resume_worker(agent_id.clone(), runtime),
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_recovery_branch_preserves_owner_and_ephemeral_priority() {
+        let result = Err(WorkerExecutorError::recovery_required(
+            "payload backend unavailable",
+        ));
+        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_some());
+        assert!(selected_replay_recovery_error(true, AgentMode::Durable, &result).is_none());
+        assert!(selected_replay_recovery_error(false, AgentMode::Ephemeral, &result).is_none());
+    }
+
+    #[test]
+    fn replay_recovery_branch_rejects_ordinary_host_failure() {
+        let result = Err(WorkerExecutorError::runtime("host task failed"));
+        assert!(selected_replay_recovery_error(false, AgentMode::Durable, &result).is_none());
+    }
 
     #[test]
     fn ephemeral_replay_is_only_for_typed_owner_initialization() {
@@ -7252,6 +7885,42 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn component_file_node_reports_the_write_permission_of_a_file() {
+        use crate::services::agent_filesystem as agent_fs;
+        let file = |read_only| agent_fs::Attributes {
+            kind: agent_fs::ObjectKind::File,
+            link_count: 1,
+            size: 7,
+            accessed: None,
+            modified: None,
+            read_only,
+        };
+
+        let read_only =
+            component_file_node(PathBuf::from("dir/read-only.txt"), file(true)).unwrap();
+        let writable = component_file_node(PathBuf::from("writable.txt"), file(false)).unwrap();
+
+        assert_eq!(
+            read_only,
+            ComponentFileSystemNode {
+                name: "read-only.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: golem_common::model::component::AgentFilePermissions::ReadOnly,
+                    size: 7,
+                },
+            }
+        );
+        assert_eq!(
+            writable.details,
+            ComponentFileSystemNodeDetails::File {
+                permissions: golem_common::model::component::AgentFilePermissions::ReadWrite,
+                size: 7,
+            }
+        );
     }
 
     #[test]
@@ -8853,6 +9522,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::INITIAL,
+            admission_index: OplogIndex::INITIAL,
             target_revision: ComponentRevision::INITIAL,
             kind: PendingUpdateKind::Automatic,
         });
@@ -8888,6 +9558,7 @@ mod tests {
         status.pending_updates.push_back(PendingUpdateRef {
             timestamp: Timestamp::now_utc(),
             oplog_index: OplogIndex::INITIAL.next(),
+            admission_index: OplogIndex::INITIAL.next(),
             target_revision: ComponentRevision::INITIAL,
             kind: PendingUpdateKind::Automatic,
         });
@@ -8945,6 +9616,43 @@ mod tests {
         assert!(
             error.to_string().contains("cannot be resumed")
                 && error.to_string().contains("redis failover"),
+            "{error}"
+        );
+    }
+
+    /// A revoke that races recovery refuses the worker an epoch. That agent is skipped, so the rest
+    /// of the scan is still resumed. Any other restart failure still fails the assignment.
+    #[test]
+    fn shard_assignment_recovery_skips_a_worker_whose_shard_left_the_assignment() {
+        assert!(recovered_restart(&recovered_agent(), Ok(())).is_ok());
+        assert!(
+            recovered_restart::<()>(
+                &recovered_agent(),
+                Err(WorkerExecutorError::ShardingNotReady)
+            )
+            .is_ok()
+        );
+        let agent = recovered_agent();
+        assert!(
+            recovered_restart::<()>(
+                &agent,
+                Err(WorkerExecutorError::oplog_fenced(
+                    agent.agent_id.clone(),
+                    2,
+                    Some(3)
+                ))
+            )
+            .is_ok()
+        );
+
+        let error = recovered_restart::<()>(
+            &recovered_agent(),
+            Err(WorkerExecutorError::runtime("instance failed to start")),
+        )
+        .expect_err("a restart failure other than a lost shard was skipped");
+        assert!(
+            error.to_string().contains("failed to restart")
+                && error.to_string().contains("instance failed to start"),
             "{error}"
         );
     }
@@ -9288,9 +9996,7 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
 
         if attributes.kind == agent_fs::ObjectKind::File {
             return Ok(GetFileSystemNodeResult::File(component_file_node(
-                &generation_handle,
-                relative,
-                attributes,
+                relative, attributes,
             )?));
         }
         if attributes.kind != agent_fs::ObjectKind::Directory {
@@ -9329,71 +10035,9 @@ impl<Ctx: WorkerCtx> FileSystemReading for DurableWorkerCtx<Ctx> {
             .map_err(|error| filesystem_read_error(path, error))?
             .await
             .map_err(|error| filesystem_read_error(path, error))?;
-            result.push(component_file_node(
-                &generation_handle,
-                entry_relative,
-                attributes,
-            )?);
+            result.push(component_file_node(entry_relative, attributes)?);
         }
         Ok(GetFileSystemNodeResult::Ok(result))
-    }
-
-    async fn read_file(
-        &self,
-        path: &CanonicalFilePath,
-    ) -> Result<ReadFileResult, WorkerExecutorError> {
-        use crate::services::agent_filesystem as agent_fs;
-
-        let generation_handle = self.filesystem_generation_handle();
-        let relative = PathBuf::from(path.to_rel_string());
-        let target = agent_fs::PathTarget::at_root(&generation_handle, relative)
-            .map_err(|error| filesystem_read_error(path, error))?;
-        let attributes = match agent_fs::attributes(
-            &generation_handle,
-            agent_fs::Target::Path(&target, agent_fs::Follow::Yes),
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        {
-            Ok(attributes) => attributes,
-            Err(error) if filesystem_error_is_not_found(&error) => {
-                return Ok(ReadFileResult::NotFound);
-            }
-            Err(error) => return Err(filesystem_read_error(path, error)),
-        };
-        if attributes.kind != agent_fs::ObjectKind::File {
-            return Ok(ReadFileResult::NotAFile);
-        }
-        let opened = agent_fs::open(
-            &generation_handle,
-            target,
-            agent_fs::OpenOptions::Existing {
-                expected: agent_fs::ObjectKind::File,
-                access: agent_fs::AccessMode::Read,
-                follow: agent_fs::Follow::Yes,
-            },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let agent_fs::OpenNode::File(file) = opened.node else {
-            unreachable!("file open returned a non-file node")
-        };
-        let length =
-            usize::try_from(attributes.size).map_err(|_| WorkerExecutorError::FileSystemError {
-                path: path.to_string(),
-                reason: "File is too large to read on this executor".to_string(),
-            })?;
-        let bytes = agent_fs::read_file(
-            &generation_handle,
-            &file,
-            agent_fs::ReadRange { offset: 0, length },
-        )
-        .map_err(|error| filesystem_read_error(path, error))?
-        .await
-        .map_err(|error| filesystem_read_error(path, error))?;
-        let stream = futures::stream::once(async move { Ok::<Bytes, WorkerExecutorError>(bytes) });
-        Ok(ReadFileResult::Ok(Box::pin(stream)))
     }
 }
 
@@ -9413,7 +10057,6 @@ fn filesystem_read_error(path: &CanonicalFilePath, error: impl Display) -> Worke
 }
 
 fn component_file_node(
-    generation_handle: &FilesystemGenerationHandle,
     relative: PathBuf,
     attributes: crate::services::agent_filesystem::Attributes,
 ) -> Result<ComponentFileSystemNode, WorkerExecutorError> {
@@ -9427,8 +10070,11 @@ fn component_file_node(
     let details = match attributes.kind {
         agent_fs::ObjectKind::File => ComponentFileSystemNodeDetails::File {
             size: attributes.size,
-            permissions: agent_fs::path_permissions(generation_handle, &relative)
-                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            permissions: if attributes.read_only {
+                golem_common::model::component::AgentFilePermissions::ReadOnly
+            } else {
+                golem_common::model::component::AgentFilePermissions::ReadWrite
+            },
         },
         agent_fs::ObjectKind::Directory | agent_fs::ObjectKind::Symlink => {
             ComponentFileSystemNodeDetails::Directory
@@ -9695,7 +10341,9 @@ pub(crate) struct HttpRequestSession {
 struct HttpRequestSessionInner {
     begin_index: OplogIndex,
     span_id: SpanId,
+    persisted: bool,
     phase: AtomicU8,
+    outcome: Mutex<golem_common::model::oplog::SpanOutcome>,
     drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
 }
 
@@ -9707,13 +10355,16 @@ impl HttpRequestSession {
     pub(crate) fn new(
         begin_index: OplogIndex,
         span_id: SpanId,
+        persisted: bool,
         drop_sink: Option<tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>>,
     ) -> Self {
         Self {
             inner: Arc::new(HttpRequestSessionInner {
                 begin_index,
                 span_id,
+                persisted,
                 phase: AtomicU8::new(HTTP_REQUEST_OPEN),
+                outcome: Mutex::new(golem_common::model::oplog::SpanOutcome::Cancelled),
                 drop_sink,
             }),
         }
@@ -9725,6 +10376,22 @@ impl HttpRequestSession {
 
     pub(crate) fn span_id(&self) -> &SpanId {
         &self.inner.span_id
+    }
+
+    pub(crate) fn persisted(&self) -> bool {
+        self.inner.persisted
+    }
+
+    pub(crate) fn outcome(&self) -> golem_common::model::oplog::SpanOutcome {
+        self.inner.outcome.lock().unwrap().clone()
+    }
+
+    pub(crate) fn record_outcome(&self, outcome: golem_common::model::oplog::SpanOutcome) {
+        let mut current = self.inner.outcome.lock().unwrap();
+        // A later EOF must not erase an error already exposed to the guest.
+        if *current != golem_common::model::oplog::SpanOutcome::Failed {
+            *current = outcome;
+        }
     }
 
     pub(crate) fn mark_closed(&self) {
@@ -9752,15 +10419,22 @@ impl HttpRequestSessionInner {
         let phase = self.phase.swap(HTTP_REQUEST_CLOSED, Ordering::AcqRel);
         if let Some(sink) = &self.drop_sink {
             let event = match phase {
-                HTTP_REQUEST_OPEN => Some(concurrent::DropEvent::CloseDurableScope {
-                    function_type: DurableFunctionType::WriteRemoteBatched(None),
-                    begin_index: self.begin_index,
-                    span_id: Some(self.span_id.clone()),
-                }),
-                HTTP_REQUEST_SCOPE_CLOSED => Some(concurrent::DropEvent::FinishSpan {
-                    span_id: self.span_id.clone(),
-                    durable: true,
-                }),
+                HTTP_REQUEST_OPEN if self.persisted => {
+                    Some(concurrent::DropEvent::CloseDurableScope {
+                        function_type: DurableFunctionType::WriteRemoteBatched(None),
+                        begin_index: self.begin_index,
+                        span_finished: Some(golem_common::model::oplog::SpanFinished {
+                            span_id: self.span_id.clone(),
+                            finished_at: Timestamp::now_utc(),
+                            outcome: self.outcome.lock().unwrap().clone(),
+                        }),
+                    })
+                }
+                HTTP_REQUEST_OPEN | HTTP_REQUEST_SCOPE_CLOSED => {
+                    Some(concurrent::DropEvent::FinishSpan {
+                        span_id: self.span_id.clone(),
+                    })
+                }
                 _ => None,
             };
             if let Some(event) = event {
@@ -10467,18 +11141,19 @@ struct PrivateDurableWorkerState {
 
     // Update that is pending and should be applied at the end of replay.
     // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
-    pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
+    pending_update: tokio::sync::Mutex<Option<HydratedUpdate>>,
 
     /// Stores the phantom ID associated with the currently replayed oplog region. Forks can change it
     current_phantom_id: Option<Uuid>,
     last_snapshot_index: Option<OplogIndex>,
-    last_snapshot_source: Option<SnapshotSource>,
-    /// Set while the recorded invocations following a loaded automatic snapshot are being
-    /// replayed. The snapshot restores the agent's own state but not every implementation detail
-    /// of the guest (for example caches of an embedded database), so the replayed tail can issue a
-    /// host-call sequence different from the recorded one. Such a divergence is a snapshot recovery
-    /// failure: the snapshot is abandoned and the worker replays the full oplog instead.
-    replaying_automatic_snapshot_tail: bool,
+    /// The baseline of the start: the column of the start outcome table.
+    baseline_role: BaselineRole,
+    /// The purpose of the speculative replay of this start: the replay after a periodic record,
+    /// the replay after the record of a snapshot-assisted update, or the full replay of a pending
+    /// automatic update, or `None` when the replay is not speculative. A periodic recovery can
+    /// reject a divergent record; an update replay fails the update or retries it, as the outcome
+    /// table decides, and records no application failure.
+    snapshot_replay_purpose: SnapshotReplayPurpose,
 
     /// Number of outgoing HTTP calls made in the current invocation (live only, not replayed).
     /// Reset to 0 at the start of each exported function invocation.
@@ -10570,26 +11245,24 @@ impl PrivateDurableWorkerState {
         tail_work: tail_work::TailWorkTracker,
         component_metadata: Component,
         owner_component_metadata: Option<Arc<Component>>,
-        configured_agent_effective_surface: golem_common::model::card::EffectiveSurface,
         worker_fork: Arc<dyn WorkerForkService>,
         file_loader: Arc<FileLoader>,
         created_by: AccountId,
         created_by_email: AccountEmail,
         initial_agent_config: Vec<TypedAgentConfigEntry>,
         agent_config: HashMap<Vec<String>, golem_common::schema::TypedSchemaValue>,
+        initial_authority_wallet: Option<Vec<StoredCard>>,
         shard_service: Arc<dyn ShardService>,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         last_snapshot_index: Option<OplogIndex>,
-        last_snapshot_source: Option<SnapshotSource>,
+        baseline_role: BaselineRole,
         per_invocation_http_call_limit: u64,
         per_invocation_rpc_call_limit: u64,
         resource_limit_entry: Arc<AtomicResourceEntry>,
         card_event_boundary_lock: Arc<tokio::sync::Mutex<()>>,
         published_authority_generation: Arc<AtomicU64>,
     ) -> Result<Self, WorkerExecutorError> {
-        let completion_marker_recorder =
-            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         let dropped_call_events = tokio::sync::mpsc::unbounded_channel();
@@ -10637,7 +11310,15 @@ impl PrivateDurableWorkerState {
                     (initial_agent_wallet_cards()?, 0)
                 }
             }
-            OwnerRuntime::Entity(_) => (BTreeMap::new(), 0),
+            OwnerRuntime::Entity(_) => (
+                initial_authority_wallet
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|card| (card.card_id(), card))
+                    .collect(),
+                0,
+            ),
         };
         let wallet_id_hash = CardHolder::Agent(golem_common::model::card::AgentCardHolder {
             agent_id: owned_agent_id.agent_id.clone(),
@@ -10660,9 +11341,36 @@ impl PrivateDurableWorkerState {
                 &owned_agent_id,
                 agent_wallet_cards.values(),
             ),
-            (OwnerRuntime::Entity(_), _) => configured_agent_effective_surface,
+            (OwnerRuntime::Entity(_), ResolvedOwnerContext::Agent(agent_id)) => {
+                let owner_component_metadata = owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata");
+                let context = agent_monomorphization_context(
+                    owner_component_metadata,
+                    &owned_agent_id,
+                    agent_id,
+                );
+                golem_common::model::card::agent_effective_surface_from_wallet(
+                    &context,
+                    agent_wallet_cards.values(),
+                )
+            }
+            (
+                OwnerRuntime::Entity(_),
+                ResolvedOwnerContext::ComponentWorker | ResolvedOwnerContext::ComponentBaseline,
+            ) => component_baseline_effective_surface_from_wallet(
+                owner_component_metadata
+                    .as_deref()
+                    .expect("entity Store has owner component metadata"),
+                &owned_agent_id,
+                agent_wallet_cards.values(),
+            ),
         };
         let local_live_tail = matches!(entity_execution_mode, Some(InvocationExecutionMode::Live));
+        let snapshot_replay_purpose =
+            baseline_role.purpose(pending_update.as_ref().map(|update| &update.reference));
+        let completion_marker_recorder =
+            concurrent::CompletionMarkerRecorder::new(oplog.clone(), replay_state.clone());
         Ok(Self {
             oplog_service,
             oplog,
@@ -10765,8 +11473,8 @@ impl PrivateDurableWorkerState {
             min_exposed_marker: None,
             current_phantom_id: original_phantom_id,
             last_snapshot_index,
-            last_snapshot_source,
-            replaying_automatic_snapshot_tail: false,
+            baseline_role,
+            snapshot_replay_purpose,
             resource_limit_entry,
         })
     }
@@ -10904,6 +11612,21 @@ impl PrivateDurableWorkerState {
             .iter_mut()
             .find(|scope| scope.start_index == start_index)
             .and_then(|scope| scope.replay_end.take())
+    }
+
+    /// Whether the open durable scope at `start_index` closes through the replay resolver (its
+    /// `Start` was claimed during replay and its `End` is awaited) rather than by appending a live
+    /// `End`. A scope claimed by a Store that already published live (a late owner adopting a
+    /// retained scope `Start`) still resolves through the cursor, which is then at its target so
+    /// the awaited `End` is either already delivered or reported incomplete without parking. A
+    /// Store that continued live locally while the shared cursor still replays (an incomplete
+    /// entity past a deleted region) appends its `End` live, as it must not park on cursor
+    /// progress it cannot drive.
+    fn durable_scope_replays(&self, start_index: OplogIndex) -> bool {
+        self.active_durable_scopes
+            .iter()
+            .any(|scope| scope.start_index == start_index && scope.replay_end.is_some())
+            && (!self.is_live() || self.replay_state.is_live())
     }
 
     fn is_durable_scope_open(&self, start_index: OplogIndex) -> bool {
@@ -11199,14 +11922,18 @@ impl PrivateDurableWorkerState {
         }
     }
 
-    /// Increments the HTTP call counter for the current invocation if in live mode.
+    /// Increments the HTTP call counter for the current invocation if the call is fresh live
+    /// work.
     ///
     /// Returns `Err` if the per-invocation HTTP call limit would be exceeded.
     /// The check and increment are performed only during live execution; replay
     /// mode is a no-op so that recovering workers are not penalised for calls
-    /// already made in a prior execution.
+    /// already made in a prior execution. Call quotas are charged before the
+    /// call's `Start` is claimed or written, so they use
+    /// [`Self::durable_call_is_fresh`]: a call that may still adopt a retained
+    /// recorded `Start` charged to the same quota is not charged again.
     pub fn check_and_increment_http_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Http) {
             return Ok(());
         }
         if self.per_invocation_http_call_limit != u64::MAX
@@ -11218,11 +11945,13 @@ impl PrivateDurableWorkerState {
         Ok(())
     }
 
-    /// Increments the RPC call counter for the current invocation if in live mode.
+    /// Increments the RPC call counter for the current invocation if the call is fresh live work.
     ///
-    /// Returns `Err` if the per-invocation RPC call limit would be exceeded.
+    /// Returns `Err` if the per-invocation RPC call limit would be exceeded. Uses
+    /// [`Self::durable_call_is_fresh`] for the same reason as
+    /// [`Self::check_and_increment_http_call_count`].
     pub fn check_and_increment_rpc_call_count(&mut self) -> Result<(), GolemSpecificWasmTrap> {
-        if !self.is_live() {
+        if !self.durable_call_is_fresh(QuotaClass::Rpc) {
             return Ok(());
         }
         if self.per_invocation_rpc_call_limit != u64::MAX
@@ -11255,6 +11984,49 @@ impl PrivateDurableWorkerState {
 
     pub(crate) fn local_live_tail(&self) -> Arc<AtomicBool> {
         self.local_live_tail.clone()
+    }
+
+    /// Whether a durable call that would claim a recorded `Start` may skip replay and record a new
+    /// `Start` directly.
+    ///
+    /// This is stricter than [`Self::is_live`]: while the cursor has retained `Start`s (recorded
+    /// `Start`s that a positional reader stepped over without consuming and that no owner has
+    /// claimed yet), a call arriving after the live transition may still be the replayed owner of
+    /// one of them. Such calls must go through the replay claim path so they can adopt their
+    /// retained `Start` instead of duplicating it. Entity Stores in `Live` mode never replay, so
+    /// they always answer `true` once live.
+    ///
+    /// Positional readers, authorization and snapshot decisions keep using [`Self::is_live`],
+    /// which describes the Store's position, not a call's admission. Per-call quotas use
+    /// [`Self::durable_call_is_fresh`], which narrows the retained-`Start` exception to the
+    /// call's own quota class.
+    pub fn durable_call_is_live(&self) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.has_unclaimed_retained_starts())
+    }
+
+    /// Whether a durable call charged to `quota` that this Store is about to issue is known to
+    /// create fresh work: the Store is live and no unclaimed retained `Start` charged to the same
+    /// quota remains for a late owner to adopt. Per-call quotas are charged before a call is
+    /// admitted (so that a refused call leaves no oplog entry), and use this predicate: a call
+    /// that may still adopt a retained recorded `Start` is not charged again, while retained
+    /// `Start`s charged to other quotas (or to none) never suppress a charge. Retained `Start`s
+    /// of the same quota class but a different owner (another Store of this agent, or a different
+    /// call kind sharing the quota) also suppress the charge; that residual under-charge is
+    /// bounded by the recorded prefix of one recovered invocation.
+    pub fn durable_call_is_fresh(&self, quota: QuotaClass) -> bool {
+        self.is_live()
+            && (self.entity_execution_mode == Some(InvocationExecutionMode::Live)
+                || !self.replay_state.retains_unclaimed_start_charged_to(quota))
+    }
+
+    /// Whether this Store is an incomplete entity that already continued live locally while the
+    /// shared cursor may still replay other owners' records. See
+    /// [`ReplayState::claim_start_for_store`].
+    pub(crate) fn store_continued_live(&self) -> bool {
+        self.entity_execution_mode == Some(InvocationExecutionMode::ReplayingIncomplete)
+            && self.is_live()
     }
 
     fn durability_is_suppressed(&self) -> bool {
@@ -11591,7 +12363,8 @@ impl<Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtx<Ctx> {
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
-/// replay, while skipping hint entries.
+/// replay, while skipping hint entries. The reader is the `DurableWorkerCtx` performing the
+/// positional read: its entity attribution decides which interleaved entries it may consume.
 /// The macro expression's type is `Result<(OplogIndex, OplogEntry), WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
@@ -11613,8 +12386,8 @@ macro_rules! get_oplog_entry {
             }
         }
     };
-    ($replay_state:expr, $($cases:path),+) => {
-        $crate::get_oplog_entry!(@reader ($replay_state).get_oplog_entry(); $($cases),+)
+    ($ctx:expr, $($cases:path),+) => {
+        $crate::get_oplog_entry!(@reader ($ctx).state.replay_state.get_oplog_entry(($ctx).entity_parent_start_index()); $($cases),+)
     };
 }
 

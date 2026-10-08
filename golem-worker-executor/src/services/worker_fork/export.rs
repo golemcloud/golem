@@ -6,20 +6,28 @@
 
 use super::{DefaultWorkerFork, admission, admission::Admission, stream_cut};
 use crate::durable_host::durable_stream::DurableStreamStore;
+use crate::filesystem_snapshot::AgentSnapshots;
 use crate::services::HasOplog;
-use crate::services::oplog::{CommitLevel, OplogService, OplogServiceOps};
+use crate::services::agent_filesystem_snapshots::{Baseline, PublishFound, fork_flight};
+use crate::services::oplog::{CommitLevel, OplogOps, OplogService, OplogServiceOps};
+use crate::services::rpc::DurableStreamRemoteError;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+use futures::FutureExt;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ForkStreamSlotRejection, ForkStreamSlotRequest, ForkStreamSlotResponse, ForkStreamSlotSuccess,
     fork_stream_slot_rejection::Reason, fork_stream_slot_response,
 };
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{
-    StreamExportFork, StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionRecord,
+    DURABLE_STREAM_FORMAT_VERSION, StreamExportFork, StreamExportForkInitializedRecord,
+    StreamForkCutRecord, StreamItemsPayload, StreamOffset, StreamSessionExpiryPolicy,
+    StreamSessionRecord,
 };
-use golem_common::model::oplog::OplogEntry;
-use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, OwnedAgentId, Timestamp};
+use golem_common::model::oplog::{DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry};
+use golem_common::model::{
+    AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId, Timestamp,
+};
 use golem_common::schema::SchemaGraph;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -29,6 +37,7 @@ use uuid::Uuid;
 
 pub(super) use golem_common::model::durable_stream::StreamExportForkCandidate as Candidate;
 
+#[derive(Debug)]
 enum Error {
     Rejected(ForkStreamSlotRejection),
     Worker(WorkerExecutorError),
@@ -37,6 +46,23 @@ enum Error {
 impl From<WorkerExecutorError> for Error {
     fn from(error: WorkerExecutorError) -> Self {
         Self::Worker(error)
+    }
+}
+
+impl From<DurableStreamRemoteError<WorkerExecutorError>> for Error {
+    fn from(error: DurableStreamRemoteError<WorkerExecutorError>) -> Self {
+        match error {
+            DurableStreamRemoteError::Unavailable => Self::Worker(WorkerExecutorError::runtime(
+                "durable stream producer is unavailable",
+            )),
+            DurableStreamRemoteError::Other(error) => Self::Worker(error),
+        }
+    }
+}
+
+impl From<crate::services::oplog::OplogError> for Error {
+    fn from(error: crate::services::oplog::OplogError) -> Self {
+        Self::Worker(error.into())
     }
 }
 
@@ -93,17 +119,19 @@ async fn execute<Ctx: WorkerCtx>(
     }
     service.shard_service.check_worker(&source_id)?;
 
-    // The target receipt wins before consulting the source: its tail, tombstone or even
-    // existence may have changed since the successful request whose response was lost.
-    if let Some(receipt) = creation_record(service.oplog_service.as_ref(), &target).await? {
-        let export = receipt
-            .export
-            .as_ref()
-            .filter(|export| matches_request(export, request, &source_id))
-            .ok_or_else(|| reject(Reason::Conflict))?;
+    if let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await? {
+        // The immutable target receipt is authoritative for a retry. Do not consult current
+        // source state: the source may have advanced, expired or been deleted after publication.
+        let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
         resume(service, &target_id, &auth).await?;
-        return Ok(response(export, receipt.cut_index, true));
+        return Ok(success);
     }
+    let source_metadata = service
+        .worker_service
+        .get(&source)
+        .await?
+        .ok_or_else(|| reject(Reason::NotFound))?;
+    let metadata = source_metadata.initial_worker_metadata.clone();
     if service
         .oplog_service
         .exists(&target, AgentMode::Durable)
@@ -115,15 +143,18 @@ async fn execute<Ctx: WorkerCtx>(
     {
         return Err(reject(Reason::Conflict));
     }
-    let metadata = service
-        .worker_service
-        .get(&source)
-        .await?
-        .ok_or_else(|| reject(Reason::NotFound))?
-        .initial_worker_metadata;
-    let worker = Worker::find_durable_stream_worker(service, &source)
+    let (worker, _response_lease) = Worker::find_durable_stream_worker(service, &source)
         .await?
         .ok_or_else(|| reject(Reason::NotFound))?;
+    let slot = worker
+        .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
+        .await?;
+    let Some(slot) = slot else {
+        return Err(reject(Reason::NotFound));
+    };
+    if slot.tombstoned {
+        return Err(reject(Reason::Conflict));
+    }
     let status = worker.get_export_fork_status().await?;
     match admission::check(
         &status.export_fork_admissions,
@@ -156,7 +187,7 @@ async fn execute<Ctx: WorkerCtx>(
             }
             candidate
         }
-        None => prepare_candidate(service, request, &source, metadata.fingerprint).await?,
+        None => prepare_candidate(request, &source, metadata.fingerprint, worker.clone()).await?,
     };
     let identity = (
         source.clone(),
@@ -175,14 +206,30 @@ async fn execute<Ctx: WorkerCtx>(
             candidate.export.content_type.clone(),
             candidate.export.initial_content_hash.clone(),
             request.closed,
+            candidate.export.target_expiry_policy,
         ),
     );
     let hash =
         *blake3::hash(&serialize(&identity).map_err(WorkerExecutorError::runtime)?).as_bytes();
+    // The attempt holds the snapshots of the source from before its read of the source oplog. An
+    // attempt that waited for another attempt of the same request reconciles again.
+    let source_snapshots = AgentSnapshots::agent(&source, metadata.fingerprint);
+    let fork = service
+        .agent_filesystem_snapshots
+        .begin_fork(&source_snapshots, fork_flight(&target_id, hash))
+        .await
+        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+    if fork.waited()
+        && let Some(receipt) = creation_receipt(service.oplog_service.as_ref(), &target).await?
+    {
+        let success = receipt_answer(&receipt, request, &source_id, Reason::NotFound)?;
+        resume(service, &target_id, &auth).await?;
+        return Ok(success);
+    }
     let mut stage_id = Uuid::new_v4();
     let result = async {
         // Stage before charging limits. A rejected byte budget never consumes admission.
-        let (mut oplog, copied_bytes) = stage(
+        let (mut oplog, copied_bytes, mut target_fingerprint, mut baseline) = stage(
             service,
             &source,
             &target_id,
@@ -193,6 +240,20 @@ async fn execute<Ctx: WorkerCtx>(
             request.max_copied_bytes,
         )
         .await?;
+        // A source without the snapshot of the baseline holds no reservation.
+        if let Some(refused) = source_baseline_refusal(
+            service,
+            &source_snapshots,
+            &target,
+            request,
+            &source_id,
+            &candidate,
+            baseline.as_ref(),
+        )
+        .await?
+        {
+            return refused;
+        }
         let admission = worker
             .reserve_export_fork(
                 target_id.clone(),
@@ -208,6 +269,8 @@ async fn execute<Ctx: WorkerCtx>(
                 worker.read_export_fork_candidate(oplog_index).await?
             }
             Admission::Conflict | Admission::LimitReached => return Err(reject(Reason::Conflict)),
+            Admission::Expired => return Err(reject(Reason::NotFound)),
+            Admission::InvalidExpiry => return Err(reject(Reason::Conflict)),
             Admission::RateLimited {
                 retry_after_seconds,
             } => {
@@ -227,7 +290,7 @@ async fn execute<Ctx: WorkerCtx>(
                 .map_err(WorkerExecutorError::runtime)?;
             stage_id = Uuid::new_v4();
             candidate = winner;
-            (oplog, _) = stage(
+            (oplog, _, target_fingerprint, baseline) = stage(
                 service,
                 &source,
                 &target_id,
@@ -238,39 +301,110 @@ async fn execute<Ctx: WorkerCtx>(
                 request.max_copied_bytes,
             )
             .await?;
+            if let Some(refused) = source_baseline_refusal(
+                service,
+                &source_snapshots,
+                &target,
+                request,
+                &source_id,
+                &candidate,
+                baseline.as_ref(),
+            )
+            .await?
+            {
+                return refused;
+            }
         }
-        oplog.commit(CommitLevel::Always).await;
+        oplog.commit(CommitLevel::Always).await?;
+        let copied = fork
+            .copy(&target, stage_id, baseline.as_ref())
+            .await
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "Failed to copy the filesystem snapshots of the fork source: {error}"
+                ))
+            })?;
+        if let Baseline::Missing(name) = copied.baseline() {
+            // Reconcile before the refusal: a parallel attempt can have published the target.
+            let receipt = creation_receipt(service.oplog_service.as_ref(), &target).await?;
+            if let Some(receipt) = &receipt {
+                copied.lost_to(receipt.cut.creation_fingerprint);
+            }
+            return missing_baseline_answer(
+                receipt.as_ref(),
+                request,
+                &source_id,
+                candidate.cut,
+                &name,
+            );
+        }
+        let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
+        let expiry_deadline_millis = admitted_publication_deadline(&candidate);
+        append_target_initialization(oplog.as_ref(), &candidate, hash, expiry_deadline_millis)
+            .await?;
+        schedule_expiry(
+            service,
+            &target,
+            target_fingerprint,
+            &candidate,
+            expiry_deadline_millis,
+        )
+        .await?;
+        oplog.commit(CommitLevel::Always).await?;
         let last = oplog.current_oplog_index().await;
         drop(oplog);
-        let target_lifecycle = service.oplog_service.lock_lifecycle(&target.agent_id).await;
-        let published = service
-            .oplog_service
-            .publish_staged(&target, AgentMode::Durable, stage_id, last)
-            .await;
-        let result = match published {
-            Ok(true) => Ok(response(&candidate.export, candidate.cut, false)),
-            outcome => {
-                if let Some(receipt) =
-                    creation_record(service.oplog_service.as_ref(), &target).await?
-                {
-                    let export = receipt
-                        .export
-                        .as_ref()
-                        .filter(|export| matches_request(export, request, &source_id))
-                        .ok_or_else(|| reject(Reason::Conflict))?;
-                    Ok(response(export, receipt.cut_index, true))
-                } else {
-                    Err(
-                        WorkerExecutorError::runtime(outcome.err().unwrap_or_else(|| {
-                            "Fork publication lost target before reconciliation".into()
-                        }))
-                        .into(),
-                    )
-                }
-            }
-        };
+        let candidate = &candidate;
+        let target = &target;
+        let source_id = &source_id;
+        let published = copied
+            .publish(
+                |publication| {
+                    async move {
+                        let outcome = service
+                            .oplog_service
+                            .publish_staged(target, AgentMode::Durable, publication, last)
+                            .await;
+                        if let Ok(true) = outcome {
+                            return PublishFound::Published(Ok(response(
+                                &candidate.export,
+                                candidate.cut,
+                                false,
+                                &candidate.target_session_key,
+                            )));
+                        }
+                        // Each receipt gives the instance id of the live target, also after the
+                        // session deadline.
+                        match (
+                            creation_receipt(service.oplog_service.as_ref(), target).await,
+                            outcome,
+                        ) {
+                            (Ok(Some(receipt)), _) => PublishFound::Live(
+                                receipt.cut.creation_fingerprint,
+                                receipt_answer(&receipt, request, source_id, Reason::Conflict),
+                            ),
+                            (Ok(None), Ok(_)) => {
+                                PublishFound::Refused(Err(WorkerExecutorError::runtime(
+                                    "Fork publication lost target before reconciliation",
+                                )
+                                .into()))
+                            }
+                            (Err(error), Ok(_)) => PublishFound::Refused(Err(error.into())),
+                            (_, Err(error)) => {
+                                PublishFound::Unknown(WorkerExecutorError::runtime(error).into())
+                            }
+                        }
+                    }
+                    .boxed()
+                },
+                || {
+                    super::publication::live_instance(service.oplog_service.as_ref(), target)
+                        .boxed()
+                },
+            )
+            .await
+            .and_then(|published| published);
         drop(target_lifecycle);
-        result
+        published
     }
     .await;
     let cleanup = service
@@ -281,6 +415,113 @@ async fn execute<Ctx: WorkerCtx>(
     cleanup.map_err(WorkerExecutorError::runtime)?;
     resume(service, &target_id, &auth).await?;
     Ok(success)
+}
+
+/// The answer of a fork that found the creation receipt `receipt` of its target. A receipt that is
+/// not live gives `when_not_live`: `NotFound` when the fork found it before it staged, and
+/// `Conflict` when an attempt that staged lost to it. A live receipt gives the target of this
+/// request, or a conflict when the receipt is of another request.
+fn receipt_answer(
+    receipt: &CreationReceipt,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+    when_not_live: Reason,
+) -> Result<ForkStreamSlotSuccess, Error> {
+    if !receipt.live {
+        return Err(reject(when_not_live));
+    }
+    let export = matching_receipt_export(receipt, request, source)?;
+    Ok(response(
+        export,
+        receipt.cut.cut_index,
+        true,
+        &receipt.initialized.session_key,
+    ))
+}
+
+/// The answer of a fork whose source does not hold the snapshot `baseline` of the baseline of
+/// the target, or `None` when the source holds it or the baseline has none. Before it refuses,
+/// it reconciles: a target that a parallel attempt published gives its response.
+#[allow(clippy::too_many_arguments)]
+async fn source_baseline_refusal<Ctx: WorkerCtx>(
+    service: &DefaultWorkerFork<Ctx>,
+    source: &AgentSnapshots,
+    target: &OwnedAgentId,
+    request: &ForkStreamSlotRequest,
+    source_id: &AgentId,
+    candidate: &Candidate,
+    baseline: Option<&FilesystemSnapshotName>,
+) -> Result<Option<Result<ForkStreamSlotSuccess, Error>>, Error> {
+    let checked = match baseline {
+        Some(name) => Some((
+            name,
+            service
+                .agent_filesystem_snapshots
+                .missing(source, name)
+                .await
+                .map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "Failed to check the filesystem snapshot of the fork baseline: {error}"
+                    ))
+                })?,
+        )),
+        None => None,
+    };
+    let receipt = if refuses_unless_reconciled(checked) {
+        creation_receipt(service.oplog_service.as_ref(), target).await?
+    } else {
+        None
+    };
+    Ok(source_baseline_answer(
+        checked,
+        receipt.as_ref(),
+        request,
+        source_id,
+        candidate.cut,
+    ))
+}
+
+/// Whether the check `checked` of the snapshot of the baseline in the source refuses the fork
+/// unless a reconciliation finds the target: the baseline has a snapshot, and the source does
+/// not hold it. `checked` holds the name of the snapshot and whether it is missing, or is `None`
+/// when the baseline has no snapshot.
+fn refuses_unless_reconciled(checked: Option<(&FilesystemSnapshotName, bool)>) -> bool {
+    checked.is_some_and(|(_, missing)| missing)
+}
+
+/// The answer of a fork at the cut `cut` after the check `checked` of the snapshot of the
+/// baseline in the source, and the reconciliation that found `receipt`: `None` when the check
+/// does not refuse the fork, and otherwise the answer of [`missing_baseline_answer`].
+fn source_baseline_answer(
+    checked: Option<(&FilesystemSnapshotName, bool)>,
+    receipt: Option<&CreationReceipt>,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+    cut: OplogIndex,
+) -> Option<Result<ForkStreamSlotSuccess, Error>> {
+    checked
+        .filter(|checked| refuses_unless_reconciled(Some(*checked)))
+        .map(|(name, _)| missing_baseline_answer(receipt, request, source, cut, name))
+}
+
+/// The answer of a fork at the cut `cut` whose source, or whose copy, lacks the snapshot `name`
+/// of the baseline of the target, after its reconciliation found `receipt`. A receipt gives its
+/// answer, as [`receipt_answer`] decides for an attempt that lost. Without a receipt, the fork
+/// is refused with an error that names the cut and the snapshot.
+fn missing_baseline_answer(
+    receipt: Option<&CreationReceipt>,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+    cut: OplogIndex,
+    name: &FilesystemSnapshotName,
+) -> Result<ForkStreamSlotSuccess, Error> {
+    match receipt {
+        Some(receipt) => receipt_answer(receipt, request, source, Reason::Conflict),
+        None => Err(WorkerExecutorError::invalid_request(format!(
+            "Cannot fork worker at oplog index {cut}: the filesystem snapshot {name} of the target's baseline is not in the store"
+        ))
+        .into()),
+    }
 }
 
 async fn resume<Ctx: WorkerCtx>(
@@ -311,7 +552,15 @@ async fn stage<Ctx: WorkerCtx>(
     hash: [u8; 32],
     candidate: &Candidate,
     max_bytes: u64,
-) -> Result<(std::sync::Arc<dyn crate::services::oplog::Oplog>, u64), Error> {
+) -> Result<
+    (
+        std::sync::Arc<dyn crate::services::oplog::Oplog>,
+        u64,
+        AgentFingerprint,
+        Option<FilesystemSnapshotName>,
+    ),
+    Error,
+> {
     service
         .copy_source_oplog(
             account,
@@ -339,18 +588,96 @@ async fn stage<Ctx: WorkerCtx>(
         })
 }
 
-async fn prepare_candidate<Ctx: WorkerCtx>(
+fn admitted_publication_deadline(candidate: &Candidate) -> Option<u64> {
+    // Admission::InvalidExpiry rejects unrepresentable TTLs before publication reaches here.
+    match candidate.expiry_policy {
+        StreamSessionExpiryPolicy::None => None,
+        StreamSessionExpiryPolicy::Sliding { ttl_seconds } => Some(
+            Timestamp::now_utc()
+                .to_millis()
+                .checked_add(
+                    ttl_seconds
+                        .checked_mul(1_000)
+                        .expect("admitted stream TTL must be representable"),
+                )
+                .expect("admitted stream deadline must be representable"),
+        ),
+        StreamSessionExpiryPolicy::Absolute { .. } => candidate.expiry_deadline_millis,
+    }
+}
+
+async fn append_target_initialization(
+    oplog: &dyn crate::services::oplog::Oplog,
+    candidate: &Candidate,
+    request_hash: [u8; 32],
+    expiry_deadline_millis: Option<u64>,
+) -> Result<(), Error> {
+    let initialized =
+        StreamSessionRecord::ExportForkInitialized(StreamExportForkInitializedRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            public_session_id: candidate.export.session.clone(),
+            session_key: candidate.target_session_key.clone(),
+            source_invocation: candidate.source_invocation.clone(),
+            request_hash: request_hash.to_vec(),
+            expiry_policy: candidate.expiry_policy,
+            expiry_deadline_millis,
+        });
+    let record = oplog
+        .upload_payload(&initialized)
+        .await
+        .map_err(WorkerExecutorError::runtime)?;
+    let summary = DurableStreamEventSummary::session(&initialized);
+    oplog
+        .add(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            record,
+            summary,
+        })
+        .await?;
+    Ok(())
+}
+
+async fn schedule_expiry<Ctx: WorkerCtx>(
     service: &DefaultWorkerFork<Ctx>,
+    target: &OwnedAgentId,
+    fingerprint: AgentFingerprint,
+    candidate: &Candidate,
+    deadline_millis: Option<u64>,
+) -> Result<(), Error> {
+    let Some(deadline_millis) = deadline_millis else {
+        return Ok(());
+    };
+    // Admission::InvalidExpiry validates the deadline before staged publication.
+    let deadline = expiry_datetime(deadline_millis)
+        .expect("admitted stream expiry must have a representable deadline");
+    service
+        .scheduler_service
+        .schedule(
+            deadline,
+            golem_common::model::ScheduledAction::ExpireDurableStreamSession {
+                owned_agent_id: target.clone(),
+                target_agent_fingerprint: fingerprint,
+                public_session_id: candidate.export.session.clone(),
+                session_key: candidate.target_session_key.clone(),
+                expected_deadline_millis: deadline_millis,
+            },
+        )
+        .await;
+    Ok(())
+}
+
+async fn prepare_candidate<Ctx: WorkerCtx>(
     request: &ForkStreamSlotRequest,
     source: &OwnedAgentId,
     fingerprint: AgentFingerprint,
+    worker: std::sync::Arc<Worker<Ctx>>,
 ) -> Result<Candidate, Error> {
-    let worker = Worker::find_durable_stream_worker(service, source)
-        .await?
-        .ok_or_else(|| reject(Reason::NotFound))?;
+    // A refused commit means the source has a new owner: fail the fork rather than read a
+    // horizon this executor is no longer allowed to write past.
     worker
         .commit_oplog_and_update_state(CommitLevel::Always)
-        .await;
+        .await?;
     let slot = worker
         .resolve_export_fork_slot(&request.session, &request.slot, &request.expected_method)
         .await?
@@ -378,6 +705,8 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
         return Err(reject(Reason::ReadOnly));
     }
     let initial = initial_payload(&slot.graph, slot.bytes, &request.initial_content)?;
+    let (expiry_policy, expiry_deadline_millis) =
+        effective_expiry_policy(request.expiry_policy, slot.expiry_policy)?;
     let requested_offset = request
         .fork_offset
         .as_deref()
@@ -454,7 +783,7 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
     // durable before staging reads the source from storage.
     worker
         .commit_oplog_and_update_state(CommitLevel::Always)
-        .await;
+        .await?;
     Ok(Candidate {
         export: StreamExportFork {
             source: source.agent_id.clone(),
@@ -470,19 +799,46 @@ async fn prepare_candidate<Ctx: WorkerCtx>(
             content_type: content_type.into(),
             initial_content_hash: blake3::hash(&request.initial_content).as_bytes().to_vec(),
             closed: request.closed,
+            target_expiry_policy: expiry_policy,
         },
         horizon: snapshot.horizon,
         cut: cut.oplog_index,
         selected: handle.stream_id,
+        source_invocation: handle.source_invocation,
+        target_session_key: IdempotencyKey::new(Uuid::new_v4().to_string()),
+        expiry_policy,
+        expiry_deadline_millis,
         retained_through: cut.last_item_offset,
         initial,
     })
+}
+
+fn effective_expiry_policy(
+    explicit: Option<golem_api_grpc::proto::golem::workerexecutor::v1::StreamSessionExpiryPolicy>,
+    inherited: StreamSessionExpiryPolicy,
+) -> Result<(StreamSessionExpiryPolicy, Option<u64>), Error> {
+    let policy = match explicit {
+        Some(policy) => crate::grpc::stream_slots::expiry_policy_from_proto(Some(policy))?,
+        None => inherited,
+    };
+    let deadline = match policy {
+        StreamSessionExpiryPolicy::None | StreamSessionExpiryPolicy::Sliding { .. } => None,
+        StreamSessionExpiryPolicy::Absolute { expires_at_millis } => Some(expires_at_millis),
+    };
+    Ok((policy, deadline))
+}
+
+fn expiry_datetime(millis: u64) -> Option<chrono::DateTime<chrono::Utc>> {
+    i64::try_from(millis)
+        .ok()
+        .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
 }
 
 pub(crate) fn response(
     export: &StreamExportFork,
     cut: OplogIndex,
     replayed: bool,
+    invocation_key: &IdempotencyKey,
 ) -> ForkStreamSlotSuccess {
     ForkStreamSlotSuccess {
         replayed,
@@ -493,6 +849,7 @@ pub(crate) fn response(
             .unwrap_or_default(),
         sub_offset: export.sub_offset,
         oplog_index: cut.as_u64(),
+        invocation_key: Some(invocation_key.clone().into()),
     }
 }
 
@@ -516,6 +873,30 @@ pub(super) fn matches_request(
             .is_none_or(|ct| ct == &export.content_type)
         && export.initial_content_hash == blake3::hash(&request.initial_content).as_bytes()
         && export.closed == request.closed
+        && request.expiry_policy.as_ref().is_none_or(|policy| {
+            crate::grpc::stream_slots::expiry_policy_from_proto(Some(*policy))
+                .is_ok_and(|policy| policy == export.target_expiry_policy)
+        })
+}
+
+fn matching_receipt_export<'a>(
+    receipt: &'a CreationReceipt,
+    request: &ForkStreamSlotRequest,
+    source: &AgentId,
+) -> Result<&'a StreamExportFork, Error> {
+    let export = receipt
+        .cut
+        .export
+        .as_ref()
+        .filter(|export| matches_request(export, request, source))
+        .ok_or_else(|| reject(Reason::Conflict))?;
+    if receipt.initialized.request_hash != receipt.cut.request_hash
+        || receipt.initialized.public_session_id != request.session
+        || receipt.initialized.expiry_policy != export.target_expiry_policy
+    {
+        return Err(reject(Reason::Conflict));
+    }
+    Ok(export)
 }
 
 /// The first marker authored for this incarnation is its immutable creation receipt, even
@@ -524,6 +905,21 @@ pub(crate) async fn creation_record(
     service: &dyn OplogService,
     target: &OwnedAgentId,
 ) -> Result<Option<StreamForkCutRecord>, WorkerExecutorError> {
+    Ok(creation_receipt(service, target)
+        .await?
+        .map(|receipt| receipt.cut))
+}
+
+struct CreationReceipt {
+    cut: StreamForkCutRecord,
+    initialized: StreamExportForkInitializedRecord,
+    live: bool,
+}
+
+async fn creation_receipt(
+    service: &dyn OplogService,
+    target: &OwnedAgentId,
+) -> Result<Option<CreationReceipt>, WorkerExecutorError> {
     let mode = AgentMode::Durable;
     let horizon = service.get_last_index(target, mode).await;
     if horizon == OplogIndex::NONE {
@@ -536,6 +932,10 @@ pub(crate) async fn creation_record(
         return Ok(None);
     };
     let mut covered = OplogIndex::INITIAL;
+    let mut cut = None;
+    let mut initialized = None;
+    let mut current_deadline_millis = None;
+    let mut live = true;
     while covered < horizon {
         let count = (horizon.as_u64() - covered.as_u64()).min(1024);
         let entries = service
@@ -553,16 +953,66 @@ pub(crate) async fn creation_record(
                     .download_payload(target, mode, record)
                     .await
                     .map_err(WorkerExecutorError::runtime)?;
-                if let StreamSessionRecord::ForkCut(cut) = record
-                    && cut.creation_fingerprint.0 == parameters.instance_id
-                    && cut.revert.is_none()
-                {
-                    return Ok(Some(cut));
+                match record {
+                    StreamSessionRecord::ForkCut(record)
+                        if cut.is_none()
+                            && record.creation_fingerprint.0 == parameters.instance_id
+                            && record.revert.is_none() =>
+                    {
+                        cut = Some(record);
+                    }
+                    StreamSessionRecord::ExportForkInitialized(record)
+                        if initialized.is_none()
+                            && cut.as_ref().is_some_and(|cut: &StreamForkCutRecord| {
+                                record.request_hash == cut.request_hash
+                            }) =>
+                    {
+                        current_deadline_millis = record.expiry_deadline_millis;
+                        initialized = Some(record);
+                    }
+                    StreamSessionRecord::ExpiryRefreshed(record)
+                        if initialized.as_ref().is_some_and(
+                            |initialized: &StreamExportForkInitializedRecord| {
+                                initialized.session_key == record.session_key
+                                    && initialized.public_session_id == record.public_session_id
+                            },
+                        ) && current_deadline_millis
+                            == Some(record.expected_deadline_millis) =>
+                    {
+                        current_deadline_millis = Some(record.deadline_millis);
+                    }
+                    StreamSessionRecord::Expired(record)
+                        if initialized.as_ref().is_some_and(
+                            |initialized: &StreamExportForkInitializedRecord| {
+                                initialized.session_key == record.session_key
+                                    && initialized.public_session_id == record.public_session_id
+                            },
+                        ) && current_deadline_millis
+                            == Some(record.expected_deadline_millis) =>
+                    {
+                        live = false;
+                    }
+                    _ => {}
                 }
             }
         }
     }
-    Ok(None)
+    match (cut, initialized) {
+        (Some(cut), Some(initialized)) => {
+            live &= current_deadline_millis
+                .is_none_or(|deadline| deadline > Timestamp::now_utc().to_millis());
+            Ok(Some(CreationReceipt {
+                cut,
+                initialized,
+                live,
+            }))
+        }
+        (None, None) => Ok(None),
+        (Some(cut), None) if cut.export.is_none() => Ok(None),
+        _ => Err(WorkerExecutorError::runtime(
+            "incomplete fork creation receipt",
+        )),
+    }
 }
 
 pub(super) fn initial_payload(
@@ -590,7 +1040,7 @@ pub(super) fn initial_payload(
             let value =
                 golem_schema::schema::render::from_untrusted_json_value(graph, &graph.root, &json)
                     .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
-            let value: golem_api_grpc::proto::golem::schema::SchemaValue = value
+            let value: golem_schema::proto::golem::schema::SchemaValue = value
                 .try_into()
                 .map_err(WorkerExecutorError::invalid_request)?;
             encoded.push(value.encode_to_vec());
@@ -600,4 +1050,228 @@ pub(super) fn initial_payload(
     DurableStreamStore::validate_external_input(Some(&payload))
         .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
     Ok(Some(payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        StreamSessionExpiryPolicy as ProtoExpiryPolicy, stream_session_expiry_policy,
+    };
+    use test_r::test;
+
+    /// A creation receipt of no export, which is `live` or not.
+    fn receipt(live: bool) -> CreationReceipt {
+        let agent = AgentId {
+            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+            agent_id: "target".to_string(),
+        };
+        CreationReceipt {
+            cut: StreamForkCutRecord {
+                format_version: 1,
+                request_hash: Vec::new(),
+                creation_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
+                export: None,
+                cut_index: OplogIndex::from_u64(3),
+                revert: None,
+                epoch_floor: 1,
+                selected_stream_id: None,
+                retained_through: None,
+            },
+            initialized: StreamExportForkInitializedRecord {
+                format_version: 1,
+                public_session_id: String::new(),
+                session_key: IdempotencyKey::fresh(),
+                source_invocation: golem_common::model::durable_stream::StreamInvocationId {
+                    callee_environment_id: golem_common::model::environment::EnvironmentId(
+                        Uuid::new_v4(),
+                    ),
+                    callee: agent,
+                    callee_fingerprint: golem_common::model::AgentFingerprint(Uuid::new_v4()),
+                    idempotency_key: IdempotencyKey::fresh(),
+                },
+                request_hash: Vec::new(),
+                expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 },
+                expiry_deadline_millis: None,
+            },
+            live,
+        }
+    }
+
+    /// The reason of the rejection that `answer` gives, or `None` for another answer.
+    fn rejected(answer: Result<ForkStreamSlotSuccess, Error>) -> Option<i32> {
+        match answer {
+            Err(Error::Rejected(rejection)) => Some(rejection.reason),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_receipt_that_is_not_live_gives_its_reason_and_a_live_one_of_another_request_conflicts() {
+        let request = ForkStreamSlotRequest::default();
+        let source = AgentId {
+            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+            agent_id: "source".to_string(),
+        };
+
+        assert_eq!(
+            [
+                rejected(receipt_answer(
+                    &receipt(false),
+                    &request,
+                    &source,
+                    Reason::NotFound
+                )),
+                rejected(receipt_answer(
+                    &receipt(false),
+                    &request,
+                    &source,
+                    Reason::Conflict
+                )),
+                rejected(receipt_answer(
+                    &receipt(true),
+                    &request,
+                    &source,
+                    Reason::NotFound
+                )),
+            ],
+            [
+                Some(Reason::NotFound as i32),
+                Some(Reason::Conflict as i32),
+                Some(Reason::Conflict as i32),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_a_missing_snapshot_of_the_source_baseline_refuses_and_a_receipt_gives_its_answer() {
+        let request = ForkStreamSlotRequest::default();
+        let source = AgentId {
+            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+            agent_id: "source".to_string(),
+        };
+        let name = FilesystemSnapshotName::update();
+        let answer = |checked: Option<(&FilesystemSnapshotName, bool)>,
+                      receipt: Option<&CreationReceipt>| {
+            source_baseline_answer(checked, receipt, &request, &source, OplogIndex::from_u64(7))
+                .map(|answer| match answer {
+                    Err(Error::Rejected(rejection)) => format!("rejected {}", rejection.reason),
+                    Err(Error::Worker(error)) => format!("{error}"),
+                    Ok(_) => "success".to_string(),
+                })
+        };
+
+        let refused = answer(Some((&name, true)), None).unwrap_or_default();
+
+        assert_eq!(
+            [
+                refuses_unless_reconciled(None),
+                refuses_unless_reconciled(Some((&name, false))),
+                refuses_unless_reconciled(Some((&name, true))),
+            ],
+            [false, false, true]
+        );
+        assert_eq!(
+            [
+                answer(None, None),
+                answer(Some((&name, false)), None),
+                answer(Some((&name, true)), Some(&receipt(true))),
+            ],
+            [
+                None,
+                None,
+                Some(format!("rejected {}", Reason::Conflict as i32))
+            ]
+        );
+        assert!(
+            refused.contains("Cannot fork worker at oplog index 7")
+                && refused.contains(name.as_str()),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_missing_baseline_without_a_receipt_names_the_cut_and_a_receipt_gives_its_answer() {
+        let request = ForkStreamSlotRequest::default();
+        let source = AgentId {
+            component_id: golem_common::model::component::ComponentId(Uuid::new_v4()),
+            agent_id: "source".to_string(),
+        };
+        let name = FilesystemSnapshotName::update();
+        let answer = |receipt: Option<&CreationReceipt>| match missing_baseline_answer(
+            receipt,
+            &request,
+            &source,
+            OplogIndex::from_u64(7),
+            &name,
+        ) {
+            Err(Error::Rejected(rejection)) => format!("rejected {}", rejection.reason),
+            Err(Error::Worker(error)) => format!("{error}"),
+            Ok(_) => "success".to_string(),
+        };
+
+        let refused = answer(None);
+        assert!(
+            refused.contains("Cannot fork worker at oplog index 7")
+                && refused.contains(name.as_str())
+                && refused.contains("is not in the store"),
+            "{refused}"
+        );
+        assert_eq!(
+            [answer(Some(&receipt(false))), answer(Some(&receipt(true)))],
+            [
+                format!("rejected {}", Reason::Conflict as i32),
+                format!("rejected {}", Reason::Conflict as i32)
+            ]
+        );
+    }
+
+    #[test]
+    fn fork_expiry_inherits_or_overrides_the_source_policy() {
+        let inherited = StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 };
+        assert_eq!(
+            effective_expiry_policy(None, inherited).unwrap(),
+            (inherited, None)
+        );
+
+        let explicit = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(5_000)),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(explicit), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Absolute {
+                    expires_at_millis: 5_000
+                },
+                Some(5_000)
+            )
+        );
+        let overflowing = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(u64::MAX)),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(overflowing), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Sliding {
+                    ttl_seconds: u64::MAX
+                },
+                None
+            )
+        );
+
+        let out_of_range = ProtoExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::ExpiresAtMillis(
+                u64::MAX,
+            )),
+        };
+        assert_eq!(
+            effective_expiry_policy(Some(out_of_range), inherited).unwrap(),
+            (
+                StreamSessionExpiryPolicy::Absolute {
+                    expires_at_millis: u64::MAX
+                },
+                Some(u64::MAX)
+            )
+        );
+    }
 }

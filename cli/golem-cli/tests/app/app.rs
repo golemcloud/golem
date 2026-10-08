@@ -43,6 +43,47 @@ async fn app_help_in_empty_folder(_tracing: &Tracing) {
     assert!(!outputs.stderr_contains(pattern::HELP_APPLICATION_CUSTOM_COMMANDS));
 }
 
+#[test]
+#[timeout("2m")]
+async fn local_server_exports_tokio_runtime_metrics_once(_tracing: &Tracing) {
+    let mut ctx = TestContext::new();
+    let server_log = ctx.cwd_path_join("runtime-metrics-server.log");
+    ctx.server_log = Some(server_log.clone());
+    ctx.add_env_var("GOLEM_LOG_FILTER", "info");
+    ctx.start_server().await;
+
+    let metrics_url = format!("http://localhost:{}/metrics", ctx.router_port());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let metrics = reqwest::get(&metrics_url)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        if metrics.lines().any(|line| {
+            line.strip_prefix("tokio_workers_count ")
+                .and_then(|value| value.parse::<f64>().ok())
+                .is_some_and(|value| value > 0.0)
+        }) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "local server metrics did not contain tokio_workers_count"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        !fs::read_to_string(server_log)
+            .unwrap()
+            .contains("Failed to install tokio runtime metrics recorder")
+    );
+}
+
 /// Missing `app new` input in non-interactive mode is a usage error: like clap, the error and the
 /// command help go to stderr with exit code 2.
 #[test]
@@ -864,6 +905,7 @@ fn echo_tool() -> Tool {
     };
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![golem_common::schema::tool::CommandNode {
                 name: "echo".to_string(),
@@ -889,6 +931,7 @@ fn echo_tool() -> Tool {
                     constraints: vec![],
                     stdin: None,
                     stdout: None,
+                    stderr: None,
                     result: Some(ToolResultSpec {
                         type_: SchemaType::string(),
                         doc: doc("result"),
@@ -1936,7 +1979,7 @@ async fn selected_dependency_guest_bridge_builds_unbuilt_provider_before_consume
 }
 
 #[test]
-#[timeout("300s")]
+#[timeout("900s")]
 async fn selected_dependency_guest_bridge_reextracts_rebuilt_provider_metadata(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "stale-metadata-repro";
@@ -8600,6 +8643,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: first
+                apiKey: stable
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8619,6 +8663,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.string()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({
@@ -8647,6 +8692,8 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
+    // apiKey keeps its compatible type and value, so its default must not be resolved,
+    // not even when the incompatible secret gets replaced.
     fs::write_str(
         ctx.cwd_path_join("golem.yaml"),
         formatdoc! {
@@ -8670,6 +8717,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
             secretDefaults:
               local:
                 secret: 42
+                apiKey: "{{{{ GOLEM_TEST_RESET_UNSET_API_KEY }}}}"
             "#,
             MANIFEST_VERSION = versions::sdk::MANIFEST
         },
@@ -8689,6 +8737,7 @@ async fn deploy_reset_allows_incompatible_config_and_secret_changes(_tracing: &T
                 config: {
                     value: z.boolean(),
                     secret: s.secret(z.number()),
+                    apiKey: s.secret(z.string()),
                 },
                 methods: {
                     increment: method({

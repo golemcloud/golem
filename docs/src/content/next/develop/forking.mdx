@@ -8,7 +8,9 @@ Golem agents are single threaded. To achieve parallel execution, it is possible 
 
 A simpler way is to use the **fork API**. The fork API consists of a single host function, defined as the following:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+The declarations below show the public interface shape; use the SDK calls shown in the usage examples rather than copying these declarations into an application.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
 ```typescript
 declare module 'golem:api/host@1.5.0' {
@@ -45,6 +47,17 @@ declare module 'golem:api/host@1.5.0' {
 </Tabs.Tab>
 
 <Tabs.Tab>
+Effect TypeScript exposes the host result type as `Agents.ForkResult`. `Agents.fork` is an Effect because host failures use the Effect error channel:
+
+```typescript
+import type { Agents } from "@golemcloud/effect-golem"
+
+type ForkResult = Agents.ForkResult
+// Agents.fork: Effect.Effect<ForkResult, Agents.AgentsHostError, AgentHostClient>
+```
+</Tabs.Tab>
+
+<Tabs.Tab>
 `fork` and `ForkResult` can be imported from `golem_rust::fork` and `golem_rust::ForkResult` respectively
 
 ```rust
@@ -66,7 +79,7 @@ pub enum ForkResult {
 /// The phantom ID of the forked agent is returned in `fork-result` on both sides.
 /// The newly created agent continues running from the same point, but the return value is going to be different
 /// in this agent and the forked agent.
-pub fn fork() -> ForkResult;
+pub fn fork() -> Result<ForkResult, AgentOperationError>;
 ```
 </Tabs.Tab>
 
@@ -90,13 +103,13 @@ def fork(): ForkResult = HostApi.fork()
 </Tabs.Tab>
 
 <Tabs.Tab>
-Assuming the `golemcloud/golem_sdk/interface/golem/core/types` package is imported as `@rpcTypes`, the `fork` host function and the related types are available from `golemcloud/golem_sdk/interface/golem/api/host`:
+Assuming `golemcloud/golem_sdk/api` is imported as `@api` and `golemcloud/golem_sdk/interface/golem/core/types` as `@rpcTypes`, the facade exposes an unwrapped `fork` function. The related type shapes below are illustrative:
 
 ```moonbit
 /// Details about the fork result
 pub(all) struct ForkDetails {
   forked_phantom_id : @rpcTypes.Uuid
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 /// Indicates which agent the code is running on after `fork`.
 /// The parameter contains details about the fork result, such as the phantom-ID of the newly
@@ -104,7 +117,7 @@ pub(all) struct ForkDetails {
 pub(all) enum ForkResult {
   Original(ForkDetails)
   Forked(ForkDetails)
-} derive(Show, Eq)
+} derive(Debug, Eq)
 
 /// Forks the current agent at the current execution point.
 /// The new agent gets the same base agent ID but with a new unique phantom ID.
@@ -122,7 +135,7 @@ Using this `fork` function from a component that was created from Golem's built-
 
 The following code snippet demonstrates calling `fork` and continuing on two different parallel branches based on its result value:
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { z } from 'zod';
@@ -158,6 +171,25 @@ The following code snippet demonstrates calling `fork` and continuing on two dif
   ```
   </Tabs.Tab>
   <Tabs.Tab>
+  ```typescript
+  import { Effect } from "effect"
+  import { Agents } from "@golemcloud/effect-golem"
+
+  const run = Effect.gen(function* () {
+    const result = yield* Agents.fork
+
+    switch (result.tag) {
+      case "original":
+        // Continue in the original agent.
+        break
+      case "forked":
+        // Continue in the forked agent.
+        break
+    }
+  })
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
   ```rust
 use golem_rust::{agent_definition, agent_implementation, fork, ForkResult};
 
@@ -178,7 +210,7 @@ impl ExampleAgent for ExampleAgentImpl {
     }
 
     fn run(&self) -> Result<(), String> {
-        match fork() {
+        match fork().map_err(|err| err.to_string())? {
             ForkResult::Original(_) => {
                 // ...
                 Ok(())
@@ -256,7 +288,7 @@ The high level idea is the following:
 The following code snippet demonstrates this pattern:
 
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
   ```typescript
   import { z } from 'zod';
@@ -323,6 +355,29 @@ The following code snippet demonstrates this pattern:
 
   </Tabs.Tab>
   <Tabs.Tab>
+  ```typescript
+  import { Effect } from "effect"
+  import { Agents } from "@golemcloud/effect-golem"
+
+  const run = Effect.gen(function* () {
+    const promiseId = yield* Agents.Promises.create
+
+    switch ((yield* Agents.fork).tag) {
+      case "original": {
+        const rawResult = yield* Agents.Promises.await(promiseId)
+        console.log(new TextDecoder().decode(rawResult))
+        break
+      }
+      case "forked": {
+        const result = new TextEncoder().encode("Hello from the forked agent")
+        yield* Agents.Promises.complete(promiseId, result)
+        break
+      }
+    }
+  })
+  ```
+  </Tabs.Tab>
+  <Tabs.Tab>
   ```rust
 use golem_rust::{
     ForkResult, agent_definition, agent_implementation, await_promise_json,
@@ -354,7 +409,7 @@ impl ExampleAgent for ExampleAgentImpl {
     async fn run(&self) -> Result<(), String> {
         let promise_id = create_promise();
 
-        match fork() {
+        match fork().map_err(|err| err.to_string())? {
             ForkResult::Original(_) => {
                 let local_result = RunResult {
                     message: format!("Hello from original agent with id: {}", self.id),
@@ -464,7 +519,7 @@ fn bytes_to_string(bytes : Bytes) -> String {
   String::from_array(chars)
 }
 
-pub fn ExampleAgent::run(self : Self) -> Unit {
+pub async fn ExampleAgent::run(self : Self) -> Unit {
   let promise_id = @api.create_promise()
 
   match @api.fork() {

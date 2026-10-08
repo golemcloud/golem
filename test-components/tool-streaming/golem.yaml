@@ -22,14 +22,30 @@ components:
       - golem-it:tool-streaming-rust-provider/streaming
       - golem-it:tool-streaming-rust-provider/capable-streaming
       - golem-it:tool-streaming-rust-provider/typed-output-stream
+      - golem-it:tool-streaming-rust-provider/secret-policy-probe
+      - golem-it:tool-streaming-rust-provider/environment-probe
+      - golem-it:tool-streaming-rust-provider/matrix-core
+      - golem-it:tool-streaming-rust-provider/matrix-resource
+      - golem-it:tool-streaming-rust-provider/matrix-permission-issuer
   golem-it:tool-streaming-rust-middleware:
     dir: rust-middleware
+    templates: rust, rust-test-component
+  golem:rate-limit-middleware:
+    dir: ../rate-limit-middleware
     templates: rust, rust-test-component
 
 tools:
   streaming: {}
   capable-streaming: {}
   typed-output-stream: {}
+  secret-policy-probe: {}
+  environment-probe: {}
+  matrix-core:
+    component: golem-it:tool-streaming-rust-provider
+  matrix-resource:
+    component: golem-it:tool-streaming-rust-provider
+  matrix-permission-issuer:
+    component: golem-it:tool-streaming-rust-provider
 
 agents:
   ToolStreamingCaller:
@@ -37,6 +53,17 @@ agents:
       streaming: {}
       capable-streaming: {}
       typed-output-stream: {}
+      matrix-core: {}
+  RustResourceToolStreamingCaller:
+    tools:
+      matrix-resource: {}
+      matrix-permission-issuer: {}
+  ToolSecretCaller:
+    tools:
+      secret-policy-probe: {}
+  EnvironmentProbeCaller:
+    tools:
+      environment-probe: {}
 
 bridge:
   rust:
@@ -45,6 +72,11 @@ bridge:
       - streaming
       - capable-streaming
       - typed-output-stream
+      - secret-policy-probe
+      - environment-probe
+      - matrix-core
+      - matrix-resource
+      - matrix-permission-issuer
 
 environments:
   local:

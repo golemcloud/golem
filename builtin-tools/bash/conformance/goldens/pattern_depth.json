@@ -1,0 +1,48 @@
+{
+ "cases": {
+  "pattern depth: extended globs nested 24 deep": {
+   "script": "c8d23572f579745d",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "@ [[ 0\n@ case\n@ a a ba\n@ a\n+ [[ 0\n+ case\n+ a  b\n+ a\n? [[ 0\n? case\n? aa a ba\n? a\n* [[ 0\n* case\n* aa  b\n* a\nalt 0\n"
+   }
+  },
+  "pattern depth: extended globs nested deeper are refused": {
+   "script": "a7fc6601577da5ca",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "[[ 0\ncase\na\na\n[[ 0\n[[ 1\nafter\n"
+   }
+  },
+  "pattern depth: globstar walks a deep tree": {
+   "script": "be1028e5d2b18d51",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "all 44\ndirs 41\ng 1 81\nd/e/x d/**/y d/f\nt/ t/a t/a/b t/a/b/h t/a/f t/c t/c/g\nt/ t/a/ t/a/b/ t/c/\nt/a/b/h\nd/.h/y\nt/ t/.z t/a t/a/b t/a/b/h t/a/f t/c t/c/g\n"
+   }
+  },
+  "pattern depth: nested negations": {
+   "script": "dc4da456aff42494",
+   "status": 0,
+   "stderr": {
+    "text": ""
+   },
+   "stdout": {
+    "text": "1000 1\n0111 2\n1000 3\n0111 8\n1000 13\n"
+   }
+  }
+ },
+ "oracle": {
+  "dockerfile": "eb9a581386453f85",
+  "profile": "d2542338f5646f8f"
+ }
+}

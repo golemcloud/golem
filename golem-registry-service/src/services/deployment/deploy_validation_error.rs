@@ -27,6 +27,13 @@ use golem_service_base::custom_api::PathSegment;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
+    #[error("Invalid MCP import {index}: {reason}")]
+    InvalidMcpImport { index: u32, reason: String },
+    #[error("MCP import {index} references unknown security scheme {security_scheme}")]
+    McpImportSecuritySchemeNotFound {
+        index: u32,
+        security_scheme: SecuritySchemeName,
+    },
     #[error(
         "Agent type {missing_agent_type} requested by http api deployment {http_api_deployment_domain} is not part of the deployment"
     )]
@@ -186,6 +193,8 @@ pub enum DeployValidationError {
         tool_name: ToolName,
         errors: Vec<String>,
     },
+    #[error("Tool {tool_name} filesystem configuration is invalid: {error}")]
+    ToolFilesystemRequirement { tool_name: ToolName, error: String },
     #[error("Tool {tool_name} in component {component_name} could not be serialized: {error}")]
     ToolMetadataSerialization {
         component_name: ComponentName,
@@ -286,7 +295,7 @@ pub enum DeployValidationError {
     },
     #[error("middleware merge mode is only valid on agent binding for tool {tool_name}")]
     ToolBindingEnvironmentMiddlewareMergeMode { tool_name: ToolName },
-    #[error("Tool middleware{middleware}{agent_tool} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), agent_tool = agent_type_name.as_ref().zip(tool_name.as_ref()).map(|(agent, tool)| format!(" for agent {agent} and tool {tool}")).unwrap_or_default())]
+    #[error("Tool middleware{middleware}{tool}{agent} is invalid: {message}", middleware = middleware_name.as_ref().map(|name| format!(" {name}")).unwrap_or_default(), tool = tool_name.as_ref().map(|name| format!(" for tool {name}")).unwrap_or_default(), agent = agent_type_name.as_ref().map(|name| format!(" owned by agent {name}")).unwrap_or_default())]
     ToolMiddleware {
         middleware_name: Option<ToolMiddlewareName>,
         agent_type_name: Option<AgentTypeName>,
@@ -307,4 +316,25 @@ pub fn format_validation_errors(errors: &[DeployValidationError]) -> String {
         .map(|err| format!("{err}"))
         .collect::<Vec<_>>()
         .join(",\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn middleware_validation_error_identifies_adjacent_tool_for_component_owner() {
+        let error = DeployValidationError::ToolMiddleware {
+            middleware_name: Some(ToolMiddlewareName::try_from("adapter").unwrap()),
+            agent_type_name: None,
+            tool_name: Some(ToolName::try_from("leaf").unwrap()),
+            message: "incompatible".to_string(),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "Tool middleware adapter for tool leaf is invalid: incompatible"
+        );
+    }
 }

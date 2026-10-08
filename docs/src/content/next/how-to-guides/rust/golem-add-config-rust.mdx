@@ -84,7 +84,7 @@ Config values in `golem.yaml` use **camelCase** keys — Rust snake_case fields 
 Override or supply config when creating an agent instance:
 
 ```shell
-golem agent new my-ns:my-component/my-agent-1 \
+golem agent new 'MyAgent("agent-1")' \
   --config foo=42 \
   --config bar=hello \
   --config nested.a=true \

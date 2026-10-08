@@ -76,3 +76,37 @@ impl RevisionEnvAgent for RevisionEnvAgentImpl {
         Ok(Self)
     }
 }
+
+#[agent_definition(ephemeral)]
+pub trait SnapshotUpdateTest {
+    fn new() -> Self;
+    fn loaded_snapshot_revision(&self) -> u32;
+    fn replay_revision(&self) -> u32;
+    fn write_file(&mut self, path: String, content: String);
+    fn read_file(&self, path: String) -> Option<String>;
+}
+
+struct SnapshotUpdateTestImpl;
+
+#[agent_implementation]
+impl SnapshotUpdateTest for SnapshotUpdateTestImpl {
+    fn new() -> Self {
+        Self
+    }
+
+    fn loaded_snapshot_revision(&self) -> u32 {
+        3
+    }
+
+    fn replay_revision(&self) -> u32 {
+        3
+    }
+
+    fn write_file(&mut self, path: String, content: String) {
+        std::fs::write(&path, content).expect("the agent writes the file");
+    }
+
+    fn read_file(&self, path: String) -> Option<String> {
+        std::fs::read_to_string(&path).ok()
+    }
+}

@@ -1,0 +1,42 @@
+manifestVersion: 1.6.0
+
+app: tool-streaming-moonbit-lifecycle-gol40
+
+componentTemplates:
+  moonbit-test-component:
+    guestLanguage: moonbit
+    presets:
+      release:
+        default: true
+        build:
+        - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}"
+          dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+        - command: moon run cmd -- agents "{{ appRootDir }}" --component-dir "{{ componentDir }}"
+          dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+        - command: moon -C "{{ appRootDir }}" build --target wasm --release
+        - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ appRootDir }}/_build/wasm/release/build/golemcloud/tool_streaming_moonbit_lifecycle_gol40/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm"
+          mkdirs:
+          - "{{ appRootDir }}/_build/wasm/release"
+        - command: wasm-tools component new "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
+        componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/final-wasm/golem:moonbit-lifecycle-gol40.wasm" "{{ appRootDir }}/../golem_it_tool_streaming_moonbit_lifecycle_gol40.wasm"
+
+components:
+  golem:moonbit-lifecycle-gol40:
+    dir: component
+    templates: moonbit-test-component
+
+tools:
+  moonbit-lifecycle-gol40: {}
+
+agents:
+  MoonBitLifecycleGol40Caller:
+    tools:
+      moonbit-lifecycle-gol40: {}
+
+environments:
+  local:
+    server: local
+    componentPresets: release

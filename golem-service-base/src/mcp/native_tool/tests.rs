@@ -19,6 +19,7 @@ fn body() -> CommandBody {
         constraints: Vec::new(),
         stdin: None,
         stdout: None,
+        stderr: None,
         result: None,
         errors: Vec::new(),
         annotations: None,
@@ -64,6 +65,7 @@ fn compile(tool: &Tool) -> Result<Vec<CompiledMcpToolExport>, String> {
 fn tool(root: CommandNode) -> Tool {
     Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree { nodes: vec![root] },
         schema: SchemaGraph::empty(),
     }
@@ -135,8 +137,14 @@ fn omission_respects_author_types_defaults_and_collection_bounds() {
         |_, _| unreachable!(),
     )
     .unwrap();
-    assert_eq!(public["maybe"], json!({"$option": "none"}));
-    assert_eq!(public["defaulted"], "kept");
+    assert_eq!(
+        public["value"]["fields"][2],
+        json!({"kind": "option", "value": {"inner": null}})
+    );
+    assert_eq!(
+        public["value"]["fields"][4],
+        json!({"kind": "string", "value": "kept"})
+    );
 
     let mut excessive = Map::new();
     excessive.insert("plain".to_string(), json!("x"));
@@ -162,6 +170,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     grandchild.aliases.push("d".to_string());
     let definition = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![root, child, grandchild],
         },
@@ -206,6 +215,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
     parent.subcommands.push(CommandIndex(3));
     let collision = Tool {
         version: "1.0.0".to_string(),
+        requires_filesystem: false,
         commands: CommandTree {
             nodes: vec![
                 collision_root,
@@ -220,7 +230,7 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
 }
 
 #[test]
-fn referenced_record_output_is_wrapped_in_an_mcp_root_object() {
+fn referenced_record_output_exposes_its_fields_at_the_mcp_root() {
     let id = TypeId::new("answer");
     let mut command = body();
     command.result = Some(ResultSpec {
@@ -247,7 +257,8 @@ fn referenced_record_output_is_wrapped_in_an_mcp_root_object() {
         .unwrap()
         .unwrap();
     assert_eq!(output["type"], "object");
-    assert!(output["properties"][FALLBACK_OUTPUT_FIELD_NAME]["$ref"].is_string());
+    assert_eq!(output["properties"]["value"]["type"], "string");
+    assert!(!output.contains_key("$ref"));
     assert!(output["$defs"].is_object());
 }
 

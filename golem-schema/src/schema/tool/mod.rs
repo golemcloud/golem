@@ -39,6 +39,7 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
 use serde::{Deserialize, Serialize};
 
+pub mod argv;
 pub mod canonical;
 pub mod compatibility;
 pub mod constraints;
@@ -98,6 +99,7 @@ impl CommandIndex {
 #[cfg_attr(feature = "full", desert(evolution()))]
 pub struct Tool {
     pub version: String,
+    pub requires_filesystem: bool,
     pub commands: CommandTree,
     /// Named-type registry shared by this tool's commands. Typed positions in
     /// the command tree may reference these definitions via
@@ -267,6 +269,7 @@ pub struct CommandBody {
     pub constraints: Vec<Constraint>,
     pub stdin: Option<StreamSpec>,
     pub stdout: Option<StreamSpec>,
+    pub stderr: Option<StreamSpec>,
     pub result: Option<ResultSpec>,
     pub errors: Vec<ErrorCase>,
     pub annotations: Option<CommandAnnotations>,

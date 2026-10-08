@@ -39,6 +39,8 @@ import {
   typedSchemaValueToWit,
   v,
 } from '../src/internal/schema-model';
+import { createGuestPermissionCardHandle } from '../src/internal/schema-model/permissionCardHandle';
+import { PERMISSION_CARD_INTERNAL } from '../src/internal/schema-model/permissionCardInternal';
 
 function remoteClientTypeChecks(): void {
   const def = defineAgent({
@@ -403,7 +405,8 @@ describe('schema markers', () => {
     });
 
     const raw = { id: 'opaque-permission-card' } as never;
-    expect(codec.fromValue(codec.toValue(raw))).toBe(raw);
+    const handle = createGuestPermissionCardHandle(PERMISSION_CARD_INTERNAL, raw);
+    expect(codec.fromValue(codec.toValue(handle))).toBe(raw);
   });
 
   it('maps unstructuredText to a role-tagged variant and round-trips', () => {
@@ -472,6 +475,7 @@ describe('defineAgent', () => {
     const agentType = AgentTypeRegistry.get(new AgentClassName('counter'));
     expect(agentType).toBeDefined();
     expect(agentType!.typeName).toBe('counter');
+    expect(agentType!.kind).toBe('regular');
     expect(agentType!.sourceLanguage).toBe('typescript');
 
     // Constructor: single identity parameter `name`.

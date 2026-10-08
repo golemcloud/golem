@@ -1,5 +1,6 @@
 use crate::raw_http;
 use crate::raw_http::Method;
+use futures_concurrency::future::Join;
 use golem_rust::bindings::golem::agent::host::{Datetime, WasmRpc};
 use golem_rust::bindings::golem::api::oplog::{GetOplog, OplogReadError, SearchOplog};
 use golem_rust::bindings::golem::tool::host as tool_host;
@@ -43,7 +44,16 @@ mod gated_host_bindings {
 use gated_host_bindings::golem::agent::host as agent_host;
 use gated_host_bindings::golem::api::host as host_api;
 
-#[derive(Clone, IntoSchema, FromSchema, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    IntoSchema,
+    FromSchema,
+    golem_rust::IntoWire,
+    golem_rust::FromWire,
+    golem_rust::WireSchema,
+    Serialize,
+    Deserialize,
+)]
 pub struct ResolveComponentResult {
     pub component_found: bool,
     pub worker_found: bool,
@@ -201,6 +211,21 @@ pub trait GolemHostApi {
         command_path: Vec<String>,
         input: String,
     ) -> Result<(), String>;
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String>;
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>);
 }
 
 pub struct GolemHostApiImpl {
@@ -1025,7 +1050,7 @@ impl GolemHostApi for GolemHostApiImpl {
     ) -> Result<(), String> {
         tool_host::ToolRpc::create(&tool_name)
             .map_err(|error| format!("{error:?}"))?
-            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None)
+            .async_invoke_and_await(&command_path, encode_tool_input(input)?, None, None, None)
             .get()
             .await
             .map(|_| ())
@@ -1040,10 +1065,119 @@ impl GolemHostApi for GolemHostApiImpl {
     ) -> Result<(), String> {
         tool_host::ToolRpc::create(&tool_name)
             .map_err(|error| format!("{error:?}"))?
-            .invoke_and_await(command_path, encode_tool_input(input)?, None, None)
+            .invoke_and_await(command_path, encode_tool_input(input)?, None, None, None)
             .await
             .map(|_| ())
             .map_err(|error| format!("{error:?}"))
+    }
+
+    async fn tool_rpc_invoke_with_policy(
+        &self,
+        tool_name: String,
+        idempotent: bool,
+        atomic: bool,
+    ) -> Result<(), String> {
+        let _idempotence = use_idempotence_mode(idempotent);
+        let _atomic = atomic.then(golem_rust::mark_atomic_operation);
+        self.tool_rpc_invoke_and_await_result(tool_name, Vec::new(), String::new())
+            .await
+    }
+
+    async fn tool_rpc_collect_stdout(
+        &self,
+        tool_name: String,
+        checkpoint: Option<String>,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+                None,
+            );
+        if let Some(checkpoint) = checkpoint {
+            let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+                .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+            raw_http::request_async(
+                Method::Get,
+                &format!("localhost:{port}"),
+                &format!("/checkpoint/{checkpoint}"),
+                None,
+                None,
+            )
+            .await;
+        }
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
+    }
+
+    async fn tool_rpc_cancel_and_collect_stdout(
+        &self,
+        tool_name: String,
+    ) -> (Result<(), String>, Result<Vec<u8>, String>) {
+        let (stdout_target, mut stdout) = tool_host::create_output();
+        let result = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .async_invoke_and_await(
+                &[],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                Some(stdout_target),
+                None,
+            );
+        let port = std::env::var("MCP_STDOUT_CHECKPOINT_PORT")
+            .expect("MCP_STDOUT_CHECKPOINT_PORT is configured");
+        let response = wasi_fetch::Client::new()
+            .get(&format!("http://localhost:{port}/checkpoint/{tool_name}"))
+            .send()
+            .await
+            .expect("MCP cancellation checkpoint request failed");
+        assert_eq!(response.status().as_u16(), 200);
+        let _ = response.into_body().bytes().await;
+        result.cancel();
+        let read = async move {
+            let mut bytes = Vec::new();
+            while let Some(item) = stdout.next().await {
+                match item {
+                    Ok(chunk) => bytes.extend(chunk),
+                    Err(error) => return Err(format!("{error:?}")),
+                }
+            }
+            Ok(bytes)
+        };
+        let (result, stdout) = (result.get(), read).join().await;
+        // Make the observed stream terminal part of a subsequent durable claim.
+        // Returning it alone does not validate what reconstruction recomputes.
+        let _ = tool_host::ToolRpc::create(&tool_name)
+            .expect("tool RPC creation failed")
+            .invoke_and_await(
+                vec![format!("observed-{stdout:?}")],
+                encode_tool_input(String::new()).expect("encode empty tool input"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        (
+            result.map(|_| ()).map_err(|error| format!("{error:?}")),
+            stdout,
+        )
     }
 }
 

@@ -19,9 +19,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
-use golem_common::model::AgentId;
 use golem_common::model::agent::AgentMode;
+use golem_common::model::{AgentId, ShardEpoch};
 use golem_common::serialization::{deserialize, serialize};
+use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 
 pub mod memory;
 pub mod multi_sqlite;
@@ -45,9 +46,30 @@ pub enum IndexedStorageError {
     InvalidResume(String),
     /// Permanent error — data issue or schema error. Caller should not retry.
     Other(String),
+    /// The write was refused because the epoch it asserted is not the one recorded for the key.
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+    },
 }
 
 impl IndexedStorageError {
+    /// Classifies failures that happen while a lazily-created backend is opened or migrated.
+    /// The indexed operation has not started yet, so a transient cause is safe to retry.
+    pub fn initialization_failed(context: &str, error: anyhow::Error) -> Self {
+        let transient = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .any(is_transient_sqlx_error);
+        let message = format!("{context}: {error:#}");
+        if transient {
+            Self::Transient(message)
+        } else {
+            Self::Other(message)
+        }
+    }
+
     pub fn is_retriable(&self) -> bool {
         matches!(self, IndexedStorageError::Transient(_))
     }
@@ -63,6 +85,22 @@ impl Display for IndexedStorageError {
             IndexedStorageError::Conflict(msg) => write!(f, "Storage conflict: {msg}"),
             IndexedStorageError::InvalidResume(msg) => write!(f, "Invalid scan resume: {msg}"),
             IndexedStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+            IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+            } => match actual {
+                Some(actual) => write!(
+                    f,
+                    "Write fenced for key {key}: asserted epoch {expected}, \
+                     the stored epoch is {actual}"
+                ),
+                None => write!(
+                    f,
+                    "Write fenced for key {key}: asserted epoch {expected}, \
+                     but no epoch is stored for it"
+                ),
+            },
         }
     }
 }
@@ -72,6 +110,71 @@ impl std::error::Error for IndexedStorageError {}
 impl From<String> for IndexedStorageError {
     fn from(s: String) -> Self {
         IndexedStorageError::Other(s)
+    }
+}
+
+/// Carries a fence rejection out of a transaction closure.
+#[derive(Debug)]
+pub(crate) enum FencedTxError {
+    Repo(RepoError),
+    Fenced {
+        key: String,
+        expected: ShardEpoch,
+        actual: Option<ShardEpoch>,
+    },
+    /// A stored value the schema should have made impossible - a negative epoch, say. Not a fence:
+    /// nobody took the key over, the row itself cannot be trusted.
+    Corrupt(String),
+}
+
+impl From<RepoError> for FencedTxError {
+    fn from(err: RepoError) -> Self {
+        FencedTxError::Repo(err)
+    }
+}
+
+impl FencedTxError {
+    pub(crate) fn check_record(
+        key: &str,
+        expected: ShardEpoch,
+        stored: Option<i64>,
+        negative_epoch_message: fn(i64, &str) -> String,
+    ) -> Result<(), FencedTxError> {
+        let actual = stored
+            .map(|epoch| {
+                u64::try_from(epoch)
+                    .map(ShardEpoch)
+                    .map_err(|_| FencedTxError::Corrupt(negative_epoch_message(epoch, key)))
+            })
+            .transpose()?;
+        if actual != Some(expected) {
+            return Err(FencedTxError::Fenced {
+                key: key.to_string(),
+                expected,
+                actual,
+            });
+        }
+        Ok(())
+    }
+
+    /// `classify` is the backend's own `RepoError` classifier.
+    pub(crate) fn into_indexed_storage_error(
+        self,
+        classify: fn(RepoError) -> IndexedStorageError,
+    ) -> IndexedStorageError {
+        match self {
+            FencedTxError::Repo(err) => classify(err),
+            FencedTxError::Fenced {
+                key,
+                expected,
+                actual,
+            } => IndexedStorageError::Fenced {
+                key,
+                expected,
+                actual,
+            },
+            FencedTxError::Corrupt(msg) => IndexedStorageError::Other(msg),
+        }
     }
 }
 
@@ -217,7 +320,8 @@ pub trait IndexedStorage: Debug + Sync {
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError>;
 
-    /// Appends an entry to the given key with the given id
+    /// Appends an entry to the given key with the given id. `expected_epoch` is checked as in
+    /// [`Self::append_many`].
     async fn append(
         &self,
         svc_name: &'static str,
@@ -227,9 +331,10 @@ pub trait IndexedStorage: Debug + Sync {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 
-    /// Appends multiple entries to the given key with the given id
+    /// Appends multiple entries to the given key with the given ids, all or nothing.
     async fn append_many(
         &self,
         svc_name: &'static str,
@@ -238,21 +343,8 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
-    ) -> Result<(), IndexedStorageError> {
-        for (id, value) in pairs.iter() {
-            self.append(
-                svc_name,
-                api_name,
-                entity_name,
-                (*namespace).clone(),
-                key,
-                *id,
-                value.to_vec(),
-            )
-            .await?;
-        }
-        Ok(())
-    }
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError>;
 
     /// Atomically moves a stopped source index to a previously absent target index. The source
     /// must contain exactly ids 1..=expected_last_id. Returns false without mutation if the target
@@ -348,7 +440,15 @@ pub trait IndexedStorage: Debug + Sync {
 
     /// Deletes the entry with the closest id to the given id in the index of the given key,
     /// in a way that `last_dropped_id` is greater to the id of the deleted entries.
-    /// The key remains present even when every entry is removed. Missing keys stay missing.
+    /// Primary oplog keys remain present even when every entry is removed, preserving the creation
+    /// fence. Archive level keys (compressed chunks and blob manifests) are removed atomically
+    /// when trimming leaves them empty, so a later retry may append the same final chunk id; their
+    /// epoch record stays. Missing keys stay missing.
+    ///
+    /// Fenced on the writer generation as an append is, checked in the same atomic step as the
+    /// trim: refused with [`IndexedStorageError::Fenced`], removing nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the generation recorded for the key (an absent record refuses
+    /// too). `None` trims unconditionally.
     async fn drop_prefix(
         &self,
         svc_name: &'static str,
@@ -356,6 +456,49 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Deletes the given key only if it holds no entries, keeping the writer generation recorded
+    /// for it. Answers `true` when the key held no entries and is now gone, `false` when it still
+    /// holds entries and was left alone. The epoch is checked in the same atomic step as the emptiness
+    /// test: refused with [`IndexedStorageError::Fenced`], deleting nothing, when `expected_epoch`
+    /// is `Some` and is not exactly the recorded generation (an absent record refuses too).
+    ///
+    /// For a writer that trimmed a key empty and must keep writing it later: [`Self::delete`]
+    /// could remove entries a newer writer has added since the trim, and
+    /// [`Self::delete_with_epoch`] would also remove the record, refusing the writer's own next
+    /// append.
+    async fn delete_empty_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError>;
+
+    /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
+    /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
+    /// otherwise. Inserts the record if the key has none.
+    async fn set_key_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Deletes the index of the given key, as [`Self::delete`] does, together with the writer
+    /// generation recorded for it, in one step.
+    async fn delete_with_epoch(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError>;
 }
 
@@ -396,6 +539,16 @@ pub struct LabelledIndexedStorage<'a, S: IndexedStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "indexed",
+            operation,
+            self.svc_name,
+            self.api_name,
+            "",
+        );
+    }
+
     pub fn new(svc_name: &'static str, api_name: &'static str, storage: &'a S) -> Self {
         Self {
             svc_name,
@@ -405,6 +558,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
     }
 
     pub async fn number_of_replicas(&self) -> Result<u8, IndexedStorageError> {
+        self.record("number_of_replicas");
         self.storage
             .number_of_replicas(self.svc_name, self.api_name)
             .await
@@ -415,6 +569,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         replicas: u8,
         timeout: Duration,
     ) -> Result<u8, IndexedStorageError> {
+        self.record("wait_for_replicas");
         self.storage
             .wait_for_replicas(self.svc_name, self.api_name, replicas, timeout)
             .await
@@ -425,8 +580,31 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
+        self.record("exists");
         self.storage
             .exists(self.svc_name, self.api_name, namespace, key)
+            .await
+    }
+
+    pub async fn move_if_absent(
+        &self,
+        source_namespace: IndexedStorageNamespace,
+        source_key: &str,
+        target_namespace: IndexedStorageNamespace,
+        target_key: &str,
+        expected_last_id: u64,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("move_if_absent");
+        self.storage
+            .move_if_absent(
+                self.svc_name,
+                self.api_name,
+                source_namespace,
+                source_key,
+                target_namespace,
+                target_key,
+                expected_last_id,
+            )
             .await
     }
 
@@ -437,6 +615,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         resume: Option<ScanResume>,
         count: u64,
     ) -> Result<(Option<ScanResume>, Vec<String>), IndexedStorageError> {
+        self.record("scan");
         self.storage
             .scan_stable(
                 self.svc_name,
@@ -454,6 +633,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
+        self.record("length");
         self.storage
             .length(self.svc_name, self.api_name, namespace, key)
             .await
@@ -464,8 +644,33 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
+        self.record("delete");
         self.storage
             .delete(self.svc_name, self.api_name, namespace, key)
+            .await
+    }
+
+    pub async fn delete_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .await
+    }
+
+    pub async fn delete_empty_with_epoch(
+        &self,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<bool, IndexedStorageError> {
+        self.record("delete");
+        self.storage
+            .delete_empty_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
             .await
     }
 
@@ -474,7 +679,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         last_dropped_id: u64,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("drop_prefix");
         self.storage
             .drop_prefix(
                 self.svc_name,
@@ -482,6 +689,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
                 namespace,
                 key,
                 last_dropped_id,
+                expected_epoch,
             )
             .await
     }
@@ -495,6 +703,16 @@ pub struct LabelledEntityIndexedStorage<'a, S: IndexedStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
+    fn record(&self, operation: &'static str) {
+        golem_service_base::metrics::storage::record_logical_operation(
+            "indexed",
+            operation,
+            self.svc_name,
+            self.api_name,
+            self.entity_name,
+        );
+    }
+
     pub fn new(
         svc_name: &'static str,
         api_name: &'static str,
@@ -516,7 +734,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: &V,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append");
         self.storage
             .append(
                 self.svc_name,
@@ -526,6 +746,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 serialize(value).map_err(IndexedStorageError::Other)?,
+                expected_epoch,
             )
             .await
     }
@@ -537,7 +758,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
         value: Vec<u8>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append");
         self.storage
             .append(
                 self.svc_name,
@@ -547,6 +770,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 key,
                 id,
                 value,
+                expected_epoch,
             )
             .await
     }
@@ -558,6 +782,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: &[(u64, &V)],
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<u64, IndexedStorageError> {
         let mut serialized_pairs = Vec::with_capacity(pairs.len());
         let mut total_bytes = 0u64;
@@ -566,7 +791,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
             total_bytes += bytes.len() as u64;
             serialized_pairs.push((*id, Bytes::from(bytes)));
         }
-        self.append_many_raw(namespace, key, serialized_pairs.into())
+        self.append_many_raw(namespace, key, serialized_pairs.into(), expected_epoch)
             .await?;
         Ok(total_bytes)
     }
@@ -577,7 +802,9 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: &IndexedStorageNamespace,
         key: &str,
         pairs: Arc<[(u64, Bytes)]>,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
+        self.record("append_many");
         self.storage
             .append_many(
                 self.svc_name,
@@ -586,6 +813,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
                 namespace,
                 key,
                 pairs,
+                expected_epoch,
             )
             .await
     }
@@ -598,6 +826,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, V)>, IndexedStorageError> {
+        self.record("read");
         let values = self
             .storage
             .read(
@@ -625,6 +854,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         from: u64,
         count: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("read");
         self.storage
             .read(
                 self.svc_name,
@@ -644,6 +874,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("first");
         self.storage
             .first(
                 self.svc_name,
@@ -661,6 +892,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("first");
         if let Some((id, bytes)) = self
             .storage
             .first(
@@ -696,6 +928,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("last");
         if let Some((id, bytes)) = self
             .storage
             .last(
@@ -722,6 +955,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
+        self.record("last");
         self.storage
             .last_id(
                 self.svc_name,
@@ -741,6 +975,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
+        self.record("closest");
         self.storage
             .closest(
                 self.svc_name,
@@ -761,6 +996,7 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, V)>, IndexedStorageError> {
+        self.record("closest");
         if let Some((id, bytes)) = self
             .storage
             .closest(
@@ -812,6 +1048,13 @@ pub enum IndexedStorageNamespace {
         agent_mode: AgentMode,
         level: usize,
     },
+    /// The chunks a blob archive level holds for an agent: the chunk bytes live in blob storage,
+    /// and only the chunks listed here are part of the oplog.
+    BlobOplogManifest {
+        agent_id: AgentId,
+        agent_mode: AgentMode,
+        level: usize,
+    },
 }
 
 /// Various namespaces for operations working on multiple indexed storage namespaces such as scan
@@ -819,6 +1062,7 @@ pub enum IndexedStorageNamespace {
 pub enum IndexedStorageMetaNamespace {
     Oplog { agent_mode: AgentMode },
     CompressedOplog { agent_mode: AgentMode, level: usize },
+    BlobOplogManifest { agent_mode: AgentMode, level: usize },
 }
 
 /// The resume token for a page of an ordered walk: the last key handed back, or `None` once a
@@ -841,11 +1085,35 @@ pub fn agent_mode_prefix(mode: AgentMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
+    use super::{IndexedStorageError, ScanResume, scan_prefix_upper_bound, stable_scan_key_bounds};
     use proptest::prelude::*;
     use test_r::test;
 
     test_r::enable!();
+
+    #[test]
+    fn transient_indexed_storage_initialization_failure_is_retryable() {
+        let error = IndexedStorageError::initialization_failed(
+            "pool initialization failed",
+            anyhow::Error::from(sqlx::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::WouldBlock,
+            ))),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Transient(_)));
+        assert!(error.is_retriable());
+    }
+
+    #[test]
+    fn permanent_indexed_storage_initialization_failure_is_not_retried() {
+        let error = IndexedStorageError::initialization_failed(
+            "migration failed",
+            anyhow::Error::from(sqlx::Error::RowNotFound),
+        );
+
+        assert!(matches!(error, IndexedStorageError::Other(_)));
+        assert!(!error.is_retriable());
+    }
 
     #[test]
     fn scan_prefix_upper_bound_handles_unicode_boundaries() {

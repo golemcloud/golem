@@ -1,13 +1,19 @@
 use futures_concurrency::prelude::*;
-use golem_rust::agentic::{AgentStream, spawn_local};
+use golem_rust::agentic::{AgentStream, Secret, spawn_local};
+use golem_rust::schema::tool::{ErrorCase, ErrorKind};
+use golem_rust::schema::try_into_schema_graph;
+use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::tool::{
-    InputStream, InvocationResult, OutputStream, Principal, RawCustomToolError, Tool,
-    ToolInvokeError, UnderlyingTool,
+    EmptyMiddlewareParameters, InputStream, InvocationResult, MonomorphicToolMiddlewareScope,
+    OutputStream, Principal, RawCustomToolError, Tool, ToolInvokeError, ToolMiddleware,
+    ToolMiddlewareInvokeFuture, ToolMiddlewareScope, ToolUnderlying, UnderlyingTool,
 };
 use golem_rust::{
-    FromSchema, IntoSchema, TypedSchemaValue, tool_definition, tool_middleware,
-    universal_tool_middleware,
+    FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, SchemaType, SchemaValue,
+    TypedSchemaValue, WireSchema, decode_schema_value, encode_schema_graph, tool_definition,
+    tool_middleware, universal_tool_middleware,
 };
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 
 #[tool_definition(version = "1.0.0")]
@@ -15,10 +21,269 @@ pub trait MiddlewareProbe {
     async fn apply(&self, value: String) -> String;
 }
 
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct StreamSummary {
+    pub chunks_read: u32,
+    pub bytes_read: u64,
+    pub output_closed: bool,
+}
+
+#[derive(Debug, Clone, golem_rust::ToolError)]
+pub enum StreamingError {
+    #[tool_error(kind = "runtime-error", exit_code = 7)]
+    Declared { bytes_read: u64 },
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait Streaming {
+    async fn run(
+        &self,
+        mode: String,
+        stdin: InputStream,
+        stdout: OutputStream,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<StreamSummary, StreamingError>;
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct SecretPolicyObservation {
+    pub label: String,
+    pub config_resolved: bool,
+    pub configured_secret_revealed: bool,
+    pub input_secret_revealed: bool,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct SecretPolicyEvidence {
+    pub middleware: Vec<SecretPolicyObservation>,
+    pub leaf_revealed: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait SecretPolicyProbe {
+    async fn inspect(&self, value: GuestSecretHandle) -> SecretPolicyEvidence;
+}
+
+#[derive(IntoSchema, FromSchema)]
+struct SecretPolicyParameters {
+    label: String,
+}
+
+struct SecretPolicyAudit {
+    parameters: SecretPolicyParameters,
+}
+
+impl SecretPolicyAudit {
+    fn new(parameters: SecretPolicyParameters) -> Self {
+        Self { parameters }
+    }
+}
+
+fn reveal_string(value: &GuestSecretHandle) -> Result<String, String> {
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = value
+        .with_handle(|handle| {
+            golem_rust::bindings::golem::secrets::reveal::reveal(handle, &expected)
+        })
+        .ok_or_else(|| "secret handle was transferred".to_string())?
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+#[tool_middleware(
+    name = "streaming-secret-policy-audit",
+    constructor = SecretPolicyAudit::new,
+    parameters = SecretPolicyParameters
+)]
+impl SecretPolicyProbeMiddleware for SecretPolicyAudit {
+    async fn inspect(
+        &self,
+        underlying: &SecretPolicyProbeUnderlying,
+        value: GuestSecretHandle,
+    ) -> Result<SecretPolicyEvidence, ToolInvokeError<Infallible>> {
+        if self.parameters.label == "restricted"
+            && std::env::var("MIDDLEWARE_PROMISE_CHECKPOINT_PORT").is_ok()
+        {
+            wait_at_middleware_promise_checkpoint("secret-policy-before-access").await;
+        }
+        let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+        let config_resolved = configured.is_ok();
+        let configured_secret_revealed = configured
+            .as_ref()
+            .is_ok_and(|configured| reveal_string(configured).is_ok());
+        let input_secret_revealed = reveal_string(&value).is_ok();
+        let mut evidence = underlying.inspect(value).await?;
+        if self.parameters.label == "restricted"
+            && std::env::var("MIDDLEWARE_PROMISE_CHECKPOINT_PORT").is_ok()
+        {
+            wait_at_middleware_promise_checkpoint("secret-policy-after-forward").await;
+        }
+        evidence.middleware.push(SecretPolicyObservation {
+            label: self.parameters.label.clone(),
+            config_resolved,
+            configured_secret_revealed,
+            input_secret_revealed,
+        });
+        Ok(evidence)
+    }
+}
+
+mod expected_mcp_probe {
+    use super::*;
+
+    #[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+    pub struct Evidence {
+        pub evidence: String,
+    }
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MiddlewareProbe {
+        async fn middleware_probe(&self, value: String, stdout: Option<OutputStream>) -> Evidence;
+    }
+}
+
+mod presented_mcp_probe {
+    pub use super::expected_mcp_probe::Evidence;
+    use super::*;
+
+    #[tool_definition(version = "1.0.0")]
+    pub trait MiddlewareProbe {
+        async fn middleware_probe(&self, value: String, stdout: Option<OutputStream>) -> Evidence;
+    }
+}
+
+struct McpProbeProjection;
+
+impl McpProbeProjection {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[tool_middleware(name = "streaming-monomorphic-mcp-projection-typed", constructor = McpProbeProjection::new)]
+impl presented_mcp_probe::MiddlewareProbeMiddleware<expected_mcp_probe::MiddlewareProbeUnderlying>
+    for McpProbeProjection
+{
+    async fn middleware_probe(
+        &self,
+        underlying: &expected_mcp_probe::MiddlewareProbeUnderlying,
+        value: String,
+        mut stdout: Option<OutputStream>,
+    ) -> Result<presented_mcp_probe::Evidence, ToolInvokeError<Infallible>> {
+        let mut invocation = underlying.start_middleware_probe(value).await?;
+        let mut underlying_stdout = invocation
+            .stdout
+            .take()
+            .expect("declared stdout is validated by generated start method");
+        let forward = async move {
+            while let Some(item) = underlying_stdout.next().await {
+                match item {
+                    Ok(bytes) => {
+                        if let Some(stdout) = &mut stdout {
+                            let _ = stdout.write(bytes).await;
+                        }
+                    }
+                    Err(failure) => {
+                        if let Some(stdout) = stdout.take() {
+                            let _ = stdout.fail(failure).await;
+                        }
+                        return;
+                    }
+                }
+            }
+            if let Some(stdout) = stdout {
+                let _ = stdout.finish().await;
+            }
+        };
+        let (result, ()) = (invocation.get(), forward).join().await;
+        let result = result?;
+        Ok(presented_mcp_probe::Evidence {
+            evidence: format!("monomorphic({})", result.evidence),
+        })
+    }
+}
+
+fn invoke_mcp_projection(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    _parameters: TypedSchemaValue,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> ToolMiddlewareInvokeFuture {
+    Box::pin(async move {
+        let (graph, mut value) = input.into_parts();
+        let SchemaValue::Record { fields } = &mut value else {
+            panic!("MCP input is a record");
+        };
+        let SchemaValue::String(argument) = &mut fields[0] else {
+            panic!("MCP value argument is a string");
+        };
+        *argument = format!("monomorphic({argument})");
+        let mut completed = underlying
+            .invoke_forwarding_outputs(
+                command_path,
+                TypedSchemaValue::new(graph, value),
+                stdin,
+                stdout,
+                stderr,
+            )
+            .await?;
+        completed.result = None;
+        Ok(completed)
+    })
+}
+
+golem_rust::ctor::__support::ctor_parse!(
+    #[ctor]
+    fn register_mcp_projection() {
+        let mut presented =
+            <McpProbeProjection as presented_mcp_probe::MiddlewareProbeMiddleware<
+                expected_mcp_probe::MiddlewareProbeUnderlying,
+            >>::__golem_presented_tool_descriptor();
+        let mut expected = <expected_mcp_probe::MiddlewareProbeUnderlying as ToolUnderlying>::__golem_tool_descriptor();
+        for descriptor in [&mut presented, &mut expected] {
+            let body = descriptor.commands.nodes[0].body.as_mut().unwrap();
+            body.stdout.as_mut().unwrap().mime = vec!["*/*".to_string()];
+        }
+        presented.commands.nodes[0].body.as_mut().unwrap().result = None;
+        let expected_body = expected.commands.nodes[0].body.as_mut().unwrap();
+        expected_body.result.as_mut().unwrap().type_ = SchemaType::record(Vec::new());
+        expected_body.errors.push(ErrorCase {
+            name: "mcp-tool-error".to_string(),
+            doc: Default::default(),
+            kind: ErrorKind::RuntimeError,
+            exit_code: 1,
+            payload: Some(SchemaType::string()),
+        });
+        golem_rust::tool::register_tool_middleware(
+            ToolMiddleware {
+                name: "streaming-monomorphic-mcp-projection".to_string(),
+                version: "0.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Default::default(),
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                    presented,
+                    expected: Some(expected),
+                })),
+                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+            },
+            invoke_mcp_projection,
+        );
+    }
+);
+
 mod expected_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub label: String,
@@ -34,7 +299,7 @@ mod expected_typed_output {
 mod presented_typed_output {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub label: String,
         pub ordinal: u32,
@@ -85,14 +350,14 @@ impl
 mod expected_typed_input {
     use super::*;
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Item {
         pub ordinal: u32,
         pub caller_extra: u64,
         pub label: String,
     }
 
-    #[derive(IntoSchema, FromSchema)]
+    #[derive(IntoSchema, FromSchema, FromWire, IntoWire, WireSchema)]
     pub struct Evidence {
         pub label: String,
         pub ordinal: u32,
@@ -145,12 +410,389 @@ async fn universal_pass_through(
     input: TypedSchemaValue,
     stdin: Option<InputStream>,
     stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
     _principal: Principal,
     underlying: UnderlyingTool,
 ) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
     underlying
-        .invoke_forwarding_stdout(command_path, input, stdin, stdout)
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
         .await
+}
+
+#[universal_tool_middleware(name = "k3-rate-limit-pre-leaf-checkpoint")]
+async fn k3_rate_limit_pre_leaf_checkpoint(
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    if tool_name == "middleware-probe" {
+        wait_at_middleware_promise_checkpoint("k3-rate-limit-post-admission-pre-leaf").await;
+    }
+    underlying
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+        .await
+}
+
+fn invoke_streaming_pass_through(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    _parameters: TypedSchemaValue,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> ToolMiddlewareInvokeFuture {
+    Box::pin(async move {
+        underlying
+            .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+            .await
+    })
+}
+
+golem_rust::ctor::__support::ctor_parse!(
+    #[ctor]
+    fn register_streaming_pass_through() {
+        let definition = <StreamingUnderlying as ToolUnderlying>::__golem_tool_descriptor();
+        golem_rust::tool::register_tool_middleware(
+            ToolMiddleware {
+                name: "streaming-monomorphic-pass-through".to_string(),
+                version: "1.0.0".to_string(),
+                aliases: Vec::new(),
+                doc: Default::default(),
+                scope: ToolMiddlewareScope::Monomorphic(Box::new(MonomorphicToolMiddlewareScope {
+                    presented: definition.clone(),
+                    expected: Some(definition),
+                })),
+                parameter_schema: try_into_schema_graph::<EmptyMiddlewareParameters>().unwrap(),
+            },
+            invoke_streaming_pass_through,
+        );
+    }
+);
+
+#[derive(IntoSchema, FromSchema)]
+struct HumanApprovalParameters {
+    request_url: String,
+    policy: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanApprovalRequest {
+    request_id: String,
+    owner: HumanApprovalOwner,
+    promise_oplog_idx: u64,
+    policy: String,
+    tool_name: String,
+    command_path: Vec<String>,
+    principal: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanApprovalOwner {
+    component_id: String,
+    agent_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HumanApprovalCallback {
+    request_id: String,
+    state: HumanApprovalState,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum HumanApprovalState {
+    Approved,
+    Denied,
+    Cancelled,
+    Abandoned,
+}
+
+#[universal_tool_middleware(
+    name = "human-approval",
+    parameters = HumanApprovalParameters
+)]
+async fn human_approval(
+    parameters: HumanApprovalParameters,
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    let request_id = golem_rust::generate_idempotency_key();
+    let promise = golem_rust::create_promise();
+    let metadata = golem_rust::get_self_metadata()
+        .map_err(|error| ToolInvokeError::InternalError(format!("owner metadata: {error:?}")))?;
+    let owner = HumanApprovalOwner {
+        component_id: metadata.agent_id.component_id.uuid.to_string(),
+        agent_name: metadata.agent_id.agent_id,
+    };
+    let request = HumanApprovalRequest {
+        request_id: request_id.to_string(),
+        owner,
+        promise_oplog_idx: promise.oplog_idx,
+        policy: parameters.policy,
+        tool_name,
+        command_path: command_path.clone(),
+        principal: match principal {
+            Principal::Anonymous => "anonymous",
+            Principal::Oidc(_) => "oidc",
+            Principal::Agent(_) => "agent",
+            Principal::GolemUser(_) => "golem-user",
+        },
+    };
+    let token = std::env::var("GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN").map_err(|_| {
+        ToolInvokeError::InternalError(
+            "GOLEM_HUMAN_APPROVAL_REQUEST_TOKEN is not configured".to_string(),
+        )
+    })?;
+    register_human_approval(&parameters.request_url, &token, &request).await?;
+
+    let callback: HumanApprovalCallback =
+        serde_json::from_slice(&golem_rust::await_promise(&promise).await).map_err(|error| {
+            ToolInvokeError::ProtocolError(format!("invalid approval callback: {error}"))
+        })?;
+    if callback.request_id != request_id.to_string() {
+        return Err(ToolInvokeError::ProtocolError(
+            "approval callback request id does not match".to_string(),
+        ));
+    }
+    match callback.state {
+        HumanApprovalState::Approved => {
+            underlying
+                .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+                .await
+        }
+        HumanApprovalState::Denied => Err(ToolInvokeError::Denied(
+            "human approval was denied".to_string(),
+        )),
+        HumanApprovalState::Cancelled | HumanApprovalState::Abandoned => {
+            Err(ToolInvokeError::Cancelled)
+        }
+    }
+}
+
+async fn register_human_approval(
+    url: &str,
+    token: &str,
+    request_body: &HumanApprovalRequest,
+) -> Result<(), ToolInvokeError<RawCustomToolError>> {
+    use golem_rust::wasip3::http::{client, types};
+    use golem_rust::wasip3::{wit_future, wit_stream};
+
+    let (scheme, remainder) = if let Some(value) = url.strip_prefix("http://") {
+        (types::Scheme::Http, value)
+    } else if let Some(value) = url.strip_prefix("https://") {
+        (types::Scheme::Https, value)
+    } else {
+        return Err(ToolInvokeError::InvalidInput(
+            "human approval requestUrl must use http or https".to_string(),
+        ));
+    };
+    let (authority, path) = remainder
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or((remainder, "/".to_string()));
+    let body = serde_json::to_vec(request_body)
+        .map_err(|error| ToolInvokeError::InternalError(error.to_string()))?;
+    let headers = types::Fields::from_list(&[
+        ("content-type".to_string(), b"application/json".to_vec()),
+        (
+            "authorization".to_string(),
+            format!("Bearer {token}").into_bytes(),
+        ),
+    ])
+    .map_err(|error| ToolInvokeError::InternalError(format!("approval headers: {error:?}")))?;
+    let (mut body_tx, body_rx) = wit_stream::new();
+    let (trailers_tx, trailers_rx) = wit_future::new(|| Ok(None));
+    let (request, transmit) = types::Request::new(headers, Some(body_rx), trailers_rx, None);
+    request
+        .set_method(&types::Method::Post)
+        .map_err(|_| ToolInvokeError::InternalError("set approval method".to_string()))?;
+    request
+        .set_scheme(Some(&scheme))
+        .map_err(|_| ToolInvokeError::InternalError("set approval scheme".to_string()))?;
+    request
+        .set_authority(Some(authority))
+        .map_err(|_| ToolInvokeError::InvalidInput("invalid approval authority".to_string()))?;
+    request
+        .set_path_with_query(Some(&path))
+        .map_err(|_| ToolInvokeError::InvalidInput("invalid approval path".to_string()))?;
+    let send = async move {
+        client::send(request)
+            .await
+            .map_err(|error| ToolInvokeError::InternalError(format!("approval request: {error:?}")))
+    };
+    let finish = async move {
+        if !body_tx.write_all(body).await.is_empty() {
+            return Err(ToolInvokeError::InternalError(
+                "approval request body was not accepted".to_string(),
+            ));
+        }
+        drop(body_tx);
+        trailers_tx
+            .write(Ok(None))
+            .await
+            .map_err(|_| ToolInvokeError::InternalError("finish approval trailers".to_string()))?;
+        transmit.await.map_err(|error| {
+            ToolInvokeError::InternalError(format!("approval transmit: {error:?}"))
+        })
+    };
+    let (response, finish) = (send, finish).join().await;
+    finish?;
+    let response = response?;
+    match response.get_status_code() {
+        200 | 201 => Ok(()),
+        401 | 403 => Err(ToolInvokeError::Denied(
+            "approval service rejected middleware authentication".to_string(),
+        )),
+        status => Err(ToolInvokeError::ProtocolError(format!(
+            "approval registration failed with status {status}"
+        ))),
+    }
+}
+
+#[universal_tool_middleware(name = "streaming-universal-secret-policy-audit")]
+async fn universal_secret_policy_audit(
+    tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    if tool_name != "secret-policy-probe" {
+        return underlying
+            .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+            .await;
+    }
+
+    let configured = Secret::<String>::new(vec!["tool_secret".to_string()]).handle();
+    let config_resolved = configured.is_ok();
+    let configured_secret_revealed = configured
+        .as_ref()
+        .is_ok_and(|configured| reveal_string(configured).is_ok());
+    let input_secret_revealed = match input.value() {
+        SchemaValue::Record { fields } => fields.first().is_some_and(
+            |value| matches!(value, SchemaValue::Secret(handle) if reveal_string(handle).is_ok()),
+        ),
+        _ => false,
+    };
+    let mut result = underlying
+        .invoke_forwarding_outputs(command_path, input, stdin, stdout, stderr)
+        .await?;
+    let value = result.result.take().ok_or_else(|| {
+        ToolInvokeError::InvalidResult("secret policy probe returned no value".to_string())
+    })?;
+    let mut evidence = SecretPolicyEvidence::from_value(value.value())
+        .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?;
+    evidence.middleware.push(SecretPolicyObservation {
+        label: "universal".to_string(),
+        config_resolved,
+        configured_secret_revealed,
+        input_secret_revealed,
+    });
+    result.result = Some(
+        evidence
+            .into_typed_schema_value()
+            .map_err(|error| ToolInvokeError::InvalidResult(error.to_string()))?,
+    );
+    Ok(result)
+}
+
+#[universal_tool_middleware(name = "streaming-universal-transform-input")]
+async fn universal_transform_input(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    let (graph, mut value) = input.into_parts();
+    let SchemaValue::Record { fields } = &mut value else {
+        panic!("MCP input is a record");
+    };
+    let SchemaValue::String(argument) = &mut fields[0] else {
+        panic!("MCP value argument is a string");
+    };
+    *argument = format!("middleware({argument})");
+    underlying
+        .invoke_forwarding_outputs(
+            command_path,
+            TypedSchemaValue::new(graph, value),
+            stdin,
+            stdout,
+            stderr,
+        )
+        .await
+}
+
+#[universal_tool_middleware(name = "streaming-universal-mcp-fanout")]
+async fn universal_mcp_fanout(
+    _tool_name: String,
+    _tool_metadata: Tool,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+    stdin: Option<InputStream>,
+    stdout: Option<OutputStream>,
+    stderr: Option<OutputStream>,
+    _principal: Principal,
+    underlying: UnderlyingTool,
+) -> Result<InvocationResult, ToolInvokeError<RawCustomToolError>> {
+    fn with_suffix(input: &TypedSchemaValue, suffix: &str) -> TypedSchemaValue {
+        let (graph, mut value) = input.clone().into_parts();
+        let SchemaValue::Record { fields } = &mut value else {
+            panic!("MCP input is a record");
+        };
+        let SchemaValue::String(argument) = &mut fields[0] else {
+            panic!("MCP value argument is a string");
+        };
+        *argument = format!("{argument}-{suffix}");
+        TypedSchemaValue::new(graph, value)
+    }
+
+    underlying
+        .invoke(command_path.clone(), with_suffix(&input, "first"), None)
+        .await?;
+    let completed = underlying
+        .invoke_forwarding_outputs(
+            command_path.clone(),
+            with_suffix(&input, "second"),
+            stdin,
+            stdout,
+            stderr,
+        )
+        .await?;
+    let pending = underlying
+        .start(command_path, with_suffix(&input, "pending"), None)
+        .await?;
+    wait_at_middleware_promise_checkpoint("mcp-pending-admitted").await;
+    pending.cancel();
+    Ok(completed)
 }
 
 macro_rules! streaming_middleware {
@@ -335,6 +977,44 @@ streaming_middleware!(
         Ok(format!("partial[{completed}|{pending}]"))
     }
 );
+
+streaming_middleware!(
+    Lifecycle,
+    [name = "streaming-lifecycle"],
+    |underlying, value| {
+        if value.starts_with("evict(") {
+            append_lifecycle_marker();
+            return underlying.apply(format!("lifecycle-effect({value})")).await;
+        }
+        if value.starts_with("suspend(") {
+            wait_at_middleware_promise_checkpoint("lifecycle-before-leaf").await;
+            let result = underlying
+                .apply(format!("lifecycle-effect({value})"))
+                .await?;
+            wait_at_middleware_promise_checkpoint("lifecycle-after-leaf").await;
+            return Ok(format!("lifecycle({result})"));
+        }
+        if value.starts_with("cascade(") {
+            let detached = underlying
+                .start_apply(format!("cascade-blocked({value})"))
+                .await?;
+            drop(detached);
+            wait_at_middleware_promise_checkpoint("cascade-child-admitted").await;
+            return underlying.apply(format!("cascade-trap({value})")).await;
+        }
+        underlying.apply(value).await
+    }
+);
+
+fn append_lifecycle_marker() {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/middleware-lifecycle.log")
+        .and_then(|mut file| file.write_all(b"P"))
+        .expect("filesystem-capable lifecycle middleware has the owner filesystem");
+}
 
 #[derive(IntoSchema, FromSchema)]
 struct PrefixParameters {

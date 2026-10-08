@@ -147,11 +147,16 @@ impl Drop for LogOutputGuard {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentResult {
     value: Option<SchemaValue>,
+    agent_id: AgentId,
 }
 
 impl AgentResult {
-    pub fn new(value: Option<SchemaValue>) -> Self {
-        Self { value }
+    pub fn new(value: Option<SchemaValue>, agent_id: AgentId) -> Self {
+        Self { value, agent_id }
+    }
+
+    pub fn agent_id(&self) -> &AgentId {
+        &self.agent_id
     }
 
     /// The raw decoded output value, if the method returned one.
@@ -684,6 +689,13 @@ pub trait TestDsl {
     }
 
     async fn auto_update_worker(
+        &self,
+        agent_id: &AgentId,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+    ) -> anyhow::Result<()>;
+
+    async fn snapshot_assisted_update_worker(
         &self,
         agent_id: &AgentId,
         target_revision: ComponentRevision,
@@ -1232,6 +1244,13 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
         WorkerExecutorError::PermissionDenied { details } => details.clone(),
+        WorkerExecutorError::OplogFenced {
+            agent_id,
+            expected_epoch,
+            actual_epoch,
+        } => format!(
+            "Oplog write for {agent_id:?} fenced: asserted epoch {expected_epoch}, stored {actual_epoch:?}"
+        ),
         WorkerExecutorError::AgentAlreadyExists { agent_id } => {
             format!("Worker already exists: {:?}", agent_id)
         }
@@ -1252,6 +1271,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             "Failed to download component: {:?} revision {}: {}",
             component_id, component_revision, reason
         ),
+        error @ (WorkerExecutorError::ComponentServiceUnavailable { .. }
+        | WorkerExecutorError::ComponentServiceRefused { .. }) => error.to_string(),
         WorkerExecutorError::ComponentParseFailed {
             component_id,
             component_revision,
@@ -1295,6 +1316,9 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
         WorkerExecutorError::Runtime { details } => {
             format!("Runtime error: {}", details)
         }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            format!("Runtime reconstruction required: {}", details)
+        }
         WorkerExecutorError::InvalidShardId {
             shard_id,
             shard_ids,
@@ -1311,9 +1335,6 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             format!("Worker not found: {:?}", agent_id)
         }
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
-        WorkerExecutorError::InitialAgentFileDownloadFailed { reason, .. } => {
-            format!("Initial File download failed: {}", reason)
-        }
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

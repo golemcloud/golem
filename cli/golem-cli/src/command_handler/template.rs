@@ -23,7 +23,10 @@ pub struct EnvVarRenderer {
 
 impl EnvVarRenderer {
     pub fn new() -> Self {
-        let proc_env_map: HashMap<String, String> = std::env::vars().collect();
+        Self::with_env_vars(std::env::vars().collect())
+    }
+
+    pub fn with_env_vars(proc_env_map: HashMap<String, String>) -> Self {
         let proc_env_vars = minijinja::value::Value::from(proc_env_map.clone());
 
         let minijinja_env = {

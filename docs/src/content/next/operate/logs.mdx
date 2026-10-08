@@ -72,10 +72,21 @@ For both `file` and `stdout` logging, a set of boolean flags control the format 
 
 ## Golem agent logs
 
-<Tabs items={["TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-Rust|TypeScript|MoonBit">
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
     <Tabs.Tab>
     In TypeScript agents, use the standard `console` API to log messages. `console.log` writes to the agent's standard output,
     `console.error` writes to standard error, while `console.debug`, `console.info`, `console.warn`, etc. write log entries with the corresponding log level.
+    </Tabs.Tab>
+    <Tabs.Tab>
+    Effect agents use Effect's logging API. The SDK installs a Golem logger, so log levels, annotations, spans, and trace identifiers are emitted through WASI logging:
+
+    ```typescript
+    import { Effect } from "effect"
+
+    const program = Effect.logInfo("my_message").pipe(
+      Effect.annotateLogs({ operation: "example" }),
+    )
+    ```
     </Tabs.Tab>
     <Tabs.Tab>
     In Rust agents, anything written to the agent's standard output and error channels, for example with `println!` or `eprintln!`, is logged.

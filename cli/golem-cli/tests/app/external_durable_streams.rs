@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::{TestContext, cmd, flag};
+use crate::app::{TestContext, cmd, flag, replace_string_in_file};
 use crate::workspace_path;
 use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_cli::{fs, versions};
@@ -24,6 +24,8 @@ use std::time::Duration;
 use tempfile::TempDir;
 use test_r::{test, timeout};
 use tokio::process::{Child, Command};
+
+const TEST_TOKEN: &str = "integration-test-capability";
 
 struct ReferenceServer {
     process: Child,
@@ -73,6 +75,7 @@ impl ReferenceServer {
         let mut process = Command::new("node")
             .arg("server.mjs")
             .arg(&ready)
+            .env("GOLEM_DS_TEST_TOKEN", TEST_TOKEN)
             .current_dir(directory.path())
             .stdin(Stdio::piped())
             .kill_on_drop(true)
@@ -112,6 +115,7 @@ impl ReferenceServer {
             .client
             .put(&url)
             .header("content-type", content_type)
+            .bearer_auth(TEST_TOKEN)
             .send()
             .await
             .unwrap();
@@ -193,6 +197,189 @@ async fn invoke<T: FromSchema>(
         .as_ref()
         .expect("missing typed invocation result");
     T::from_value(value.value()).expect("unexpected guest result schema")
+}
+
+async fn invoke_template<T: FromSchema>(ctx: &TestContext, method: &str, values: Vec<Value>) -> T {
+    let mut args = vec![
+        flag::YES.to_owned(),
+        cmd::AGENT.to_owned(),
+        cmd::INVOKE.to_owned(),
+        "StreamingAgent(\"external\")".to_owned(),
+        method.to_owned(),
+    ];
+    args.extend(values.iter().map(Value::to_string));
+    args.extend([
+        "--no-stream".to_owned(),
+        flag::FORMAT.to_owned(),
+        "json".to_owned(),
+    ]);
+    let output = tokio::time::timeout(Duration::from_secs(90), ctx.cli(args))
+        .await
+        .expect("template Durable Streams invocation timed out");
+    assert!(output.success_or_dump());
+    let results: Vec<InvokeResultView> = output.stdout_json();
+    let value = results[0]
+        .result_json
+        .as_ref()
+        .expect("missing typed invocation result");
+    T::from_value(value.value()).expect("unexpected template result schema")
+}
+
+async fn wait_for_closed_json(client: &reqwest::Client, url: &str) -> Vec<Value> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let response = client.get(format!("{url}?offset=-1")).send().await.unwrap();
+            if response
+                .headers()
+                .get("stream-closed")
+                .and_then(|v| v.to_str().ok())
+                == Some("true")
+            {
+                return response.json().await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("template output stream did not close")
+}
+
+async fn streaming_template_walkthrough(language: &str, append: &str, read: &str) {
+    let mut ctx = TestContext::new();
+    let app_name = format!("{language}-durable-streams-walkthrough");
+    fs::create_dir_all(ctx.cwd_path_join(&app_name)).unwrap();
+    ctx.cd(&app_name);
+    ctx.add_env_var("DURABLE_STREAM_TOKEN", TEST_TOKEN);
+    assert!(
+        ctx.cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            &format!("{language}/streaming"),
+        ])
+        .await
+        .success_or_dump()
+    );
+    let readme = fs::read_to_string(ctx.cwd_path_join("README.md")).unwrap();
+    assert!(readme.contains(&format!("ORIGIN=http://{app_name}.localhost:9006")));
+    assert!(!readme.contains("ORIGIN=http://app-name.localhost:9006"));
+    assert!(ctx.cli([flag::YES, cmd::BUILD]).await.success_or_dump());
+    ctx.start_server().await;
+    replace_string_in_file(
+        ctx.cwd_path_join("golem.yaml"),
+        &format!("subdomain: {app_name}"),
+        &format!("domain: localhost:{}", ctx.custom_request_port()),
+    )
+    .unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let origin = format!("http://localhost:{}", ctx.custom_request_port());
+    let base = format!("{origin}/durable-stream-agents/protocol/echo/invocations/template-session");
+    let source = format!("{base}/streams/input");
+    assert_eq!(
+        client.put(&source).send().await.unwrap().status(),
+        reqwest::StatusCode::CREATED
+    );
+    assert!(
+        client
+            .post(&source)
+            .header("content-type", "application/json")
+            .body("\"shared\"")
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .is_success()
+    );
+    let fork = source.replace("/invocations/", "/forks/template-fork/invocations/");
+    assert_eq!(
+        client
+            .put(&fork)
+            .header("stream-forked-from", source.strip_prefix(&origin).unwrap(),)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CREATED
+    );
+    for (url, body) in [(&source, "\"source-only\""), (&fork, "\"fork-only\"")] {
+        assert!(
+            client
+                .post(url)
+                .header("content-type", "application/json")
+                .header("stream-closed", "true")
+                .body(body)
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .is_success()
+        );
+    }
+    let source_result = format!("{base}/streams/$result");
+    let fork_result = source_result.replace("/invocations/", "/forks/template-fork/invocations/");
+    assert_eq!(
+        wait_for_closed_json(&client, &source_result).await,
+        [json!("echo:shared"), json!("echo:source-only")]
+    );
+    assert_eq!(
+        wait_for_closed_json(&client, &fork_result).await,
+        [json!("echo:shared"), json!("echo:fork-only")]
+    );
+
+    let server = ReferenceServer::start().await;
+    let external = server.create("/template", "application/json").await;
+    let append_args = vec![
+        json!(external),
+        json!("stable-template-producer"),
+        json!(["once"]),
+        json!(false),
+    ];
+    let first: Option<String> = invoke_template(&ctx, append, append_args.clone()).await;
+    assert!(first.is_some());
+    let duplicate: Option<String> = invoke_template(&ctx, append, append_args).await;
+    assert_eq!(duplicate, None);
+    let _: Option<String> = invoke_template(
+        &ctx,
+        append,
+        vec![
+            json!(external),
+            json!("closer"),
+            json!(["tail"]),
+            json!(true),
+        ],
+    )
+    .await;
+    let values: Vec<String> = invoke_template(&ctx, read, vec![json!(external)]).await;
+    assert_eq!(values, ["once", "tail"]);
+    let requests = server.requests().await;
+    assert!(
+        requests
+            .iter()
+            .any(|r| r["producerId"] == "stable-template-producer")
+    );
+    for method in ["GET", "POST"] {
+        assert!(requests.iter().any(|r| {
+            r["path"] == "/template" && r["method"] == method && r["authenticated"] == true
+        }));
+    }
+    server.stop().await;
+}
+
+#[test]
+#[timeout("40 minutes")]
+async fn generated_streaming_templates_execute_durable_streams_walkthrough() {
+    for (language, append, read) in [
+        ("rust", "append_external", "read_external"),
+        ("ts", "appendExternal", "readExternal"),
+        ("effect", "appendExternal", "readExternal"),
+        ("scala", "appendExternal", "readExternal"),
+        ("moonbit", "append_external", "read_external"),
+    ] {
+        streaming_template_walkthrough(language, append, read).await;
+    }
 }
 
 #[test]

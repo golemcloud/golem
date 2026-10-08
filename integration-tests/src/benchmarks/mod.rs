@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures_concurrency::future::Join;
 use golem_common::model::agent::ParsedAgentId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::{AgentId, IdempotencyKey};
@@ -34,8 +35,11 @@ pub mod cold_start_unknown;
 pub mod durability_overhead;
 pub mod idempotency_key;
 pub mod latency;
+mod public_invocation;
 pub mod sleep;
 pub mod streaming;
+pub mod streaming_history;
+pub mod streaming_recovery;
 pub mod throughput;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
@@ -62,11 +66,22 @@ fn inject_trace_context(request: &mut Request) {
 pub async fn delete_workers(
     user: &TestUserContext<BenchmarkTestDependencies>,
     agent_ids: &[AgentId],
+    recorder: &BenchmarkRecorder,
 ) {
     info!("Deleting {} workers...", agent_ids.len());
-    for agent_id in agent_ids {
-        if let Err(err) = user.delete_worker(agent_id).await {
-            warn!("Failed to delete worker: {:?}", err);
+    let results = agent_ids
+        .iter()
+        .map(|agent_id| user.delete_worker(agent_id))
+        .collect::<Vec<_>>()
+        .join()
+        .await;
+    for result in results {
+        if let Err(err) = result {
+            warn!(error = ?err, "Failed to delete worker");
+            recorder.failure(
+                &ResultKey::primary("cleanup-delete-worker"),
+                format!("{err:?}"),
+            );
         }
     }
     info!("Deleting {} workers completed", agent_ids.len());
@@ -91,6 +106,7 @@ fn failure_message(message: String) -> String {
 #[derive(Debug)]
 pub struct InvokeResult {
     pub value: Vec<SchemaValue>,
+    pub agent_id: Option<AgentId>,
     pub retries: usize,
     pub timeouts: usize,
     pub accumulated_time: Duration,
@@ -180,12 +196,14 @@ pub async fn invoke_and_await_agent(
             match result {
                 Ok(Ok(data_value)) => {
                     accumulated_time += duration;
+                    let agent_id = data_value.agent_id().clone();
                     let value = data_value
                         .into_return_value()
                         .map(|v| vec![v])
                         .unwrap_or_default();
                     break InvokeResult {
                         value,
+                        agent_id: Some(agent_id),
                         retries,
                         timeouts,
                         accumulated_time,
@@ -269,6 +287,7 @@ pub async fn invoke_and_await_http(client: Client, request: impl Fn() -> Request
 
                         break InvokeResult {
                             value: vec![SchemaValue::String(body)],
+                            agent_id: None,
                             retries,
                             timeouts,
                             accumulated_time,
@@ -352,6 +371,7 @@ mod tests {
     fn result(failures: Vec<String>) -> InvokeResult {
         InvokeResult {
             value: vec![],
+            agent_id: None,
             retries: failures.len(),
             timeouts: 0,
             accumulated_time: Duration::from_millis(7),

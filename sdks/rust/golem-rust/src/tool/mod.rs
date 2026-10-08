@@ -12,34 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
+#[cfg(not(feature = "export_golem_agentic"))]
 pub use crate::bindings::golem::agent::common::Principal;
-#[cfg(not(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-)))]
-pub use crate::bindings::golem::tool::streams::ToolStdoutWriter;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(not(feature = "export_golem_agentic"))]
+pub use crate::bindings::golem::tool::streams::ToolOutputWriter;
+#[cfg(feature = "export_golem_agentic")]
 pub use crate::golem_agentic::golem::agent::common::Principal;
-#[cfg(any(
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
-pub use crate::golem_agentic::golem::tool::streams::ToolStdoutWriter;
+#[cfg(feature = "export_golem_agentic")]
+pub use crate::golem_agentic::golem::tool::streams::ToolOutputWriter;
 pub use crate::schema::tool::Tool;
 pub use crate::schema::tool::{
     MonomorphicToolMiddlewareScope, ToolMiddleware, ToolMiddlewareScope,
 };
 pub use tool_middleware::{
     InputStream, InvocationResult, RawCustomToolError, ToolInvokeError, TypedUnderlyingInvocation,
-    UnderlyingInvocation, UnderlyingTool, decode_result_empty, decode_result_stdout_only,
-    decode_result_value, decode_result_with_stdout,
+    UnderlyingInvocation, UnderlyingTool, decode_result_empty, decode_result_outputs_only,
+    decode_result_stderr_only, decode_result_stdout_only, decode_result_value,
+    decode_result_with_outputs, decode_result_with_stderr, decode_result_with_stdout,
 };
 
 #[doc(hidden)]
@@ -72,25 +61,17 @@ pub use tool_middleware_registry::{
     get_tool_middleware_invoker_by_name, register_tool_middleware,
 };
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 pub(crate) use crate::schema::tool::wit::wire;
 
-#[cfg(any(
-    test,
-    feature = "export_golem_agentic",
-    feature = "export_golem_tool_middleware"
-))]
+#[cfg(any(test, feature = "export_golem_agentic"))]
 pub(crate) mod invocation_result;
 mod tool_middleware;
-#[cfg(any(
-    feature = "export_golem_tool_middleware",
-    feature = "export_golem_agentic_tool_middleware"
-))]
+#[cfg(feature = "export_golem_agentic")]
 mod tool_middleware_impl;
+#[cfg(feature = "export_golem_agentic")]
+#[doc(hidden)]
+pub use tool_middleware_impl::install_middleware_exports;
 mod tool_middleware_registry;
 
 #[doc(hidden)]

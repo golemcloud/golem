@@ -25,7 +25,10 @@ pub fn QuotaToken::new(String, UInt64) -> Self
 pub fn QuotaToken::reserve(Self, UInt64) -> Result[Reservation, FailedReservation]
 pub fn QuotaToken::split(Self, UInt64) -> Self
 pub impl @schema.FromSchema for QuotaToken
+pub impl @schema.FromWire for QuotaToken
 pub impl @schema.IntoSchema for QuotaToken
+pub impl @schema.IntoWire for QuotaToken
+pub impl @schema.WireSchema for QuotaToken
 
 pub(all) struct Reservation {
   // private fields

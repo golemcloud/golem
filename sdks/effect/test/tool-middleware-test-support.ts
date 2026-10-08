@@ -24,7 +24,7 @@ export const byteItems = (
 
 export const startMiddleware = <I extends (...args: any[]) => Promise<any>>(
   invoke: I,
-  ...args: Parameters<I>
+  ...args: any[]
 ) => {
   type Pending = {
     readonly bytes: Uint8Array
@@ -89,7 +89,7 @@ export const startMiddleware = <I extends (...args: any[]) => Promise<any>>(
       failure = reason
       deliver()
     },
-  } satisfies Pick<Streams.ToolStdoutWriter, "write" | "finish" | "fail">
+  } satisfies Pick<Streams.ToolOutputWriter, "write" | "finish" | "fail">
   const stdout: AsyncIterableIterator<number> = {
     [Symbol.asyncIterator]() {
       return this
@@ -119,6 +119,7 @@ export const startMiddleware = <I extends (...args: any[]) => Promise<any>>(
       return terminal
     },
   }
-  ;(args as unknown[])[7] = writer as Streams.ToolStdoutWriter
-  return { completion: invoke(...args), stdout }
+  if (args.length === 10) args.splice(8, 0, undefined)
+  args[7] = writer as Streams.ToolOutputWriter
+  return { completion: invoke(...(args as Parameters<I>)), stdout }
 }

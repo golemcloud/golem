@@ -44,9 +44,10 @@ use golem_common::base_model::durable_stream::{
     StreamConsumerDeletingRecord, StreamConsumerItemValueRecord, StreamEndResult, StreamId,
     StreamInvocationId, StreamItemsPayload, StreamItemsRecord, StreamOffset, StreamRecordReference,
     StreamRegistrationCoordinate, StreamRegistrationInvocation, StreamRootKind,
-    StreamSessionMapping, StreamSessionMappingRecord, StreamSessionMappingUpdateRecord,
-    StreamSessionPreparedRecord, StreamSessionRecord, StreamSourceKind, StreamTerminalAuthor,
-    StreamTopologyActivatedRecord, StreamTopologyPreparedRecord, StreamValuePathStep,
+    StreamSessionExpiryPolicy, StreamSessionMapping, StreamSessionMappingRecord,
+    StreamSessionMappingUpdateRecord, StreamSessionPreparedRecord, StreamSessionRecord,
+    StreamSourceKind, StreamTerminalAuthor, StreamTopologyActivatedRecord,
+    StreamTopologyPreparedRecord, StreamValuePathStep,
 };
 use golem_common::base_model::environment::EnvironmentId;
 use golem_common::base_model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex};
@@ -57,11 +58,11 @@ use golem_common::model::{AgentInvocationPayload, OwnedAgentId};
 use golem_schema::schema::SchemaFingerprintV1;
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use test_r::{test, timeout};
-use tokio::sync::{Barrier, Notify, oneshot};
+use tokio::sync::{Barrier, Notify, Semaphore, oneshot};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -235,6 +236,7 @@ async fn local_registration_rejects_foreign_coordinate_without_committing() {
                     transport_stream_id: 0,
                     source: ProducerOutputSource::New(request),
                     cancellation_epoch: None,
+                    role: SessionStreamRole::Output,
                 }],
                 None,
             )
@@ -250,6 +252,11 @@ struct TestOplogState {
     entries: BTreeMap<OplogIndex, OplogEntry>,
     committed: OplogIndex,
     commit_count: u64,
+    /// When set, `add` answers the way a primary oplog does when the threshold commit behind
+    /// the add is refused by the storage.
+    refused_adds: Option<crate::services::oplog::OplogFence>,
+    /// The fence a primary oplog latches when the storage refuses one of its commits.
+    fence: Option<crate::services::oplog::OplogFence>,
 }
 
 #[derive(Default)]
@@ -270,7 +277,7 @@ impl TestOplog {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
 
-    fn committed_length(&self) -> u64 {
+    pub(crate) fn committed_length(&self) -> u64 {
         self.state.lock().unwrap().committed.as_u64()
     }
 
@@ -287,18 +294,32 @@ impl TestOplog {
             .cloned()
             .collect()
     }
+
+    pub(crate) fn refuse_adds(&self, fence: crate::services::oplog::OplogFence) {
+        self.state.lock().unwrap().refused_adds = Some(fence);
+    }
+
+    pub(crate) fn latch_fence(&self, fence: crate::services::oplog::OplogFence) {
+        self.state.lock().unwrap().fence = Some(fence);
+    }
 }
 
 #[async_trait]
 impl Oplog for TestOplog {
-    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+    async fn add(
+        &self,
+        entry: OplogEntry,
+    ) -> Result<OplogIndex, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
+        if let Some(fence) = &state.refused_adds {
+            return Err(crate::services::oplog::OplogError::Fenced(fence.clone()));
+        }
         let index = state
             .entries
             .last_key_value()
             .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
         state.entries.insert(index, entry);
-        index
+        Ok(index)
     }
 
     fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
@@ -308,7 +329,11 @@ impl Oplog for TestOplog {
             .last_key_value()
             .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
         state.entries.insert(index, entry);
-        Box::pin(async move { index })
+        Box::pin(async move { Ok(index) })
+    }
+
+    fn fence(&self) -> Option<crate::services::oplog::OplogFence> {
+        self.state.lock().unwrap().fence.clone()
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
@@ -318,20 +343,23 @@ impl Oplog for TestOplog {
         (before - state.entries.len()) as u64
     }
 
-    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+    async fn commit(
+        &self,
+        _level: CommitLevel,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
         let committed = state
             .entries
             .iter()
             .filter(|(index, _)| **index > state.committed)
             .map(|(index, entry)| (*index, entry.clone()))
-            .collect();
+            .collect::<BTreeMap<OplogIndex, OplogEntry>>();
         state.committed = state
             .entries
             .last_key_value()
             .map_or(state.committed, |(index, _)| *index);
         state.commit_count += 1;
-        committed
+        Ok(committed)
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
@@ -411,8 +439,12 @@ impl Oplog for TestOplog {
             .find_map(|(index, entry)| (!entry.is_hint()).then_some(*index))
     }
 
-    async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
-        true
+    async fn wait_for_replicas(
+        &self,
+        _replicas: u8,
+        _timeout: Duration,
+    ) -> Result<bool, crate::services::oplog::OplogError> {
+        Ok(true)
     }
 
     async fn read(&self, oplog_index: OplogIndex) -> OplogEntry {
@@ -469,9 +501,9 @@ impl Oplog for TestOplog {
         &self,
         serialized_request: Vec<u8>,
         build_start: Box<dyn FnOnce(RawOplogPayload) -> Result<OplogEntry, String> + Send>,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let entry = build_start(RawOplogPayload::SerializedInline(serialized_request))?;
-        let index = self.add(entry.clone()).await;
+        let index = self.add(entry.clone()).await?;
         Ok(OrderedOplogStart {
             index,
             entry,
@@ -482,7 +514,7 @@ impl Oplog for TestOplog {
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
         build_request: crate::services::oplog::IndexedReservedStartBuilder,
-    ) -> Result<OrderedOplogStart, String> {
+    ) -> Result<OrderedOplogStart, crate::services::oplog::OplogError> {
         let mut state = self.state.lock().unwrap();
         let index = state
             .entries
@@ -498,14 +530,24 @@ impl Oplog for TestOplog {
         })
     }
 
-    async fn add_pair(
+    fn enqueue_add_pair(
         &self,
         start: OplogEntry,
         make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
-    ) -> (OplogIndex, OplogIndex) {
-        let first = self.add(start).await;
-        let second = self.add(make_second(first)).await;
-        (first, second)
+    ) -> crate::services::oplog::OplogAddPairReceipt {
+        let mut state = self.state.lock().unwrap();
+        if let Some(fence) = &state.refused_adds {
+            let refused = crate::services::oplog::OplogError::Fenced(fence.clone());
+            return Box::pin(async move { Err(refused) });
+        }
+        let first = state
+            .entries
+            .last_key_value()
+            .map_or(OplogIndex::INITIAL, |(index, _)| index.next());
+        state.entries.insert(first, start);
+        let second = first.next();
+        state.entries.insert(second, make_second(first));
+        Box::pin(async move { Ok((first, second)) })
     }
 }
 
@@ -513,7 +555,7 @@ impl Oplog for TestOplog {
 async fn test_oplog_read_exact_includes_uncommitted_entries() {
     let oplog = TestOplog::default();
     let entry = OplogEntry::interrupted();
-    let index = oplog.add(entry.clone()).await;
+    let index = oplog.add(entry.clone()).await.unwrap();
 
     let entries = oplog.read_exact(index, 1).await;
 
@@ -523,7 +565,7 @@ async fn test_oplog_read_exact_includes_uncommitted_entries() {
 #[test]
 async fn test_oplog_read_exact_rejects_incomplete_range() {
     let oplog = TestOplog::default();
-    let index = oplog.add(OplogEntry::interrupted()).await;
+    let index = oplog.add(OplogEntry::interrupted()).await.unwrap();
 
     let result = std::panic::AssertUnwindSafe(oplog.read_exact(index, 2))
         .catch_unwind()
@@ -813,12 +855,14 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
                     let _guard = lock.lock().await;
                     admission
                         .submit(move |_, context| async move {
+                            context.begin_lifecycle_publication().await?;
                             context.defer_publication(Box::pin(async move {
                                 Ok(publication.await.unwrap())
                             }));
                             Ok::<(), StreamStoreError>(())
                         })
                         .await?;
+                    admission.wait_published().await?;
                     written.send(()).unwrap();
                     Ok::<(), StreamStoreError>(())
                 })
@@ -839,8 +883,240 @@ async fn publication_waits_until_admitted_session_lock_is_released() {
         } else {
             assert_eq!(live.owned_operations.available_permits(), 15);
         }
+        assert_eq!(
+            live.observe_publication(async { Ok(37) }).await.unwrap(),
+            37
+        );
         published.send(Ok(())).unwrap();
         operation.await.unwrap().unwrap();
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn lifecycle_publication_gate_joins_all_tails_without_retaining_inactive_contexts() {
+    for fail_first_tail in [false, true] {
+        let owner = identity();
+        let releases = [Arc::new(Semaphore::new(0)), Arc::new(Semaphore::new(0))];
+        let completed = Arc::new(AtomicUsize::new(0));
+        let next_tail = Arc::new(AtomicUsize::new(0));
+        let (tail_done, mut completions) = tokio::sync::mpsc::unbounded_channel();
+        let commit: DurableStreamCommit = Arc::new({
+            let releases = releases.clone();
+            let completed = completed.clone();
+            move |receipt| {
+                let tail = next_tail.fetch_add(1, Ordering::SeqCst);
+                let release = releases[tail].clone();
+                let completed = completed.clone();
+                let tail_done = tail_done.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(Ok(())).unwrap();
+                    release.acquire().await.unwrap().forget();
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    tail_done.send(tail).unwrap();
+                    assert!(!(fail_first_tail && tail == 0), "publication failed");
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            owner.environment_id,
+            owner.agent_id,
+            owner.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let (returned, context) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_admitted(None, 0, false, move |_, admission| async move {
+                    let context = admission
+                        .submit(|owner, context| async move {
+                            context.begin_lifecycle_publication().await?;
+                            context
+                                .run_nested(|_, nested| async move {
+                                    nested.begin_lifecycle_publication().await
+                                })
+                                .await?;
+                            owner.commit(&context).await?;
+                            owner.commit(&context).await?;
+                            context.finish_durable_effect();
+                            Ok::<_, StreamStoreError>(context)
+                        })
+                        .await?;
+                    returned.send(context).ok().unwrap();
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        let inactive_context = context.await.unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let observed = Arc::new(AtomicBool::new(false));
+        let observation = live.observe_publication({
+            let observed = observed.clone();
+            let completed = completed.clone();
+            async move {
+                observed.store(true, Ordering::SeqCst);
+                Ok(completed.load(Ordering::SeqCst))
+            }
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let (entered, entering) = oneshot::channel();
+        let second = tokio::spawn({
+            let live = live.clone();
+            async move {
+                live.run_lifecycle(None, 0, |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    Ok::<_, StreamStoreError>(42)
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        assert!(!second.is_finished());
+        releases[0].add_permits(1);
+        assert_eq!(completions.recv().await, Some(0));
+        if fail_first_tail {
+            live.retirement.cancelled().await;
+        }
+        assert!(live.publication_gate.try_lock().is_err());
+        assert!(futures::poll!(&mut observation).is_pending());
+        releases[1].add_permits(1);
+        assert_eq!(completions.recv().await, Some(1));
+        if fail_first_tail {
+            assert_eq!(observation.await, Err(StreamStoreError::RecoveryRequired));
+            assert!(!observed.load(Ordering::SeqCst));
+            assert_eq!(
+                second.await.unwrap(),
+                Err(StreamStoreError::RecoveryRequired)
+            );
+        } else {
+            assert_eq!(observation.await.unwrap(), 2);
+            assert!(observed.load(Ordering::SeqCst));
+            assert_eq!(second.await.unwrap().unwrap(), 42);
+        }
+        drop(inactive_context);
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn failed_publication_observation_fences_queued_writes_before_releasing_gate() {
+    for panic in [false, true] {
+        let live = producer(Arc::new(TestOplog::default()), &identity(), None).await;
+        let (release, released) = oneshot::channel();
+        let observation = live.observe_publication(async move {
+            released.await.unwrap();
+            assert!(!panic, "status actor lost");
+            Err::<(), _>(StreamStoreError::Oplog(
+                "status reconstruction failed".into(),
+            ))
+        });
+        tokio::pin!(observation);
+        assert!(futures::poll!(&mut observation).is_pending());
+        let wrote = Arc::new(AtomicBool::new(false));
+        let (entered, entering) = oneshot::channel();
+        let writer = tokio::spawn({
+            let live = live.clone();
+            let wrote = wrote.clone();
+            async move {
+                live.run_lifecycle(None, 0, move |_, context| async move {
+                    entered.send(()).unwrap();
+                    context.begin_lifecycle_publication().await?;
+                    wrote.store(true, Ordering::SeqCst);
+                    Ok::<_, StreamStoreError>(())
+                })
+                .await
+            }
+        });
+        entering.await.unwrap();
+        release.send(()).unwrap();
+        let error = observation.await.unwrap_err();
+        assert!(matches!(error, StreamStoreError::Oplog(_)));
+        assert_eq!(
+            writer.await.unwrap(),
+            Err(StreamStoreError::RecoveryRequired)
+        );
+        assert!(!wrote.load(Ordering::SeqCst));
+        assert!(live.publication_gate.try_lock().is_ok());
+        live.wait_durable_drained().await;
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn guarded_publication_wait_survives_caller_cancellation_after_submit() {
+    for fail_write in [false, true] {
+        let identity = identity();
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    receipt.unwrap().send(Ok(())).unwrap();
+                    release.notified().await;
+                    folded.store(true, Ordering::Release);
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            Arc::new(TestOplog::default()),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let lock = live.session_lock(&identity.invocation);
+        let (written, write_done) = oneshot::channel();
+        let caller = tokio::spawn({
+            let live = live.clone();
+            let lock = lock.clone();
+            async move {
+                live.run_admitted(None, 0, true, move |_, admission| async move {
+                    let _guard = lock.lock().await;
+                    let outcome = admission
+                        .submit(move |owner, context| async move {
+                            owner.commit(&context).await?;
+                            context.finish_durable_effect();
+                            if fail_write {
+                                Err(StreamStoreError::Oplog("write failed after commit".into()))
+                            } else {
+                                Ok(())
+                            }
+                        })
+                        .await;
+                    written.send(()).unwrap();
+                    admission.wait_published().await?;
+                    outcome
+                })
+                .await
+            }
+        });
+        write_done.await.unwrap();
+        assert!(!folded.load(Ordering::Acquire));
+        assert!(lock.try_lock().is_err());
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        assert!(lock.try_lock().is_err());
+        release.notify_one();
+        let _guard = lock.lock().await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
     }
 }
 
@@ -860,11 +1136,11 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
             let reached = reached.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 reached.notify_one();
                 release.notified().await;
                 if let Some(published) = published {
-                    published.send(()).unwrap();
+                    published.send(Ok(())).unwrap();
                 }
             })
         }
@@ -1638,7 +1914,6 @@ async fn reconcile(
     producer
         .reconcile_attachments_configured(
             now_millis,
-            golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RENEWAL_TARGET_MILLIS,
             golem_common::base_model::durable_stream::STREAM_ATTACHMENT_RECONCILIATION_BATCH_SIZE,
             probe,
         )
@@ -1655,7 +1930,10 @@ async fn delayed_stream_records_retain_registration_entity_attribution() {
     request.entity_parent_start_index = entity_parent_start_index;
     let handle = live.register(None, request).await.unwrap().value;
 
-    oplog.add(OplogEntry::no_op(None)).await;
+    oplog
+        .add(OplogEntry::no_op(None))
+        .await
+        .expect("oplog write");
     live.write_items(
         None,
         handle.stream_id,
@@ -1717,7 +1995,10 @@ async fn item_payloads_are_loaded_only_for_the_requested_batch() {
             .unwrap();
     }
     for _ in 0..2050 {
-        oplog.add(OplogEntry::interrupted()).await;
+        oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
     }
     assert!(
         producer.index.lock().await.streams[&handle.stream_id]
@@ -1948,7 +2229,10 @@ async fn cursor_validation_point_reads_without_historical_event_cache() {
         .unwrap()
         .value;
     for _ in 0..2050 {
-        oplog.add(OplogEntry::interrupted()).await;
+        oplog
+            .add(OplogEntry::interrupted())
+            .await
+            .expect("oplog write");
     }
     producer
         .end(None, handle.stream_id, 3, StreamEndResult::Ok)
@@ -2058,38 +2342,51 @@ async fn attachment_lifecycle_is_idempotent_fenced_and_rebuildable() {
             .replayed
     );
     assert_eq!(oplog.committed_length(), after_activate);
+    assert_eq!(
+        live.attachment_view(&key)
+            .await
+            .unwrap()
+            .lease_expires_at_millis,
+        None
+    );
     assert!(
         live.read_attached_segment(&key, &handle, 121, None, None)
             .await
             .unwrap()
             .is_empty()
     );
+    assert!(
+        live.read_attached_segment(&key, &handle, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(oplog.committed_length(), after_activate);
+    live.write_items(
+        None,
+        handle.stream_id,
+        0,
+        StreamItemsPayload::PackedU8(vec![13, 29]),
+    )
+    .await
+    .unwrap();
+    let before_read = oplog.committed_length();
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    let events = live
+        .read_attached_segment(&key, &handle, u64::MAX, None, None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
     assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &handle,
-            120 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+        events[0].payload,
+        CommittedProducerStreamEventPayload::PackedU8(13)
     );
-    assert!(
-        !live
-            .renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
+    assert_eq!(
+        events[1].payload,
+        CommittedProducerStreamEventPayload::PackedU8(29)
     );
-    let after_renew = oplog.committed_length();
-    assert!(
-        live.renew_attachment(key.clone(), 130)
-            .await
-            .unwrap()
-            .replayed
-    );
-    assert_eq!(oplog.committed_length(), after_renew);
+    assert_eq!(oplog.committed_length(), before_read);
     assert!(
         !live
             .finalize_attachment(
@@ -2337,7 +2634,6 @@ async fn attachment_prepare_advances_epochs_from_every_remote_recovery_state() {
         for result in [
             live.prepare_attachment(old.clone(), 112).await.map(|_| ()),
             live.activate_attachment(old.clone(), 112).await.map(|_| ()),
-            live.renew_attachment(old.clone(), 112).await.map(|_| ()),
             live.finalize_attachment(
                 old.clone(),
                 StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2479,7 +2775,7 @@ async fn attachment_slots_are_isolated_by_consumer_identity() {
 async fn active_attachment_count_spans_distinct_consumer_slots() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
-    let live = producer(oplog, &identity, None).await;
+    let live = producer(oplog.clone(), &identity, None).await;
     let handle = live
         .register(None, root_registration(&identity))
         .await
@@ -2504,7 +2800,9 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     second.consumer_invocation.callee = second.consumer.clone();
     second.consumer_invocation.callee_fingerprint = second.expected_consumer_fingerprint;
 
+    assert!(!live.has_reconcilable_attachments().await);
     live.prepare_attachment(first.clone(), 100).await.unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
@@ -2513,6 +2811,10 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     );
     live.activate_attachment(first.clone(), 110).await.unwrap();
     live.prepare_attachment(second.clone(), 100).await.unwrap();
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.activate_attachment(second.clone(), 110).await.unwrap();
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
@@ -2526,11 +2828,16 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(live.has_reconcilable_attachments().await);
     assert!(
         live.has_active_attachment(&first.session_key, &handle)
             .await
             .unwrap()
     );
+
+    drop(live);
+    let live = producer(oplog.clone(), &identity, None).await;
+    assert!(live.has_reconcilable_attachments().await);
     live.finalize_attachment(
         second,
         StreamAttachmentFinalizationReason::ConsumerFinalized,
@@ -2538,12 +2845,16 @@ async fn active_attachment_count_spans_distinct_consumer_slots() {
     )
     .await
     .unwrap();
+    assert!(!live.has_reconcilable_attachments().await);
     assert!(
         !live
             .has_active_attachment(&first.session_key, &handle)
             .await
             .unwrap()
     );
+    drop(live);
+    let live = producer(oplog, &identity, None).await;
+    assert!(!live.has_reconcilable_attachments().await);
 }
 
 #[test]
@@ -2609,7 +2920,7 @@ async fn producer_rejects_handles_with_altered_non_identity_metadata_before_atta
 }
 
 #[test]
-async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
+async fn deletion_is_fail_closed_for_prepared_and_quiet_active_references() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
     let live = producer(oplog, &identity, None).await;
@@ -2626,16 +2937,11 @@ async fn deletion_is_fail_closed_for_prepared_active_and_expired_references() {
             if dependents == std::slice::from_ref(&key)
     ));
     live.activate_attachment(key.clone(), 110).await.unwrap();
-    assert_eq!(
-        live.read_attached_segment(
-            &key,
-            &first,
-            110 + STREAM_ATTACHMENT_LEASE_TTL_MILLIS,
-            None,
-            None,
-        )
-        .await,
-        Err(StreamStoreError::LeaseExpired)
+    assert!(
+        live.read_attached_segment(&key, &first, u64::MAX, None, None,)
+            .await
+            .unwrap()
+            .is_empty()
     );
     assert!(matches!(
         live.commit_deletion_barrier(1_000, true).await,
@@ -2762,7 +3068,7 @@ async fn deleting_producer_restarts_without_renewing_before_cascade_retry() {
     };
     assert_eq!(
         restarted
-            .reconcile_attachments_configured(1_000, 1, 256, &probe)
+            .reconcile_attachments_configured(1_000, 256, &probe)
             .await
             .unwrap(),
         0
@@ -3493,13 +3799,13 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
         let oplog = oplog_for_commit.clone();
         let batches = batches_for_commit.clone();
         Box::pin(async move {
-            let committed_entries = oplog.commit(CommitLevel::Always).await;
+            let committed_entries = oplog.commit(CommitLevel::Always).await.unwrap();
             batches
                 .lock()
                 .unwrap()
                 .push(committed_entries.into_values().collect());
             if let Some(committed) = committed {
-                let _ = committed.send(());
+                let _ = committed.send(Ok(()));
             }
         })
     });
@@ -3549,7 +3855,8 @@ async fn session_record_commit_folds_a_pending_invocation_added_immediately_befo
             Vec::new(),
             Vec::new(),
         ))
-        .await;
+        .await
+        .unwrap();
     producer
         .append_session_record(
             None,
@@ -4085,13 +4392,13 @@ async fn failed_commit_callbacks_fence_cached_reads_and_recover_committed_items(
                 let oplog = oplog.clone();
                 let fail = fail.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     assert!(
                         fail_after_receipt || !fail.load(Ordering::Acquire),
                         "injected failure before durability receipt"
                     );
                     if let Some(receipt) = receipt {
-                        let _ = receipt.send(());
+                        let _ = receipt.send(Ok(()));
                     }
                     assert!(
                         !fail.load(Ordering::Acquire),
@@ -4238,9 +4545,9 @@ async fn handle_read_hydrates_cancellation_committed_before_request_abort() {
             let block_commit = block_commit.clone();
             let committed = committed.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
                 if block_commit.load(Ordering::SeqCst) {
                     committed.notify_waiters();
@@ -4320,9 +4627,9 @@ async fn external_append_retry_after_commit_cancellation_is_duplicate() {
             let block_commit = block_commit.clone();
             let committed = committed.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
                 if block_commit.load(Ordering::SeqCst) {
                     committed.notify_waiters();
@@ -4422,13 +4729,13 @@ async fn external_append_survives_caller_abort_before_commit_receipt() {
             let blocked = blocked.clone();
             let release = release.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if block_receipt.swap(false, Ordering::SeqCst) {
                     blocked.notify_one();
                     release.notified().await;
                 }
                 if let Some(published) = published {
-                    let _ = published.send(());
+                    let _ = published.send(Ok(()));
                 }
             })
         }
@@ -5420,9 +5727,9 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(Ok(()));
                 }
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
@@ -5484,7 +5791,10 @@ async fn prepared_input_registration_batch_recovers_without_duplicate_registrati
                     committed,
                     move |bindings| StreamSessionPreparedRecord {
                         format_version: DURABLE_STREAM_FORMAT_VERSION,
+                        public_session_id: session_key.idempotency_key.value.clone(),
                         session_key: session_key.idempotency_key.clone(),
+                        expiry_policy: StreamSessionExpiryPolicy::None,
+                        expiry_deadline_millis: None,
                         attempt: StartAttemptDescriptor {
                             format_version: DURABLE_STREAM_FORMAT_VERSION,
                             session_key: session_key.clone(),
@@ -5592,8 +5902,8 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
-                let _ = committed.unwrap().send(());
+                oplog.commit(CommitLevel::Always).await.unwrap();
+                let _ = committed.unwrap().send(Ok(()));
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
             })
@@ -5629,7 +5939,10 @@ async fn prepared_foreign_inputs_recover_the_winning_invocation_and_topology() {
     };
     let prepared = StreamSessionPreparedRecord {
         format_version: DURABLE_STREAM_FORMAT_VERSION,
+        public_session_id: identity.invocation.idempotency_key.value.clone(),
         session_key: identity.invocation.idempotency_key.clone(),
+        expiry_policy: StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
         attempt: StartAttemptDescriptor {
             format_version: DURABLE_STREAM_FORMAT_VERSION,
             session_key: identity.invocation.clone(),
@@ -5852,11 +6165,13 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
                 transport_stream_id: 31,
                 source: ProducerOutputSource::New(request.clone()),
                 cancellation_epoch: None,
+                role: SessionStreamRole::Output,
             },
             ProducerOutputRegistration {
                 transport_stream_id: 12,
                 source: ProducerOutputSource::Existing(existing.clone()),
                 cancellation_epoch: None,
+                role: SessionStreamRole::Output,
             },
         ]
     };
@@ -5929,6 +6244,228 @@ async fn result_plan_preserves_mixed_output_order_and_replays() {
 }
 
 #[test]
+async fn reverted_result_replay_preserves_foreign_handles_without_live_authority() {
+    for mixed in [false, true] {
+        for retained_stage in 0..3 {
+            let identity = identity();
+            let oplog = Arc::new(TestOplog::default());
+            let before_source = oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            let live = producer(oplog.clone(), &identity, None).await;
+            let source_request = root_registration(&identity);
+            let stale = live
+                .register(None, source_request.clone())
+                .await
+                .unwrap()
+                .value;
+            let after_source = oplog.current_oplog_index().await;
+            let mut request = source_request.clone();
+            let StreamRegistrationCoordinate::Root {
+                recursive_value_path,
+                ..
+            } = &mut request.coordinate
+            else {
+                unreachable!()
+            };
+            recursive_value_path.push(StreamValuePathStep::RecordField(1));
+            let outputs = |handle, cancellation_epoch| {
+                let mut outputs = Vec::new();
+                if mixed {
+                    outputs.push(ProducerOutputRegistration {
+                        transport_stream_id: 31,
+                        source: ProducerOutputSource::New(request.clone()),
+                        cancellation_epoch,
+                        role: SessionStreamRole::Output,
+                    });
+                }
+                outputs.push(ProducerOutputRegistration {
+                    transport_stream_id: 12,
+                    source: ProducerOutputSource::Existing(handle),
+                    cancellation_epoch,
+                    role: SessionStreamRole::Output,
+                });
+                outputs
+            };
+            let original = live
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), None),
+                    None,
+                )
+                .await
+                .unwrap();
+            let after_result = oplog.current_oplog_index().await;
+            oplog.add(OplogEntry::no_op(None)).await.unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
+            let cut = DurableStreamStore::prepare_fork_cut(
+                oplog.as_ref(),
+                (&owner, identity.fingerprint),
+                (&owner, identity.fingerprint),
+                oplog.current_oplog_index().await,
+                [before_source, after_source, after_result][retained_stage],
+                None,
+                [0; 32],
+                true,
+            )
+            .await
+            .unwrap();
+            let marker = DurableStreamOplogRecord::Session(
+                None,
+                Box::new(StreamSessionRecord::ForkCut(cut.clone())),
+            )
+            .into_inline_entry();
+            oplog
+                .add_pair(
+                    OplogEntry::revert(cut.revert.unwrap()),
+                    Box::new(move |_| marker),
+                )
+                .await
+                .unwrap();
+            oplog.commit(CommitLevel::Always).await.unwrap();
+            drop(live);
+            let recovered = producer(oplog.clone(), &identity, None).await;
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            let result = recovered
+                .register_result_streams(
+                    None,
+                    identity.invocation.clone(),
+                    vec![4, 5],
+                    outputs(stale.clone(), Some(7)),
+                    None,
+                )
+                .await;
+            if retained_stage == 2 {
+                let replay = result.unwrap();
+                assert_eq!(replay.session_record, original.session_record);
+                assert_eq!(replay.handles.len(), usize::from(mixed));
+                for handle in replay.handles {
+                    assert_eq!(handle.producer_generation, recovered.generation());
+                    assert_ne!(handle.producer_generation, stale.producer_generation);
+                }
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(stale.clone(), Some(0)),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::InvalidAttachmentState
+                );
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![9, 5],
+                            outputs(stale.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let refreshed = recovered
+                    .handle_for_coordinate(&source_request.coordinate)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            outputs(refreshed.clone(), None),
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                let mut changed_mapping = outputs(stale.clone(), None);
+                changed_mapping.last_mut().unwrap().transport_stream_id = 13;
+                assert_eq!(
+                    recovered
+                        .register_result_streams(
+                            None,
+                            identity.invocation.clone(),
+                            vec![4, 5],
+                            changed_mapping,
+                            None,
+                        )
+                        .await
+                        .unwrap_err(),
+                    StreamStoreError::RegistrationDivergence
+                );
+                if mixed {
+                    let mut changed_registration = outputs(stale.clone(), None);
+                    let ProducerOutputSource::New(request) = &mut changed_registration[0].source
+                    else {
+                        unreachable!()
+                    };
+                    request.element_schema_fingerprint = SchemaFingerprintV1([99; 32]);
+                    assert_eq!(
+                        recovered
+                            .register_result_streams(
+                                None,
+                                identity.invocation.clone(),
+                                vec![4, 5],
+                                changed_registration,
+                                None,
+                            )
+                            .await
+                            .unwrap_err(),
+                        StreamStoreError::InvalidHandle
+                    );
+                }
+                // Cancellation hints on exact replay must not change an open source.
+                let head = recovered.stream_head(&refreshed).await.unwrap();
+                assert!(!head.closed && !head.cancelled);
+                assert_eq!(
+                    recovered
+                        .local_binding(12, &stale, SessionStreamRole::Output)
+                        .await,
+                    Err(StreamStoreError::InvalidHandle)
+                );
+            } else {
+                // Includes a discarded source and a mixed new registration: neither may write.
+                assert_eq!(result.unwrap_err(), StreamStoreError::InvalidHandle);
+            }
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+            recovered
+                .commit_deletion_barrier(1_000, true)
+                .await
+                .unwrap();
+            let tip = oplog.current_oplog_index().await;
+            let commits = oplog.commit_count();
+            assert_eq!(
+                recovered
+                    .register_result_streams(
+                        None,
+                        identity.invocation.clone(),
+                        vec![4, 5],
+                        outputs(stale, Some(7)),
+                        None,
+                    )
+                    .await
+                    .unwrap_err(),
+                StreamStoreError::ProducerDeleting
+            );
+            assert_eq!(oplog.current_oplog_index().await, tip);
+            assert_eq!(oplog.commit_count(), commits);
+        }
+    }
+}
+
+#[test]
 async fn result_registration_cancels_outputs_before_publishing_the_result() {
     for new_output in [false, true] {
         let identity = identity();
@@ -5974,11 +6511,13 @@ async fn result_registration_cancels_outputs_before_publishing_the_result() {
                         None => ProducerOutputSource::New(request.clone()),
                     },
                     cancellation_epoch: Some(7),
+                    role: SessionStreamRole::Output,
                 },
                 ProducerOutputRegistration {
                     transport_stream_id: 29,
                     source: ProducerOutputSource::Existing(existing.clone()),
                     cancellation_epoch: Some(7),
+                    role: SessionStreamRole::Output,
                 },
             ]
         };
@@ -6050,11 +6589,13 @@ async fn result_plan_rejects_duplicate_new_coordinates_before_committing() {
             transport_stream_id: 1,
             source: ProducerOutputSource::New(request.clone()),
             cancellation_epoch: None,
+            role: SessionStreamRole::Output,
         },
         ProducerOutputRegistration {
             transport_stream_id: 2,
             source: ProducerOutputSource::New(request),
             cancellation_epoch: None,
+            role: SessionStreamRole::Output,
         },
     ];
 
@@ -6277,7 +6818,7 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(matches!(
@@ -6435,7 +6976,7 @@ async fn history_rebuild_rejects_duplicate_nested_stream_ownership() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(
@@ -6490,7 +7031,7 @@ async fn history_rebuild_rejects_nested_registration_without_enclosing_item() {
         }))
         .await
         .unwrap();
-    oplog.commit(CommitLevel::Always).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
     drop(producer);
 
     assert!(matches!(
@@ -6942,6 +7483,186 @@ async fn session_control_batch_validates_before_appending_any_record() {
     }
 }
 
+pub(crate) fn test_fence() -> crate::services::oplog::OplogFence {
+    crate::services::oplog::OplogFence {
+        agent_id: identity().agent_id,
+        expected_epoch: golem_common::model::ShardEpoch(3),
+        actual_epoch: Some(golem_common::model::ShardEpoch(4)),
+    }
+}
+
+/// A fence has to reach the worker executor's boundaries as a fence: flattened into
+/// `InvalidRequest` it is rejected as a validation failure, and the caller never reroutes.
+#[test]
+fn a_fenced_oplog_error_keeps_its_type_through_the_producer() {
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    let fenced = StreamStoreError::from(crate::services::oplog::OplogError::Fenced(test_fence()));
+    assert!(matches!(fenced, StreamStoreError::Fenced(_)));
+    assert!(matches!(
+        fenced.into_worker_executor_error(WorkerExecutorError::invalid_request),
+        WorkerExecutorError::OplogFenced { .. }
+    ));
+
+    let payload = StreamStoreError::from(crate::services::oplog::OplogError::Payload(
+        "payload too large".to_string(),
+    ));
+    assert!(matches!(payload, StreamStoreError::Oplog(_)));
+    assert!(matches!(
+        payload.into_worker_executor_error(WorkerExecutorError::invalid_request),
+        WorkerExecutorError::InvalidRequest { .. }
+    ));
+}
+
+#[test]
+async fn a_fenced_session_record_append_is_reported_as_fenced() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer(oplog.clone(), &identity, None).await;
+    oplog.refuse_adds(test_fence());
+
+    let result = producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::ConsumerDeleting(StreamConsumerDeletingRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                consumer_environment_id: identity.environment_id,
+                consumer: identity.agent_id,
+                consumer_fingerprint: identity.fingerprint,
+                deleting_at_millis: 100,
+            }),
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "a refused session record append must stay a fence, got {result:?}"
+    );
+}
+
+/// A producer committing the way the worker does: a commit the storage refuses is answered with
+/// the fence on its receipt.
+async fn producer_answering_fenced_commits(
+    oplog: Arc<TestOplog>,
+    identity: &TestIdentity,
+) -> Arc<DurableStreamStore> {
+    let commit_oplog = oplog.clone();
+    let commit: DurableStreamCommit = Arc::new(move |committed| {
+        let oplog = commit_oplog.clone();
+        Box::pin(async move {
+            if let Some(fence) = oplog.fence() {
+                if let Some(committed) = committed {
+                    let _ = committed.send(Err(fence));
+                }
+                return;
+            }
+            oplog
+                .commit(CommitLevel::Always)
+                .await
+                .expect("oplog write");
+            if let Some(committed) = committed {
+                let _ = committed.send(Ok(()));
+            }
+        })
+    });
+    DurableStreamStore::load_with_commit(
+        oplog,
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+        commit,
+    )
+    .await
+    .unwrap()
+}
+
+/// Items whose commit was refused never reached the oplog: a live reader handed them would
+/// journal offsets the shard's new owner replays without.
+#[test]
+async fn a_fenced_commit_neither_publishes_nor_indexes_stream_items() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer_answering_fenced_commits(oplog.clone(), &identity).await;
+    let handle = producer
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let bus = producer.bus(handle.stream_id).unwrap();
+    let mut subscription = bus.subscribe().await.unwrap();
+    let committed_before = oplog.committed_length();
+    oplog.latch_fence(test_fence());
+
+    let result = producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "a write whose commit was refused must report the fence, got {result:?}"
+    );
+    // The refused write poisons the store, which retires its buses: the reader may observe
+    // that retirement, but never an event.
+    let received = tokio::time::timeout(Duration::from_millis(200), subscription.recv()).await;
+    assert!(
+        !matches!(received, Ok(Ok(_))),
+        "nothing may be published for a write whose commit was refused"
+    );
+    assert_eq!(oplog.committed_length(), committed_before);
+    assert_eq!(
+        producer.index.lock().await.streams[&handle.stream_id].next_sequence,
+        0
+    );
+    // The latch outlives the refused write: a later write reports the fence as well, not a
+    // local recovery.
+    let retried = producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::PackedU8(vec![7]),
+        )
+        .await;
+    assert!(
+        matches!(retried, Err(StreamStoreError::Fenced(_))),
+        "a write after a fence must report the fence, got {retried:?}"
+    );
+}
+
+#[test]
+async fn a_fenced_commit_does_not_record_an_attachment_in_the_index() {
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = producer_answering_fenced_commits(oplog.clone(), &identity).await;
+    let handle = producer
+        .register(None, root_registration(&identity))
+        .await
+        .unwrap()
+        .value;
+    let key = attachment_key(&identity, handle.stream_id);
+    oplog.latch_fence(test_fence());
+
+    let result = producer.prepare_attachment(key.clone(), 100).await;
+
+    assert!(
+        matches!(result, Err(StreamStoreError::Fenced(_))),
+        "an attachment whose commit was refused must report the fence, got {result:?}"
+    );
+    assert!(
+        producer
+            .inspect_attachments()
+            .await
+            .iter()
+            .all(|view| view.key != key)
+    );
+}
+
 #[test]
 async fn malformed_session_record_is_rejected_at_the_write_boundary() {
     let identity = identity();
@@ -7159,9 +7880,9 @@ async fn restart_recovers_registration_committed_before_caller_observation() {
             let oplog = oplog.clone();
             let commit_reached = commit_reached.clone();
             Box::pin(async move {
-                oplog.commit(CommitLevel::Always).await;
+                oplog.commit(CommitLevel::Always).await.unwrap();
                 if let Some(committed) = committed {
-                    let _ = committed.send(());
+                    let _ = committed.send(Ok(()));
                 }
                 commit_reached.wait().await;
                 std::future::pending::<()>().await;
@@ -7287,7 +8008,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
             let release = release.clone();
             let folded = folded.clone();
             Box::pin(async move {
-                receipt.unwrap().send(()).unwrap();
+                receipt.unwrap().send(Ok(())).unwrap();
                 release.notified().await;
                 folded.store(true, Ordering::Release);
             })
@@ -7310,7 +8031,7 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
         let live = live.clone();
         async move {
             live.run_owned(None, 0, move |owner, context| async move {
-                owner.commit(&context).await;
+                owner.commit(&context).await.unwrap();
                 context.finish_durable_effect();
                 owner.notify_session_records_changed(Some(&context));
                 requested.send(()).unwrap();
@@ -7328,6 +8049,101 @@ async fn session_notification_waits_for_status_fold_after_caller_cancellation() 
     notification.await;
     assert!(folded.load(Ordering::Acquire));
     live.wait_durable_drained().await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn stream_terminals_wake_session_recovery_after_fold_but_items_do_not() {
+    for cancel in [false, true] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let block = Arc::new(AtomicBool::new(false));
+        let committed = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let folded = Arc::new(AtomicBool::new(false));
+        let commit: DurableStreamCommit = Arc::new({
+            let oplog = oplog.clone();
+            let block = block.clone();
+            let committed = committed.clone();
+            let release = release.clone();
+            let folded = folded.clone();
+            move |receipt| {
+                let oplog = oplog.clone();
+                let block = block.clone();
+                let committed = committed.clone();
+                let release = release.clone();
+                let folded = folded.clone();
+                Box::pin(async move {
+                    oplog.commit(CommitLevel::Always).await.unwrap();
+                    if let Some(receipt) = receipt {
+                        let _ = receipt.send(Ok(()));
+                    }
+                    if block.swap(false, Ordering::AcqRel) {
+                        committed.notify_one();
+                        release.notified().await;
+                        folded.store(true, Ordering::Release);
+                    }
+                })
+            }
+        });
+        let live = DurableStreamStore::load_with_commit(
+            oplog,
+            identity.environment_id,
+            identity.agent_id.clone(),
+            identity.fingerprint,
+            None,
+            commit,
+        )
+        .await
+        .unwrap();
+        let handle = live
+            .register(None, root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        live.wait_durable_drained().await;
+        let mut notification = Box::pin(live.session_records_changed().notified());
+        notification.as_mut().enable();
+        live.write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::Values(vec![vec![3]]),
+        )
+        .await
+        .unwrap();
+        live.wait_durable_drained().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+
+        block.store(true, Ordering::Release);
+        let caller = tokio::spawn({
+            let live = live.clone();
+            async move {
+                if cancel {
+                    live.cancel_open(
+                        None,
+                        handle.stream_id,
+                        StreamCancelRole::InputConsumer,
+                        StreamCancelReason::GuestDrop,
+                        None,
+                    )
+                    .await
+                } else {
+                    live.end_open(None, handle.stream_id, StreamEndResult::Ok)
+                        .await
+                }
+            }
+        });
+        committed.notified().await;
+        assert!(futures::poll!(notification.as_mut()).is_pending());
+        assert!(!folded.load(Ordering::Acquire));
+        caller.abort();
+        let _ = caller.await;
+        release.notify_one();
+        notification.await;
+        assert!(folded.load(Ordering::Acquire));
+        live.wait_durable_drained().await;
+    }
 }
 
 #[test]
@@ -7350,9 +8166,9 @@ async fn durable_activity_waits_for_callback_tails_but_not_abandoned_fanout() {
                 let committed = committed.clone();
                 let release = release.clone();
                 Box::pin(async move {
-                    oplog.commit(CommitLevel::Always).await;
+                    oplog.commit(CommitLevel::Always).await.unwrap();
                     if let Some(receipt) = receipt {
-                        let _ = receipt.send(());
+                        let _ = receipt.send(Ok(()));
                     }
                     if block.swap(false, Ordering::AcqRel) {
                         committed.notify_one();

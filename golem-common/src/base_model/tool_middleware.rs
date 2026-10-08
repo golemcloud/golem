@@ -115,6 +115,8 @@ pub struct ToolMiddlewareInstallation {
     pub version: Option<String>,
     pub parameters: NormalizedJsonValue,
     pub account: Option<AccountEmail>,
+    pub secret_keys_readable: Option<SecretKeyScope>,
+    pub secret_keys_revealable: Option<SecretKeyScope>,
     #[serde(default)]
     #[cfg_attr(feature = "full", desert(default), oai(default))]
     pub filesystem_access: ToolFilesystemAccess,
@@ -123,6 +125,7 @@ pub struct ToolMiddlewareInstallation {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub enum ToolMiddlewareMergeMode {
     #[default]
@@ -183,6 +186,20 @@ pub struct RemoteToolMiddlewareDeployment {
     pub name: ToolMiddlewareName,
     pub release: ToolMiddlewareReleaseReference,
     pub provision: ToolProvisionConfig,
+}
+
+/// Deployment-owned inputs for compiling middleware against dynamic tool metadata.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub struct ToolMiddlewareConfiguration {
+    pub universal: Vec<ToolMiddlewareInstallation>,
+    pub compatibility_mode: crate::schema::tool::compatibility::ToolCompatibilityMode,
+    pub environment_bindings:
+        std::collections::BTreeMap<ToolName, crate::model::tool::ToolBindingInput>,
+    pub agent_bindings: std::collections::BTreeMap<
+        crate::model::agent::AgentTypeName,
+        std::collections::BTreeMap<ToolName, crate::model::tool::ToolBindingInput>,
+    >,
 }
 
 /// One pinned middleware invocation in a compiled tool chain.

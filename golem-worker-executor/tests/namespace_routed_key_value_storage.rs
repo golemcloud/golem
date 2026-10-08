@@ -14,9 +14,9 @@
 
 use crate::WorkerExecutorTestDependencies;
 use golem_common::config::{DbPostgresConfig, RedisConfig};
-use golem_common::model::AgentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{AgentFingerprint, AgentId};
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::KeyValueStoragePostgresConfig;
@@ -114,7 +114,10 @@ async fn routes_agent_namespaces_to_redis(deps: &WorkerExecutorTestDependencies)
             b"worker-route-value".as_slice(),
         ),
         (
-            KeyValueStorageNamespace::AgentInvocationResultIndex { agent_id },
+            KeyValueStorageNamespace::AgentInvocationResultIndex {
+                agent_id,
+                fingerprint: AgentFingerprint(uuid::Uuid::from_u128(1)),
+            },
             "result-index-route-key",
             b"result-index-route-value".as_slice(),
         ),

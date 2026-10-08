@@ -222,9 +222,19 @@ fn snapshot_matches_card(snapshot: &PermissionCardValuePayload, card: &StoredCar
         && snapshot.polymorphic == matches!(card, StoredCard::Polymorphic(_))
 }
 
-fn snapshot_mismatch_error(card_id: Uuid) -> permissions_types::PermissionError {
+fn snapshot_mismatch_error(
+    source: &'static str,
+    snapshot: &PermissionCardValuePayload,
+    card: &StoredCard,
+) -> permissions_types::PermissionError {
     permissions_types::PermissionError::NotPermitted(format!(
-        "permission-card snapshot for {card_id} does not match the stored card"
+        "permission-card snapshot for {} does not match the {source} card (parents: {:?} vs {:?}, expiry: {}, polymorphic: {} vs {})",
+        snapshot.card_id,
+        sorted_uuids(snapshot.parent_ids.iter().copied()),
+        sorted_uuids(card.parent_ids().iter().map(|card_id| card_id.0)),
+        snapshot.expires_at == card.expires_at(),
+        snapshot.polymorphic,
+        matches!(card, StoredCard::Polymorphic(_)),
     ))
 }
 
@@ -344,7 +354,7 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
         if snapshot_matches_card(&snapshot, &card) {
             return Ok(card);
         }
-        return Err(snapshot_mismatch_error(snapshot.card_id));
+        return Err(snapshot_mismatch_error("cached handle", &snapshot, &card));
     }
 
     let card_id = CardId(snapshot.card_id);
@@ -352,7 +362,7 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
         if snapshot_matches_card(&snapshot, &card) {
             return Ok(card);
         }
-        return Err(snapshot_mismatch_error(snapshot.card_id));
+        return Err(snapshot_mismatch_error("wallet", &snapshot, &card));
     }
 
     let card_state = ctx
@@ -369,7 +379,7 @@ async fn resolve_permission_card<Ctx: WorkerCtx>(
             if snapshot_matches_card(&snapshot, &card) {
                 Ok(card)
             } else {
-                Err(snapshot_mismatch_error(snapshot.card_id))
+                Err(snapshot_mismatch_error("registry", &snapshot, &card))
             }
         }
         Some(CardState::Revoked) => Err(permissions_types::PermissionError::CardRevoked(format!(
@@ -767,7 +777,7 @@ async fn resolve_scope_derivation_parents<Ctx: WorkerCtx>(
     invocation_key: &IdempotencyKey,
 ) -> Result<Vec<ScopeDerivationParent>, permissions_types::PermissionError> {
     let context = super::owner_monomorphization_context(
-        &ctx.state.component_metadata,
+        ctx.owner_component_metadata(),
         &ctx.owned_agent_id,
         &ctx.state.owner_context,
     );
@@ -913,7 +923,8 @@ where
         DurableCallSession::<Pair, NotCancellable>::begin(ctx, DurableFunctionType::WriteLocal)
             .await?;
     let oplog_index = begun.begin_index();
-    let card_id = derive_card_id(ctx, &invocation_key, oplog_index);
+    let card_id_sequence = ctx.state.current_idempotency_key_oplog_index(oplog_index);
+    let card_id = derive_card_id(ctx, &invocation_key, card_id_sequence);
     let provenance = CardManagedByRuntimeDerived {
         environment_id: ctx.owned_agent_id.environment_id,
         agent_id: ctx.owned_agent_id.agent_id.clone(),
@@ -981,7 +992,7 @@ where
                     card: Box::new(created.clone()),
                     wallet_generation,
                 })
-                .await;
+                .await?;
         } else {
             return Err(anyhow!(
                 "replayed runtime permission-card creation {card_id} is missing its CardDerived audit event"
@@ -1710,7 +1721,7 @@ async fn complete_source_card_transfer<Ctx: WorkerCtx>(
             installed_card.card_id(),
             target_holder,
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1751,7 +1762,7 @@ async fn ensure_source_card_transfer_started<Ctx: WorkerCtx>(
             target_holder.clone(),
             ctx.state.wallet_generation,
         ))
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -1803,7 +1814,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                     card: Box::new(installed_card.clone()),
                     wallet_generation: ctx.state.wallet_generation,
                 })
-                .await;
+                .await?;
         }
 
         ctx.public_state
@@ -1817,7 +1828,7 @@ async fn execute_source_card_transfer<Ctx: WorkerCtx>(
                     transfer.target_holder(),
                 )),
             ))
-            .await;
+            .await?;
     }
 
     complete_source_card_transfer(
@@ -2142,7 +2153,7 @@ pub(super) async fn complete_pending_source_card_transfers<Ctx: WorkerCtx>(
                     agent_id: retry.target_agent_id,
                 }),
             ))
-            .await;
+            .await?;
     }
 
     Ok(())
@@ -2564,7 +2575,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
                     ensure_card_permission(ctx, CardVerb::Derive, CardResourcePattern::Any)?;
                     let wallet = ctx.agent_wallet_cards_snapshot();
                     let context = super::owner_monomorphization_context(
-                        &ctx.state.component_metadata,
+                        ctx.owner_component_metadata(),
                         &ctx.owned_agent_id,
                         &ctx.state.owner_context,
                     );
@@ -2798,7 +2809,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
                 self.public_state
                     .worker()
                     .commit_oplog_and_update_state(CommitLevel::Always)
-                    .await;
+                    .await?;
             }
             let start_index = handle.start_index();
 

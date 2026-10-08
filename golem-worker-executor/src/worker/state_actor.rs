@@ -49,17 +49,18 @@
 //! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
 //! lock-free.
 
-use super::status::{
-    calculate_last_known_status_with_checkpoint, try_fold_status_from,
-    update_status_with_new_entries,
-};
+use super::status::{StatusOplogReader, calculate_status_with_reader, fold_committed_status};
 use super::status_flusher::{AgentStatusFlusher, FlushReason};
 use super::{
-    PendingMemoryGrowth, UnloadReason, Worker, WorkerCommand, WorkerInstance, WorkerStatusMetric,
+    PendingMemoryGrowth, RetirementReason, UnloadReason, Worker, WorkerCommand, WorkerInstance,
+    WorkerStatusMetric,
 };
+use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::{CommitLevel, Oplog};
-use crate::services::{All, HasConfig, HasSchedulerService};
+use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence};
+use crate::services::{
+    All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService, HasWorkerService,
+};
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
 use chrono::Utc;
@@ -67,9 +68,10 @@ use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
 use golem_common::model::{
-    AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId, ScheduledAction, Timestamp,
+    AgentFingerprint, AgentStatus, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
+    ScheduledAction, Timestamp,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::any::Any;
@@ -77,13 +79,12 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Handle to the worker-state actor's two job queues. Dropping it requests ordered shutdown.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     commit: Arc<OwnerCommitController>,
     lifecycle_jobs: mpsc::UnboundedSender<LifecycleJob<Ctx>>,
-    notification_queued: Arc<AtomicBool>,
     stop: Arc<WorkerStateActorStop>,
     owned_agent_id: OwnedAgentId,
 }
@@ -166,6 +167,34 @@ pub(crate) struct OwnerCommitController {
     owned_agent_id: OwnedAgentId,
 }
 
+/// Who hears that a commit landed, ahead of the fold behind it.
+pub enum CommitReceipt {
+    /// Signalled on a commit and dropped on a refusal, which its waiter reads as "nothing was
+    /// committed".
+    Plain(oneshot::Sender<()>),
+    /// Answered either way, so a refusal reaches the waiter as the fence itself.
+    Refusable(oneshot::Sender<Result<(), OplogFence>>),
+}
+
+impl CommitReceipt {
+    fn committed(self) {
+        match self {
+            Self::Plain(receipt) => {
+                let _ = receipt.send(());
+            }
+            Self::Refusable(receipt) => {
+                let _ = receipt.send(Ok(()));
+            }
+        }
+    }
+
+    fn refused(self, fence: &OplogFence) {
+        if let Self::Refusable(receipt) = self {
+            let _ = receipt.send(Err(fence.clone()));
+        }
+    }
+}
+
 /// A request processed by the status task, which exclusively owns the commit + status-fold
 /// transaction. Jobs are processed strictly in enqueue order, giving the same serialization the
 /// former `update_state_lock` mutex provided — without lock-ownership handoff to potentially
@@ -173,16 +202,19 @@ pub(crate) struct OwnerCommitController {
 enum StatusJob {
     Stop,
     /// Commits the oplog and folds the newly committed entries into the published status.
-    /// Replies with the current oplog index after the commit and whether the status changed.
-    /// The reply deliberately does not depend on the worker lifecycle lock; if the caller wants the
-    /// invocation loop notified about the change, it enqueues a lifecycle job afterwards.
+    /// Replies with the current oplog index after the commit and whether the status changed, or
+    /// with the fence when the storage refused the commit.
+    /// The actor queues lifecycle notification without awaiting the lifecycle lock, even if the
+    /// caller has cancelled its receipt or full-transaction waiter.
     CommitAndUpdateState {
         level: CommitLevel,
-        committed: Option<oneshot::Sender<()>>,
-        done: oneshot::Sender<(OplogIndex, bool)>,
+        committed: Option<CommitReceipt>,
+        done: oneshot::Sender<Result<(OplogIndex, bool), OplogFence>>,
     },
     /// Appends an entry and completes its commit + fold transaction even if the caller is
     /// cancelled. The caller-acquired guards remain owned by this job until the transaction ends.
+    /// Replies with the refusal when the oplog has a new owner, so the caller never reports an
+    /// entry as delivered that was not written.
     AppendAndCommitAttached {
         entry: Box<OplogEntry>,
         _worker_keepalive: Arc<dyn Any + Send + Sync>,
@@ -196,27 +228,28 @@ enum StatusJob {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
-        done: oneshot::Sender<bool>,
+        done: oneshot::Sender<Result<bool, OplogError>>,
     },
-    /// Returns the published status after reattaching it when a jump or revert detached it.
-    /// Serialization on the status queue prevents observing an in-flight status transition.
-    AttachedStatus {
+    /// Observes completed projection work in FIFO order without committing buffered entries.
+    Status {
         done: oneshot::Sender<Arc<AgentStatusRecord>>,
     },
-    /// Returns the published status if it is currently attached to the oplog, `None` if it is
-    /// detached. Runs on the status queue so it cannot observe the detached window of an
-    /// in-flight commit or reattach transaction. The attached-ness check happens on the actor,
-    /// but the caller decides how to react (it asserts): a job whose caller was cancelled must
-    /// not be able to panic the actor.
-    NonDetachedStatus {
-        done: oneshot::Sender<Option<Arc<AgentStatusRecord>>>,
-    },
-    /// Commits, then — if the status became detached (a jump or revert made it non-foldable) —
-    /// recomputes it from the oplog, republishes it, and forces a cache flush.
-    Reattach {
-        done: oneshot::Sender<()>,
+    /// Writes the confirmation record of a filesystem snapshot when the last automatic snapshot
+    /// record still has the name. The check and the append run in this one job, so no other
+    /// status job runs between them. The job holds the instance guard of its caller until it
+    /// ends, so the instance cannot stop while it runs, and it calls `on_confirmed` with the
+    /// instance under that guard when it answers `Confirmed`.
+    ConfirmFilesystemSnapshot {
+        name: FilesystemSnapshotName,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        on_confirmed: OnConfirmed,
+        done: oneshot::Sender<ConfirmOutcome>,
     },
 }
+
+/// What a confirmation does with the instance when it gives `Confirmed`, before the instance
+/// guard is released.
+pub(crate) type OnConfirmed = Box<dyn FnOnce(&WorkerInstance) + Send>;
 
 /// A request processed by the lifecycle task. Notifications and ordinary growth persistence are
 /// fire-and-forget. Ordered oplog entries await a reply but never take the worker's `instance`
@@ -236,7 +269,7 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     OrderedOplogEntry {
         worker: Arc<Worker<Ctx>>,
         entry: Box<OplogEntry>,
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), OplogError>>,
     },
     MemoryLimitExceeded {
         worker: Arc<Worker<Ctx>>,
@@ -248,12 +281,16 @@ enum LifecycleJob<Ctx: WorkerCtx> {
 struct StatusState<Ctx: WorkerCtx> {
     deps: All<Ctx>,
     owned_agent_id: OwnedAgentId,
+    fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     created_by: AccountId,
     oplog: Arc<dyn Oplog>,
     /// The published worker status. Written only by this task (and during worker construction,
     /// before the actor exists); read lock-free everywhere else.
     last_known_status: Arc<ArcSwap<AgentStatusRecord>>,
+    /// Last committed prefix preceding the current invocation. Retained in memory only; repair
+    /// validates it through the same Jump/Revert checks as persisted checkpoint baselines.
+    invocation_start_status: arc_swap::ArcSwapOption<AgentStatusRecord>,
     /// Whether the published status is detached from the oplog (no longer incrementally
     /// foldable). Written only by this task; read lock-free elsewhere.
     detached: Arc<AtomicBool>,
@@ -271,11 +308,22 @@ impl<Ctx: WorkerCtx> Drop for WorkerStateActor<Ctx> {
     }
 }
 
+/// The error a refused append or commit replies with. The retirement is spawned inside the actor,
+/// so the caller only needs an error it will not mistake for a delivered entry.
+fn fenced_error(fence: &OplogFence) -> WorkerExecutorError {
+    WorkerExecutorError::oplog_fenced(
+        fence.agent_id.clone(),
+        fence.expected_epoch.0,
+        fence.actual_epoch.map(|epoch| epoch.0),
+    )
+}
+
 impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         deps: All<Ctx>,
         owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
         agent_mode: AgentMode,
         created_by: AccountId,
         oplog: Arc<dyn Oplog>,
@@ -290,16 +338,23 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         let state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
+            fingerprint,
             agent_mode,
             created_by,
             oplog,
             last_known_status,
+            invocation_start_status: arc_swap::ArcSwapOption::empty(),
             detached,
             metrics_status,
             status_flusher: status_flusher.clone(),
             published_authority_generation,
         };
 
+        let notification_queued = Arc::new(AtomicBool::new(false));
+        let notification_queued_task = notification_queued.clone();
+        let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
+        let status_lifecycle_jobs = lifecycle_jobs.clone();
+        let status_notification_queued = notification_queued.clone();
         let (status_jobs, mut status_rx) = mpsc::unbounded_channel::<StatusJob>();
         let status_task = tokio::spawn(async move {
             while let Some(job) = status_rx.recv().await {
@@ -312,9 +367,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                let changed = state.commit_and_update_state(level, committed).await;
+                                let changed =
+                                    state.commit_and_update_state(level, committed).await?;
                                 let index = state.oplog.current_oplog_index().await;
-                                (index, changed)
+                                if changed {
+                                    queue_status_notification(
+                                        &status_lifecycle_jobs,
+                                        &status_notification_queued,
+                                    );
+                                }
+                                Ok((index, changed))
                             },
                             done,
                         )
@@ -329,17 +391,23 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                state.oplog.add(*entry).await;
-                                state
-                                    .commit_and_update_state(CommitLevel::Always, None)
-                                    .await;
-                                state.ensure_status_attached().await;
-                                if state.detached.load(Ordering::Acquire) {
-                                    Err(WorkerExecutorError::runtime(
-                                        "Committed worker status could not be reconstructed",
-                                    ))
-                                } else {
-                                    Ok(())
+                                match state.oplog.add(*entry).await {
+                                    Ok(_) => {
+                                        if let Err(fence) = state
+                                            .commit_and_update_state(CommitLevel::Always, None)
+                                            .await
+                                        {
+                                            return Err(fenced_error(&fence));
+                                        }
+                                        Ok(())
+                                    }
+                                    // The shard has a new owner: give the agent up and leave no
+                                    // further trace in an oplog that is no longer ours.
+                                    Err(OplogError::Fenced(fence)) => {
+                                        state.retire_fenced_agent(fence.clone());
+                                        Err(fenced_error(&fence))
+                                    }
+                                    Err(error) => panic!("oplog write: {error}"),
                                 }
                             },
                             done,
@@ -356,7 +424,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     } => {
                         complete_status_job(
                             async {
-                                state.ensure_status_attached().await;
                                 let status = state.last_known_status.load();
                                 if !can_append_invocation(
                                     &status,
@@ -364,47 +431,56 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     expected_result_generation,
                                     expected_revert_generation,
                                 ) {
-                                    return false;
+                                    return Ok(false);
                                 }
                                 drop(status);
-                                state.oplog.add(*entry).await;
-                                state
+                                // Returned rather than reported as a moved version: the caller
+                                // retries on `false`, and a fenced oplog refuses every retry.
+                                if let Err(error) = state.oplog.add(*entry).await {
+                                    if let OplogError::Fenced(fence) = &error {
+                                        state.retire_fenced_agent(fence.clone());
+                                    }
+                                    return Err(error);
+                                }
+                                // The entry is only buffered until this commit, which is where a
+                                // takeover is found. The key has not reached the status, so nothing
+                                // that fails pending invocations can answer its caller: the enqueue
+                                // itself has to be refused.
+                                if let Err(fence) = state
                                     .commit_and_update_state(CommitLevel::Always, None)
-                                    .await;
+                                    .await
+                                {
+                                    return Err(OplogError::Fenced(fence));
+                                }
                                 if let WorkerInstance::Running(running) = &*instance_guard {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
-                                true
+                                Ok(true)
                             },
                             done,
                         )
                         .await;
                     }
-                    StatusJob::AttachedStatus { done } => {
-                        if state.detached.load(Ordering::Acquire) {
-                            state.reattach().await;
-                        }
+                    StatusJob::Status { done } => {
                         let _ = done.send(state.last_known_status.load_full());
                     }
-                    StatusJob::NonDetachedStatus { done } => {
-                        let status = if state.detached.load(Ordering::Acquire) {
-                            None
-                        } else {
-                            Some(state.last_known_status.load_full())
-                        };
-                        let _ = done.send(status);
-                    }
-                    StatusJob::Reattach { done } => {
-                        state.reattach().await;
-                        let _ = done.send(());
+                    StatusJob::ConfirmFilesystemSnapshot {
+                        name,
+                        instance_guard,
+                        on_confirmed,
+                        done,
+                    } => {
+                        let outcome = state.confirm_filesystem_snapshot(name).await;
+                        if outcome == ConfirmOutcome::Confirmed {
+                            on_confirmed(&instance_guard);
+                        }
+                        let _ = done.send(outcome);
+                        drop(instance_guard);
                     }
                 }
             }
         });
 
-        let notification_queued = Arc::new(AtomicBool::new(false));
-        let notification_queued_task = notification_queued.clone();
-        let (lifecycle_jobs, mut lifecycle_rx) = mpsc::unbounded_channel::<LifecycleJob<Ctx>>();
         let lifecycle_task = tokio::spawn(async move {
             let mut drains = Vec::new();
             while let Some(job) = lifecycle_rx.recv().await {
@@ -428,20 +504,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                         entry,
                         done,
                     } => {
-                        worker.add_and_commit_oplog(*entry).await;
-                        let _ = done.send(());
+                        let _ = done.send(worker.add_and_commit_oplog(*entry).await.map(|_| ()));
                     }
                     LifecycleJob::MemoryLimitExceeded { worker, memory } => {
                         worker
                             .memory_limit_interrupt_queued
                             .store(false, Ordering::Release);
-                        if memory.exceeds_current_limit() {
-                            worker
+                        if memory.exceeds_current_limit()
+                            && let Err(error) = worker
                                 .set_interrupting_for(
                                     InterruptKind::Suspend(Timestamp::now_utc()),
                                     UnloadReason::MemoryLimit,
                                 )
-                                .await;
+                                .await
+                        {
+                            tracing::error!(%error, "Failed to establish memory-limit suspension");
                         }
                     }
                 }
@@ -472,7 +549,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 owned_agent_id: owned_agent_id.clone(),
             }),
             lifecycle_jobs,
-            notification_queued,
             stop,
             owned_agent_id,
         };
@@ -487,11 +563,15 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     }
 
     /// Commits the oplog and folds the new entries into the published status. Returns the
-    /// current oplog index after the commit and whether the status changed.
+    /// current oplog index after the commit and whether the status changed, or the fence when the
+    /// storage refused the commit; the refusal has already started the agent's retirement.
     ///
     /// If the caller's future is dropped while awaiting the reply, the commit still runs to
     /// completion on the status task (the same semantics as the oplog actor's own jobs).
-    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+    pub async fn commit_and_update_state(
+        &self,
+        level: CommitLevel,
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -504,8 +584,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn commit_and_update_state_notifying(
         &self,
         level: CommitLevel,
-        committed: oneshot::Sender<()>,
-    ) -> (OplogIndex, bool) {
+        committed: CommitReceipt,
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.commit
             .run_status_job(|done| StatusJob::CommitAndUpdateState {
                 level,
@@ -513,6 +593,32 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                 done,
             })
             .await
+    }
+
+    /// Enqueues the complete commit + fold transaction, returning a receipt fulfilled directly
+    /// after the commit. The actor retains the fold and queues lifecycle notification afterwards.
+    pub fn enqueue_commit_and_update_state_notifying(
+        &self,
+        level: CommitLevel,
+    ) -> oneshot::Receiver<Result<(), OplogFence>> {
+        let (committed, committed_rx) = oneshot::channel();
+        let (done, _done_rx) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::CommitAndUpdateState {
+                level,
+                committed: Some(CommitReceipt::Refusable(committed)),
+                done,
+            })
+            .is_err()
+        {
+            panic!(
+                "Worker state actor for {} terminated unexpectedly",
+                self.owned_agent_id
+            );
+        }
+        committed_rx
     }
 
     pub async fn append_and_commit_attached(
@@ -541,7 +647,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerInstance>,
-    ) -> bool {
+    ) -> Result<bool, OplogError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
@@ -554,54 +660,37 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             .await
     }
 
-    pub async fn attached_status(&self) -> Arc<AgentStatusRecord> {
+    pub async fn status(&self) -> Arc<AgentStatusRecord> {
         self.commit
-            .run_status_job(|done| StatusJob::AttachedStatus { done })
+            .run_status_job(|done| StatusJob::Status { done })
             .await
     }
 
-    pub async fn try_attached_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        self.reattach_worker_status().await;
-        self.commit
-            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
-            .await
-            .ok_or_else(|| WorkerExecutorError::runtime("Worker status could not be reconstructed"))
+    /// Observational reads can race retirement. A closed queue or dropped reply means the
+    /// caller must resolve the worker's lifecycle before reading its persisted state.
+    pub async fn observe_status(
+        &self,
+    ) -> Result<Option<Arc<AgentStatusRecord>>, WorkerExecutorError> {
+        let (done, response) = oneshot::channel();
+        if self
+            .commit
+            .status_jobs
+            .send(StatusJob::Status { done })
+            .is_err()
+        {
+            return Ok(None);
+        }
+        Ok(response.await.ok())
     }
 
-    /// Returns the published status, asserting it is attached to the oplog. Serialized behind
-    /// any in-flight commit/reattach transactions. The assert lives here on the caller side, so
-    /// a job left behind by a cancelled caller cannot panic the actor.
-    pub async fn non_detached_status(&self) -> Arc<AgentStatusRecord> {
-        self.commit
-            .run_status_job(|done| StatusJob::NonDetachedStatus { done })
-            .await
-            .expect("worker status was unexpectedly detached from the oplog")
-    }
-
-    /// Commits and, if the status is detached, recomputes and republishes it (see
-    /// [`Worker::reattach_worker_status`]).
-    pub async fn reattach_worker_status(&self) {
-        self.commit
-            .run_status_job(|done| StatusJob::Reattach { done })
-            .await
+    pub async fn try_status(&self) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        self.observe_status()
+            .await?
+            .ok_or_else(|| WorkerExecutorError::runtime("Worker status actor stopped"))
     }
 
     pub fn owner_commit_controller(&self) -> Arc<OwnerCommitController> {
         self.commit.clone()
-    }
-
-    /// Asks the lifecycle task to wake the invocation loop about a status change. Fire and
-    /// forget: never blocks, and safe to call from store-polled futures and store-keeping
-    /// fibers alike, because the worker lifecycle lock is only taken on the lifecycle task.
-    pub fn notify_status_changed(&self) {
-        if !self.notification_queued.swap(true, Ordering::AcqRel)
-            && self
-                .lifecycle_jobs
-                .send(LifecycleJob::NotifyStatusChanged)
-                .is_err()
-        {
-            self.notification_queued.store(false, Ordering::Release);
-        }
     }
 
     /// Joins queued lifecycle work and its requeued descendants after execution has stopped.
@@ -645,11 +734,32 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
+    /// Writes the confirmation record of the filesystem snapshot `name`, as
+    /// [`StatusJob::ConfirmFilesystemSnapshot`] says. The job holds `instance_guard` until it ends.
+    /// A status task that has ended, or that drops the job, gives [`ConfirmOutcome::Deferred`].
+    /// Only `Worker::confirm_as` calls it, after the owner gate lets the confirmation through.
+    pub(super) async fn append_confirmation(
+        &self,
+        name: FilesystemSnapshotName,
+        instance_guard: OwnedMutexGuard<WorkerInstance>,
+        on_confirmed: OnConfirmed,
+    ) -> ConfirmOutcome {
+        self.commit
+            .try_run_status_job(|done| StatusJob::ConfirmFilesystemSnapshot {
+                name,
+                instance_guard,
+                on_confirmed,
+                done,
+            })
+            .await
+            .unwrap_or(ConfirmOutcome::Deferred)
+    }
+
     pub fn queue_ordered_oplog_entry(
         &self,
         worker: Arc<Worker<Ctx>>,
         entry: OplogEntry,
-    ) -> oneshot::Receiver<()> {
+    ) -> oneshot::Receiver<Result<(), OplogError>> {
         let (done, done_rx) = oneshot::channel();
         if self
             .lifecycle_jobs
@@ -670,7 +780,21 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
 }
 
 impl OwnerCommitController {
-    pub async fn commit_and_update_state(&self, level: CommitLevel) -> (OplogIndex, bool) {
+    /// Sends a job to the status task and waits for its reply. Gives `None` when the task has
+    /// ended or dropped the job without a reply. It never panics.
+    async fn try_run_status_job<R>(
+        &self,
+        make_job: impl FnOnce(oneshot::Sender<R>) -> StatusJob,
+    ) -> Option<R> {
+        let (done, done_rx) = oneshot::channel();
+        self.status_jobs.send(make_job(done)).ok()?;
+        done_rx.await.ok()
+    }
+
+    pub async fn commit_and_update_state(
+        &self,
+        level: CommitLevel,
+    ) -> Result<(OplogIndex, bool), OplogFence> {
         self.run_status_job(|done| StatusJob::CommitAndUpdateState {
             level,
             committed: None,
@@ -701,26 +825,219 @@ impl OwnerCommitController {
     }
 }
 
+/// Whether the last automatic snapshot record of `status` has `name` and its confirmation.
+fn confirmed_with_name(status: &AgentStatusRecord, name: &FilesystemSnapshotName) -> bool {
+    status.last_automatic_snapshot.as_ref().is_some_and(|last| {
+        matches!(&last.files, golem_common::model::SnapshotFiles::Confirmed(own) if own == name)
+    })
+}
+
+/// What a confirmation job does before its append, after its first commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BeforeAppend {
+    /// The job appends nothing and replies this. Nobody asks the admission.
+    Reply(ConfirmOutcome),
+    /// The job appends the confirmation record when this executor still admits work of the
+    /// agent, and replies `Deferred` otherwise. The job asks the admission last.
+    NeedsAdmission,
+}
+
+/// The reply of a confirmation job before its append, or `None` when the job appends the
+/// confirmation record. It asks `admission` only when `decision` needs it, and at most once.
+fn reply_before_append(
+    decision: BeforeAppend,
+    admission: impl FnOnce() -> bool,
+) -> Option<ConfirmOutcome> {
+    match decision {
+        BeforeAppend::Reply(reply) => Some(reply),
+        BeforeAppend::NeedsAdmission if !admission() => Some(ConfirmOutcome::Deferred),
+        BeforeAppend::NeedsAdmission => None,
+    }
+}
+
+/// Decides a confirmation job before its append, after its first commit, over the status and
+/// before the admission of the shard.
+fn confirmation_before_append(
+    detached: bool,
+    status: &AgentStatusRecord,
+    name: &FilesystemSnapshotName,
+) -> BeforeAppend {
+    if detached {
+        BeforeAppend::Reply(ConfirmOutcome::Deferred)
+    } else if confirmed_with_name(status, name) {
+        BeforeAppend::Reply(ConfirmOutcome::Confirmed)
+    } else if status
+        .last_automatic_snapshot
+        .as_ref()
+        .and_then(|last| last.files.name())
+        != Some(name)
+    {
+        BeforeAppend::Reply(ConfirmOutcome::Superseded)
+    } else {
+        BeforeAppend::NeedsAdmission
+    }
+}
+
+/// Decides a confirmation job after its append and its second commit. Only a status that folded
+/// the confirmation of the record with `name` gives `Confirmed`.
+fn confirmation_after_append(
+    detached: bool,
+    status: &AgentStatusRecord,
+    name: &FilesystemSnapshotName,
+) -> ConfirmOutcome {
+    if !detached && confirmed_with_name(status, name) {
+        ConfirmOutcome::Confirmed
+    } else {
+        ConfirmOutcome::Deferred
+    }
+}
+
+fn queue_status_notification<Ctx: WorkerCtx>(
+    lifecycle_jobs: &mpsc::UnboundedSender<LifecycleJob<Ctx>>,
+    notification_queued: &AtomicBool,
+) {
+    if !notification_queued.swap(true, Ordering::AcqRel)
+        && lifecycle_jobs
+            .send(LifecycleJob::NotifyStatusChanged)
+            .is_err()
+    {
+        notification_queued.store(false, Ordering::Release);
+    }
+}
+
 async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: oneshot::Sender<R>) {
     let result = transaction.await;
     let _ = done.send(result);
 }
 
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
-    /// The commit + status-fold transaction. Commits the oplog, then either folds the newly
-    /// committed entries into the published status or marks the status detached when it can no
-    /// longer be incrementally computed (e.g. after a revert or a snapshot update). Returns
-    /// whether the published status (or its detachment) changed.
+    /// The confirmation job of a filesystem snapshot. It commits, checks that the status is
+    /// attached and that the last automatic snapshot record has `name`, checks that this executor
+    /// still admits work of the agent, appends the confirmation record, commits, and decides from
+    /// the folded status. A commit or append the oplog refuses because the shard has a new owner
+    /// gives `Deferred`; the refusal has already started the retirement of the agent. An append
+    /// that fails for another cause also gives `Deferred`. A commit that fails for a cause other
+    /// than a fence panics in `commit_and_update_state`, as every commit of the status task does.
+    async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
+        if self
+            .commit_and_update_state(CommitLevel::Always, None)
+            .await
+            .is_err()
+        {
+            return ConfirmOutcome::Deferred;
+        }
+        // The admission reads the clock and the shard assignment, so it is asked last, and only
+        // when the decision needs it.
+        let admitted = || {
+            self.deps
+                .shard_service()
+                .check_admission(&self.owned_agent_id.agent_id)
+                .is_ok()
+        };
+        match reply_before_append(
+            confirmation_before_append(
+                self.detached.load(Ordering::Acquire),
+                &self.last_known_status.load(),
+                &name,
+            ),
+            admitted,
+        ) {
+            Some(reply) => reply,
+            None => {
+                match self
+                    .oplog
+                    .add(OplogEntry::snapshot_confirmed(name.clone()))
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(OplogError::Fenced(fence)) => {
+                        self.retire_fenced_agent(fence);
+                        return ConfirmOutcome::Deferred;
+                    }
+                    Err(error) => {
+                        warn!(
+                            error = %error,
+                            "Failed to append the confirmation of a filesystem snapshot"
+                        );
+                        return ConfirmOutcome::Deferred;
+                    }
+                }
+                if self
+                    .commit_and_update_state(CommitLevel::Always, None)
+                    .await
+                    .is_err()
+                {
+                    return ConfirmOutcome::Deferred;
+                }
+                confirmation_after_append(
+                    self.detached.load(Ordering::Acquire),
+                    &self.last_known_status.load(),
+                    &name,
+                )
+            }
+        }
+    }
+
+    /// Retires the agent after a background oplog write was refused because its shard moved.
+    ///
+    /// Spawned rather than awaited: this runs on the status task, which must never take the
+    /// worker's instance lock (callers holding that lock await status jobs), and the stop inside
+    /// [`Worker::interrupt_and_retire`] does take it. Handing the stop to an independent task keeps
+    /// that discipline while still dropping the agent from this executor - which recording the
+    /// retirement alone would not do, because on a background path nothing else is unwinding to
+    /// carry the stop out.
+    ///
+    /// Only the generation this actor belongs to is retired, identified by the status cell the
+    /// two share. By the time the task runs that generation may be gone and a newer one cached
+    /// under the same id, which is left alone: at a stale epoch its own open latches the fence and
+    /// retires it, and at a re-granted epoch it is legitimately this executor's.
+    fn retire_fenced_agent(&self, fence: OplogFence) {
+        let active_agents = self.deps.active_agents();
+        let owned_agent_id = self.owned_agent_id.clone();
+        let status_cell = self.last_known_status.clone();
+        tokio::spawn(async move {
+            if let Some(worker) = active_agents.try_get_cached(&owned_agent_id).await
+                && worker.shares_status_cell(&status_cell)
+            {
+                let _ = worker
+                    .interrupt_and_retire(
+                        InterruptKind::ShardLost,
+                        RetirementReason::Fenced(Some(fence)),
+                    )
+                    .await;
+            }
+        });
+    }
+
+    /// Commits the oplog, acknowledges the persistence milestone, then folds or reconstructs
+    /// the projection before another status job can run. Returns whether status was republished.
+    ///
+    /// A commit the storage refused because the shard has a new owner is returned as the fence
+    /// rather than folded into "unchanged": a caller whose entry was only buffered until this
+    /// commit must not report it as written.
     async fn commit_and_update_state(
         &self,
         commit_level: CommitLevel,
-        committed: Option<oneshot::Sender<()>>,
-    ) -> bool {
+        committed: Option<CommitReceipt>,
+    ) -> Result<bool, OplogFence> {
         // Sample before committing: a later sample could include new, uncommitted appends.
+        // Reading the index is not a write, so a fenced oplog still answers it; the sample is
+        // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        let mut new_entries = self.oplog.commit(commit_level).await;
+        let new_entries = match self.oplog.commit(commit_level).await {
+            Ok(entries) => entries,
+            Err(OplogError::Fenced(fence)) => {
+                // Nothing was committed and nothing more can be.
+                if let Some(committed) = committed {
+                    committed.refused(&fence);
+                }
+                self.retire_fenced_agent(fence.clone());
+                return Err(fence);
+            }
+            Err(error) => panic!("oplog write: {error}"),
+        };
         if let Some(committed) = committed {
-            let _ = committed.send(());
+            committed.committed();
         }
 
         let mut authority_change_count = new_entries
@@ -728,85 +1045,79 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             .filter(|entry| is_authority_state_entry(entry))
             .count() as u64;
 
-        let changed = if !self.detached.load(Ordering::Acquire) {
-            let old_status = self.last_known_status.load_full();
-            // A catch-up can already have folded a plugin's buffered direct-commit receipts.
-            new_entries.retain(|index, _| *index > old_status.oplog_idx);
-            let flushes_buffer =
-                self.agent_mode != AgentMode::Ephemeral || commit_level != CommitLevel::DurableOnly;
-            let contiguous = match (new_entries.first_key_value(), new_entries.last_key_value()) {
-                (Some((first, _)), Some((last, _))) => {
-                    *first == old_status.oplog_idx.next()
-                        && last.as_u64() - first.as_u64() + 1 == new_entries.len() as u64
-                        && (!flushes_buffer || *last >= appended_through)
-                }
-                _ => !flushes_buffer || appended_through <= old_status.oplog_idx,
-            };
-            let updated_status = if contiguous {
-                update_status_with_new_entries(
-                    self.agent_mode,
-                    old_status.as_ref().clone(),
-                    new_entries,
-                    &self.deps.config().retry,
-                )
-            } else {
-                // Threshold flushes and replica waits can commit entries outside this actor.
-                // Read committed storage in bounded chunks, including payload hydration, rather
-                // than retaining every automatically flushed entry in memory until this commit.
-                // The gap may contain authority changes absent from the commit receipt.
-                authority_change_count = authority_change_count.max(1);
-                try_fold_status_from(
+        let old_status = self.last_known_status.load_full();
+        if new_entries.iter().any(|(index, entry)| {
+            *index > old_status.oplog_idx
+                && matches!(entry, OplogEntry::AgentInvocationStarted { .. })
+        }) {
+            self.invocation_start_status.store(Some(old_status.clone()));
+        }
+        let (updated_status, receipt_gap, horizon) = fold_committed_status(
+            &self.deps,
+            &self.owned_agent_id,
+            self.oplog.as_ref(),
+            self.agent_mode,
+            commit_level,
+            appended_through,
+            old_status.as_ref().clone(),
+            new_entries,
+        )
+        .await;
+        let (updated_status, reconstructed) = match updated_status {
+            Ok(Some(status)) => (status, false),
+            Ok(None) | Err(_) => {
+                // Suppress background cache writes until the replacement projection is installed.
+                self.detached.store(true, Ordering::Release);
+                self.status_flusher.invalidate_baseline().await;
+                let reader = StatusOplogReader::new(
                     &self.deps,
                     &self.owned_agent_id,
                     self.agent_mode,
-                    old_status.as_ref().clone(),
-                )
-                .await
-            };
+                    Some(self.oplog.as_ref()),
+                    horizon,
+                );
+                let baseline = self
+                    .invocation_start_status
+                    .load_full()
+                    .map(|status| status.as_ref().clone());
+                let status = calculate_status_with_reader(&self.deps, &reader, baseline, || async {
+                    self.deps.worker_service()
+                        .read_status_checkpoint(&self.owned_agent_id, self.fingerprint, self.agent_mode)
+                        .await
+                        .unwrap_or_else(|error| {
+                            debug!(agent_id = %self.owned_agent_id, %error, "Status checkpoint unavailable; rebuilding from oplog");
+                            None
+                        })
+                }).await
+                    .unwrap_or_else(|error| panic!("oplog status reconstruction: {error}"))
+                    .unwrap_or_else(|| panic!("worker oplog disappeared during status reconstruction"));
+                (status, true)
+            }
+        };
+        if receipt_gap || reconstructed {
+            // Repair may expose authority changes absent from the commit receipt.
+            authority_change_count = authority_change_count.max(1);
+        }
 
-            match updated_status {
-                // The comparison stays. Skipping the fold when the commit produced no entries
-                // would not be equivalent: the fold's `finalize` step prunes oplog-processor
-                // checkpoints that are neither active nor in-flight, and it runs whether or not
-                // there were entries (see `empty_fold_is_not_the_identity` in `status`).
-                Ok(Some(updated_status)) if updated_status != *old_status => {
-                    let updated_status = self.update_last_known_status(updated_status).await;
-
-                    self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
-                        .await;
-
-                    true
-                }
-                Ok(Some(_)) => false,
-                Ok(None) => {
-                    // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
-                    // This can happen during a revert or a snapshot update for example.
-                    debug!(agent_id = %self.owned_agent_id.agent_id, "Detaching worker_status from oplog");
-                    self.detached.store(true, Ordering::Release);
-                    // The in-memory status is no longer authoritative, and after reattach it will be
-                    // recomputed from scratch, so the persisted baseline can no longer be trusted: the
-                    // next flush must be a full reconcile write.
-                    self.status_flusher.invalidate_baseline().await;
-                    true
-                }
-                Err(error) => {
-                    tracing::error!(
-                        agent_id = %self.owned_agent_id,
-                        %error,
-                        "Failed to update worker status from newly committed oplog entries; detaching status"
-                    );
-                    self.detached.store(true, Ordering::Release);
-                    self.status_flusher.invalidate_baseline().await;
-                    true
+        // Empty folds still finalize checkpoint pruning; do not bypass them on an empty receipt.
+        let changed = if reconstructed || updated_status != *old_status {
+            let updated_status = self.update_last_known_status(updated_status).await;
+            if reconstructed {
+                self.detached.store(false, Ordering::Release);
+                if let Err(error) = self.status_flusher.flush(FlushReason::Forced).await {
+                    debug!(agent_id = %self.owned_agent_id, %error, "Reconstructed status cache flush failed; background flusher will retry");
                 }
             }
+            self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
+                .await;
+            true
         } else {
             false
         };
 
         // This release-publish is deliberately owned by the cancellation-proof
         // status actor and happens only after the committed entries were folded
-        // (or the status was marked detached). A producer cannot report success
+        // or reconstructed. A producer cannot report success
         // for a committed card event while authorization still considers the
         // old generation current.
         if authority_change_count != 0 {
@@ -814,68 +1125,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                 .fetch_add(authority_change_count, Ordering::Release);
         }
 
-        changed
-    }
-
-    async fn reattach(&self) {
-        self.commit_and_update_state(CommitLevel::Always, None)
-            .await;
-
-        self.ensure_status_attached().await;
-    }
-
-    async fn ensure_status_attached(&self) -> bool {
-        if self.detached.load(Ordering::Acquire) {
-            debug!(
-                agent_id = %self.owned_agent_id.agent_id,
-                "Worker status was detached from oplog, recomputing it"
-            );
-
-            let worker_status = calculate_last_known_status_with_checkpoint(
-                &self.deps,
-                &self.owned_agent_id,
-                self.agent_mode,
-                None,
-            )
-            .await
-            .and_then(|status| {
-                status
-                    .ok_or_else(|| "worker oplog disappeared while reattaching status".to_string())
-            });
-
-            let Ok(worker_status) = worker_status else {
-                tracing::error!(
-                    agent_id = %self.owned_agent_id,
-                    error = %worker_status.unwrap_err(),
-                    "Failed to recompute detached worker status"
-                );
-                return false;
-            };
-
-            // Install the recomputed status while still detached, so a concurrent background sweep
-            // keeps skipping (the in-memory status is not authoritative until it is installed).
-            self.update_last_known_status(worker_status).await;
-
-            // Now the in-memory status is authoritative again; clear the flag and force a flush.
-            // Release ordering pairs with the Acquire loads in the checkpoint/flusher paths: with
-            // the lock-free ArcSwap status, this flag is the publication barrier that makes the
-            // recomputed status visible before readers start trusting it again.
-            self.detached.store(false, Ordering::Release);
-
-            // The status was recomputed from an earlier baseline; persist it synchronously so the
-            // cache is immediately usable again. A failure remains best-effort because the oplog
-            // is authoritative and the flusher will retry it in the background.
-            if let Err(err) = self.status_flusher.flush(FlushReason::Forced).await {
-                debug!(
-                    agent_id = %self.owned_agent_id.agent_id,
-                    "Forced status flush on reattach failed (will retry in background): {err}"
-                );
-            }
-
-            true
-        } else {
-            false
-        }
+        Ok(changed)
     }
 
     /// Publishes a new status and hands the (previous, new) pair to the flusher, which updates
@@ -1015,8 +1265,7 @@ mod tests {
                     let finished = status_finished.clone();
                     async move {
                         // A lifecycle job must be able to submit status work before status Stop.
-                        let Some(StatusJob::AttachedStatus { done }) = status_rx.recv().await
-                        else {
+                        let Some(StatusJob::Status { done }) = status_rx.recv().await else {
                             panic!("status actor stopped before lifecycle work finished");
                         };
                         done.send(Arc::new(AgentStatusRecord::default())).unwrap();
@@ -1040,7 +1289,7 @@ mod tests {
                             Some(LifecycleJob::Stop)
                         ));
                         let (done, response) = oneshot::channel();
-                        assert!(status_jobs.send(StatusJob::AttachedStatus { done }).is_ok());
+                        assert!(status_jobs.send(StatusJob::Status { done }).is_ok());
                         response.await.unwrap();
                         if pause_stage == 0 {
                             entered.notify_one();
@@ -1091,7 +1340,6 @@ mod tests {
                         owned_agent_id: owned_agent_id.clone(),
                     }),
                     lifecycle_jobs,
-                    notification_queued: Arc::new(AtomicBool::new(false)),
                     stop,
                     owned_agent_id,
                 });
@@ -1146,6 +1394,263 @@ mod tests {
             idempotency_key: Some(key),
             manual_update_target_revision: None,
         }
+    }
+
+    fn with_candidate(
+        name: Option<&golem_common::model::oplog::FilesystemSnapshotName>,
+        confirmed: bool,
+    ) -> AgentStatusRecord {
+        AgentStatusRecord {
+            last_automatic_snapshot: Some(golem_common::model::AutomaticSnapshot {
+                index: OplogIndex::from_u64(10),
+                timestamp: golem_common::model::Timestamp::from(1_000),
+                component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                files: match (name, confirmed) {
+                    (Some(name), true) => {
+                        golem_common::model::SnapshotFiles::Confirmed(name.clone())
+                    }
+                    (name, _) => golem_common::model::SnapshotFiles::named(name.cloned()),
+                },
+            }),
+            ..AgentStatusRecord::default()
+        }
+    }
+
+    /// A confirmation gives `Confirmed` only from a status that folded the new confirmation
+    /// record. When no other entry follows, the names that a start can select from that status
+    /// are the own name of the job and the name of the previous usable record.
+    #[test]
+    fn a_confirmed_answer_selects_the_own_name_and_the_previous_usable_name_of_the_folded_status() {
+        use super::{ConfirmOutcome, confirmation_after_append};
+        use crate::worker::snapshot_selection::names_in_use;
+        use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogPayload};
+        let (previous, own) = (
+            FilesystemSnapshotName::periodic(),
+            FilesystemSnapshotName::periodic(),
+        );
+        let snapshot = |name: &FilesystemSnapshotName| OplogEntry::Snapshot {
+            timestamp: Timestamp::now_utc(),
+            data: OplogPayload::Inline(Box::new(vec![])),
+            mime_type: "application/octet-stream".to_string(),
+            active_cards: Vec::new(),
+            wallet_generation: 0,
+            filesystem_snapshot: Some(name.clone()),
+        };
+        let fold = |status: AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+            crate::worker::status::update_status_with_new_entries(
+                golem_common::model::agent::AgentMode::Durable,
+                status,
+                entries
+                    .into_iter()
+                    .map(|(index, entry)| (OplogIndex::from_u64(index), entry))
+                    .collect(),
+                &golem_common::model::RetryConfig::default(),
+            )
+            .unwrap()
+            .unwrap()
+        };
+        let before = fold(
+            AgentStatusRecord {
+                oplog_idx: OplogIndex::from_u64(1),
+                ..AgentStatusRecord::default()
+            },
+            vec![
+                (2, snapshot(&previous)),
+                (3, OplogEntry::snapshot_confirmed(previous.clone())),
+                (4, snapshot(&own)),
+            ],
+        );
+        let after = fold(
+            before.clone(),
+            vec![(5, OplogEntry::snapshot_confirmed(own.clone()))],
+        );
+
+        assert_eq!(
+            confirmation_after_append(false, &before, &own),
+            ConfirmOutcome::Deferred
+        );
+        assert_eq!(
+            confirmation_after_append(false, &after, &own),
+            ConfirmOutcome::Confirmed
+        );
+        let mut kept = [own, previous];
+        kept.sort_unstable_by(|left, right| left.as_str().cmp(right.as_str()));
+        assert_eq!(names_in_use(&after), Box::from(kept));
+    }
+
+    #[test]
+    fn a_confirmation_job_goes_on_to_the_admission_only_for_the_unconfirmed_candidate() {
+        use super::{BeforeAppend, ConfirmOutcome, confirmation_before_append};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let name = FilesystemSnapshotName::periodic();
+        let other = FilesystemSnapshotName::periodic();
+
+        let cases = [
+            confirmation_before_append(true, &with_candidate(Some(&name), false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), true), &name),
+            confirmation_before_append(false, &with_candidate(Some(&other), false), &name),
+            confirmation_before_append(false, &with_candidate(None, false), &name),
+            confirmation_before_append(false, &with_candidate(Some(&name), false), &name),
+        ];
+
+        // Only the last case goes on to the admission; the others reply at once.
+        assert_eq!(
+            cases,
+            [
+                BeforeAppend::Reply(ConfirmOutcome::Deferred),
+                BeforeAppend::Reply(ConfirmOutcome::Confirmed),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::Reply(ConfirmOutcome::Superseded),
+                BeforeAppend::NeedsAdmission,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_confirmation_job_asks_the_admission_once_and_only_when_its_decision_needs_it() {
+        use super::{BeforeAppend, ConfirmOutcome, reply_before_append};
+        let asked = std::cell::Cell::new(0);
+        let admission = |admitted| {
+            let asked = &asked;
+            move || {
+                asked.set(asked.get() + 1);
+                admitted
+            }
+        };
+
+        let replied = reply_before_append(
+            BeforeAppend::Reply(ConfirmOutcome::Superseded),
+            admission(true),
+        );
+        let asked_after_reply = asked.get();
+        let appends = reply_before_append(BeforeAppend::NeedsAdmission, admission(true));
+        let refused = reply_before_append(BeforeAppend::NeedsAdmission, admission(false));
+
+        assert_eq!(
+            (replied, asked_after_reply, appends, refused, asked.get()),
+            (
+                Some(ConfirmOutcome::Superseded),
+                0,
+                None,
+                Some(ConfirmOutcome::Deferred),
+                2
+            )
+        );
+    }
+
+    #[test]
+    fn after_its_append_a_confirmation_job_answers_superseded_never() {
+        use super::{ConfirmOutcome, confirmation_after_append};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let name = FilesystemSnapshotName::periodic();
+        let other = FilesystemSnapshotName::periodic();
+
+        let cases = [
+            confirmation_after_append(false, &with_candidate(Some(&name), true), &name),
+            confirmation_after_append(true, &with_candidate(Some(&name), true), &name),
+            confirmation_after_append(false, &with_candidate(Some(&name), false), &name),
+            confirmation_after_append(false, &with_candidate(Some(&other), true), &name),
+        ];
+
+        assert_eq!(
+            cases,
+            [
+                ConfirmOutcome::Confirmed,
+                ConfirmOutcome::Deferred,
+                ConfirmOutcome::Deferred,
+                ConfirmOutcome::Deferred,
+            ]
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn a_confirmation_to_a_stopped_status_task_is_deferred_and_does_not_panic() {
+        use super::{ConfirmOutcome, WorkerInstance};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "stopped-status".into(),
+            },
+        );
+        let (status_jobs, status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(async {}),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            stop,
+            owned_agent_id,
+        };
+        drop(status_rx);
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+            .lock_owned()
+            .await;
+
+        let reply = actor
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
+            .await;
+
+        assert_eq!(reply, ConfirmOutcome::Deferred);
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn a_confirmation_gives_the_reply_of_the_status_task() {
+        use super::{ConfirmOutcome, WorkerInstance};
+        use golem_common::model::oplog::FilesystemSnapshotName;
+        let owned_agent_id = OwnedAgentId::new(
+            EnvironmentId::new(),
+            &AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "replying-status".into(),
+            },
+        );
+        let (status_jobs, mut status_rx) = mpsc::unbounded_channel();
+        let (lifecycle_jobs, _lifecycle_rx) = mpsc::unbounded_channel();
+        let stop = WorkerStateActorStop::new(
+            || {},
+            tokio::spawn(std::future::pending()),
+            status_jobs.clone(),
+            tokio::spawn(async {}),
+            async {},
+        );
+        let actor = WorkerStateActor::<Context> {
+            commit: Arc::new(OwnerCommitController {
+                status_jobs,
+                owned_agent_id: owned_agent_id.clone(),
+            }),
+            lifecycle_jobs,
+            stop,
+            owned_agent_id,
+        };
+        let status_task = tokio::spawn(async move {
+            if let Some(StatusJob::ConfirmFilesystemSnapshot { done, .. }) = status_rx.recv().await
+            {
+                let _ = done.send(ConfirmOutcome::Superseded);
+            }
+        });
+        let guard = Arc::new(tokio::sync::Mutex::new(WorkerInstance::Unresolved))
+            .lock_owned()
+            .await;
+
+        let reply = actor
+            .append_confirmation(FilesystemSnapshotName::periodic(), guard, Box::new(|_| {}))
+            .await;
+        status_task.await.unwrap();
+
+        assert_eq!(reply, ConfirmOutcome::Superseded);
     }
 
     #[test]

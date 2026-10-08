@@ -98,7 +98,7 @@ pub trait NativeToolStdinHandle: Send {
 pub type NativeToolReadFuture<'a> =
     Pin<Box<dyn Future<Output = Option<Result<Vec<u8>, String>>> + Send + 'a>>;
 
-pub trait NativeToolStdoutHandle: Send {
+pub trait NativeToolOutputHandle: Send {
     fn write<'a>(
         &'a mut self,
         bytes: Vec<u8>,
@@ -107,7 +107,7 @@ pub trait NativeToolStdoutHandle: Send {
 }
 
 pub type NativeToolStdin = Box<dyn NativeToolStdinHandle>;
-pub type NativeToolStdout = Box<dyn NativeToolStdoutHandle>;
+pub type NativeToolOutput = Box<dyn NativeToolOutputHandle>;
 
 /// Observation-only view of cancellation requested by the caller of a native tool.
 ///
@@ -158,7 +158,8 @@ pub struct NativeToolInvocation {
     pub principal: Principal,
     pub cancellation: NativeToolCancellation,
     pub stdin: Option<NativeToolStdin>,
-    pub stdout: Option<NativeToolStdout>,
+    pub stdout: Option<NativeToolOutput>,
+    pub stderr: Option<NativeToolOutput>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -207,6 +208,179 @@ pub trait NativeToolInvoker<Ctx, E = std::convert::Infallible>: Send + Sync + 's
         context: &'a mut Ctx,
         invocation: NativeToolInvocation,
     ) -> NativeToolFuture<'a, E>;
+}
+
+/// Deterministic ambient native tool used by CLI conformance tests.
+///
+/// The production catalogs only install it when [`TEST_FIXTURE_ENV`] is set. Keeping the
+/// definition and implementation here gives the registry and executor one metadata identity.
+pub mod conformance_fixture {
+    use super::*;
+
+    pub const TEST_FIXTURE_ENV: &str = "GOLEM_TEST_NATIVE_CONFORMANCE_TOOL";
+    pub const TOOL_NAME: &str = "native-conformance";
+    pub const HOST_TOOL_ID: &str = "native-conformance-fixture";
+    pub const IMPLEMENTATION_VERSION: &str = "1.0.0";
+    pub const REFRESHED_IMPLEMENTATION_VERSION: &str = "2.0.0";
+
+    #[derive(Debug, Clone, IntoSchema)]
+    pub struct Evidence {
+        pub value: String,
+        pub count: u64,
+        pub agent_authorized: bool,
+    }
+
+    #[derive(Debug, ToolError)]
+    pub enum ConformanceError {
+        #[tool_error(kind = "usage-error", exit_code = 2)]
+        Rejected { reason: String },
+    }
+
+    #[tool_definition(version = "1.0.0")]
+    trait NativeConformance {
+        fn structured(
+            &self,
+            context: &mut (),
+            value: String,
+            count: u64,
+            principal: golem_native_tool::Principal,
+        ) -> Evidence;
+
+        fn supported_error(
+            &self,
+            context: &mut (),
+            reason: String,
+        ) -> Result<Evidence, ConformanceError>;
+
+        async fn finite_stream(
+            &self,
+            context: &mut (),
+            value: String,
+            stdout: NativeToolOutput,
+        ) -> Evidence;
+
+        fn middleware(&self, context: &mut (), value: String) -> String;
+    }
+
+    struct NativeConformanceImpl;
+
+    #[tool_implementation]
+    impl NativeConformance for NativeConformanceImpl {
+        fn structured(
+            &self,
+            _context: &mut (),
+            value: String,
+            count: u64,
+            _principal: Principal,
+        ) -> Evidence {
+            Evidence {
+                value,
+                count,
+                agent_authorized: true,
+            }
+        }
+
+        fn supported_error(
+            &self,
+            _context: &mut (),
+            reason: String,
+        ) -> Result<Evidence, ConformanceError> {
+            Err(ConformanceError::Rejected { reason })
+        }
+
+        async fn finite_stream(
+            &self,
+            _context: &mut (),
+            value: String,
+            mut stdout: NativeToolOutput,
+        ) -> Evidence {
+            stdout
+                .write(format!("first:{value}|").into_bytes())
+                .await
+                .unwrap();
+            stdout.write(b"second".to_vec()).await.unwrap();
+            stdout.finish().unwrap();
+            Evidence {
+                value,
+                count: 2,
+                agent_authorized: true,
+            }
+        }
+
+        fn middleware(&self, _context: &mut (), value: String) -> String {
+            format!("leaf({value})")
+        }
+    }
+
+    #[tool_definition(version = "2.0.0")]
+    trait NativeConformanceRefreshed {
+        fn refreshed(&self, context: &mut ()) -> u64;
+    }
+
+    struct NativeConformanceRefreshedImpl;
+
+    #[tool_implementation]
+    impl NativeConformanceRefreshed for NativeConformanceRefreshedImpl {
+        fn refreshed(&self, _context: &mut ()) -> u64 {
+            2
+        }
+    }
+
+    pub struct ConformanceNativeTool;
+
+    pub fn enabled() -> bool {
+        std::env::var_os(TEST_FIXTURE_ENV).is_some()
+    }
+
+    fn refreshed() -> bool {
+        std::env::var(TEST_FIXTURE_ENV).is_ok_and(|value| value == "2")
+    }
+
+    pub fn definition() -> NativeToolDefinition {
+        if refreshed() {
+            let mut tool = NativeConformanceRefreshedImpl
+                .native_tool_invoker()
+                .metadata();
+            tool.commands.nodes[0].name = TOOL_NAME.to_string();
+            NativeToolDefinition::new(HOST_TOOL_ID, REFRESHED_IMPLEMENTATION_VERSION, tool)
+                .expect("refreshed native conformance fixture definition is valid")
+        } else {
+            NativeConformanceImpl
+                .native_tool_invoker()
+                .definition(HOST_TOOL_ID, IMPLEMENTATION_VERSION)
+                .expect("native conformance fixture definition is valid")
+        }
+    }
+
+    impl<Ctx> NativeToolInvoker<Ctx, anyhow::Error> for ConformanceNativeTool
+    where
+        Ctx: Send + 'static,
+    {
+        fn metadata(&self) -> Tool {
+            definition().tool
+        }
+
+        fn invoke<'a>(
+            &'a self,
+            _context: &'a mut Ctx,
+            invocation: NativeToolInvocation,
+        ) -> NativeToolFuture<'a, anyhow::Error> {
+            Box::pin(async move {
+                let mut context = ();
+                if refreshed() {
+                    NativeConformanceRefreshedImpl
+                        .native_tool_invoker()
+                        .invoke(&mut context, invocation)
+                        .await
+                } else {
+                    NativeConformanceImpl
+                        .native_tool_invoker()
+                        .invoke(&mut context, invocation)
+                        .await
+                }
+            })
+        }
+    }
 }
 
 #[doc(hidden)]

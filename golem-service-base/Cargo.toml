@@ -21,7 +21,8 @@ worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
-golem-schema = { workspace = true }
+golem-mcp-import = { workspace = true }
+golem-schema = { workspace = true, features = ["protobuf"] }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -51,6 +52,7 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 indexmap.workspace = true
 lazy_static = { workspace = true }
+libsqlite3-sys = { workspace = true }
 metrics-prometheus = { workspace = true }
 openidconnect.workspace = true
 pin-project = { workspace = true }
@@ -64,7 +66,7 @@ reqwest = { workspace = true }
 rustc-hash = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["unbounded_depth"] }
 sha2.workspace = true
 sqlx = { workspace = true, features = [
     "runtime-tokio",
@@ -76,6 +78,7 @@ sqlx = { workspace = true, features = [
     "bigdecimal",
     "chrono",
 ] }
+stacker = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 tempfile = { workspace = true }
@@ -88,6 +91,7 @@ tonic = { workspace = true, features = [ "_tls-any" ] }
 tonic-tracing-opentelemetry = { workspace = true }
 tower = { workspace = true }
 tracing = { workspace = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
@@ -95,12 +99,20 @@ wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
 assert2.workspace = true
+aws-runtime = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
+criterion = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false
+
+[[bench]]
+name = "blob_storage_exists"
 harness = false

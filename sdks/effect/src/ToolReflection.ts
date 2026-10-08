@@ -1,8 +1,14 @@
 /** Effect-native reflection for ambient Golem tools. @since 1.6.0 */
 import type * as Common from "golem:tool/common@0.1.0"
 import type * as Core from "golem:core/types@2.0.0"
-import { Effect, Exit, Scope, Stream } from "effect"
-import { createToolClientRuntime, isRpcError, type ToolRuntimeError } from "./BridgeTool.js"
+import { Effect, Result, Scope, Stream } from "effect"
+import {
+  collectToolInvocation,
+  createToolClientRuntime,
+  isRpcError,
+  type CollectedToolInvocation,
+  type ToolRuntimeError,
+} from "./BridgeTool.js"
 import { ToolClient } from "./host/ToolClient.js"
 import {
   cloneSchemaValue,
@@ -20,9 +26,12 @@ import {
   schemaGraphFromWit,
   schemaGraphToWit,
   schemaValueFromWit,
+  schemaValueToWit,
 } from "./internal/schema-model/wit.js"
 import { freezeSchemaGraph, SchemaRef, type JsonValue } from "./SchemaRef.js"
 import { SchemaRenderError } from "./internal/reflection/schemaRender.js"
+
+const EMPTY_TUPLE_GRAPH: SchemaGraph = { defs: new Map(), root: t.tuple([]) }
 
 /** A local schema, metadata, or remote output failure. @since 1.6.0 @category errors */
 export class ToolReflectionError {
@@ -42,6 +51,7 @@ export interface ToolArgument {
   readonly schema: SchemaRef
   readonly optionalCarrier?: true
   readonly default?: SchemaValue
+  readonly defaultJson?: JsonValue
 }
 
 /** A declared custom tool failure decoded from the discovered schema. @since 1.6.0 @category errors */
@@ -50,50 +60,25 @@ export interface ReflectedToolFailure {
   readonly value?: JsonValue
 }
 
-/** A scoped command invocation with independent stdout and structured result. @since 1.6.0 @category streams */
+/** A scoped command invocation with independent outputs and structured result. @since 1.6.0 @category streams */
 export interface StartedToolInvocation<A, E = never> {
-  readonly stdout: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
+  readonly stdout?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
+  readonly stderr?: Stream.Stream<Uint8Array, ToolRuntimeError<never>>
   readonly result: Effect.Effect<A, ToolRuntimeError<E> | ToolReflectionError>
   readonly cancel: Effect.Effect<void>
   readonly collect: Effect.Effect<
-    { readonly result: A; readonly stdout: Uint8Array },
-    ToolRuntimeError<E> | ToolReflectionError
+    CollectedToolInvocation<A, ToolRuntimeError<E> | ToolReflectionError, ToolRuntimeError<never>>
   >
 }
 
-const collectResultAndStdout = <
-  A,
-  ResultError,
-  StdoutError,
-  ResultRequirements,
-  StdoutRequirements,
->(
-  result: Effect.Effect<A, ResultError, ResultRequirements>,
-  stdout: Stream.Stream<Uint8Array, StdoutError, StdoutRequirements>,
-): Effect.Effect<
-  { readonly result: A; readonly stdout: Uint8Array },
-  ResultError | StdoutError,
-  ResultRequirements | StdoutRequirements
-> =>
-  Effect.scoped(
-    Effect.all([Effect.exit(result), Effect.exit(Stream.runCollect(stdout))], {
-      concurrency: "unbounded",
-    }),
-  ).pipe(
-    Effect.flatMap(
-      ([resultExit, stdoutExit]): Effect.Effect<
-        { readonly result: A; readonly stdout: Uint8Array },
-        ResultError | StdoutError
-      > => {
-        if (Exit.isFailure(resultExit)) return Effect.failCause(resultExit.cause)
-        if (Exit.isFailure(stdoutExit)) return Effect.failCause(stdoutExit.cause)
-        return Effect.succeed({
-          result: resultExit.value,
-          stdout: concatBytes(stdoutExit.value),
-        })
-      },
-    ),
-  )
+const resultFromCollected = <A, ResultError, OutputError>(
+  collected: CollectedToolInvocation<A, ResultError, OutputError>,
+): Effect.Effect<A, ResultError | OutputError> => {
+  if (Result.isFailure(collected.result)) return Effect.fail(collected.result.failure)
+  if (Result.isFailure(collected.stdout)) return Effect.fail(collected.stdout.failure)
+  if (Result.isFailure(collected.stderr)) return Effect.fail(collected.stderr.failure)
+  return Effect.succeed(collected.result.success)
+}
 
 /** A callable command in a discovered tool snapshot. @since 1.6.0 @category models */
 export class ToolCommand {
@@ -107,8 +92,10 @@ export class ToolCommand {
   readonly inputSchema?: SchemaRef
   readonly stdin?: Common.StreamSpec
   readonly stdout?: Common.StreamSpec
+  readonly stderr?: Common.StreamSpec
   readonly result?: SchemaRef
   readonly errors: ReadonlyArray<{ readonly name: string; readonly payload?: SchemaRef }>
+  readonly annotations?: Common.CommandAnnotations
   private readonly wireGraph?: SchemaGraph
 
   constructor(
@@ -134,6 +121,10 @@ export class ToolCommand {
       ? [
           ...body.positionals.fixed.map((positional) => {
             const optional = !positional.required && positional.default_ === undefined
+            const schema = SchemaRef.fromImmutableGraph(
+              graph,
+              optional ? optionalRoot(graph, typeAt(positional.type)) : typeAt(positional.type),
+            )
             const defaultValue =
               positional.default_ === undefined
                 ? undefined
@@ -147,10 +138,9 @@ export class ToolCommand {
               get default() {
                 return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
               },
-              schema: SchemaRef.fromImmutableGraph(
-                graph,
-                optional ? optionalRoot(graph, typeAt(positional.type)) : typeAt(positional.type),
-              ),
+              defaultJson:
+                defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
+              schema,
             })
           }),
           ...(body.positionals.tail
@@ -160,6 +150,8 @@ export class ToolCommand {
                   name: body.positionals.tail.name,
                   aliases: [] as ReadonlyArray<string>,
                   required: body.positionals.tail.min > 0,
+                  default: body.positionals.tail.min > 0 ? undefined : v.list([]),
+                  defaultJson: body.positionals.tail.min > 0 ? undefined : freezeJson([]),
                   schema: SchemaRef.fromImmutableGraph(
                     graph,
                     t.list(typeAt(body.positionals.tail.itemType)),
@@ -182,6 +174,8 @@ export class ToolCommand {
     this.constraints = Object.freeze([...(body?.constraints ?? [])])
     this.stdin = body?.stdin
     this.stdout = body?.stdout
+    this.stderr = body?.stderr
+    this.annotations = body?.annotations
     this.result = body?.result
       ? SchemaRef.fromImmutableGraph(graph, typeAt(body.result.type))
       : undefined
@@ -209,9 +203,15 @@ export class ToolCommand {
   /** Pack canonical JSON before a remote call. @since 1.6.0 @category validation */
   packJson(input: JsonValue): Core.SchemaValueTree {
     if (!this.inputSchema) throw new ToolReflectionError("input", "command has no body")
-    const value = this.inputSchema.packJson(input)
-    if (!this.inputSchema.validateValue(value).success)
-      throw new ToolReflectionError("input", "invalid tool input")
+    const validated = this.inputSchema.validateJson(input)
+    if (!validated.success) {
+      const issue = validated.issues[0]
+      throw new ToolReflectionError(
+        "input",
+        issue?.cause ?? new SchemaRenderError(issue?.path ?? [], issue?.message ?? "invalid input"),
+      )
+    }
+    const value = validated.value
     this.validateConstraints(value)
     return value
   }
@@ -301,6 +301,7 @@ export class ToolCommand {
       wireGraph: this.wireGraph,
       stdin: this.stdin,
       stdout: this.stdout,
+      stderr: this.stderr,
       result: this.result,
       toolName: this.toolName,
       path: this.path,
@@ -324,8 +325,10 @@ export class ToolCommand {
         { graph: command.wireGraph, value: schemaValueFromWit(input) },
         stdin,
         command.stdout !== undefined,
+        command.stderr !== undefined,
       )
-      const stdout = started.stdout ?? Stream.empty
+      const stdout = started.stdout
+      const stderr = started.stderr
       const result = started.result.pipe(
         Effect.mapError((error) => command.mapFailure(error)),
         Effect.flatMap((terminal) => {
@@ -354,8 +357,8 @@ export class ToolCommand {
           )
         }),
       )
-      const collect = collectResultAndStdout(result, stdout)
-      return { stdout, result, cancel: started.cancel, collect }
+      const collect = collectToolInvocation(result, stdout, stderr)
+      return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
 
@@ -384,22 +387,28 @@ export class ToolCommand {
                 }),
           ),
         )
-        const collect = collectResultAndStdout(result, started.stdout)
-        return { stdout: started.stdout, result, cancel: started.cancel, collect }
+        const collect = collectToolInvocation(result, started.stdout, started.stderr)
+        return {
+          stdout: started.stdout,
+          stderr: started.stderr,
+          result,
+          cancel: started.cancel,
+          collect,
+        }
       }),
     )
   }
 
   /** Await a schema-native result, draining optional stdout concurrently. @since 1.6.0 @category invocation */
   invokeValue(input: Core.SchemaValueTree, stdin?: Stream.Stream<Uint8Array>) {
-    if (this.stdout?.required)
+    if (this.stdout?.required || this.stderr?.required)
       return Effect.fail(
-        new ToolReflectionError("input", "command requires caller-readable stdout"),
+        new ToolReflectionError("input", "command requires caller-readable output"),
       )
     return Effect.scoped(
       this.startValue(input, stdin).pipe(
         Effect.flatMap((started) => started.collect),
-        Effect.map((v) => v.result),
+        Effect.flatMap(resultFromCollected),
       ),
     )
   }
@@ -429,14 +438,15 @@ export class ToolCommand {
       wireGraph: this.wireGraph,
       stdin: this.stdin,
       stdout: this.stdout,
+      stderr: this.stderr,
       toolName: this.toolName,
       path: this.path,
       validateConstraints: (value: Core.SchemaValueTree) => this.validateConstraints(value),
     }
     return Effect.gen(function* () {
-      if (command.stdout?.required)
+      if (command.stdout?.required || command.stderr?.required)
         return yield* Effect.fail(
-          new ToolReflectionError("input", "command requires caller-readable stdout"),
+          new ToolReflectionError("input", "command requires caller-readable output"),
         )
       if (command.stdin?.required && !stdin)
         return yield* Effect.fail(new ToolReflectionError("input", "command requires stdin"))
@@ -508,7 +518,11 @@ export class ToolCommand {
     try {
       if (!declared.payload) {
         const value = schemaValueFromWit(custom.payload.value)
-        if (value.tag !== "tuple" || value.elements.length !== 0)
+        if (
+          !schemaShapesMatch(EMPTY_TUPLE_GRAPH, schemaGraphFromWit(custom.payload.graph)) ||
+          value.tag !== "tuple" ||
+          value.elements.length !== 0
+        )
           return new ToolReflectionError("output", "custom error has an unexpected payload")
         return { tag: "tool", error: { name: custom.name } }
       }
@@ -630,6 +644,7 @@ export class DynamicToolClient {
     input: Core.TypedSchemaValue,
     stdin?: Stream.Stream<Uint8Array>,
     withStdout = false,
+    withStderr = false,
   ): Effect.Effect<
     StartedToolInvocation<Core.TypedSchemaValue | undefined>,
     ToolReflectionError | ToolRuntimeError<never>,
@@ -649,11 +664,13 @@ export class DynamicToolClient {
         encoded,
         stdin,
         withStdout,
+        withStderr,
       )
-      const stdout = started.stdout ?? Stream.empty
+      const stdout = started.stdout
+      const stderr = started.stderr
       const result = started.result.pipe(Effect.map((terminal) => terminal.result))
-      const collect = collectResultAndStdout(result, stdout)
-      return { stdout, result, cancel: started.cancel, collect }
+      const collect = collectToolInvocation(result, stdout, stderr)
+      return { stdout, stderr, result, cancel: started.cancel, collect }
     })
   }
 
@@ -666,7 +683,7 @@ export class DynamicToolClient {
     return Effect.scoped(
       this.start(path, input, stdin).pipe(
         Effect.flatMap((started) => started.collect),
-        Effect.map((collected) => collected.result),
+        Effect.flatMap(resultFromCollected),
       ),
     )
   }
@@ -749,8 +766,15 @@ function optionArgument(
     option.default_ === undefined &&
     option.shape.tag !== "repeatable-list" &&
     option.shape.tag !== "repeatable-map"
+  const schema = SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root)
   const defaultValue =
-    option.default_ === undefined ? undefined : schemaValueFromWit(option.default_)
+    option.default_ !== undefined
+      ? schemaValueFromWit(option.default_)
+      : !option.required && option.shape.tag === "repeatable-list"
+        ? v.list([])
+        : !option.required && option.shape.tag === "repeatable-map"
+          ? v.map([])
+          : undefined
   return Object.freeze({
     kind: "option",
     name: option.long,
@@ -760,7 +784,8 @@ function optionArgument(
     get default() {
       return defaultValue === undefined ? undefined : cloneSchemaValue(defaultValue)
     },
-    schema: SchemaRef.fromImmutableGraph(graph, optional ? optionalRoot(graph, root) : root),
+    defaultJson: defaultValue === undefined ? undefined : canonicalDefault(schema, defaultValue),
+    schema,
   })
 }
 
@@ -779,16 +804,19 @@ function optionalRoot(graph: SchemaGraph, root: SchemaType): SchemaType {
 }
 
 function flagArgument(flag: Common.FlagSpec, graph: SchemaGraph): ToolArgument {
+  const defaultValue = flag.shape.tag === "bool-flag" ? v.bool(flag.shape.val.default_) : v.u32(0)
+  const schema = SchemaRef.fromImmutableGraph(
+    graph,
+    flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
+  )
   return Object.freeze({
     kind: "flag",
     name: flag.long,
     aliases: Object.freeze([...flag.aliases]),
     required: false,
-    default: flag.shape.tag === "bool-flag" ? v.bool(flag.shape.val.default_) : v.u32(0),
-    schema: SchemaRef.fromImmutableGraph(
-      graph,
-      flag.shape.tag === "bool-flag" ? t.bool() : t.u32(),
-    ),
+    default: defaultValue,
+    defaultJson: freezeJson(schema.unpackJson(schemaValueToWit(defaultValue))),
+    schema,
   })
 }
 
@@ -827,12 +855,18 @@ function valueMatches(value: SchemaValue, expected: SchemaValue): boolean {
   }
 }
 
-function concatBytes(chunks: ReadonlyArray<Uint8Array>): Uint8Array {
-  const result = new Uint8Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0))
-  let offset = 0
-  for (const chunk of chunks) {
-    result.set(chunk, offset)
-    offset += chunk.length
+function freezeJson<T extends JsonValue>(value: T): T {
+  if (typeof value === "object" && value !== null) {
+    for (const child of Object.values(value)) freezeJson(child)
+    Object.freeze(value)
   }
-  return result
+  return value
+}
+
+function canonicalDefault(schema: SchemaRef, value: SchemaValue): JsonValue | undefined {
+  try {
+    return freezeJson(schema.unpackJson(schemaValueToWit(value)))
+  } catch {
+    return undefined
+  }
 }
