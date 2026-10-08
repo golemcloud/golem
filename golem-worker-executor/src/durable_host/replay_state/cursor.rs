@@ -888,48 +888,66 @@ impl CursorTx<'_> {
         )
     }
 
-    /// Classifies a `Start` claim that found no matching `Start` while the cursor still replays.
-    /// Returns the subscription to wait on when the entry at the cursor head belongs to an entity
-    /// body that is claimed and has not settled: that body, or the supervisor that drains its
-    /// recorded terminal, can still consume the head, and the claim's `Start` may then turn out
-    /// to be recorded after it or not at all. Returns `None` when the missing `Start` can be
-    /// decided now: the cursor is live, the head names no owner, a top-level sibling `Start` is
-    /// at the head, the owning body is not active, or the claim is issued from inside the
-    /// owning body (that body cannot consume the head while it waits on its own claim).
+    /// Gathers the facts [`missing_start_waits_for`] decides on for a `Start` claim that found no
+    /// match, and returns the subscription to wait on when the rule says the claim waits. The
+    /// claim was issued from the Store whose call chain starts at `claim_parent`.
     ///
-    /// The head was buffered by the claim's head fast path, so the owner check reads no oplog
-    /// entry. Only a claim with a parent later than the owner reads the parent chain. A parent
-    /// after the replay target was appended live, so the claim keeps its strict classification.
+    /// The head was buffered by the claim's head fast path. No oplog entry is read while no body
+    /// is active. Otherwise the parent chains are read only down to the earliest active body,
+    /// because a parent always precedes its children.
     pub(super) async fn active_body_owning_head(
         &self,
-        claim: &StartClaim,
+        claim_parent: Option<OplogIndex>,
     ) -> Option<tokio::sync::watch::Receiver<HashSet<OplogIndex>>> {
         if self.cursor.is_live() {
             return None;
         }
         let (_, head) = self.st.replay_buffer.front()?;
-        let owner = match head_owner(head) {
+        let head_parent = match head_owner(head) {
             HeadOwner::EntityBody(owner) | HeadOwner::ParentStart(owner) => owner,
             HeadOwner::Unattributed | HeadOwner::Agent => return None,
         };
         let mut bodies = self.cursor.reconstruction_claims.subscribe_bodies();
-        if !bodies.borrow_and_update().contains(&owner) {
-            return None;
-        }
+        let active_bodies = bodies.borrow_and_update().clone();
+        let floor = *active_bodies.iter().min()?;
+        let head_chain = self
+            .parent_chain(Some(head_parent), floor, Some(&active_bodies))
+            .await;
+        let claim_chain = self.parent_chain(claim_parent, floor, None).await;
+        missing_start_waits_for(
+            &head_chain,
+            &claim_chain,
+            &active_bodies,
+            self.cursor.replay_target(),
+        )
+        .map(|_| bodies)
+    }
+
+    /// `first` followed by the parent of each recorded `Start` in turn. The chain ends at an
+    /// index below `floor`, at an index in `stop_at`, at an index after the replay target (a
+    /// live append, which is not read), or at an entry that is not a `Start`.
+    async fn parent_chain(
+        &self,
+        first: Option<OplogIndex>,
+        floor: OplogIndex,
+        stop_at: Option<&HashSet<OplogIndex>>,
+    ) -> Vec<OplogIndex> {
         let replay_target = self.cursor.replay_target();
-        let mut parent = claim.expected_parent_start_index();
-        while let Some(index) = parent.filter(|index| *index > owner) {
-            if index > replay_target {
-                return None;
+        let mut chain = Vec::new();
+        let mut next = first.filter(|index| *index >= floor);
+        while let Some(index) = next {
+            chain.push(index);
+            if index > replay_target || stop_at.is_some_and(|stop_at| stop_at.contains(&index)) {
+                break;
             }
-            parent = match self.cursor.oplog.read(index).await {
+            next = match self.cursor.oplog.read(index).await {
                 OplogEntry::Start {
                     parent_start_index, ..
-                } => parent_start_index,
+                } => parent_start_index.filter(|parent| *parent >= floor),
                 _ => None,
             };
         }
-        (parent != Some(owner)).then_some(bodies)
+        chain
     }
 
     /// Whether `entry` is an `End`/`Cancelled` whose `start_index` currently has a registered
@@ -1980,7 +1998,10 @@ impl CursorTx<'_> {
         if !matches!(outcome, StartClaimAttempt::Missing) {
             return Ok(outcome);
         }
-        if let Some(bodies) = self.active_body_owning_head(claim).await {
+        if let Some(bodies) = self
+            .active_body_owning_head(claim.expected_parent_start_index())
+            .await
+        {
             return Ok(StartClaimAttempt::Blocked(BlockedOn::ActiveBody(bodies)));
         }
         if !recover_missing {
@@ -2251,6 +2272,8 @@ impl ReplayState {
             log_hashes: std::sync::Mutex::new(HashMap::new()),
             pending_replay_events: std::sync::Mutex::new(Vec::new()),
             progress: Notify::new(),
+            #[cfg(feature = "test-utils")]
+            active_body_waits: tokio::sync::watch::Sender::new(0),
             #[cfg(test)]
             primary_publication_gate: std::sync::Mutex::new(None),
         };
@@ -2514,6 +2537,16 @@ impl ReplayState {
         &self,
     ) -> Result<(), WorkerExecutorError> {
         self.wait_for_reconstruction_fences().await
+    }
+
+    /// Waits until a `Start` claim of this replay waits for an active entity body.
+    #[cfg(feature = "test-utils")]
+    pub(crate) async fn test_wait_for_claim_blocked_on_active_body(&self) {
+        let mut waits = self.cursor.active_body_waits.subscribe();
+        waits
+            .wait_for(|waits| *waits > 0)
+            .await
+            .expect("the replay cursor owns the active-body wait counter");
     }
 
     #[cfg(feature = "test-utils")]
@@ -4096,4 +4129,29 @@ pub(super) fn head_owner(entry: &OplogEntry) -> HeadOwner {
             EntityAttribution::EntityBody(owner) => HeadOwner::EntityBody(owner),
         },
     }
+}
+
+/// Decides whether a `Start` claim that found no match while the cursor replays waits instead of
+/// reporting the missing `Start`, and returns the entity body it waits for.
+///
+/// `head_chain` is the owner named by the entry at the cursor head followed by its ancestors, and
+/// `claim_chain` is the expected parent of the claim followed by its ancestors. The claim waits
+/// for the nearest active body that encloses the head entry: that body, or the supervisor that
+/// drains its recorded terminal, can still consume the head, and the claim's `Start` may then
+/// turn out to be recorded after it or not at all. The claim does not wait when no active body
+/// encloses the head, when the claim is issued from inside that body (only that body can consume
+/// its own entry, so it would wait for itself), or when its chain contains a live append after
+/// the replay target.
+pub(super) fn missing_start_waits_for(
+    head_chain: &[OplogIndex],
+    claim_chain: &[OplogIndex],
+    active_bodies: &HashSet<OplogIndex>,
+    replay_target: OplogIndex,
+) -> Option<OplogIndex> {
+    let body = *head_chain
+        .iter()
+        .find(|index| active_bodies.contains(index))?;
+    let claim_is_live = claim_chain.iter().any(|index| *index > replay_target);
+    let claim_is_inside_body = claim_chain.contains(&body);
+    (!claim_is_live && !claim_is_inside_body).then_some(body)
 }

@@ -442,6 +442,21 @@ pub(crate) enum ReplayStartClaimOutcome {
 }
 
 impl ReplayState {
+    /// Waits until a blocked claim may run again.
+    async fn wait_while_blocked(
+        &self,
+        blocked: BlockedOn,
+        progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>,
+    ) {
+        #[cfg(feature = "test-utils")]
+        if matches!(blocked, BlockedOn::ActiveBody(_)) {
+            self.cursor
+                .active_body_waits
+                .send_modify(|waits| *waits += 1);
+        }
+        blocked.wait(progress).await
+    }
+
     /// Runs a [`StartClaim`] as an owned cursor operation: acquire a cursor transaction, claim
     /// the described `Start` (consuming it and registering a resolver receiver atomically), and
     /// return the registered handle together with the claimed entry. Shared frame of every
@@ -538,8 +553,11 @@ impl ReplayState {
                                 Ok((None, None, Some(Missing::StoreAlreadyLive)))
                             }
                             Ok(StartClaimAttempt::Missing) => {
-                                if let Some(bodies) =
-                                    tx.active_body_owning_head(&owned_claim).await
+                                if let Some(bodies) = tx
+                                    .active_body_owning_head(
+                                        owned_claim.expected_parent_start_index(),
+                                    )
+                                    .await
                                 {
                                     return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
                                 }
@@ -580,10 +598,11 @@ impl ReplayState {
                 }
                 None => {}
             }
-            blocked
-                .expect("an undecided Start claim is blocked")
-                .wait(progress)
-                .await;
+            self.wait_while_blocked(
+                blocked.expect("an undecided Start claim is blocked"),
+                progress,
+            )
+            .await;
         }
     }
 
@@ -825,7 +844,7 @@ impl ReplayState {
                     debug_assert!(recover_missing);
                     return Ok(ScopeStartClaimOutcome::MissingSettling { replay_target });
                 }
-                StartClaimAttempt::Blocked(on) => on.wait(progress).await,
+                StartClaimAttempt::Blocked(on) => self.wait_while_blocked(on, progress).await,
             }
         }
     }
@@ -900,7 +919,9 @@ impl ReplayState {
     /// live transition while unclaimed retained `Start`s exist (see
     /// `WorkerState::durable_call_is_live`) uses this to adopt its retained `Start` or fall back
     /// to recording a new one. A missing id while replay is still positioned before the target
-    /// and the Store is not live remains strict divergence.
+    /// and the Store is not live waits while an active entity body owns the cursor head (see
+    /// [`missing_start_waits_for`](super::cursor::missing_start_waits_for)), and otherwise remains
+    /// strict divergence.
     pub(crate) async fn claim_custom_start_for_store(
         &self,
         expected_function_name: &HostFunctionName,
@@ -1099,6 +1120,20 @@ impl ReplayState {
                                 return Ok((None, None, Some(Missing::StoreAlreadyLive)));
                             }
                             OplogEntryLookupResult::NotFound { .. } => {
+                                // The exact scan reads past the head without buffering it. Drain
+                                // the head like any claim's head path does, so the missing id is
+                                // classified against the entry that is actually at the head.
+                                tx.try_get_oplog_entry_leaving_unclaimed_starts(|_| false)
+                                    .await?;
+                                if tx.cursor.is_live() {
+                                    return Ok((None, None, Some(Missing::ReplayEnded)));
+                                }
+                                if let Some(bodies) = tx
+                                    .active_body_owning_head(expected_parent_start_index)
+                                    .await
+                                {
+                                    return Ok((None, Some(BlockedOn::ActiveBody(bodies)), None));
+                                }
                                 return Err(WorkerExecutorError::unexpected_oplog_entry(
                                     format!(
                                         "custom durable Start {{ invocation_id: {expected_invocation_id} }}"
@@ -1127,10 +1162,11 @@ impl ReplayState {
                 }
                 None => {}
             }
-            blocked
-                .expect("an undecided custom Start claim is blocked")
-                .wait(progress)
-                .await;
+            self.wait_while_blocked(
+                blocked.expect("an undecided custom Start claim is blocked"),
+                progress,
+            )
+            .await;
         };
         let OplogEntry::Start {
             timestamp,

@@ -311,6 +311,10 @@ struct ReplayCursor {
     /// re-drive the cursor. Resolver delivery is the primary wakeup; this covers the "another
     /// consumer advanced the cursor past my blocker" case that a oneshot alone cannot.
     progress: Notify,
+    /// Counts the times a `Start` claim began to wait because an active entity body owns the
+    /// cursor head. Tests use it to observe that a claim is parked in that state.
+    #[cfg(feature = "test-utils")]
+    active_body_waits: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     primary_publication_gate:
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,

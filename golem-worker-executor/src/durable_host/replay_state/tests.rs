@@ -8786,3 +8786,172 @@ async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() 
     );
     reconstruction.body_settled();
 }
+
+#[test]
+fn missing_start_waits_for_the_nearest_active_body_enclosing_the_head() {
+    use super::cursor::missing_start_waits_for;
+
+    let i = OplogIndex::from_u64;
+    let target = i(20);
+    let active = HashSet::from([i(2), i(6)]);
+    // The head names the body directly, or through a scope of that body.
+    assert_eq!(
+        missing_start_waits_for(&[i(2)], &[], &active, target),
+        Some(i(2))
+    );
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[], &active, target),
+        Some(i(2))
+    );
+    // A body nested in another active body owns its own entries.
+    assert_eq!(
+        missing_start_waits_for(&[i(7), i(6)], &[i(1)], &active, target),
+        Some(i(6))
+    );
+    // No active body encloses the head.
+    assert_eq!(missing_start_waits_for(&[], &[], &active, target), None);
+    assert_eq!(missing_start_waits_for(&[i(4)], &[], &active, target), None);
+    // The claim comes from inside the owning body, directly or through one of its scopes.
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[i(2)], &active, target),
+        None
+    );
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[i(5), i(2)], &active, target),
+        None
+    );
+    // A claim from another body waits for the owner of the head.
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[i(6)], &active, target),
+        Some(i(2))
+    );
+    // A claim whose chain was appended live keeps its strict classification.
+    assert_eq!(
+        missing_start_waits_for(&[i(3), i(2)], &[i(21)], &active, target),
+        None
+    );
+}
+
+#[test]
+async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head() {
+    // [NoOp(1), Start(entity=2), Start(scope 3, parent 2), Start(4, parent 3), End(4→5),
+    //  End(3→6), End(2→7)] — the body claimed its scope Start(3), so the head is the child
+    // Start(4). It names the scope, not the entity, as its parent; the claim still waits for the
+    // body that encloses the scope.
+    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
+        end_for(2, 3),
+    ])
+    .await;
+    let scope = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(scope.start_idx(), OplogIndex::from_u64(3));
+
+    let mut claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::unowned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+        ),
+    );
+    assert_claim_parked(&mut claim).await;
+
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(7)
+    ));
+    assert!(matches!(
+        finished_claim(claim).await.unwrap(),
+        ReplayStartClaimOutcome::ReplayEnded
+    ));
+    drop(scope);
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_its_own_head() {
+    // As above, but the body itself claims a call under its scope that it never recorded.
+    let (rs, _handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
+        end_for(2, 3),
+    ])
+    .await;
+    let _scope = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    let claim = spawn_primary_clock_claim(
+        &rs,
+        StartClaim::owned(
+            &HostFunctionName::WallClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(3),
+        ),
+    );
+    assert!(
+        finished_claim(claim).await.is_err(),
+        "a body must not wait for itself to consume the head under its own scope"
+    );
+    reconstruction.body_settled();
+}
+
+#[test]
+async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_head() {
+    // The guest starts a custom durable invocation whose Start was never recorded while the
+    // completed reconstruction has not drained the body's Start(3).
+    let (rs, handle, mut reconstruction) = replay_with_undrained_reconstruction(vec![
+        start_with_parent(2),
+        end_for(3, 1),
+        end_for(2, 2),
+    ])
+    .await;
+    let mut claim = tokio::spawn({
+        let rs = rs.clone();
+        async move {
+            rs.claim_custom_start_for_store(
+                &HostFunctionName::Custom("missing-custom".to_string()),
+                &DurableFunctionType::WriteRemote,
+                None,
+                uuid::Uuid::new_v4(),
+                &custom_request(1),
+                false,
+            )
+            .await
+        }
+    });
+    if let Ok(outcome) = tokio::time::timeout(Duration::from_millis(50), &mut claim).await {
+        match outcome.unwrap() {
+            Err(error) => panic!("the missing custom Start was decided too early: {error}"),
+            Ok(_) => panic!("the missing custom Start was decided too early"),
+        }
+    }
+
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { .. })
+    ));
+    let outcome = tokio::time::timeout(Duration::from_secs(5), claim)
+        .await
+        .expect("the blocked custom claim was not woken")
+        .unwrap()
+        .unwrap();
+    assert!(matches!(outcome, CustomStartClaimOutcome::ReplayEnded));
+    reconstruction.body_settled();
+}
