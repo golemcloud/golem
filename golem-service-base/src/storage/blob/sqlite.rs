@@ -121,7 +121,7 @@ impl SqliteBlobStorage {
                     last_modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Metadata: Last modified timestamp
                     size INTEGER NOT NULL,                                -- Metadata: Size of the blob
                     is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
-                    PRIMARY KEY (namespace, parent, name)  -- Composite primary key
+                    PRIMARY KEY (namespace, parent, name, is_directory)   -- A blob and a directory can hold one path
                 );
                 "#)).await?;
         Ok(())
@@ -279,8 +279,9 @@ impl BlobStorageBackend for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
+        // A blob row sorts before the row of a directory at the same path, so a blob wins.
         let query = sqlx::query_as(
-            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? ORDER BY is_directory LIMIT 1;",
         )
             .bind(Self::namespace(namespace))
             .bind(path.parent_text()?)
@@ -310,7 +311,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, ?, ?, FALSE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
                     "#,
                 )
                     .bind(Self::namespace(namespace))
@@ -343,7 +344,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                 INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                 SELECT ?, ?, ?, value, size, FALSE FROM blob_storage
                 WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE
-                ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
             "#,
         )
         .bind(Self::namespace(to_namespace))
@@ -371,13 +372,14 @@ impl BlobStorageBackend for SqliteBlobStorage {
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
         let size = data.len() as i64;
-        // The primary key holds the path, so the insert and the check of the key are one
-        // statement. A row that is there makes the insert change no row.
+        // The primary key holds the path and the kind of the row, so the insert and the check of
+        // the key are one statement. A blob row that is there makes the insert change no row, and
+        // the row of a directory at the path is another key.
         let query = sqlx::query(
             r#"
                 INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                 VALUES (?, ?, ?, ?, ?, FALSE)
-                ON CONFLICT(namespace, parent, name) DO NOTHING;
+                ON CONFLICT(namespace, parent, name, is_directory) DO NOTHING;
             "#,
         )
         .bind(Self::namespace(namespace))
@@ -408,7 +410,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
         let query = sqlx::query(
-            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;",
         )
         .bind(Self::namespace(namespace))
         .bind(path.parent_text()?)
@@ -432,7 +434,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
                     r#"
                         INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
                         VALUES (?, ?, ?, NULL, 0, TRUE)
-                        ON CONFLICT(namespace, parent, name) DO UPDATE SET is_directory = TRUE, value = NULL, size = 0;
+                        ON CONFLICT(namespace, parent, name, is_directory) DO UPDATE SET last_modified_at = CURRENT_TIMESTAMP;
                     "#
                 )
                 .bind(Self::namespace(namespace))
@@ -456,7 +458,7 @@ impl BlobStorageBackend for SqliteBlobStorage {
     ) -> Result<Vec<PathBuf>, Error> {
         let directory = path.text()?;
         let query =
-            sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
+            sqlx::query_as("SELECT DISTINCT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
                 .bind(Self::namespace(namespace))
                 .bind(directory.clone());
 
