@@ -515,16 +515,17 @@ pub fn validate_record_fields<'g, 'f, I>(
     values: &[SchemaValue],
 ) -> Result<(), Vec<ValueError>>
 where
-    I: ExactSizeIterator<Item = (&'f str, &'f SchemaType)>,
+    I: Iterator<Item = (&'f str, &'f SchemaType)> + Clone,
 {
     let mut errors = Vec::new();
     let mut path = ValuePath::new();
     let index = GraphIndex::new(graph);
 
-    if fields.len() != values.len() {
+    let field_count = fields.clone().count();
+    if field_count != values.len() {
         errors.push(ValueError::RecordArityMismatch {
             path: path.snapshot(),
-            expected: fields.len(),
+            expected: field_count,
             found: values.len(),
         });
         return Err(errors);
