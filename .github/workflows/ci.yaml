@@ -68,16 +68,15 @@ jobs:
           cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
-      - name: Extract archive
-        run: |
-          mkdir tmp/golem-binaries
-          tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 5
-      - name: Save packaged binaries to cache
-        uses: actions/cache/save@v5
+      - name: Upload packaged binaries
+        uses: actions/upload-artifact@v6
         with:
-          path: tmp/golem-binaries
-          key: golem-binaries-${{ github.run_id }}
+          name: golem-binaries
+          path: tmp/golem-binaries.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   check-clippy-and-format:
     env:
@@ -270,7 +269,6 @@ jobs:
       - uses: ./.github/actions/restore-binaries
         with:
           run-id: ${{ github.run_id }}
-          fail-on-cache-miss: 'true'
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
@@ -1307,11 +1305,14 @@ jobs:
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Total: $count WASM files"
 
-      - name: Save merged WASMs to cache
-        uses: actions/cache/save@v5
+      - name: Upload merged WASMs
+        uses: actions/upload-artifact@v6
         with:
-          path: tmp/test-components-wasm
-          key: golem-test-components-${{ github.run_id }}
+          name: golem-test-components
+          path: tmp/test-components-wasm/*.wasm
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   detect-skill-changes:
     name: Detect golem-skills changes
