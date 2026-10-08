@@ -7956,7 +7956,7 @@ mod update_entry_sequences {
     use super::*;
     use crate::services::worker_fork::ForkUpdates;
     use crate::worker::cut_point::validate_snapshot_update_boundaries;
-    use crate::worker::status::update_queue::UpdateStep;
+    use crate::worker::status::update_queue::{UpdateStep, manual_update_target_revision_of};
     use proptest::prelude::*;
     use test_r::test;
 
@@ -8151,11 +8151,20 @@ mod update_entry_sequences {
 
             // The fork cancels the status's pending queue and then its pending manual update
             // invocations, and takes the filesystem snapshot of the authoritative baseline of
-            // the status as its baseline.
+            // the status as its baseline. It folds the entries that its copy keeps.
             let (cancelled, baseline) = list
                 .iter()
-                .fold(ForkUpdates::default(), |updates, (index, entry)| {
-                    updates.after(*index, entry, status.deleted_regions.is_in_deleted_region(*index))
+                .filter_map(|(index, entry)| {
+                    let manual_update = match entry {
+                        OplogEntry::PendingAgentInvocation { payload, .. } => {
+                            manual_update_target_revision_of(payload)
+                        }
+                        _ => None,
+                    };
+                    ForkUpdates::update_entry(entry.clone(), manual_update).map(|kept| (*index, kept))
+                })
+                .fold(ForkUpdates::default(), |updates, (index, kept)| {
+                    updates.after_kept(index, kept, status.deleted_regions.is_in_deleted_region(index))
                 })
                 .into_parts();
             let cancelled = cancelled.collect::<Vec<_>>();
