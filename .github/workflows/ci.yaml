@@ -139,19 +139,55 @@ jobs:
         run: cargo make --profile ci check-docs-skills
       - name: Check reflection conformance corpus embeds
         run: cargo make --profile ci check-reflection-conformance
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
       - name: Check built-in artifact pins
         run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests
-        run: cargo make --profile ci unit-tests
+        run: cargo make --profile ci --skip-tasks test-component-middleware-unit-tests unit-tests
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  config-checks:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+          install-protoc: 'true'
+      - uses: ./.github/actions/restore-binaries
+        with:
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
+
+  middleware-unit-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+      CARGO_TARGET_DIR: ${{ github.workspace }}/tmp/middleware-unit-target
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+      - name: Test middleware components
+        run: cargo make --profile ci test-component-middleware-unit-tests
 
   builtin-artifacts:
     runs-on: blacksmith
@@ -1533,6 +1569,8 @@ jobs:
     needs:
       - check-clippy-and-format
       - unit-tests-and-checks
+      - config-checks
+      - middleware-unit-tests
       - golem-schema-guest
       - worker-tests
       - managed-xfs-tests
