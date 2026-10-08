@@ -26,13 +26,15 @@ pub(crate) struct ProcessingOutput {
 
 pub(crate) fn process_entries(
     state: &mut WorkerState,
+    first_entry_index: u64,
     entries: Vec<OplogEntry>,
 ) -> ProcessingOutput {
     let mut completed_spans: Vec<OtlpSpan> = Vec::new();
     let mut log_records: Vec<OtlpLogRecord> = Vec::new();
     let mut metrics: Vec<OtlpMetric> = Vec::new();
 
-    for entry in entries {
+    for (offset, entry) in entries.into_iter().enumerate() {
+        let first_new_metric = metrics.len();
         match entry {
             OplogEntry::Create(params) => {
                 handle_create(state, params, &mut metrics);
@@ -211,12 +213,37 @@ pub(crate) fn process_entries(
             }
             _ => {} // ignore all other entry types
         }
+        let source_index = first_entry_index.saturating_add(offset as u64);
+        for metric in &mut metrics[first_new_metric..] {
+            add_source_oplog_index(metric, source_index);
+        }
     }
 
     ProcessingOutput {
         spans: completed_spans,
         log_records,
         metrics,
+    }
+}
+
+fn add_source_oplog_index(metric: &mut OtlpMetric, index: u64) {
+    let add = |data_point: &mut OtlpNumberDataPoint| {
+        data_point.attributes.push(KeyValue {
+            key: "golem.oplog.index".to_string(),
+            value: OtlpValue {
+                string_value: index.to_string(),
+            },
+        });
+    };
+    if let Some(sum) = &mut metric.sum {
+        for data_point in &mut sum.data_points {
+            add(data_point);
+        }
+    }
+    if let Some(gauge) = &mut metric.gauge {
+        for data_point in &mut gauge.data_points {
+            add(data_point);
+        }
     }
 }
 
@@ -230,9 +257,7 @@ fn non_empty_trace_id(trace_id: &str) -> Option<String> {
 
 fn worker_error_variant_name(e: &golem_rust::bindings::golem::api::oplog::WorkerError) -> String {
     match e {
-        golem_rust::bindings::golem::api::oplog::WorkerError::Unknown(_) => {
-            "Unknown".to_string()
-        }
+        golem_rust::bindings::golem::api::oplog::WorkerError::Unknown(_) => "Unknown".to_string(),
         golem_rust::bindings::golem::api::oplog::WorkerError::InvalidRequest(_) => {
             "InvalidRequest".to_string()
         }
@@ -1041,11 +1066,20 @@ mod tests {
             HashMap::from([("external".to_string(), Some("external".to_string()))]);
 
         assert_eq!(
-            resolve_parent_through_inherited(
-                Some("external".to_string()),
-                &inherited_span_parents,
-            ),
+            resolve_parent_through_inherited(Some("external".to_string()), &inherited_span_parents,),
             Some("external".to_string())
         );
+    }
+
+    #[test]
+    fn source_oplog_index_is_attached_to_every_metric_point() {
+        let mut metric = counter_metric("count", "1", "count", "10", Vec::new());
+
+        add_source_oplog_index(&mut metric, 42);
+
+        let data_point = &metric.sum.unwrap().data_points[0];
+        assert!(data_point.attributes.iter().any(|attribute| {
+            attribute.key == "golem.oplog.index" && attribute.value.string_value == "42"
+        }));
     }
 }

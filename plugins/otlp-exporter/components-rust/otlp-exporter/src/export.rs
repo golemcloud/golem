@@ -121,7 +121,11 @@ pub(crate) fn build_resource_attributes(
     ]
 }
 
-async fn send_otlp_request(config: &ExporterConfig, path: &str, json: String) -> Result<(), String> {
+async fn send_otlp_request(
+    config: &ExporterConfig,
+    path: &str,
+    json: String,
+) -> Result<(), String> {
     let url = format!("{}{}", config.endpoint.trim_end_matches('/'), path);
 
     let mut header_entries = vec![("content-type".to_string(), b"application/json".to_vec())];

@@ -3174,7 +3174,7 @@ mod local_observability_tests {
             status: LocalObservabilityStatus::Ready,
             message: None,
             exporter_name: "golem-otlp-exporter".to_string(),
-            exporter_version: "1.5.1".to_string(),
+            exporter_version: "1.6.0".to_string(),
             sample_interval_seconds: 5,
             retention_days: 7,
             retention_bytes: 1024,

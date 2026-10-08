@@ -17,8 +17,8 @@ use processing::process_entries;
 use state::WORKER_STATES;
 
 use golem_rust::bindings::golem::api::oplog::{OplogEntry, OplogIndex};
-use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::Guest as OplogProcessorGuest;
+use golem_rust::schema::wit::wire::{AgentId, ComponentId};
 
 use std::collections::HashMap;
 
@@ -31,7 +31,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
         component_id: ComponentId,
         worker_id: AgentId,
         metadata: golem_rust::oplog_processor::host::AgentMetadata,
-        _first_entry_index: OplogIndex,
+        first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), String> {
         if entries.is_empty() {
@@ -42,9 +42,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
             Ok(Some(c)) => c,
             Ok(None) => return Ok(()),
             Err(e) => {
-                return Err(format!(
-                    "OTLP exporter: configuration error: {e}"
-                ));
+                return Err(format!("OTLP exporter: configuration error: {e}"));
             }
         };
 
@@ -53,20 +51,23 @@ impl OplogProcessorGuest for OtlpExporterComponent {
         // Clone current state for processing — do NOT mutate the stored state yet
         let mut working_state = WORKER_STATES.with(|states| {
             let states = states.borrow();
-            states.get(&key).cloned().unwrap_or_else(|| state::WorkerState {
-                trace_id: String::new(),
-                trace_states: Vec::new(),
-                pending_spans: HashMap::new(),
-                implicit_spans: Vec::new(),
-                terminal_error: None,
-                inherited_span_parents: HashMap::new(),
-                invocation_start_ns: None,
-                total_memory_bytes: 0,
-                active_resources: 0,
-            })
+            states
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| state::WorkerState {
+                    trace_id: String::new(),
+                    trace_states: Vec::new(),
+                    pending_spans: HashMap::new(),
+                    implicit_spans: Vec::new(),
+                    terminal_error: None,
+                    inherited_span_parents: HashMap::new(),
+                    invocation_start_ns: None,
+                    total_memory_bytes: 0,
+                    active_resources: 0,
+                })
         });
 
-        let output = process_entries(&mut working_state, entries);
+        let output = process_entries(&mut working_state, first_entry_index, entries);
 
         let has_traces = exporter_config.signals.traces && !output.spans.is_empty();
         let has_logs = exporter_config.signals.logs && !output.log_records.is_empty();
@@ -89,7 +90,7 @@ impl OplogProcessorGuest for OtlpExporterComponent {
 
         let scope = InstrumentationScope {
             name: "golem-otlp-exporter".to_string(),
-            version: "1.5.0".to_string(),
+            version: "1.6.0".to_string(),
         };
 
         if has_traces {

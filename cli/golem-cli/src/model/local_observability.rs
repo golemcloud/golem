@@ -62,6 +62,14 @@ pub enum LocalMetricKind {
     Unknown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LocalMetricTemporality {
+    Unspecified,
+    Delta,
+    Cumulative,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalMetricScope {
@@ -98,6 +106,7 @@ pub struct LocalMetricFamily {
     pub description: String,
     pub unit: String,
     pub kind: LocalMetricKind,
+    pub temporality: LocalMetricTemporality,
     pub category: String,
     pub series_count: u64,
     pub latest_value: Option<f64>,
@@ -127,6 +136,7 @@ pub struct LocalMetricSeriesRequest {
 pub struct LocalMetricSeries {
     pub series_key: String,
     pub statistic: String,
+    pub temporality: LocalMetricTemporality,
     pub attributes: BTreeMap<String, String>,
     pub environment_id: Option<Uuid>,
     pub component_id: Option<Uuid>,
@@ -160,6 +170,7 @@ pub struct LocalMetricSample {
     pub timestamp_unix_nanos: i64,
     pub value: f64,
     pub statistic: String,
+    pub source_oplog_index: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -169,4 +180,5 @@ pub struct LocalMetricSamplesResponse {
     pub observed_from_unix_nanos: Option<i64>,
     pub observed_to_unix_nanos: Option<i64>,
     pub original_point_count: u64,
+    pub approximate: bool,
 }

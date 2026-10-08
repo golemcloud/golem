@@ -19,7 +19,7 @@ use golem_cli::model::local_observability::{
     LocalMetricFamiliesRequest, LocalMetricFamiliesResponse, LocalMetricFamily, LocalMetricKind,
     LocalMetricSample, LocalMetricSamplesRequest, LocalMetricSamplesResponse, LocalMetricScope,
     LocalMetricSeries, LocalMetricSeriesRequest, LocalMetricSeriesResponse, LocalMetricSource,
-    LocalObservabilityCapability, LocalObservabilityStatus,
+    LocalMetricTemporality, LocalObservabilityCapability, LocalObservabilityStatus,
 };
 use poem::http::{HeaderValue, StatusCode, header};
 use poem::{Body, Request, Response, Route};
@@ -40,7 +40,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 pub const OBSERVABILITY_DB_FILE_NAME: &str = "observability.db";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 const RETENTION_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const RETENTION_BYTES: u64 = 1024 * 1024 * 1024;
@@ -51,7 +51,7 @@ const MAX_SERIES_LIMIT: u16 = 500;
 const DEFAULT_SAMPLE_LIMIT: u16 = 240;
 const MAX_SAMPLE_LIMIT: u16 = 1000;
 const EXPORTER_NAME: &str = "golem-otlp-exporter";
-const EXPORTER_VERSION: &str = "1.5.1";
+const EXPORTER_VERSION: &str = "1.6.0";
 
 #[derive(Clone, Debug)]
 enum RuntimeState {
@@ -76,6 +76,7 @@ struct StoredPoint {
     description: String,
     unit: String,
     kind: LocalMetricKind,
+    temporality: LocalMetricTemporality,
     category: String,
     timestamp_ns: i64,
     value: f64,
@@ -85,6 +86,7 @@ struct StoredPoint {
     agent_id: Option<String>,
     agent_type: Option<String>,
     attributes: BTreeMap<String, String>,
+    source_oplog_index: Option<u64>,
 }
 
 impl LocalObservability {
@@ -347,40 +349,54 @@ impl LocalObservability {
             .unwrap_or(DEFAULT_FAMILY_LIMIT)
             .clamp(1, MAX_FAMILY_LIMIT) as usize;
         let cursor = decode_cursor(&request.cursor)?;
-        let rows = scoped_rows(
-            pool,
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "WITH scoped AS (SELECT id, family, description, unit, kind, temporality, category, timestamp_ns, value, statistic, series_key FROM metric_points WHERE 1 = 1",
+        );
+        push_metric_filters(
+            &mut query,
             request.source,
             &request.scope,
             request.range.from_unix_nanos,
             request.range.to_unix_nanos,
             None,
-        )
-        .await?;
-        let name_filter = request.name_filter.as_deref().map(str::to_lowercase);
-        let mut grouped = BTreeMap::<String, FamilyAccumulator>::new();
-        for row in rows {
-            if name_filter
-                .as_ref()
-                .is_some_and(|filter| !row.family.to_lowercase().contains(filter))
-            {
-                continue;
-            }
-            grouped.entry(row.family.clone()).or_default().add(row);
+            None,
+        );
+        if let Some(name_filter) = &request.name_filter {
+            query
+                .push(" AND INSTR(LOWER(family), LOWER(")
+                .push_bind(name_filter.clone())
+                .push(")) > 0");
         }
-        let mut values = grouped
-            .into_values()
-            .map(FamilyAccumulator::finish)
-            .collect::<Vec<_>>();
-        values.sort_by(|left, right| {
-            category_rank(&left.category)
-                .cmp(&category_rank(&right.category))
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        let start = cursor.min(values.len());
-        let end = (start + limit).min(values.len());
-        let next_cursor = (end < values.len()).then(|| end.to_string());
+        query
+            .push(
+                "), ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY family ORDER BY CASE WHEN statistic = 'value' THEN 0 ELSE 1 END, timestamp_ns DESC, id DESC) AS family_rank FROM scoped), aggregated AS (SELECT family, MAX(description) AS description, MAX(unit) AS unit, MAX(kind) AS kind, MAX(temporality) AS temporality, MAX(category) AS category, COUNT(DISTINCT series_key) AS series_count, MAX(CASE WHEN statistic = 'value' THEN timestamp_ns END) AS latest_unix_nanos FROM scoped GROUP BY family) SELECT aggregated.family, aggregated.description, aggregated.unit, aggregated.kind, aggregated.temporality, aggregated.category, aggregated.series_count, ranked.value AS latest_value, aggregated.latest_unix_nanos FROM aggregated LEFT JOIN ranked ON ranked.family = aggregated.family AND ranked.family_rank = 1 AND ranked.statistic = 'value' ORDER BY CASE WHEN aggregated.category IN ('Invocations', 'Execution') THEN 0 WHEN aggregated.category = 'Reliability' THEN 1 WHEN aggregated.category IN ('Runtime', 'Capacity') THEN 2 WHEN aggregated.category IN ('State Changes', 'Scheduling/Durability') THEN 3 WHEN aggregated.category = 'Compilation/Storage' THEN 4 ELSE 5 END, aggregated.family LIMIT ",
+            )
+            .push_bind((limit + 1) as i64)
+            .push(" OFFSET ")
+            .push_bind(cursor as i64);
+        let mut values = query
+            .build()
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                Ok(LocalMetricFamily {
+                    name: row.try_get("family")?,
+                    description: row.try_get("description")?,
+                    unit: row.try_get("unit")?,
+                    kind: parse_kind(row.try_get("kind")?),
+                    temporality: parse_temporality(row.try_get("temporality")?),
+                    category: row.try_get("category")?,
+                    series_count: row.try_get::<i64, _>("series_count")?.max(0) as u64,
+                    latest_value: row.try_get("latest_value")?,
+                    latest_unix_nanos: row.try_get("latest_unix_nanos")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let next_cursor = (values.len() > limit).then(|| (cursor + limit).to_string());
+        values.truncate(limit);
         Ok(LocalMetricFamiliesResponse {
-            values: values[start..end].to_vec(),
+            values,
             next_cursor,
         })
     }
@@ -396,45 +412,50 @@ impl LocalObservability {
             .unwrap_or(DEFAULT_SERIES_LIMIT)
             .clamp(1, MAX_SERIES_LIMIT) as usize;
         let cursor = decode_cursor(&request.cursor)?;
-        let rows = scoped_rows(
-            pool,
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "WITH ranked AS (SELECT id, series_key, statistic, temporality, attributes_json, environment_id, component_id, agent_id, agent_type, value, timestamp_ns, ROW_NUMBER() OVER (PARTITION BY series_key ORDER BY timestamp_ns DESC, id DESC) AS series_rank FROM metric_points WHERE 1 = 1",
+        );
+        push_metric_filters(
+            &mut query,
             request.source,
             &request.scope,
             request.range.from_unix_nanos,
             request.range.to_unix_nanos,
             Some(&request.family),
-        )
-        .await?;
-        let mut grouped = BTreeMap::<String, LocalMetricSeries>::new();
-        for row in rows {
-            let entry =
-                grouped
-                    .entry(row.series_key.clone())
-                    .or_insert_with(|| LocalMetricSeries {
-                        series_key: row.series_key.clone(),
-                        statistic: row.statistic.clone(),
-                        attributes: row.attributes.clone(),
-                        environment_id: row.environment_id.as_deref().and_then(parse_uuid),
-                        component_id: row.component_id.as_deref().and_then(parse_uuid),
-                        agent_id: row.agent_id.clone(),
-                        agent_type: row.agent_type.clone(),
-                        latest_value: None,
-                        latest_unix_nanos: None,
-                    });
-            if entry
-                .latest_unix_nanos
-                .is_none_or(|timestamp| row.timestamp_ns >= timestamp)
-            {
-                entry.latest_unix_nanos = Some(row.timestamp_ns);
-                entry.latest_value = Some(row.value);
-            }
-        }
-        let values = grouped.into_values().collect::<Vec<_>>();
-        let start = cursor.min(values.len());
-        let end = (start + limit).min(values.len());
-        let next_cursor = (end < values.len()).then(|| end.to_string());
+            None,
+        );
+        query
+            .push(") SELECT series_key, statistic, temporality, attributes_json, environment_id, component_id, agent_id, agent_type, value, timestamp_ns FROM ranked WHERE series_rank = 1 ORDER BY series_key LIMIT ")
+            .push_bind((limit + 1) as i64)
+            .push(" OFFSET ")
+            .push_bind(cursor as i64);
+        let mut values = query
+            .build()
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let attributes_json: String = row.try_get("attributes_json")?;
+                let environment_id: Option<String> = row.try_get("environment_id")?;
+                let component_id: Option<String> = row.try_get("component_id")?;
+                Ok(LocalMetricSeries {
+                    series_key: row.try_get("series_key")?,
+                    statistic: row.try_get("statistic")?,
+                    temporality: parse_temporality(row.try_get("temporality")?),
+                    attributes: serde_json::from_str(&attributes_json)?,
+                    environment_id: environment_id.as_deref().and_then(parse_uuid),
+                    component_id: component_id.as_deref().and_then(parse_uuid),
+                    agent_id: row.try_get("agent_id")?,
+                    agent_type: row.try_get("agent_type")?,
+                    latest_value: row.try_get("value")?,
+                    latest_unix_nanos: row.try_get("timestamp_ns")?,
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let next_cursor = (values.len() > limit).then(|| (cursor + limit).to_string());
+        values.truncate(limit);
         Ok(LocalMetricSeriesResponse {
-            values: values[start..end].to_vec(),
+            values,
             next_cursor,
         })
     }
@@ -445,102 +466,86 @@ impl LocalObservability {
     ) -> anyhow::Result<LocalMetricSamplesResponse> {
         let pool = self.ready_pool().await?;
         validate_range(request.range.from_unix_nanos, request.range.to_unix_nanos)?;
-        let rows = scoped_rows(
+        let max_points = request
+            .max_points
+            .unwrap_or(DEFAULT_SAMPLE_LIMIT)
+            .clamp(1, MAX_SAMPLE_LIMIT) as usize;
+        let summary = sample_summary(
             pool,
             request.source,
             &request.scope,
             request.range.from_unix_nanos,
             request.range.to_unix_nanos,
-            Some(&request.family),
+            &request.family,
+            &request.series_key,
+        )
+        .await?;
+        let Some(profile) = sample_profile(
+            pool,
+            request.source,
+            &request.scope,
+            request.range.to_unix_nanos,
+            &request.family,
+            &request.series_key,
         )
         .await?
-        .into_iter()
-        .filter(|row| row.series_key == request.series_key)
-        .collect::<Vec<_>>();
-        let original_point_count = rows.len() as u64;
-        let max_points = request
-            .max_points
-            .unwrap_or(DEFAULT_SAMPLE_LIMIT)
-            .clamp(1, MAX_SAMPLE_LIMIT) as usize;
-        let step = rows.len().div_ceil(max_points).max(1);
-        let samples = rows
-            .iter()
-            .step_by(step)
-            .map(|row| LocalMetricSample {
-                timestamp_unix_nanos: row.timestamp_ns,
-                value: row.value,
-                statistic: row.statistic.clone(),
-            })
-            .collect();
+        else {
+            return Ok(LocalMetricSamplesResponse {
+                samples: Vec::new(),
+                observed_from_unix_nanos: None,
+                observed_to_unix_nanos: None,
+                original_point_count: 0,
+                approximate: false,
+            });
+        };
+        let include_seed = profile.kind == LocalMetricKind::Gauge;
+        let needs_seed = include_seed
+            || (matches!(
+                profile.kind,
+                LocalMetricKind::Counter | LocalMetricKind::Histogram
+            ) && profile.temporality == LocalMetricTemporality::Cumulative);
+        let seed = if needs_seed {
+            sample_seed(
+                pool,
+                request.source,
+                &request.scope,
+                request.range.from_unix_nanos,
+                &request.family,
+                &request.series_key,
+            )
+            .await?
+        } else {
+            None
+        };
+        let in_range_limit = max_points
+            .saturating_sub(usize::from(include_seed && seed.is_some()))
+            .max(1);
+        let aggregate = summary.point_count as usize > in_range_limit;
+        let mut samples = if aggregate {
+            aggregate_samples(
+                pool,
+                request,
+                profile,
+                in_range_limit,
+                seed.as_ref().map(|sample| sample.value),
+            )
+            .await?
+        } else {
+            raw_samples(pool, request, in_range_limit).await?
+        };
+        if include_seed && let Some(mut seed) = seed {
+            seed.timestamp_unix_nanos = request.range.from_unix_nanos;
+            samples.insert(0, seed);
+            samples.truncate(max_points);
+        }
         Ok(LocalMetricSamplesResponse {
             samples,
-            observed_from_unix_nanos: rows.first().map(|row| row.timestamp_ns),
-            observed_to_unix_nanos: rows.last().map(|row| row.timestamp_ns),
-            original_point_count,
+            observed_from_unix_nanos: summary.observed_from,
+            observed_to_unix_nanos: summary.observed_to,
+            original_point_count: summary.point_count,
+            approximate: aggregate,
         })
     }
-}
-
-#[derive(Default)]
-struct FamilyAccumulator {
-    name: String,
-    description: String,
-    unit: String,
-    kind: Option<LocalMetricKind>,
-    category: String,
-    series: std::collections::BTreeSet<String>,
-    latest_value: Option<f64>,
-    latest_timestamp: Option<i64>,
-}
-
-impl FamilyAccumulator {
-    fn add(&mut self, row: ReadPoint) {
-        self.name = row.family;
-        self.description = row.description;
-        self.unit = row.unit;
-        self.kind = Some(row.kind);
-        self.category = row.category;
-        self.series.insert(row.series_key);
-        if self
-            .latest_timestamp
-            .is_none_or(|timestamp| row.timestamp_ns >= timestamp)
-            && row.statistic == "value"
-        {
-            self.latest_timestamp = Some(row.timestamp_ns);
-            self.latest_value = Some(row.value);
-        }
-    }
-
-    fn finish(self) -> LocalMetricFamily {
-        LocalMetricFamily {
-            name: self.name,
-            description: self.description,
-            unit: self.unit,
-            kind: self.kind.unwrap_or(LocalMetricKind::Unknown),
-            category: self.category,
-            series_count: self.series.len() as u64,
-            latest_value: self.latest_value,
-            latest_unix_nanos: self.latest_timestamp,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ReadPoint {
-    family: String,
-    description: String,
-    unit: String,
-    kind: LocalMetricKind,
-    category: String,
-    timestamp_ns: i64,
-    value: f64,
-    statistic: String,
-    environment_id: Option<String>,
-    component_id: Option<String>,
-    agent_id: Option<String>,
-    agent_type: Option<String>,
-    attributes: BTreeMap<String, String>,
-    series_key: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -760,6 +765,7 @@ async fn open_store(path: &Path) -> anyhow::Result<SqlitePool> {
             description TEXT NOT NULL,
             unit TEXT NOT NULL,
             kind TEXT NOT NULL,
+            temporality TEXT NOT NULL,
             category TEXT NOT NULL,
             timestamp_ns INTEGER NOT NULL,
             value REAL NOT NULL,
@@ -769,7 +775,8 @@ async fn open_store(path: &Path) -> anyhow::Result<SqlitePool> {
             agent_id TEXT,
             agent_type TEXT,
             attributes_json TEXT NOT NULL,
-            series_key TEXT NOT NULL
+            series_key TEXT NOT NULL,
+            source_oplog_index TEXT
         )
         "#,
     )
@@ -827,10 +834,10 @@ async fn insert_points(pool: &SqlitePool, points: &[StoredPoint]) -> anyhow::Res
         sqlx::query(
             r#"
             INSERT INTO metric_points (
-                source, family, description, unit, kind, category, timestamp_ns, value,
+                source, family, description, unit, kind, temporality, category, timestamp_ns, value,
                 statistic, environment_id, component_id, agent_id, agent_type,
-                attributes_json, series_key
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                attributes_json, series_key, source_oplog_index
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(source_name(point.source))
@@ -838,6 +845,7 @@ async fn insert_points(pool: &SqlitePool, points: &[StoredPoint]) -> anyhow::Res
         .bind(&point.description)
         .bind(&point.unit)
         .bind(kind_name(point.kind))
+        .bind(temporality_name(point.temporality))
         .bind(&point.category)
         .bind(point.timestamp_ns)
         .bind(point.value)
@@ -848,6 +856,7 @@ async fn insert_points(pool: &SqlitePool, points: &[StoredPoint]) -> anyhow::Res
         .bind(&point.agent_type)
         .bind(attributes_json)
         .bind(series_key)
+        .bind(point.source_oplog_index.map(|index| index.to_string()))
         .execute(&mut *transaction)
         .await?;
     }
@@ -890,22 +899,348 @@ async fn store_allocated_bytes(pool: &SqlitePool) -> anyhow::Result<u64> {
     Ok((page_count as u64).saturating_mul(page_size as u64))
 }
 
-async fn scoped_rows(
+#[derive(Clone, Debug)]
+struct SampleProfile {
+    kind: LocalMetricKind,
+    temporality: LocalMetricTemporality,
+    statistic: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SampleSummary {
+    point_count: u64,
+    observed_from: Option<i64>,
+    observed_to: Option<i64>,
+}
+
+async fn sample_profile(
+    pool: &SqlitePool,
+    source: LocalMetricSource,
+    scope: &LocalMetricScope,
+    to: i64,
+    family: &str,
+    series_key: &str,
+) -> anyhow::Result<Option<SampleProfile>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT kind, temporality, statistic FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        source,
+        scope,
+        i64::MIN,
+        to,
+        Some(family),
+        Some(series_key),
+    );
+    query.push(" ORDER BY timestamp_ns DESC, id DESC LIMIT 1");
+    let Some(row) = query.build().fetch_optional(pool).await? else {
+        return Ok(None);
+    };
+    Ok(Some(SampleProfile {
+        kind: parse_kind(row.try_get("kind")?),
+        temporality: parse_temporality(row.try_get("temporality")?),
+        statistic: row.try_get("statistic")?,
+    }))
+}
+
+async fn sample_summary(
     pool: &SqlitePool,
     source: LocalMetricSource,
     scope: &LocalMetricScope,
     from: i64,
     to: i64,
-    family: Option<&str>,
-) -> anyhow::Result<Vec<ReadPoint>> {
+    family: &str,
+    series_key: &str,
+) -> anyhow::Result<SampleSummary> {
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT family, description, unit, kind, category, timestamp_ns, value, statistic, environment_id, component_id, agent_id, agent_type, attributes_json, series_key FROM metric_points WHERE source = ",
+        "SELECT COUNT(*) AS point_count, MIN(timestamp_ns) AS observed_from, MAX(timestamp_ns) AS observed_to FROM metric_points WHERE 1 = 1",
     );
-    query.push_bind(source_name(source));
+    push_metric_filters(
+        &mut query,
+        source,
+        scope,
+        from,
+        to,
+        Some(family),
+        Some(series_key),
+    );
+    let row = query.build().fetch_one(pool).await?;
+    let point_count = row.try_get::<i64, _>("point_count")?.max(0) as u64;
+    Ok(SampleSummary {
+        point_count,
+        observed_from: row.try_get("observed_from")?,
+        observed_to: row.try_get("observed_to")?,
+    })
+}
+
+async fn raw_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    limit: usize,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT timestamp_ns, value, statistic, source_oplog_index FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query
+        .push(" ORDER BY timestamp_ns, id LIMIT ")
+        .push_bind(limit as i64);
+    query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(read_sample)
+        .collect()
+}
+
+async fn sample_seed(
+    pool: &SqlitePool,
+    source: LocalMetricSource,
+    scope: &LocalMetricScope,
+    from: i64,
+    family: &str,
+    series_key: &str,
+) -> anyhow::Result<Option<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT timestamp_ns, value, statistic, source_oplog_index FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        source,
+        scope,
+        i64::MIN,
+        from,
+        Some(family),
+        Some(series_key),
+    );
+    query.push(" ORDER BY timestamp_ns DESC, id DESC LIMIT 1");
+    query
+        .build()
+        .fetch_optional(pool)
+        .await?
+        .map(read_sample)
+        .transpose()
+}
+
+async fn aggregate_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    profile: SampleProfile,
+    max_points: usize,
+    seed: Option<f64>,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let span = request
+        .range
+        .to_unix_nanos
+        .saturating_sub(request.range.from_unix_nanos)
+        .max(1);
+    let divisor = max_points.max(1) as i64;
+    let bucket_width = span.saturating_add(divisor - 1) / divisor;
+    match (profile.kind, profile.temporality) {
+        (LocalMetricKind::Gauge, _) => {
+            aggregate_last_samples(pool, request, max_points, bucket_width).await
+        }
+        (_, LocalMetricTemporality::Delta) => {
+            aggregate_sum_samples(pool, request, &profile.statistic, max_points, bucket_width).await
+        }
+        (
+            LocalMetricKind::Counter | LocalMetricKind::Histogram,
+            LocalMetricTemporality::Cumulative,
+        ) => aggregate_cumulative_samples(pool, request, max_points, bucket_width, seed).await,
+        (LocalMetricKind::Event, _) => {
+            aggregate_mean_samples(pool, request, max_points, bucket_width).await
+        }
+        _ => aggregate_last_samples(pool, request, max_points, bucket_width).await,
+    }
+}
+
+async fn aggregate_last_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    max_points: usize,
+    bucket_width: i64,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH ranked AS (SELECT timestamp_ns, value, statistic, source_oplog_index, ROW_NUMBER() OVER (PARTITION BY ((timestamp_ns - ",
+    );
+    query.push_bind(request.range.from_unix_nanos);
+    query.push(") / ").push_bind(bucket_width);
+    query.push(
+        ") ORDER BY timestamp_ns DESC, id DESC) AS bucket_rank FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query
+        .push(") SELECT timestamp_ns, value, statistic, source_oplog_index FROM ranked WHERE bucket_rank = 1 ORDER BY timestamp_ns LIMIT ")
+        .push_bind(max_points as i64);
+    query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(read_sample)
+        .collect()
+}
+
+async fn aggregate_sum_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    statistic: &str,
+    max_points: usize,
+    bucket_width: i64,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new("WITH bucketed AS (SELECT ");
+    push_bucket_timestamp(&mut query, request.range.from_unix_nanos, bucket_width);
+    query.push(" AS bucket_timestamp, value FROM metric_points WHERE 1 = 1");
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query
+        .push(") SELECT bucket_timestamp AS timestamp_ns, SUM(value) AS value FROM bucketed GROUP BY bucket_timestamp ORDER BY bucket_timestamp LIMIT ")
+        .push_bind(max_points as i64);
+    let rows = query.build().fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(LocalMetricSample {
+                timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+                value: row.try_get("value")?,
+                statistic: statistic.to_string(),
+                source_oplog_index: None,
+            })
+        })
+        .collect()
+}
+
+async fn aggregate_cumulative_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    max_points: usize,
+    bucket_width: i64,
+    seed: Option<f64>,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH deltas AS (SELECT timestamp_ns, CASE WHEN previous_value IS NULL THEN NULL WHEN value >= previous_value THEN value - previous_value ELSE value END AS value FROM (SELECT timestamp_ns, value, LAG(value, 1, ",
+    );
+    query.push_bind(seed);
+    query.push(
+        ") OVER (ORDER BY timestamp_ns, id) AS previous_value FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query.push(")), bucketed AS (SELECT ");
+    push_bucket_timestamp(&mut query, request.range.from_unix_nanos, bucket_width);
+    query.push(" AS bucket_timestamp, value FROM deltas WHERE value IS NOT NULL)");
+    query
+        .push(" SELECT bucket_timestamp AS timestamp_ns, SUM(value) AS value FROM bucketed GROUP BY bucket_timestamp ORDER BY bucket_timestamp LIMIT ")
+        .push_bind(max_points as i64);
+    let rows = query.build().fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(LocalMetricSample {
+                timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+                value: row.try_get("value")?,
+                statistic: "delta".to_string(),
+                source_oplog_index: None,
+            })
+        })
+        .collect()
+}
+
+async fn aggregate_mean_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    max_points: usize,
+    bucket_width: i64,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new("WITH bucketed AS (SELECT ");
+    push_bucket_timestamp(&mut query, request.range.from_unix_nanos, bucket_width);
+    query.push(" AS bucket_timestamp, value FROM metric_points WHERE 1 = 1");
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query
+        .push(") SELECT bucket_timestamp AS timestamp_ns, AVG(value) AS value FROM bucketed GROUP BY bucket_timestamp ORDER BY bucket_timestamp LIMIT ")
+        .push_bind(max_points as i64);
+    let rows = query.build().fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(LocalMetricSample {
+                timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+                value: row.try_get("value")?,
+                statistic: "mean".to_string(),
+                source_oplog_index: None,
+            })
+        })
+        .collect()
+}
+
+fn push_bucket_timestamp(
+    query: &mut QueryBuilder<'_, Sqlite>,
+    range_start: i64,
+    bucket_width: i64,
+) {
+    query.push_bind(range_start);
+    query.push(" + ((timestamp_ns - ");
+    query.push_bind(range_start);
+    query.push(") / ").push_bind(bucket_width);
+    query.push(") * ").push_bind(bucket_width);
+}
+
+fn push_metric_filters(
+    query: &mut QueryBuilder<'_, Sqlite>,
+    source: LocalMetricSource,
+    scope: &LocalMetricScope,
+    from: i64,
+    to: i64,
+    family: Option<&str>,
+    series_key: Option<&str>,
+) {
+    query.push(" AND source = ").push_bind(source_name(source));
     query.push(" AND timestamp_ns >= ").push_bind(from);
-    query.push(" AND timestamp_ns <= ").push_bind(to);
+    query.push(" AND timestamp_ns < ").push_bind(to);
     if let Some(family) = family {
-        query.push(" AND family = ").push_bind(family);
+        query.push(" AND family = ").push_bind(family.to_string());
+    }
+    if let Some(series_key) = series_key {
+        query
+            .push(" AND series_key = ")
+            .push_bind(series_key.to_string());
     }
     if let Some(environment_id) = scope.environment_id {
         query
@@ -914,17 +1249,27 @@ async fn scoped_rows(
             .push(" OR environment_id IS NULL)");
     }
     push_string_filter(
-        &mut query,
+        query,
         "component_id",
         scope.component_ids.iter().map(Uuid::to_string),
     );
-    push_string_filter(&mut query, "agent_id", scope.agent_ids.iter().cloned());
+    push_string_filter(query, "agent_id", scope.agent_ids.iter().cloned());
     if let Some(agent_type) = &scope.agent_type {
-        query.push(" AND agent_type = ").push_bind(agent_type);
+        query
+            .push(" AND agent_type = ")
+            .push_bind(agent_type.clone());
     }
-    query.push(" ORDER BY timestamp_ns, id");
-    let rows = query.build().fetch_all(pool).await?;
-    rows.into_iter().map(read_point).collect()
+}
+
+fn read_sample(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<LocalMetricSample> {
+    Ok(LocalMetricSample {
+        timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+        value: row.try_get("value")?,
+        statistic: row.try_get("statistic")?,
+        source_oplog_index: row
+            .try_get::<Option<String>, _>("source_oplog_index")?
+            .and_then(|index| index.parse().ok()),
+    })
 }
 
 fn push_string_filter(
@@ -942,26 +1287,6 @@ fn push_string_filter(
         separated.push_bind(value);
     }
     separated.push_unseparated(")");
-}
-
-fn read_point(row: sqlx::sqlite::SqliteRow) -> anyhow::Result<ReadPoint> {
-    let attributes_json: String = row.try_get("attributes_json")?;
-    Ok(ReadPoint {
-        family: row.try_get("family")?,
-        description: row.try_get("description")?,
-        unit: row.try_get("unit")?,
-        kind: parse_kind(row.try_get("kind")?),
-        category: row.try_get("category")?,
-        timestamp_ns: row.try_get("timestamp_ns")?,
-        value: row.try_get("value")?,
-        statistic: row.try_get("statistic")?,
-        environment_id: row.try_get("environment_id")?,
-        component_id: row.try_get("component_id")?,
-        agent_id: row.try_get("agent_id")?,
-        agent_type: row.try_get("agent_type")?,
-        attributes: serde_json::from_str(&attributes_json)?,
-        series_key: row.try_get("series_key")?,
-    })
 }
 
 struct ParsedOtlpBatch {
@@ -1030,16 +1355,27 @@ fn parse_otlp_json(body: &[u8], environment_id: Option<&str>) -> anyhow::Result<
                     .get("unit")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let (kind, data_points) = if let Some(sum) = metric.get("sum") {
+                let (kind, temporality, data_points) = if let Some(sum) = metric.get("sum") {
                     let monotonic = sum
                         .get("isMonotonic")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     let kind = known_agent_kind(family, monotonic);
-                    (kind, sum.get("dataPoints").and_then(Value::as_array))
+                    let temporality =
+                        match sum.get("aggregationTemporality").and_then(parse_i64_value) {
+                            Some(1) => LocalMetricTemporality::Delta,
+                            Some(2) => LocalMetricTemporality::Cumulative,
+                            _ => LocalMetricTemporality::Unspecified,
+                        };
+                    (
+                        kind,
+                        temporality,
+                        sum.get("dataPoints").and_then(Value::as_array),
+                    )
                 } else if let Some(gauge) = metric.get("gauge") {
                     (
                         LocalMetricKind::Gauge,
+                        LocalMetricTemporality::Unspecified,
                         gauge.get("dataPoints").and_then(Value::as_array),
                     )
                 } else {
@@ -1062,12 +1398,17 @@ fn parse_otlp_json(body: &[u8], environment_id: Option<&str>) -> anyhow::Result<
                     attributes.extend(parse_attributes(
                         data_point.get("attributes").and_then(Value::as_array),
                     ));
+                    let source_oplog_index = attributes
+                        .get("golem.oplog.index")
+                        .and_then(|index| index.parse::<u64>().ok());
+                    attributes.retain(|key, _| !reserved_correlation_attribute(key));
                     points.push(StoredPoint {
                         source: LocalMetricSource::Agents,
                         family: family.to_string(),
                         description: description.to_string(),
                         unit: unit.to_string(),
                         kind,
+                        temporality,
                         category: agent_category(family).to_string(),
                         timestamp_ns,
                         value,
@@ -1077,6 +1418,7 @@ fn parse_otlp_json(body: &[u8], environment_id: Option<&str>) -> anyhow::Result<
                         agent_id: Some(agent_id.clone()),
                         agent_type: agent_type.clone(),
                         attributes,
+                        source_oplog_index,
                     });
                 }
             }
@@ -1161,12 +1503,25 @@ fn parse_number(data_point: &Value) -> Option<f64> {
 }
 
 fn parse_i64(value: Option<&Value>) -> Option<i64> {
-    value.and_then(|value| {
-        value
-            .as_i64()
-            .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
-            .or_else(|| value.as_str()?.parse().ok())
-    })
+    value.and_then(parse_i64_value)
+}
+
+fn parse_i64_value(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+        .or_else(|| value.as_str()?.parse().ok())
+}
+
+fn reserved_correlation_attribute(key: &str) -> bool {
+    matches!(
+        key,
+        "service.name"
+            | "golem.agent.id"
+            | "golem.component.id"
+            | "golem.component.version"
+            | "golem.oplog.index"
+    )
 }
 
 fn service_point(
@@ -1184,6 +1539,14 @@ fn service_point(
         description: description.to_string(),
         unit: service_unit(family).to_string(),
         kind,
+        temporality: match kind {
+            LocalMetricKind::Counter | LocalMetricKind::Histogram => {
+                LocalMetricTemporality::Cumulative
+            }
+            LocalMetricKind::Gauge | LocalMetricKind::Event | LocalMetricKind::Unknown => {
+                LocalMetricTemporality::Unspecified
+            }
+        },
         category: service_category(family).to_string(),
         timestamp_ns,
         value,
@@ -1193,16 +1556,18 @@ fn service_point(
         agent_id: None,
         agent_type: None,
         attributes,
+        source_oplog_index: None,
     }
 }
 
 fn series_key(point: &StoredPoint, attributes_json: &str) -> String {
     format!(
-        "{}|{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}|{}",
         point.environment_id.as_deref().unwrap_or_default(),
         point.component_id.as_deref().unwrap_or_default(),
         point.agent_id.as_deref().unwrap_or_default(),
         point.agent_type.as_deref().unwrap_or_default(),
+        temporality_name(point.temporality),
         point.statistic,
         attributes_json
     )
@@ -1283,17 +1648,6 @@ fn service_unit(family: &str) -> &'static str {
     }
 }
 
-fn category_rank(category: &str) -> u8 {
-    match category {
-        "Invocations" | "Execution" => 0,
-        "Reliability" => 1,
-        "Runtime" | "Capacity" => 2,
-        "State Changes" | "Scheduling/Durability" => 3,
-        "Compilation/Storage" => 4,
-        _ => 5,
-    }
-}
-
 fn source_name(source: LocalMetricSource) -> &'static str {
     match source {
         LocalMetricSource::Services => "services",
@@ -1318,6 +1672,22 @@ fn parse_kind(kind: String) -> LocalMetricKind {
         "histogram" => LocalMetricKind::Histogram,
         "event" => LocalMetricKind::Event,
         _ => LocalMetricKind::Unknown,
+    }
+}
+
+fn temporality_name(temporality: LocalMetricTemporality) -> &'static str {
+    match temporality {
+        LocalMetricTemporality::Unspecified => "unspecified",
+        LocalMetricTemporality::Delta => "delta",
+        LocalMetricTemporality::Cumulative => "cumulative",
+    }
+}
+
+fn parse_temporality(temporality: String) -> LocalMetricTemporality {
+    match temporality.as_str() {
+        "delta" => LocalMetricTemporality::Delta,
+        "cumulative" => LocalMetricTemporality::Cumulative,
+        _ => LocalMetricTemporality::Unspecified,
     }
 }
 
@@ -1377,8 +1747,10 @@ mod tests {
                 "scopeMetrics": [{"metrics": [{
                     "name": "golem.invocation.count",
                     "unit": "1",
-                    "sum": {"isMonotonic": true, "dataPoints": [{
-                        "timeUnixNano": "42", "asInt": "1", "attributes": []
+                    "sum": {"aggregationTemporality": 1, "isMonotonic": true, "dataPoints": [{
+                        "timeUnixNano": "42", "asInt": "1", "attributes": [
+                            {"key": "golem.oplog.index", "value": {"stringValue": "9"}}
+                        ]
                     }]}
                 }]}]
             }]
@@ -1388,6 +1760,9 @@ mod tests {
         assert_eq!(batch.rejected, 0);
         assert_eq!(batch.points[0].agent_type.as_deref(), Some("Counter"));
         assert_eq!(batch.points[0].kind, LocalMetricKind::Counter);
+        assert_eq!(batch.points[0].temporality, LocalMetricTemporality::Delta);
+        assert_eq!(batch.points[0].source_oplog_index, Some(9));
+        assert!(!batch.points[0].attributes.contains_key("golem.oplog.index"));
     }
 
     #[test]
@@ -1445,49 +1820,294 @@ mod tests {
         let component_id = Uuid::new_v4();
         let agent_id = format!("{component_id}/Counter(\"stored\")");
         let timestamp = now_ns();
-        insert_points(
-            &pool,
-            &[StoredPoint {
-                source: LocalMetricSource::Agents,
-                family: "golem.invocation.count".to_string(),
-                description: "Invocations".to_string(),
-                unit: "1".to_string(),
-                kind: LocalMetricKind::Counter,
-                category: "Invocations".to_string(),
-                timestamp_ns: timestamp,
-                value: 3.0,
-                statistic: "value".to_string(),
-                environment_id: Some(environment_id.to_string()),
-                component_id: Some(component_id.to_string()),
-                agent_id: Some(agent_id.clone()),
-                agent_type: Some("Counter".to_string()),
-                attributes: BTreeMap::new(),
-            }],
-        )
-        .await
-        .unwrap();
+        let point = StoredPoint {
+            source: LocalMetricSource::Agents,
+            family: "golem.invocation.count".to_string(),
+            description: "Invocations".to_string(),
+            unit: "1".to_string(),
+            kind: LocalMetricKind::Counter,
+            temporality: LocalMetricTemporality::Delta,
+            category: "Invocations".to_string(),
+            timestamp_ns: timestamp,
+            value: 3.0,
+            statistic: "value".to_string(),
+            environment_id: Some(environment_id.to_string()),
+            component_id: Some(component_id.to_string()),
+            agent_id: Some(agent_id.clone()),
+            agent_type: Some("Counter".to_string()),
+            attributes: BTreeMap::new(),
+            source_oplog_index: Some(17),
+        };
+        let attributes_json = serde_json::to_string(&point.attributes).unwrap();
+        let stored_series_key = series_key(&point, &attributes_json);
+        insert_points(&pool, &[point]).await.unwrap();
 
-        let rows = scoped_rows(
+        let samples = raw_samples(
             &pool,
-            LocalMetricSource::Agents,
-            &LocalMetricScope {
-                environment_id: Some(environment_id),
-                component_ids: Vec::new(),
-                agent_ids: vec![agent_id],
-                agent_type: None,
+            &LocalMetricSamplesRequest {
+                source: LocalMetricSource::Agents,
+                scope: LocalMetricScope {
+                    environment_id: Some(environment_id),
+                    component_ids: Vec::new(),
+                    agent_ids: Vec::new(),
+                    agent_type: None,
+                },
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: timestamp - 1,
+                    to_unix_nanos: timestamp + 1,
+                },
+                family: "golem.invocation.count".to_string(),
+                series_key: stored_series_key,
+                max_points: Some(10),
             },
-            timestamp - 1,
-            timestamp + 1,
-            Some("golem.invocation.count"),
+            10,
         )
         .await
         .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].value, 3.0);
+        assert_eq!(samples[0].source_oplog_index, Some(17));
 
         pool.close().await;
         clear_store(&db_path).await.unwrap();
         assert!(!db_path.exists());
+        tokio::fs::remove_dir(&test_dir).await.unwrap();
+    }
+
+    #[test]
+    async fn sample_queries_use_truthful_bounded_transforms() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "golem-local-observability-samples-test-{}",
+            Uuid::new_v4()
+        ));
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+        let db_path = test_dir.join(OBSERVABILITY_DB_FILE_NAME);
+        let pool = open_store(&db_path).await.unwrap();
+        let environment_id = Uuid::new_v4();
+        let component_id = Uuid::new_v4();
+        let agent_id = format!("{component_id}/Counter(\"samples\")");
+        let point = |family: &str,
+                     kind: LocalMetricKind,
+                     temporality: LocalMetricTemporality,
+                     timestamp_ns: i64,
+                     value: f64| StoredPoint {
+            source: LocalMetricSource::Agents,
+            family: family.to_string(),
+            description: family.to_string(),
+            unit: "1".to_string(),
+            kind,
+            temporality,
+            category: "test".to_string(),
+            timestamp_ns,
+            value,
+            statistic: "value".to_string(),
+            environment_id: Some(environment_id.to_string()),
+            component_id: Some(component_id.to_string()),
+            agent_id: Some(agent_id.clone()),
+            agent_type: Some("Counter".to_string()),
+            attributes: BTreeMap::new(),
+            source_oplog_index: Some(timestamp_ns as u64),
+        };
+        let mut points = Vec::new();
+        for (timestamp, value) in [(10, 1.0), (20, 2.0), (30, 3.0), (40, 4.0)] {
+            points.push(point(
+                "delta",
+                LocalMetricKind::Counter,
+                LocalMetricTemporality::Delta,
+                timestamp,
+                value,
+            ));
+        }
+        for (timestamp, value) in [(5, 2.0), (10, 5.0), (20, 8.0), (30, 2.0), (40, 7.0)] {
+            points.push(point(
+                "cumulative",
+                LocalMetricKind::Counter,
+                LocalMetricTemporality::Cumulative,
+                timestamp,
+                value,
+            ));
+        }
+        for (timestamp, value) in [(5, 9.0), (20, 10.0), (40, 12.0)] {
+            points.push(point(
+                "gauge",
+                LocalMetricKind::Gauge,
+                LocalMetricTemporality::Unspecified,
+                timestamp,
+                value,
+            ));
+        }
+        let attributes_json = serde_json::to_string(&points[0].attributes).unwrap();
+        let delta_series_key = series_key(
+            points.iter().find(|point| point.family == "delta").unwrap(),
+            &attributes_json,
+        );
+        let cumulative_series_key = series_key(
+            points
+                .iter()
+                .find(|point| point.family == "cumulative")
+                .unwrap(),
+            &attributes_json,
+        );
+        let gauge_series_key = series_key(
+            points.iter().find(|point| point.family == "gauge").unwrap(),
+            &attributes_json,
+        );
+        insert_points(&pool, &points).await.unwrap();
+        let service = LocalObservability {
+            db_path: db_path.clone(),
+            pool: Some(pool.clone()),
+            state: RwLock::new(RuntimeState::Ready),
+            discarded_points: AtomicU64::new(0),
+            last_service_sample: AtomicI64::new(0),
+            last_agent_ingest: AtomicI64::new(0),
+        };
+        let request = |family: &str, series_key: &str, from: i64, to: i64, max_points: u16| {
+            LocalMetricSamplesRequest {
+                source: LocalMetricSource::Agents,
+                scope: LocalMetricScope {
+                    environment_id: Some(environment_id),
+                    component_ids: Vec::new(),
+                    agent_ids: Vec::new(),
+                    agent_type: None,
+                },
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: from,
+                    to_unix_nanos: to,
+                },
+                family: family.to_string(),
+                series_key: series_key.to_string(),
+                max_points: Some(max_points),
+            }
+        };
+
+        let families = service
+            .families(&LocalMetricFamiliesRequest {
+                source: LocalMetricSource::Agents,
+                scope: LocalMetricScope {
+                    environment_id: Some(environment_id),
+                    ..Default::default()
+                },
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: 0,
+                    to_unix_nanos: 50,
+                },
+                name_filter: None,
+                cursor: None,
+                limit: Some(2),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            families
+                .values
+                .iter()
+                .map(|family| family.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["cumulative", "delta"]
+        );
+        assert_eq!(families.next_cursor.as_deref(), Some("2"));
+        let series = service
+            .series(&LocalMetricSeriesRequest {
+                source: LocalMetricSource::Agents,
+                scope: LocalMetricScope {
+                    environment_id: Some(environment_id),
+                    ..Default::default()
+                },
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: 0,
+                    to_unix_nanos: 50,
+                },
+                family: "delta".to_string(),
+                cursor: None,
+                limit: Some(1),
+            })
+            .await
+            .unwrap();
+        assert_eq!(series.values.len(), 1);
+        assert_eq!(series.values[0].latest_value, Some(4.0));
+        assert_eq!(series.values[0].latest_unix_nanos, Some(40));
+
+        let delta = service
+            .samples(&request("delta", &delta_series_key, 0, 50, 2))
+            .await
+            .unwrap();
+        assert_eq!(
+            delta
+                .samples
+                .iter()
+                .map(|sample| sample.value)
+                .collect::<Vec<_>>(),
+            vec![3.0, 7.0]
+        );
+        assert!(delta.approximate);
+        assert_eq!(delta.original_point_count, 4);
+
+        let cumulative = service
+            .samples(&request("cumulative", &cumulative_series_key, 10, 50, 2))
+            .await
+            .unwrap();
+        assert_eq!(
+            cumulative
+                .samples
+                .iter()
+                .map(|sample| (sample.timestamp_unix_nanos, sample.value))
+                .collect::<Vec<_>>(),
+            vec![(10, 6.0), (30, 7.0)]
+        );
+        assert!(cumulative.approximate);
+
+        let gauge = service
+            .samples(&request("gauge", &gauge_series_key, 10, 50, 3))
+            .await
+            .unwrap();
+        assert_eq!(
+            gauge
+                .samples
+                .iter()
+                .map(|sample| (sample.timestamp_unix_nanos, sample.value))
+                .collect::<Vec<_>>(),
+            vec![(10, 9.0), (20, 10.0), (40, 12.0)]
+        );
+        assert!(!gauge.approximate);
+        assert_eq!(gauge.original_point_count, 2);
+        assert_eq!(gauge.observed_from_unix_nanos, Some(20));
+        assert_eq!(gauge.observed_to_unix_nanos, Some(40));
+
+        drop(service);
+        pool.close().await;
+        clear_store(&db_path).await.unwrap();
+        tokio::fs::remove_dir(&test_dir).await.unwrap();
+    }
+
+    #[test]
+    async fn rejects_an_incompatible_store_with_clean_guidance() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "golem-local-observability-old-schema-test-{}",
+            Uuid::new_v4()
+        ));
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+        let db_path = test_dir.join(OBSERVABILITY_DB_FILE_NAME);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&db_path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+
+        let error = open_store(&db_path).await.unwrap_err().to_string();
+
+        assert!(error.contains("schema 1"), "{error}");
+        assert!(
+            error.contains("golem server clean --observability-only"),
+            "{error}"
+        );
+        clear_store(&db_path).await.unwrap();
         tokio::fs::remove_dir(&test_dir).await.unwrap();
     }
 
