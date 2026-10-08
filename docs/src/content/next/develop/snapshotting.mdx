@@ -216,7 +216,7 @@ Golem runs snapshot loading in read-only mode and writes nothing from it to the 
 
 If loading fails, partial state is discarded:
 
-- A manual update fails and the agent remains on its previous component version.
+- A manual update fails and the agent remains on its previous component version. This is also true when the agent exits during the load. When an interrupt stops the load, the update stays pending, and the next start loads the snapshot again. See [Updating agents](/next/develop/updating#when-a-manual-update-fails).
 - A snapshot-assisted automatic update fails with `UPDATE_SNAPSHOT_INCOMPATIBLE`, and the agent remains on its previous component version. Golem does not reject the snapshot record. See [Updating agents](/next/develop/updating#failure-codes).
 - If an automatic snapshot is rejected by its loader, or loading or subsequent replay fails deterministically, Golem rejects only that snapshot record and recreates the component. The next start uses the previous usable automatic snapshot, if Golem keeps one and it is not the rejected record. When no usable automatic snapshot is left, Golem starts from the authoritative recovery baseline, or from the beginning if none exists. Transient failures and resource-limit failures can instead propagate or cause recovery to retry.
 - Failure to load the authoritative recovery baseline of an already completed manual update or snapshot-assisted update cannot fall back to pre-update history.

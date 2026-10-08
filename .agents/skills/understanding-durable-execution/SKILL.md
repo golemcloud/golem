@@ -897,7 +897,8 @@ record. A record with a name on an executor without filesystem snapshots gives `
 `prepare_instance` (`durable_host/mod.rs`) then branches on the pending update:
 
 - `SnapshotBased` — the save hook already ran and the payload is already recorded; the store must
-  already be live, and `finalize_pending_snapshot_update` loads it into the new revision.
+  already be live, and `finalize_pending_snapshot_update` loads it into the new revision. It writes
+  `SuccessfulUpdate` only after the load completed.
 - `SnapshotAssistedAutomatic` — `try_load_snapshot` loads the application snapshot of the selected
   record `S` into the target, after `materialize` restored its filesystem snapshot. `resume_replay`
   replays the stopped-source tail with the source revision's metadata: the executable metadata,
@@ -949,7 +950,10 @@ the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupte
 assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
 store failure of the baseline payload). An `Interrupted` error that reaches `decide` fails a plain
 automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
-pending manual update. A plain automatic head whose authoritative baseline does not restore
+pending manual update. The load of a pending manual update reports its own `ManualLoadResult`: a
+failed load and a guest exit (`Exited`) fail the update without a code, and an interrupted load
+(`Interrupted(kind)`) passes its interrupt, writes nothing, and leaves the update pending, so the
+next start loads the payload again. A plain automatic head whose authoritative baseline does not restore
 (`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
 with a visible cause and writes no failed update.
 
