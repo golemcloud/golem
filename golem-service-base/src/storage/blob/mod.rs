@@ -56,12 +56,15 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 
 /// Keeps blobs at the paths of a namespace.
 ///
-/// A path names a blob or a directory, and a directory is not a blob. So a read at the path of a
-/// directory finds no blob, a delete at that path removes no blob, and a write at that path is an
-/// error. A path is at the root of the namespace when it has no name in it, for example an empty
-/// path or `.`, and the root is a directory. A directory is there while a blob is below it, at
-/// any depth, and a directory that `create_dir` made is there until `delete_dir` removes it. A
-/// directory that `create_dir` made keeps a size of zero and a time, which `get_metadata` gives.
+/// A path names a blob, a directory, or both, and a directory is not a blob. So a read at the path
+/// of a directory finds no blob unless a blob is also at that path, a write at that path writes
+/// the blob and keeps the directory, and a delete at that path removes the blob and keeps the
+/// directory. A blob can be below another blob, and the path of the first blob is then also a
+/// directory. A path is at the root of the namespace when it has no name in it, for example an
+/// empty path or `.`, and the root is a directory that names no blob, so a write at a root path
+/// is an error. A directory is there while a blob is below it, at any depth, and a directory that
+/// `create_dir` made is there until `delete_dir` removes it. A directory that `create_dir` made
+/// keeps a size of zero and a time, which `get_metadata` gives.
 ///
 /// A late change: a write or a delete whose call ended without an answer, or whose call was
 /// dropped, lands within one storage call deadline of the end of the call, or never. The doc of a
@@ -74,7 +77,7 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     ///
-    /// A directory has no blob at its path, and a root path is a directory.
+    /// A directory is not a blob, and a root path is a directory that names no blob.
     async fn get_raw(
         &self,
         target_label: &'static str,
@@ -85,7 +88,7 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Gives the bytes of the blob at the path as a stream, or nothing if the path has no blob.
     ///
-    /// A directory has no blob at its path, and a root path is a directory.
+    /// A directory is not a blob, and a root path is a directory that names no blob.
     async fn get_stream(
         &self,
         target_label: &'static str,
@@ -111,9 +114,9 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Reads the bytes from `start` to `end` of a blob. Both offsets are inclusive.
     ///
     /// The result has `end - start + 1` bytes. `None` means that no blob has the path. A
-    /// directory has no blob at its path, and a root path is a directory. A range with a byte
-    /// that is not in the blob gives an error that downcasts to [`BlobRangeError`]: an `end` at
-    /// or after the length of the blob, a `start` after `end`, and each range of an empty blob.
+    /// directory is not a blob, and a root path is a directory that names no blob. A range with a
+    /// byte that is not in the blob gives an error that downcasts to [`BlobRangeError`]: an `end`
+    /// at or after the length of the blob, a `start` after `end`, and each range of an empty blob.
     /// A `start` after `end` gives this error before the backend reads the blob.
     async fn get_raw_slice(
         &self,
@@ -128,8 +131,9 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Tells the size and the time of the blob at the path, or nothing if the path has no blob.
     ///
     /// A directory that `create_dir` made is the one path without a blob that has metadata: it
-    /// gives a size of zero and the time of the last `create_dir`. A directory that only holds
-    /// blobs gives nothing, and so does a root path.
+    /// gives a size of zero and the time of the last `create_dir`. A blob at that path wins, and
+    /// gives its own size and time. A directory that only holds blobs gives nothing, and so does a
+    /// root path.
     async fn get_metadata(
         &self,
         target_label: &'static str,
@@ -140,7 +144,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Writes the bytes as the blob at the path, over the blob that was there.
     ///
-    /// A blob cannot be where a directory is, so a root path is an error.
+    /// A directory at the path stays, and a blob at the path is not a directory for a write
+    /// below it. A root path names no blob, so it gives [`BlobNameError::NoName`].
     ///
     /// In the namespace [`BlobStorageNamespace::FilesystemSnapshots`] a reader sees the whole new
     /// blob or the one before, and the rule of a late change in the doc of [`BlobStorage`] holds.
@@ -156,8 +161,9 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Writes the bytes as the blob at the path when the path has no blob.
     ///
-    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`]. When
-    /// the path has a blob, the call writes nothing and gives [`PutIfAbsent::AlreadyExists`]. The
+    /// When the path has no blob, the call writes the blob and gives [`PutIfAbsent::Written`]. A
+    /// directory at the path is not a blob, so it does not stop the write. When the path has a
+    /// blob, the call writes nothing and gives [`PutIfAbsent::AlreadyExists`]. The
     /// check and the write are one step. So when two calls write one path at the same time, one
     /// call gives `Written` and the other gives `AlreadyExists`. The rules of [`BlobNameError`]
     /// apply as for `put_raw`, and a root path gives [`BlobNameError::NoName`] on every backend.
@@ -179,7 +185,7 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Writes the bytes of the stream as the blob at the path, over the blob that was there.
     ///
-    /// A blob cannot be where a directory is, so a root path is an error.
+    /// The rules of a path of `put_raw` apply.
     async fn put_stream(
         &self,
         target_label: &'static str,
@@ -191,8 +197,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Removes the blob at the path.
     ///
-    /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
-    /// path is a directory.
+    /// A path that has no blob changes nothing. A directory at the path stays, and a root path
+    /// is a directory that names no blob.
     ///
     /// The rule of a late change in the doc of [`BlobStorage`] holds for this call in the
     /// namespace `FilesystemSnapshots`.
@@ -206,8 +212,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
 
     /// Removes the blob at every one of the paths.
     ///
-    /// A path that has no blob changes nothing. A directory has no blob at its path, and a root
-    /// path is a directory.
+    /// A path that has no blob changes nothing. A directory at a path stays, and a root path is
+    /// a directory that names no blob.
     ///
     /// The storage reads every path before it removes the first blob, so a path that breaks a
     /// rule of a name gives a [`BlobNameError`] and the call removes no blob at all. The rule
@@ -226,8 +232,9 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Makes a directory at the path.
     ///
     /// A root path changes nothing and leaves no entry behind. A path is at the root when it has
-    /// no name in it, for example an empty path or `.`. A second call on the same path adds
-    /// nothing and removes nothing, and it gives the directory the time of that call.
+    /// no name in it, for example an empty path or `.`. A blob at the path stays. A second call on
+    /// the same path adds nothing and removes nothing, and it gives the directory the time of that
+    /// call.
     async fn create_dir(
         &self,
         target_label: &'static str,
@@ -279,8 +286,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     ///
     /// A root path changes nothing and returns false. A path is at the root when it has no
     /// name in it, for example an empty path or `.`. A directory that only holds blobs
-    /// exists. Returns true if the path had a directory. Returns false if the path had
-    /// nothing.
+    /// exists. A blob at the path itself is not below the path, so it stays. Returns true if the
+    /// path had a directory. Returns false if the path had no directory.
     async fn delete_dir(
         &self,
         target_label: &'static str,
@@ -294,8 +301,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Returns `Directory` for a root path, whatever the namespace holds. A path is at the root
     /// when it has no name in it, for example an empty path or `.`. Returns `Directory` for a
     /// path that has blobs below it, at any depth, also when the storage keeps no entry for
-    /// that directory. Returns `File` for a path that has a blob. Returns `DoesNotExist` for
-    /// every other path.
+    /// that directory. Returns `File` for a path that has a blob, also when the path is a
+    /// directory too. Returns `DoesNotExist` for every other path.
     async fn exists(
         &self,
         target_label: &'static str,
@@ -308,8 +315,8 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// `from`.
     ///
     /// A copy onto the same path writes nothing and changes nothing, and two forms of one path
-    /// are the same path. A blob cannot be where a directory is, so a root path at either end
-    /// gives [`BlobNameError::NoName`]. A `from` path with no blob at it gives an error that
+    /// are the same path. A root path names no blob, so a root path at either end gives
+    /// [`BlobNameError::NoName`]. A `from` path with no blob at it gives an error that
     /// downcasts to [`BlobMissingError`], the copy onto the same path as well, and writes
     /// nothing to `to`. One read gives that error, and it is permanent, so the operation does no
     /// more work.
@@ -346,7 +353,7 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// blob at `from`.
     ///
     /// A move onto the same path keeps the blob where it is, and two forms of one path are the same
-    /// path. A blob cannot be where a directory is, so a root path at either end gives
+    /// path. A root path names no blob, so a root path at either end gives
     /// [`BlobNameError::NoName`]. The copy comes before the delete, so each error of `copy` is an
     /// error of `move` and the blob at `from` stays: a `from` path with no blob at it gives the
     /// error of the copy, which is [`BlobMissingError`] where `copy` gives it, the move onto the
@@ -609,7 +616,7 @@ fn blob_path(path: &Path) -> Result<Option<NormalizedBlobPath<'_>>, BlobNameErro
 }
 
 /// Gives the one form of a path at which an operation writes a blob. A root path gives
-/// [`BlobNameError::NoName`], because a blob cannot be where a directory is.
+/// [`BlobNameError::NoName`], because the root is a directory that names no blob.
 fn written_blob_path(path: &Path) -> Result<NormalizedBlobPath<'_>, BlobNameError> {
     let path = normalized_blob_path(path)?;
     path.reject_root()?;
@@ -1420,7 +1427,7 @@ pub enum BlobNameError {
     /// so does a path that only has `.` in it. A guest that gives an empty container name and
     /// an empty object name makes such a path.
     ///
-    /// A root path is a directory, and a blob cannot be where a directory is, so an operation
+    /// A root path is a directory that names no blob, so an operation
     /// that writes a blob at such a path gives this error on each backend: `put_raw`,
     /// `put_raw_if_absent` and `put_stream` (`NormalizedBlobPath::reject_root`), and `copy`
     /// and `move`, at either of their two paths (`blob_copy_changes_nothing`). An operation
@@ -1636,7 +1643,7 @@ mod normalized_path {
 
         /// Gives [`BlobNameError::NoName`] if the path is at the root of a namespace.
         ///
-        /// A path at the root is a directory, and a blob cannot be where a directory is. A
+        /// A path at the root is a directory that names no blob. A
         /// guest can give an empty container name and an empty object name, so the path is of
         /// the guest and the error is permanent.
         pub(crate) fn reject_root(&self) -> Result<(), BlobNameError> {
@@ -1805,7 +1812,7 @@ mod normalized_path {
 ///
 /// A copy onto the same path changes nothing, because the blob is already there. Both paths are
 /// in their one form, so two forms of one path are the same path. A root path at either end
-/// gives [`BlobNameError::NoName`], because a blob cannot be where a directory is.
+/// gives [`BlobNameError::NoName`], because the root is a directory that names no blob.
 pub(crate) fn blob_copy_changes_nothing(
     from: &NormalizedBlobPath,
     to: &NormalizedBlobPath,
