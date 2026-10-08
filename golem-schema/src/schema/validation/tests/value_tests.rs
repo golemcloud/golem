@@ -36,9 +36,8 @@ use chrono::Utc;
 use proptest::prelude::*;
 use test_r::test;
 
-// PROVISIONAL bug_finder reproducer: preparation must not recurse on pure aliases.
 #[test]
-fn bug_finder_long_flat_alias_chain_validates_without_stack_overflow() {
+fn long_flat_alias_chain_validates_without_stack_overflow() {
     let count = 20_000;
     let graph = SchemaGraph {
         defs: (0..count)

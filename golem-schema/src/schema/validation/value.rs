@@ -502,17 +502,19 @@ impl<'a> ValidationContext<'a> {
     #[cfg(feature = "regex")]
     fn prepare_regexes(
         &mut self,
-        ty: &'a SchemaType,
+        mut ty: &'a SchemaType,
         visited: &mut std::collections::HashSet<&'a TypeId>,
     ) {
-        match ty {
-            SchemaType::Ref { id, .. } => {
-                if visited.insert(id)
-                    && let Some(def) = self.index.lookup(id)
-                {
-                    self.prepare_regexes(&def.body, visited);
-                }
+        while let SchemaType::Ref { id, .. } = ty {
+            if !visited.insert(id) {
+                return;
             }
+            let Some(def) = self.index.lookup(id) else {
+                return;
+            };
+            ty = &def.body;
+        }
+        match ty {
             SchemaType::Record { fields, .. } => {
                 for field in fields {
                     self.prepare_regexes(&field.body, visited);
