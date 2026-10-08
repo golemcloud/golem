@@ -164,7 +164,7 @@ use golem_common::model::{
     AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput, AgentInvocationPayload,
     AgentInvocationResult, AgentMetadata, AgentStatusRecord, IdempotencyKey, OwnedAgentId,
     PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, RetryPolicyState, ShardAssignment,
-    ShardEpoch, ShardId, Timestamp, TimestampedAgentInvocation,
+    ShardEpoch, ShardId, Timestamp,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -1168,6 +1168,13 @@ impl<Ctx: WorkerCtx> UsesAllDeps for Worker<Ctx> {
     fn all(&self) -> &All<Self::Ctx> {
         &self.deps
     }
+}
+
+/// An invocation hydrated from this owner's committed Pending entry. The payload is retained
+/// unchanged for Started; lowering may transform only a separate invocation clone.
+pub struct HydratedInvocation {
+    pub(crate) invocation: AgentInvocation,
+    pub(crate) payload: OplogPayload<AgentInvocationPayload>,
 }
 
 fn into_pending_invocation_parts(
@@ -5206,18 +5213,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     async fn hydrate_pending_invocation(
         &self,
         pending: &PendingInvocationRef,
-    ) -> Result<TimestampedAgentInvocation, WorkerExecutorError> {
+    ) -> Result<HydratedInvocation, WorkerExecutorError> {
         let entry = self.oplog.read(pending.oplog_index).await;
         match entry {
             OplogEntry::PendingAgentInvocation {
-                timestamp,
                 idempotency_key,
                 payload,
                 trace_id,
                 trace_states,
                 invocation_context,
+                ..
             } => {
-                let agent_payload = self.oplog.download_payload(payload).await.map_err(|e| {
+                let agent_payload = self.oplog.download_payload(payload.clone()).await.map_err(|e| {
                     WorkerExecutorError::unknown(format!(
                         "Failed to download pending agent invocation payload at oplog index {}: {e}",
                         pending.oplog_index
@@ -5230,9 +5237,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 let invocation =
                     AgentInvocation::from_parts(idempotency_key, agent_payload, invocation_context);
-                Ok(TimestampedAgentInvocation {
-                    timestamp,
+                Ok(HydratedInvocation {
                     invocation,
+                    payload,
                 })
             }
             other => Err(WorkerExecutorError::unknown(format!(

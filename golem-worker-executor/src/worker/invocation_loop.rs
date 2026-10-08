@@ -43,10 +43,10 @@ use crate::worker::invocation::{
 };
 use crate::worker::status_checkpointer;
 use crate::worker::{
-    CreateWorkerInstanceError, FinalWorkerState, PendingLiveInvocationDisposition,
-    PendingWorkerInterrupt, QueuedWorkerInvocation, RetryDecision, RunningAgent,
-    RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest, Worker, WorkerCommand,
-    WorkerRunningAgent, WorkerTrace,
+    CreateWorkerInstanceError, FinalWorkerState, HydratedInvocation,
+    PendingLiveInvocationDisposition, PendingWorkerInterrupt, QueuedWorkerInvocation,
+    RetryDecision, RunningAgent, RunningAgentRuntime, RunningWorker, UnloadReason, UnloadRequest,
+    Worker, WorkerCommand, WorkerRunningAgent, WorkerTrace,
 };
 use crate::workerctx::{PublicWorkerIo, UpdateManagement, WorkerCtx};
 use async_lock::Mutex;
@@ -60,7 +60,7 @@ use golem_common::model::oplog::FilesystemSnapshotName;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationResult,
-    IdempotencyKey, OwnedAgentId, TimestampedAgentInvocation,
+    IdempotencyKey, OwnedAgentId,
 };
 use golem_common::model::{
     AgentStatusRecord, OplogIndex, PendingInvocationRef, Timestamp,
@@ -2825,7 +2825,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     /// it is a special case of the exported function invocation).
     async fn external_invocation(
         &mut self,
-        inner: TimestampedAgentInvocation,
+        inner: HydratedInvocation,
         update_attempt_index: OplogIndex,
     ) -> CommandOutcome {
         // Rechecked here as well as where the invocation was taken: hydrating it and waiting for
@@ -2838,14 +2838,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 self.manual_update(target_revision, update_attempt_index)
                     .await
             }
-            invocation => {
-                if let Some(idempotency_key) = invocation.idempotency_key() {
+            _ => {
+                if let Some(idempotency_key) = inner.invocation.idempotency_key() {
                     let has_result = matches!(
                         self.parent.lookup_invocation_result(idempotency_key).await,
                         LookupResult::Complete(_) | LookupResult::Interrupted
                     );
                     if !has_result {
-                        self.invoke_agent(invocation).await
+                        self.invoke_agent(inner).await
                     } else {
                         debug!(
                             "Skipping enqueued invocation with idempotency key {idempotency_key} as it already has a result"
@@ -2876,17 +2876,18 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                         }
                     }
                 } else {
-                    self.invoke_agent(invocation).await
+                    self.invoke_agent(inner).await
                 }
             }
         }
     }
 
     /// Invokes an agent function on the worker
-    async fn invoke_agent(&mut self, invocation: AgentInvocation) -> CommandOutcome {
-        let display_name = invocation.display_name();
-        let invocation_context = invocation.invocation_context();
+    async fn invoke_agent(&mut self, invocation: HydratedInvocation) -> CommandOutcome {
+        let display_name = invocation.invocation.display_name();
+        let invocation_context = invocation.invocation.invocation_context();
         let idempotency_key = invocation
+            .invocation
             .idempotency_key()
             .cloned()
             .unwrap_or_else(IdempotencyKey::fresh);
@@ -2915,13 +2916,13 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> CommandOutcome {
-        let kind = invocation.kind();
-        let display_name = invocation.display_name();
+        let kind = invocation.invocation.kind();
+        let display_name = invocation.invocation.display_name();
         let invocation_idempotency_key = idempotency_key.clone();
         self.uses_streams = invocation_uses_streams(
-            &invocation,
+            &invocation.invocation,
             &self.store.data().component_metadata().metadata,
             self.parent.parsed_agent_id.as_ref(),
         );
@@ -2982,7 +2983,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         &mut self,
         mut invocation_context: InvocationContextStack,
         idempotency_key: IdempotencyKey,
-        invocation: AgentInvocation,
+        invocation: HydratedInvocation,
     ) -> Result<InvokeResult, WorkerExecutorError> {
         let (lowered, local_span_ids, inherited_span_ids) = async {
             self.store
@@ -2993,7 +2994,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Self::extend_invocation_context(
                 &mut invocation_context,
                 &idempotency_key,
-                &invocation,
+                &invocation.invocation,
                 &self.owned_agent_id.agent_id(),
                 &self.parent.parsed_agent_id,
             );
@@ -3015,10 +3016,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
             let invocation_for_lowering = if self.uses_streams {
                 self.parent
-                    .rehydrate_durable_streaming_invocation(invocation.clone())
+                    .rehydrate_durable_streaming_invocation(invocation.invocation.clone())
                     .await?
             } else {
-                invocation.clone()
+                invocation.invocation.clone()
             };
             let lowered = lower_invocation(
                 invocation_for_lowering,
