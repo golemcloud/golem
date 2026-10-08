@@ -1556,7 +1556,7 @@ impl UpdateFields {
                 step,
             ) => {
                 let applied_update = match step {
-                    UpdateStep::Succeeded(applied) => applied.clone(),
+                    UpdateStep::Succeeded(applied) => applied.as_ref(),
                     _ => return Err(missing_step()),
                 };
                 self.successful_updates.push(SuccessfulUpdateRecord {
@@ -1564,9 +1564,8 @@ impl UpdateFields {
                     target_revision: *target_revision,
                     oplog_index: oplog_idx,
                     filesystem_snapshot: applied_update
-                        .as_ref()
                         .and_then(|update| update.kind.filesystem_snapshot().cloned()),
-                    pending_update: applied_update.clone(),
+                    pending_update: applied_update.cloned(),
                     snapshot_assisted_details: snapshot_assisted_details.clone(),
                 });
                 self.component_revision = *target_revision;
@@ -1584,7 +1583,7 @@ impl UpdateFields {
                     }) => {
                         self.component_revision_for_replay = *target_revision;
                         self.authoritative_snapshot = Some(AuthoritativeSnapshot {
-                            index: oplog_index,
+                            index: *oplog_index,
                             kind: AuthoritativeSnapshotKind::ManualUpdate,
                         });
                     }
@@ -1592,12 +1591,12 @@ impl UpdateFields {
                         kind: PendingUpdateKind::SnapshotAssistedAutomatic(selection),
                         ..
                     }) => {
-                        let AssistedSelection { snapshot, .. } = *selection;
+                        let AssistedSelection { snapshot, .. } = selection.as_ref();
                         self.component_revision_for_replay = snapshot.component_revision;
                         self.authoritative_snapshot = Some(AuthoritativeSnapshot {
                             index: snapshot.index,
                             kind: AuthoritativeSnapshotKind::SnapshotAssistedAutomatic {
-                                filesystem_snapshot: snapshot.filesystem_snapshot,
+                                filesystem_snapshot: snapshot.filesystem_snapshot.clone(),
                             },
                         });
                     }
