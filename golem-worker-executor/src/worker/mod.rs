@@ -9036,6 +9036,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.card_event_boundary_lock.clone()
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn test_hold_invalidated_card_boundary(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let guard = self.card_event_boundary_lock.clone().lock_owned().await;
+        self.published_authority_generation
+            .fetch_add(1, Ordering::AcqRel);
+        guard
+    }
+
     pub(crate) fn published_authority_generation(&self) -> Arc<AtomicU64> {
         self.published_authority_generation.clone()
     }
