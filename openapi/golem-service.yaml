@@ -25800,6 +25800,8 @@ components:
           $ref: '#/components/schemas/AgentHttpAuthDetails'
         phantomAgent:
           type: boolean
+        phantomIdBinding:
+          $ref: '#/components/schemas/PhantomIdBinding'
         corsOptions:
           $ref: '#/components/schemas/CorsOptions'
         webhookSuffix:
@@ -26907,6 +26909,23 @@ components:
       - currentRevision
       - name
       - data
+    PhantomIdBinding:
+      title: PhantomIdBinding
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - Path
+          - Query
+        name:
+          type: string
+        optional:
+          type: boolean
+      required:
+      - type
+      - name
+      - optional
     Plan:
       title: Plan
       type: object
