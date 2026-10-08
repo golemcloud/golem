@@ -17,9 +17,10 @@ use crate::context::Context;
 use crate::local_observability::LocalObservabilityClient;
 use crate::model::environment::{EnvironmentReference, EnvironmentResolveMode};
 use crate::model::local_observability::{
-    LocalMetricFamiliesRequest, LocalMetricFamily, LocalMetricSample, LocalMetricSamplesRequest,
-    LocalMetricScope, LocalMetricSeries, LocalMetricSeriesRequest, LocalMetricSource,
-    LocalMetricTimeRange, LocalObservabilityCapability, LocalObservabilityStatus,
+    LocalMetricDashboardRequest, LocalMetricDashboardResponse, LocalMetricFamiliesRequest,
+    LocalMetricFamily, LocalMetricSample, LocalMetricSamplesRequest, LocalMetricScope,
+    LocalMetricSeries, LocalMetricSeriesRequest, LocalMetricSource, LocalMetricTimeRange,
+    LocalObservabilityCapability, LocalObservabilityStatus,
 };
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -118,6 +119,7 @@ impl MetricsFocus {
 #[derive(Clone, Debug)]
 pub(in crate::tui) struct MetricsQuery {
     pub(in crate::tui) source: LocalMetricSource,
+    pub(in crate::tui) mode: MetricsMode,
     pub(in crate::tui) agent_ids: Vec<String>,
     pub(in crate::tui) selected_family: Option<String>,
     pub(in crate::tui) selected_series: Option<String>,
@@ -128,6 +130,8 @@ pub(in crate::tui) struct MetricsQuery {
 pub(in crate::tui) struct MetricsRefreshPayload {
     pub(in crate::tui) capability: LocalObservabilityCapability,
     pub(in crate::tui) source: LocalMetricSource,
+    pub(in crate::tui) mode: MetricsMode,
+    pub(in crate::tui) dashboard: Option<LocalMetricDashboardResponse>,
     pub(in crate::tui) families: Vec<LocalMetricFamily>,
     pub(in crate::tui) series: Vec<LocalMetricSeries>,
     pub(in crate::tui) samples: Vec<LocalMetricSample>,
@@ -145,6 +149,7 @@ pub(in crate::tui) struct MetricsState {
     pub(in crate::tui) range: MetricsRange,
     pub(in crate::tui) live: bool,
     pub(in crate::tui) selected_panel: usize,
+    pub(in crate::tui) dashboard: Option<LocalMetricDashboardResponse>,
     pub(in crate::tui) families: Vec<LocalMetricFamily>,
     pub(in crate::tui) series: Vec<LocalMetricSeries>,
     pub(in crate::tui) samples: Vec<LocalMetricSample>,
@@ -166,6 +171,7 @@ impl Default for MetricsState {
             range: MetricsRange::Minutes15,
             live: true,
             selected_panel: 0,
+            dashboard: None,
             families: Vec::new(),
             series: Vec::new(),
             samples: Vec::new(),
@@ -207,6 +213,8 @@ pub(in crate::tui) async fn load(
         return Ok(MetricsRefreshPayload {
             capability,
             source: query.source,
+            mode: query.mode,
+            dashboard: None,
             families: Vec::new(),
             series: Vec::new(),
             samples: Vec::new(),
@@ -230,6 +238,27 @@ pub(in crate::tui) async fn load(
         scope.environment_id = Some(environment.environment_id.0);
     }
     let range = current_range(query.range);
+    if query.mode == MetricsMode::Dashboard {
+        let dashboard = client
+            .dashboard(&LocalMetricDashboardRequest {
+                source: query.source,
+                scope,
+                range,
+                max_points: Some(80),
+            })
+            .await?;
+        return Ok(MetricsRefreshPayload {
+            capability,
+            source: query.source,
+            mode: query.mode,
+            dashboard: Some(dashboard),
+            families: Vec::new(),
+            series: Vec::new(),
+            samples: Vec::new(),
+            selected_family: 0,
+            selected_series: 0,
+        });
+    }
     let families = client
         .families(&LocalMetricFamiliesRequest {
             source: query.source,
@@ -251,6 +280,8 @@ pub(in crate::tui) async fn load(
         return Ok(MetricsRefreshPayload {
             capability,
             source: query.source,
+            mode: query.mode,
+            dashboard: None,
             families,
             series: Vec::new(),
             samples: Vec::new(),
@@ -299,6 +330,8 @@ pub(in crate::tui) async fn load(
     Ok(MetricsRefreshPayload {
         capability,
         source: query.source,
+        mode: query.mode,
+        dashboard: None,
         families,
         series,
         samples,

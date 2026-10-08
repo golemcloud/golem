@@ -14,12 +14,15 @@
 
 use anyhow::{Context, anyhow};
 use golem_cli::model::local_observability::{
-    LOCAL_OBSERVABILITY_CAPABILITY_PATH, LOCAL_OBSERVABILITY_FAMILIES_PATH,
-    LOCAL_OBSERVABILITY_SAMPLES_PATH, LOCAL_OBSERVABILITY_SERIES_PATH, LOCAL_OTLP_METRICS_PATH,
-    LocalMetricFamiliesRequest, LocalMetricFamiliesResponse, LocalMetricFamily, LocalMetricKind,
-    LocalMetricSample, LocalMetricSamplesRequest, LocalMetricSamplesResponse, LocalMetricScope,
-    LocalMetricSeries, LocalMetricSeriesRequest, LocalMetricSeriesResponse, LocalMetricSource,
-    LocalMetricTemporality, LocalObservabilityCapability, LocalObservabilityStatus,
+    LOCAL_OBSERVABILITY_CAPABILITY_PATH, LOCAL_OBSERVABILITY_DASHBOARD_PATH,
+    LOCAL_OBSERVABILITY_FAMILIES_PATH, LOCAL_OBSERVABILITY_SAMPLES_PATH,
+    LOCAL_OBSERVABILITY_SERIES_PATH, LOCAL_OTLP_METRICS_PATH, LocalMetricDashboardPanel,
+    LocalMetricDashboardPanelKind, LocalMetricDashboardRequest, LocalMetricDashboardResponse,
+    LocalMetricDashboardSeries, LocalMetricDashboardStat, LocalMetricFamiliesRequest,
+    LocalMetricFamiliesResponse, LocalMetricFamily, LocalMetricKind, LocalMetricSample,
+    LocalMetricSamplesRequest, LocalMetricSamplesResponse, LocalMetricScope, LocalMetricSeries,
+    LocalMetricSeriesRequest, LocalMetricSeriesResponse, LocalMetricSource, LocalMetricTemporality,
+    LocalObservabilityCapability, LocalObservabilityStatus,
 };
 use poem::http::{HeaderValue, StatusCode, header};
 use poem::{Body, Request, Response, Route};
@@ -50,6 +53,10 @@ const DEFAULT_SERIES_LIMIT: u16 = 200;
 const MAX_SERIES_LIMIT: u16 = 500;
 const DEFAULT_SAMPLE_LIMIT: u16 = 240;
 const MAX_SAMPLE_LIMIT: u16 = 1000;
+const DEFAULT_DASHBOARD_POINTS: u16 = 80;
+const MAX_DASHBOARD_POINTS: u16 = 240;
+const MAX_DASHBOARD_SERIES: usize = 6;
+const MAX_EVENT_QUANTILE_POINTS: u64 = 100_000;
 const EXPORTER_NAME: &str = "golem-otlp-exporter";
 const EXPORTER_VERSION: &str = "1.6.0";
 
@@ -530,6 +537,18 @@ impl LocalObservability {
                 seed.as_ref().map(|sample| sample.value),
             )
             .await?
+        } else if matches!(
+            profile.kind,
+            LocalMetricKind::Counter | LocalMetricKind::Histogram
+        ) && profile.temporality == LocalMetricTemporality::Cumulative
+        {
+            cumulative_delta_samples(
+                pool,
+                request,
+                in_range_limit,
+                seed.as_ref().map(|sample| sample.value),
+            )
+            .await?
         } else {
             raw_samples(pool, request, in_range_limit).await?
         };
@@ -546,6 +565,917 @@ impl LocalObservability {
             approximate: aggregate,
         })
     }
+
+    pub async fn dashboard(
+        &self,
+        request: &LocalMetricDashboardRequest,
+    ) -> anyhow::Result<LocalMetricDashboardResponse> {
+        let pool = self.ready_pool().await?;
+        validate_range(request.range.from_unix_nanos, request.range.to_unix_nanos)?;
+        let max_points = request
+            .max_points
+            .unwrap_or(DEFAULT_DASHBOARD_POINTS)
+            .clamp(1, MAX_DASHBOARD_POINTS);
+        let families = self
+            .families(&LocalMetricFamiliesRequest {
+                source: request.source,
+                scope: request.scope.clone(),
+                range: request.range,
+                name_filter: None,
+                cursor: None,
+                limit: Some(MAX_FAMILY_LIMIT),
+            })
+            .await?
+            .values;
+        let specs = dashboard_panel_specs(request.source);
+        let mut panels = Vec::with_capacity(specs.len());
+        for spec in specs {
+            panels.push(build_dashboard_panel(self, request, &families, *spec, max_points).await?);
+        }
+        let stats = match request.source {
+            LocalMetricSource::Agents => agent_dashboard_stats(pool, request).await?,
+            LocalMetricSource::Services => server_dashboard_stats(pool, request).await?,
+        };
+        let freshest_sample_unix_nanos = freshest_sample(pool, request).await?;
+        Ok(LocalMetricDashboardResponse {
+            source: request.source,
+            range: request.range,
+            generated_at_unix_nanos: now_ns(),
+            freshest_sample_unix_nanos,
+            stats,
+            panels,
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DashboardPanelSpec {
+    id: &'static str,
+    title: &'static str,
+    kind: LocalMetricDashboardPanelKind,
+    family_fragments: &'static [&'static str],
+}
+
+const AGENT_DASHBOARD_PANELS: &[DashboardPanelSpec] = &[
+    DashboardPanelSpec {
+        id: "invocation-rate",
+        title: "Invocation rate",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["golem.invocation.count"],
+    },
+    DashboardPanelSpec {
+        id: "completed-duration",
+        title: "Completed duration p50 / p95",
+        kind: LocalMetricDashboardPanelKind::Distribution,
+        family_fragments: &["golem.invocation.duration_ns"],
+    },
+    DashboardPanelSpec {
+        id: "reliability",
+        title: "Reliability events by kind",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &[
+            "golem.error.count",
+            "golem.interruption.count",
+            "golem.exit.count",
+            "golem.restart.count",
+            "golem.update.failure_count",
+        ],
+    },
+    DashboardPanelSpec {
+        id: "top-agents",
+        title: "Top Agent Types / Agents",
+        kind: LocalMetricDashboardPanelKind::Ranking,
+        family_fragments: &["golem.invocation.count"],
+    },
+    DashboardPanelSpec {
+        id: "memory",
+        title: "Observed last-known memory",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["golem.memory.total_bytes"],
+    },
+    DashboardPanelSpec {
+        id: "active-resources",
+        title: "Active resources",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["golem.resources.active"],
+    },
+];
+
+const SERVER_DASHBOARD_PANELS: &[DashboardPanelSpec] = &[
+    DashboardPanelSpec {
+        id: "request-throughput",
+        title: "Success / failure throughput",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["api_success", "api_failure", "grpc_success", "grpc_failure"],
+    },
+    DashboardPanelSpec {
+        id: "request-latency",
+        title: "Request latency p50 / p95",
+        kind: LocalMetricDashboardPanelKind::Distribution,
+        family_fragments: &["api_success_seconds", "api_failure_seconds"],
+    },
+    DashboardPanelSpec {
+        id: "active-streams",
+        title: "Active HTTP / gRPC streams",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["api_active_streams"],
+    },
+    DashboardPanelSpec {
+        id: "workers",
+        title: "Worker states / active invocations",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &[
+            "worker_count_by_status",
+            "invocation_active_count",
+            "worker_memory_resident_count",
+        ],
+    },
+    DashboardPanelSpec {
+        id: "memory-capacity",
+        title: "Memory capacity",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["memory_pool", "admission_rss", "mimalloc_current"],
+    },
+    DashboardPanelSpec {
+        id: "admission-pressure",
+        title: "Admission pressure",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &[
+            "waiting_for_memory",
+            "admission_wait",
+            "memory_grow_rejected",
+        ],
+    },
+    DashboardPanelSpec {
+        id: "compilation",
+        title: "Compilation",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["compilation"],
+    },
+    DashboardPanelSpec {
+        id: "cache",
+        title: "Cache effectiveness",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["cache_hit", "cache_miss", "cache_eviction", "cache_size"],
+    },
+    DashboardPanelSpec {
+        id: "scheduler-oplog-streams",
+        title: "Scheduler / oplog / durable-stream health",
+        kind: LocalMetricDashboardPanelKind::TimeSeries,
+        family_fragments: &["scheduler", "scheduled_action", "oplog", "durable_stream"],
+    },
+];
+
+fn dashboard_panel_specs(source: LocalMetricSource) -> &'static [DashboardPanelSpec] {
+    match source {
+        LocalMetricSource::Agents => AGENT_DASHBOARD_PANELS,
+        LocalMetricSource::Services => SERVER_DASHBOARD_PANELS,
+    }
+}
+
+async fn build_dashboard_panel(
+    service: &LocalObservability,
+    request: &LocalMetricDashboardRequest,
+    families: &[LocalMetricFamily],
+    spec: DashboardPanelSpec,
+    max_points: u16,
+) -> anyhow::Result<LocalMetricDashboardPanel> {
+    match spec.id {
+        "invocation-rate" => {
+            return build_agent_rate_panel(service, request, spec, max_points).await;
+        }
+        "completed-duration" => {
+            return build_agent_duration_panel(service, request, spec, max_points).await;
+        }
+        "top-agents" => return build_agent_ranking_panel(service, request, spec).await,
+        _ => {}
+    }
+    let matching = families
+        .iter()
+        .filter(|family| {
+            spec.family_fragments
+                .iter()
+                .any(|fragment| family.name.contains(fragment))
+        })
+        .collect::<Vec<_>>();
+    let mut dashboard_series = Vec::new();
+    let mut observed_from = None;
+    let mut observed_to = None;
+    let mut approximate = false;
+    for family in matching {
+        if dashboard_series.len() >= MAX_DASHBOARD_SERIES {
+            break;
+        }
+        let remaining = (MAX_DASHBOARD_SERIES - dashboard_series.len()) as u16;
+        let series = service
+            .series(&LocalMetricSeriesRequest {
+                source: request.source,
+                scope: request.scope.clone(),
+                range: request.range,
+                family: family.name.clone(),
+                cursor: None,
+                limit: Some(remaining),
+            })
+            .await?
+            .values;
+        for series in series {
+            let samples = service
+                .samples(&LocalMetricSamplesRequest {
+                    source: request.source,
+                    scope: request.scope.clone(),
+                    range: request.range,
+                    family: family.name.clone(),
+                    series_key: series.series_key.clone(),
+                    max_points: Some(max_points),
+                })
+                .await?;
+            observed_from = min_option(observed_from, samples.observed_from_unix_nanos);
+            observed_to = max_option(observed_to, samples.observed_to_unix_nanos);
+            approximate |= samples.approximate;
+            let label = dashboard_series_label(family, &series);
+            dashboard_series.push(LocalMetricDashboardSeries {
+                key: format!("{}:{}", family.name, series.series_key),
+                label,
+                unit: family.unit.clone(),
+                latest_value: samples
+                    .samples
+                    .last()
+                    .map(|sample| sample.value)
+                    .or(series.latest_value),
+                samples: samples.samples,
+                approximate: samples.approximate,
+            });
+            if dashboard_series.len() >= MAX_DASHBOARD_SERIES {
+                break;
+            }
+        }
+    }
+    let empty_reason = dashboard_series.is_empty().then(|| {
+        format!(
+            "No matching {} samples in this range",
+            match request.source {
+                LocalMetricSource::Agents => "Agent",
+                LocalMetricSource::Services => "Server",
+            }
+        )
+    });
+    Ok(LocalMetricDashboardPanel {
+        id: spec.id.to_string(),
+        title: spec.title.to_string(),
+        kind: spec.kind,
+        series: dashboard_series,
+        empty_reason,
+        observed_from_unix_nanos: observed_from,
+        observed_to_unix_nanos: observed_to,
+        approximate,
+    })
+}
+
+async fn build_agent_rate_panel(
+    service: &LocalObservability,
+    request: &LocalMetricDashboardRequest,
+    spec: DashboardPanelSpec,
+    max_points: u16,
+) -> anyhow::Result<LocalMetricDashboardPanel> {
+    let pool = service.ready_pool().await?;
+    let span = request
+        .range
+        .to_unix_nanos
+        .saturating_sub(request.range.from_unix_nanos)
+        .max(1);
+    let bucket_width = span
+        .saturating_add(max_points as i64 - 1)
+        .checked_div(max_points as i64)
+        .unwrap_or(1)
+        .max(1);
+    let mut query = QueryBuilder::<Sqlite>::new("WITH bucketed AS (SELECT ");
+    push_bucket_timestamp(&mut query, request.range.from_unix_nanos, bucket_width);
+    query.push(" AS bucket_timestamp, value FROM metric_points WHERE 1 = 1");
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some("golem.invocation.count"),
+        None,
+    );
+    query
+        .push(") SELECT bucket_timestamp AS timestamp_ns, SUM(value) / ")
+        .push_bind(bucket_width as f64 / 1_000_000_000.0)
+        .push(" AS value FROM bucketed GROUP BY bucket_timestamp ORDER BY bucket_timestamp LIMIT ")
+        .push_bind(max_points as i64);
+    let samples = query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(LocalMetricSample {
+                timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+                value: row.try_get("value")?,
+                statistic: "rate".to_string(),
+                source_oplog_index: None,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let observed_from_unix_nanos = samples.first().map(|sample| sample.timestamp_unix_nanos);
+    let observed_to_unix_nanos = samples.last().map(|sample| sample.timestamp_unix_nanos);
+    let series = (!samples.is_empty())
+        .then(|| LocalMetricDashboardSeries {
+            key: "golem.invocation.count:rate".to_string(),
+            label: "All invocations".to_string(),
+            unit: "invocations/s".to_string(),
+            latest_value: samples.last().map(|sample| sample.value),
+            samples,
+            approximate: true,
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    Ok(dashboard_panel(
+        request,
+        spec,
+        series,
+        observed_from_unix_nanos,
+        observed_to_unix_nanos,
+        true,
+    ))
+}
+
+async fn build_agent_duration_panel(
+    service: &LocalObservability,
+    request: &LocalMetricDashboardRequest,
+    spec: DashboardPanelSpec,
+    max_points: u16,
+) -> anyhow::Result<LocalMetricDashboardPanel> {
+    let pool = service.ready_pool().await?;
+    let (points, sampled) = bounded_event_points(
+        pool,
+        request,
+        "golem.invocation.duration_ns",
+        MAX_EVENT_QUANTILE_POINTS,
+    )
+    .await?;
+    let span = request
+        .range
+        .to_unix_nanos
+        .saturating_sub(request.range.from_unix_nanos)
+        .max(1);
+    let bucket_width = span
+        .saturating_add(max_points as i64 - 1)
+        .checked_div(max_points as i64)
+        .unwrap_or(1)
+        .max(1);
+    let mut buckets = BTreeMap::<i64, Vec<f64>>::new();
+    for (timestamp, value) in points {
+        let bucket = request.range.from_unix_nanos.saturating_add(
+            timestamp
+                .saturating_sub(request.range.from_unix_nanos)
+                .checked_div(bucket_width)
+                .unwrap_or(0)
+                .saturating_mul(bucket_width),
+        );
+        buckets.entry(bucket).or_default().push(value);
+    }
+    let quantile_series = |quantile: f64, label: &str| {
+        let samples = buckets
+            .iter()
+            .map(|(timestamp, values)| {
+                let mut values = values.clone();
+                values.sort_by(f64::total_cmp);
+                let index = ((values.len().saturating_sub(1)) as f64 * quantile).round() as usize;
+                LocalMetricSample {
+                    timestamp_unix_nanos: *timestamp,
+                    value: values[index],
+                    statistic: label.to_string(),
+                    source_oplog_index: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        LocalMetricDashboardSeries {
+            key: format!("golem.invocation.duration_ns:{label}"),
+            label: label.to_string(),
+            unit: "ns".to_string(),
+            latest_value: samples.last().map(|sample| sample.value),
+            samples,
+            approximate: sampled,
+        }
+    };
+    let series = if buckets.is_empty() {
+        Vec::new()
+    } else {
+        vec![quantile_series(0.50, "p50"), quantile_series(0.95, "p95")]
+    };
+    let observed_from_unix_nanos = series
+        .first()
+        .and_then(|series| series.samples.first())
+        .map(|sample| sample.timestamp_unix_nanos);
+    let observed_to_unix_nanos = series
+        .first()
+        .and_then(|series| series.samples.last())
+        .map(|sample| sample.timestamp_unix_nanos);
+    Ok(dashboard_panel(
+        request,
+        spec,
+        series,
+        observed_from_unix_nanos,
+        observed_to_unix_nanos,
+        sampled,
+    ))
+}
+
+async fn build_agent_ranking_panel(
+    service: &LocalObservability,
+    request: &LocalMetricDashboardRequest,
+    spec: DashboardPanelSpec,
+) -> anyhow::Result<LocalMetricDashboardPanel> {
+    let pool = service.ready_pool().await?;
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT agent_type, agent_id, SUM(value) AS total, MAX(timestamp_ns) AS observed_to FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some("golem.invocation.count"),
+        None,
+    );
+    query.push(" GROUP BY agent_type, agent_id ORDER BY total DESC, agent_type, agent_id LIMIT ");
+    query.push_bind(MAX_DASHBOARD_SERIES as i64);
+    let mut observed_to_unix_nanos = None;
+    let series = query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            let agent_type = row
+                .try_get::<Option<String>, _>("agent_type")?
+                .unwrap_or_else(|| "Unknown type".to_string());
+            let agent_id = row
+                .try_get::<Option<String>, _>("agent_id")?
+                .unwrap_or_else(|| "Unknown Agent".to_string());
+            let observed_to = row.try_get::<i64, _>("observed_to")?;
+            observed_to_unix_nanos = max_option(observed_to_unix_nanos, Some(observed_to));
+            Ok(LocalMetricDashboardSeries {
+                key: agent_id.clone(),
+                label: format!("{agent_type} · {agent_id}"),
+                unit: "invocations".to_string(),
+                samples: Vec::new(),
+                latest_value: Some(row.try_get("total")?),
+                approximate: false,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(dashboard_panel(
+        request,
+        spec,
+        series,
+        None,
+        observed_to_unix_nanos,
+        false,
+    ))
+}
+
+fn dashboard_panel(
+    request: &LocalMetricDashboardRequest,
+    spec: DashboardPanelSpec,
+    series: Vec<LocalMetricDashboardSeries>,
+    observed_from_unix_nanos: Option<i64>,
+    observed_to_unix_nanos: Option<i64>,
+    approximate: bool,
+) -> LocalMetricDashboardPanel {
+    let empty_reason = series.is_empty().then(|| {
+        format!(
+            "No matching {} samples in this range",
+            match request.source {
+                LocalMetricSource::Agents => "Agent",
+                LocalMetricSource::Services => "Server",
+            }
+        )
+    });
+    LocalMetricDashboardPanel {
+        id: spec.id.to_string(),
+        title: spec.title.to_string(),
+        kind: spec.kind,
+        series,
+        empty_reason,
+        observed_from_unix_nanos,
+        observed_to_unix_nanos,
+        approximate,
+    }
+}
+
+fn dashboard_series_label(family: &LocalMetricFamily, series: &LocalMetricSeries) -> String {
+    let identity = series
+        .agent_id
+        .as_deref()
+        .or(series.agent_type.as_deref())
+        .or_else(|| series.attributes.values().next().map(String::as_str));
+    match (identity, series.statistic.as_str()) {
+        (Some(identity), "value") => format!("{} · {identity}", family.name),
+        (Some(identity), statistic) => format!("{} · {identity} · {statistic}", family.name),
+        (None, "value") => family.name.clone(),
+        (None, statistic) => format!("{} · {statistic}", family.name),
+    }
+}
+
+fn min_option(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+fn max_option(left: Option<i64>, right: Option<i64>) -> Option<i64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (left, right) => left.or(right),
+    }
+}
+
+async fn agent_dashboard_stats(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+) -> anyhow::Result<Vec<LocalMetricDashboardStat>> {
+    let invocations =
+        metric_total(pool, request, &["golem.invocation.count"], Some("value")).await?;
+    let errors = metric_total(
+        pool,
+        request,
+        &[
+            "golem.error.count",
+            "golem.interruption.count",
+            "golem.exit.count",
+            "golem.update.failure_count",
+        ],
+        Some("value"),
+    )
+    .await?;
+    let (duration_p95, duration_approximate) =
+        event_quantile(pool, request, "golem.invocation.duration_ns", 0.95).await?;
+    let observed_agents = distinct_agents(pool, request).await?;
+    Ok(vec![
+        dashboard_stat(
+            "invocations",
+            "Invocations started",
+            invocations,
+            "1",
+            false,
+        ),
+        dashboard_stat("errors", "Error events", errors, "1", false),
+        dashboard_stat(
+            "duration-p95",
+            "Completed p95",
+            duration_p95,
+            "ns",
+            duration_approximate,
+        ),
+        dashboard_stat(
+            "observed-agents",
+            "Observed Agents",
+            observed_agents.map(|value| value as f64),
+            "agents",
+            false,
+        ),
+    ])
+}
+
+async fn server_dashboard_stats(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+) -> anyhow::Result<Vec<LocalMetricDashboardStat>> {
+    let successes = metric_total(
+        pool,
+        request,
+        &["api_success_seconds", "internal_grpc_success_seconds"],
+        Some("count"),
+    )
+    .await?;
+    let http_failures =
+        metric_total(pool, request, &["api_failure_seconds"], Some("count")).await?;
+    let grpc_failures = metric_total(
+        pool,
+        request,
+        &["internal_grpc_failure_total"],
+        Some("value"),
+    )
+    .await?;
+    let failures = add_optional_values(http_failures, grpc_failures);
+    let duration_seconds = (request
+        .range
+        .to_unix_nanos
+        .saturating_sub(request.range.from_unix_nanos) as f64
+        / 1_000_000_000.0)
+        .max(f64::EPSILON);
+    let total_requests = match (successes, failures) {
+        (Some(successes), Some(failures)) => Some(successes + failures),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    let request_rate = total_requests.map(|value| value / duration_seconds);
+    let failure_percentage = match (failures, total_requests) {
+        (Some(failures), Some(total)) if total > 0.0 => Some(failures * 100.0 / total),
+        (Some(_), Some(_)) => Some(0.0),
+        _ => None,
+    };
+    let request_p95 = histogram_quantile(
+        pool,
+        request,
+        &["api_success_seconds", "api_failure_seconds"],
+        0.95,
+    )
+    .await?;
+    let active_workers = latest_gauge_sum(pool, request, &["worker_count_by_status"]).await?;
+    Ok(vec![
+        dashboard_stat("request-rate", "Request rate", request_rate, "req/s", false),
+        dashboard_stat(
+            "failure-percentage",
+            "Failure %",
+            failure_percentage,
+            "%",
+            false,
+        ),
+        dashboard_stat("request-p95", "Request p95", request_p95, "s", true),
+        dashboard_stat(
+            "active-workers",
+            "Active workers",
+            active_workers,
+            "workers",
+            false,
+        ),
+    ])
+}
+
+fn add_optional_values(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left + right),
+        (left, right) => left.or(right),
+    }
+}
+
+fn dashboard_stat(
+    id: &str,
+    label: &str,
+    value: Option<f64>,
+    unit: &str,
+    approximate: bool,
+) -> LocalMetricDashboardStat {
+    LocalMetricDashboardStat {
+        id: id.to_string(),
+        label: label.to_string(),
+        value,
+        unit: unit.to_string(),
+        approximate: approximate && value.is_some(),
+    }
+}
+
+async fn metric_total(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+    family_fragments: &[&str],
+    statistic: Option<&str>,
+) -> anyhow::Result<Option<f64>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH ordered AS (SELECT timestamp_ns, value, temporality, series_key, LAG(value) OVER (PARTITION BY series_key ORDER BY timestamp_ns, id) AS previous_value FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        i64::MIN,
+        request.range.to_unix_nanos,
+        None,
+        None,
+    );
+    push_family_fragments(&mut query, family_fragments);
+    if let Some(statistic) = statistic {
+        query
+            .push(" AND statistic = ")
+            .push_bind(statistic.to_string());
+    }
+    query
+        .push("), ranged AS (SELECT value, temporality, previous_value FROM ordered WHERE timestamp_ns >= ")
+        .push_bind(request.range.from_unix_nanos)
+        .push(") SELECT COUNT(*) AS point_count, SUM(CASE WHEN temporality = 'cumulative' THEN CASE WHEN previous_value IS NULL THEN 0 WHEN value >= previous_value THEN value - previous_value ELSE value END ELSE value END) AS total FROM ranged");
+    let row = query.build().fetch_one(pool).await?;
+    let count = row.try_get::<i64, _>("point_count")?;
+    if count == 0 {
+        Ok(None)
+    } else {
+        Ok(row.try_get("total")?)
+    }
+}
+
+async fn event_quantile(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+    family: &str,
+    quantile: f64,
+) -> anyhow::Result<(Option<f64>, bool)> {
+    let (points, approximate) =
+        bounded_event_points(pool, request, family, MAX_EVENT_QUANTILE_POINTS).await?;
+    let mut values = points
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Ok((None, false));
+    }
+    values.sort_by(f64::total_cmp);
+    let index =
+        ((values.len().saturating_sub(1)) as f64 * quantile.clamp(0.0, 1.0)).round() as usize;
+    Ok((values.get(index).copied(), approximate))
+}
+
+async fn bounded_event_points(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+    family: &str,
+    max_points: u64,
+) -> anyhow::Result<(Vec<(i64, f64)>, bool)> {
+    let mut count_query =
+        QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM metric_points WHERE 1 = 1");
+    push_metric_filters(
+        &mut count_query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(family),
+        None,
+    );
+    let count: i64 = count_query.build_query_scalar().fetch_one(pool).await?;
+    if count <= 0 {
+        return Ok((Vec::new(), false));
+    }
+    let count = count as u64;
+    let stride = count.div_ceil(max_points).max(1);
+    let mut values_query = QueryBuilder::<Sqlite>::new(
+        "WITH ordered AS (SELECT timestamp_ns, value, ROW_NUMBER() OVER (ORDER BY timestamp_ns, id) AS point_number FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut values_query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(family),
+        None,
+    );
+    values_query
+        .push(") SELECT timestamp_ns, value FROM ordered WHERE ((point_number - 1) % ")
+        .push_bind(stride as i64)
+        .push(") = 0 ORDER BY point_number LIMIT ")
+        .push_bind(max_points as i64);
+    let values = values_query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get("timestamp_ns")?, row.try_get("value")?)))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok((values, count > max_points))
+}
+
+async fn distinct_agents(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+) -> anyhow::Result<Option<u64>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT COUNT(DISTINCT agent_id) AS agent_count FROM metric_points WHERE agent_id IS NOT NULL",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        None,
+        None,
+    );
+    let count = query
+        .build()
+        .fetch_one(pool)
+        .await?
+        .try_get::<i64, _>("agent_count")?;
+    Ok((count > 0).then_some(count as u64))
+}
+
+async fn latest_gauge_sum(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+    family_fragments: &[&str],
+) -> anyhow::Result<Option<f64>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH ranked AS (SELECT value, ROW_NUMBER() OVER (PARTITION BY series_key ORDER BY timestamp_ns DESC, id DESC) AS series_rank FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        None,
+        None,
+    );
+    push_family_fragments(&mut query, family_fragments);
+    query.push(
+        ") SELECT COUNT(*) AS series_count, SUM(value) AS total FROM ranked WHERE series_rank = 1",
+    );
+    let row = query.build().fetch_one(pool).await?;
+    if row.try_get::<i64, _>("series_count")? == 0 {
+        Ok(None)
+    } else {
+        Ok(row.try_get("total")?)
+    }
+}
+
+async fn histogram_quantile(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+    family_fragments: &[&str],
+    quantile: f64,
+) -> anyhow::Result<Option<f64>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH ordered AS (SELECT timestamp_ns, value, series_key, attributes_json, LAG(value) OVER (PARTITION BY series_key ORDER BY timestamp_ns, id) AS previous_value FROM metric_points WHERE statistic = 'bucket'",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        i64::MIN,
+        request.range.to_unix_nanos,
+        None,
+        None,
+    );
+    push_family_fragments(&mut query, family_fragments);
+    query
+        .push("), ranged AS (SELECT series_key, attributes_json, CASE WHEN previous_value IS NULL THEN 0 WHEN value >= previous_value THEN value - previous_value ELSE value END AS delta FROM ordered WHERE timestamp_ns >= ")
+        .push_bind(request.range.from_unix_nanos)
+        .push(") SELECT attributes_json, SUM(delta) AS bucket_count FROM ranged GROUP BY series_key, attributes_json");
+    let mut buckets = BTreeMap::<String, f64>::new();
+    for row in query.build().fetch_all(pool).await? {
+        let attributes: BTreeMap<String, String> =
+            serde_json::from_str(&row.try_get::<String, _>("attributes_json")?)?;
+        if let Some(bound) = attributes.get("le") {
+            *buckets.entry(bound.clone()).or_default() += row.try_get::<f64, _>("bucket_count")?;
+        }
+    }
+    let mut buckets = buckets
+        .into_iter()
+        .filter_map(|(bound, count)| {
+            let bound = match bound.as_str() {
+                "+Inf" | "Inf" | "inf" => f64::INFINITY,
+                _ => bound.parse().ok()?,
+            };
+            Some((bound, count))
+        })
+        .collect::<Vec<_>>();
+    buckets.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let total = buckets.last().map(|bucket| bucket.1).unwrap_or(0.0);
+    if total <= 0.0 {
+        return Ok(None);
+    }
+    let target = total * quantile.clamp(0.0, 1.0);
+    Ok(buckets
+        .into_iter()
+        .find(|(_, count)| *count >= target)
+        .and_then(|(bound, _)| bound.is_finite().then_some(bound)))
+}
+
+async fn freshest_sample(
+    pool: &SqlitePool,
+    request: &LocalMetricDashboardRequest,
+) -> anyhow::Result<Option<i64>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "SELECT MAX(timestamp_ns) AS freshest FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        None,
+        None,
+    );
+    Ok(query.build().fetch_one(pool).await?.try_get("freshest")?)
+}
+
+fn push_family_fragments(query: &mut QueryBuilder<'_, Sqlite>, family_fragments: &[&str]) {
+    query.push(" AND (");
+    for (index, fragment) in family_fragments.iter().enumerate() {
+        if index > 0 {
+            query.push(" OR ");
+        }
+        query
+            .push("family LIKE ")
+            .push_bind(format!("%{fragment}%"));
+    }
+    query.push(")");
 }
 
 #[derive(Debug, Serialize)]
@@ -584,6 +1514,7 @@ pub fn add_routes(
     authorization_token: &'static str,
 ) -> Route {
     let capability = service.clone();
+    let dashboard = service.clone();
     let families = service.clone();
     let series = service.clone();
     let samples = service.clone();
@@ -597,6 +1528,20 @@ pub fn add_routes(
                     return unauthorized();
                 }
                 json_response(StatusCode::OK, &service.capability().await)
+            }
+        })),
+    )
+    .at(
+        LOCAL_OBSERVABILITY_DASHBOARD_PATH,
+        poem::post(poem::endpoint::make(move |request: Request| {
+            let service = dashboard.clone();
+            async move {
+                query_response::<LocalMetricDashboardRequest, _, _>(
+                    request,
+                    authorization_token,
+                    |request| async move { service.dashboard(&request).await },
+                )
+                .await
             }
         })),
     )
@@ -1171,6 +2116,49 @@ async fn aggregate_cumulative_samples(
                 value: row.try_get("value")?,
                 statistic: "delta".to_string(),
                 source_oplog_index: None,
+            })
+        })
+        .collect()
+}
+
+async fn cumulative_delta_samples(
+    pool: &SqlitePool,
+    request: &LocalMetricSamplesRequest,
+    max_points: usize,
+    seed: Option<f64>,
+) -> anyhow::Result<Vec<LocalMetricSample>> {
+    let mut query = QueryBuilder::<Sqlite>::new(
+        "WITH deltas AS (SELECT timestamp_ns, source_oplog_index, CASE WHEN previous_value IS NULL THEN NULL WHEN value >= previous_value THEN value - previous_value ELSE value END AS value FROM (SELECT timestamp_ns, value, source_oplog_index, LAG(value, 1, ",
+    );
+    query.push_bind(seed);
+    query.push(
+        ") OVER (ORDER BY timestamp_ns, id) AS previous_value FROM metric_points WHERE 1 = 1",
+    );
+    push_metric_filters(
+        &mut query,
+        request.source,
+        &request.scope,
+        request.range.from_unix_nanos,
+        request.range.to_unix_nanos,
+        Some(&request.family),
+        Some(&request.series_key),
+    );
+    query
+        .push(")) SELECT timestamp_ns, value, source_oplog_index FROM deltas WHERE value IS NOT NULL ORDER BY timestamp_ns LIMIT ")
+        .push_bind(max_points as i64);
+    query
+        .build()
+        .fetch_all(pool)
+        .await?
+        .into_iter()
+        .map(|row| {
+            Ok(LocalMetricSample {
+                timestamp_unix_nanos: row.try_get("timestamp_ns")?,
+                value: row.try_get("value")?,
+                statistic: "delta".to_string(),
+                source_oplog_index: row
+                    .try_get::<Option<String>, _>("source_oplog_index")?
+                    .and_then(|index| index.parse().ok()),
             })
         })
         .collect()
@@ -2054,6 +3042,20 @@ mod tests {
         );
         assert!(cumulative.approximate);
 
+        let exact_cumulative = service
+            .samples(&request("cumulative", &cumulative_series_key, 10, 50, 10))
+            .await
+            .unwrap();
+        assert_eq!(
+            exact_cumulative
+                .samples
+                .iter()
+                .map(|sample| (sample.timestamp_unix_nanos, sample.value))
+                .collect::<Vec<_>>(),
+            vec![(10, 3.0), (20, 3.0), (30, 2.0), (40, 5.0)]
+        );
+        assert!(!exact_cumulative.approximate);
+
         let gauge = service
             .samples(&request("gauge", &gauge_series_key, 10, 50, 3))
             .await
@@ -2070,6 +3072,240 @@ mod tests {
         assert_eq!(gauge.original_point_count, 2);
         assert_eq!(gauge.observed_from_unix_nanos, Some(20));
         assert_eq!(gauge.observed_to_unix_nanos, Some(40));
+
+        drop(service);
+        pool.close().await;
+        clear_store(&db_path).await.unwrap();
+        tokio::fs::remove_dir(&test_dir).await.unwrap();
+    }
+
+    #[test]
+    async fn agent_dashboard_returns_typed_values_and_explicit_empty_panels() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "golem-local-observability-dashboard-test-{}",
+            Uuid::new_v4()
+        ));
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+        let db_path = test_dir.join(OBSERVABILITY_DB_FILE_NAME);
+        let pool = open_store(&db_path).await.unwrap();
+        let environment_id = Uuid::new_v4();
+        let component_id = Uuid::new_v4();
+        let agent_id = format!("{component_id}/Counter(\"dashboard\")");
+        let point = |family: &str,
+                     kind: LocalMetricKind,
+                     temporality: LocalMetricTemporality,
+                     timestamp_ns: i64,
+                     value: f64| StoredPoint {
+            source: LocalMetricSource::Agents,
+            family: family.to_string(),
+            description: family.to_string(),
+            unit: if family.ends_with("_ns") { "ns" } else { "1" }.to_string(),
+            kind,
+            temporality,
+            category: agent_category(family).to_string(),
+            timestamp_ns,
+            value,
+            statistic: "value".to_string(),
+            environment_id: Some(environment_id.to_string()),
+            component_id: Some(component_id.to_string()),
+            agent_id: Some(agent_id.clone()),
+            agent_type: Some("Counter".to_string()),
+            attributes: BTreeMap::new(),
+            source_oplog_index: Some(timestamp_ns as u64),
+        };
+        insert_points(
+            &pool,
+            &[
+                point(
+                    "golem.invocation.count",
+                    LocalMetricKind::Counter,
+                    LocalMetricTemporality::Delta,
+                    10,
+                    1.0,
+                ),
+                point(
+                    "golem.invocation.count",
+                    LocalMetricKind::Counter,
+                    LocalMetricTemporality::Delta,
+                    20,
+                    2.0,
+                ),
+                point(
+                    "golem.error.count",
+                    LocalMetricKind::Counter,
+                    LocalMetricTemporality::Delta,
+                    20,
+                    1.0,
+                ),
+                point(
+                    "golem.invocation.duration_ns",
+                    LocalMetricKind::Event,
+                    LocalMetricTemporality::Delta,
+                    20,
+                    10.0,
+                ),
+                point(
+                    "golem.invocation.duration_ns",
+                    LocalMetricKind::Event,
+                    LocalMetricTemporality::Delta,
+                    30,
+                    30.0,
+                ),
+                point(
+                    "golem.memory.total_bytes",
+                    LocalMetricKind::Gauge,
+                    LocalMetricTemporality::Unspecified,
+                    30,
+                    4096.0,
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        let service = LocalObservability {
+            db_path: db_path.clone(),
+            pool: Some(pool.clone()),
+            state: RwLock::new(RuntimeState::Ready),
+            discarded_points: AtomicU64::new(0),
+            last_service_sample: AtomicI64::new(0),
+            last_agent_ingest: AtomicI64::new(0),
+        };
+
+        let dashboard = service
+            .dashboard(&LocalMetricDashboardRequest {
+                source: LocalMetricSource::Agents,
+                scope: LocalMetricScope {
+                    environment_id: Some(environment_id),
+                    ..Default::default()
+                },
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: 0,
+                    to_unix_nanos: 40,
+                },
+                max_points: Some(20),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(dashboard.stats.len(), 4);
+        assert_eq!(dashboard.stats[0].value, Some(3.0));
+        assert_eq!(dashboard.stats[1].value, Some(1.0));
+        assert_eq!(dashboard.stats[2].value, Some(30.0));
+        assert_eq!(dashboard.stats[3].value, Some(1.0));
+        assert_eq!(dashboard.panels.len(), 6);
+        assert!(!dashboard.panels[0].series.is_empty());
+        assert_eq!(dashboard.panels[0].observed_to_unix_nanos, Some(20));
+        assert!(
+            dashboard
+                .panels
+                .iter()
+                .find(|panel| panel.id == "active-resources")
+                .unwrap()
+                .empty_reason
+                .is_some()
+        );
+        assert_eq!(dashboard.freshest_sample_unix_nanos, Some(30));
+
+        drop(service);
+        pool.close().await;
+        clear_store(&db_path).await.unwrap();
+        tokio::fs::remove_dir(&test_dir).await.unwrap();
+    }
+
+    #[test]
+    async fn server_dashboard_uses_reset_aware_histograms_and_current_gauges() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "golem-local-observability-server-dashboard-test-{}",
+            Uuid::new_v4()
+        ));
+        tokio::fs::create_dir_all(&test_dir).await.unwrap();
+        let db_path = test_dir.join(OBSERVABILITY_DB_FILE_NAME);
+        let pool = open_store(&db_path).await.unwrap();
+        let histogram_point =
+            |family: &str, timestamp_ns: i64, value: f64, statistic: &str, le: Option<&str>| {
+                let mut attributes = BTreeMap::new();
+                if let Some(le) = le {
+                    attributes.insert("le".to_string(), le.to_string());
+                }
+                service_point(
+                    family,
+                    family,
+                    LocalMetricKind::Histogram,
+                    timestamp_ns,
+                    value,
+                    statistic,
+                    attributes,
+                )
+            };
+        let mut points = Vec::new();
+        for (family, seed, current, le_one_seed, le_one_current) in [
+            ("api_success_seconds", 10.0, 15.0, 8.0, 12.0),
+            ("api_failure_seconds", 2.0, 3.0, 1.0, 2.0),
+        ] {
+            points.push(histogram_point(family, 5, seed, "count", None));
+            points.push(histogram_point(family, 20, current, "count", None));
+            points.push(histogram_point(family, 5, le_one_seed, "bucket", Some("1")));
+            points.push(histogram_point(
+                family,
+                20,
+                le_one_current,
+                "bucket",
+                Some("1"),
+            ));
+            points.push(histogram_point(family, 5, seed, "bucket", Some("2")));
+            points.push(histogram_point(family, 20, current, "bucket", Some("2")));
+            points.push(histogram_point(family, 5, seed, "bucket", Some("+Inf")));
+            points.push(histogram_point(family, 20, current, "bucket", Some("+Inf")));
+        }
+        for (status, value) in [("running", 2.0), ("idle", 3.0)] {
+            points.push(service_point(
+                "worker_count_by_status",
+                "Workers",
+                LocalMetricKind::Gauge,
+                20,
+                value,
+                "value",
+                BTreeMap::from([("status".to_string(), status.to_string())]),
+            ));
+        }
+        insert_points(&pool, &points).await.unwrap();
+        let service = LocalObservability {
+            db_path: db_path.clone(),
+            pool: Some(pool.clone()),
+            state: RwLock::new(RuntimeState::Ready),
+            discarded_points: AtomicU64::new(0),
+            last_service_sample: AtomicI64::new(0),
+            last_agent_ingest: AtomicI64::new(0),
+        };
+
+        let dashboard = service
+            .dashboard(&LocalMetricDashboardRequest {
+                source: LocalMetricSource::Services,
+                scope: LocalMetricScope::default(),
+                range: golem_cli::model::local_observability::LocalMetricTimeRange {
+                    from_unix_nanos: 10,
+                    to_unix_nanos: 30,
+                },
+                max_points: Some(20),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(dashboard.stats.len(), 4);
+        assert_eq!(dashboard.stats[0].value, Some(300_000_000.0));
+        assert!((dashboard.stats[1].value.unwrap() - 16.666_666).abs() < 0.001);
+        assert_eq!(dashboard.stats[2].value, Some(2.0));
+        assert_eq!(dashboard.stats[3].value, Some(5.0));
+        assert_eq!(dashboard.panels.len(), 9);
+        assert!(
+            dashboard
+                .panels
+                .iter()
+                .find(|panel| panel.id == "active-streams")
+                .unwrap()
+                .empty_reason
+                .is_some()
+        );
 
         drop(service);
         pool.close().await;

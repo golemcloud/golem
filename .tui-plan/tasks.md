@@ -12,30 +12,30 @@
 
 ## Foundation
 
-- [ ] Add typed `OpsDestination` and per-destination route stacks.
-- [ ] Add horizontal scrollable Ops tab bar and direct leader navigation.
+- [x] Add typed `OpsDestination` and per-destination route stacks.
+- [x] Add horizontal scrollable Ops tab bar and direct leader navigation.
 - [ ] Introduce `OpsApp` and delegate render/input/help/actions from the shell.
-- [ ] Add shared async, collection, details, time-range, and chart state.
+- [~] Add shared async, collection, details, time-range, and chart state.
 - [ ] Migrate Agents and metadata caching to the new boundary.
 - [ ] Derive help and palette visibility from exact route/focus.
 
 ## Metrics backend
 
-- [ ] Add temporality and source oplog index to local metric models/store.
-- [ ] Upgrade local observability schema to version 2.
-- [ ] Replace whole-range in-memory queries and every-Nth sampling.
-- [ ] Add truthful bucket transforms, gauge seeds, gaps, and approximation flags.
-- [ ] Add typed Agent/Server dashboard request and response.
-- [ ] Add exporter source-index attributes and release version 1.6.0.
-- [ ] Rebuild, validate, and commit the exporter WASM.
+- [x] Add temporality and source oplog index to local metric models/store.
+- [x] Upgrade local observability schema to version 2.
+- [x] Replace whole-range in-memory queries and every-Nth sampling.
+- [x] Add truthful bucket transforms, gauge seeds, gaps, and approximation flags.
+- [x] Add typed Agent/Server dashboard request and response.
+- [x] Add exporter source-index attributes and release version 1.6.0.
+- [x] Rebuild, validate, and commit the exporter WASM.
 
 ## Metrics UI
 
-- [ ] Add Dashboard/Explore and Agent/Server controls.
-- [ ] Add global range, live/pause, refresh, and freshness state.
-- [ ] Implement Agent stats and six curated panels.
-- [ ] Implement Server stats and nine curated panels.
-- [ ] Add responsive chart grid, cursor inspection, expansion, and handoff.
+- [x] Add Dashboard/Explore and Agent/Server controls.
+- [~] Add global range, live/pause, refresh, and freshness state.
+- [x] Implement Agent stats and six curated panels.
+- [x] Implement Server stats and nine curated panels.
+- [~] Add responsive chart grid, cursor inspection, expansion, and handoff.
 - [ ] Add paged Explore families/series and six-series compatibility checks.
 
 ## Oplog and Stream

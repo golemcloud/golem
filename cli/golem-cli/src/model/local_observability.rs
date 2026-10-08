@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub const LOCAL_OBSERVABILITY_CAPABILITY_PATH: &str = "/_golem/local/observability/capability";
+pub const LOCAL_OBSERVABILITY_DASHBOARD_PATH: &str = "/_golem/local/observability/dashboard";
 pub const LOCAL_OBSERVABILITY_FAMILIES_PATH: &str = "/_golem/local/observability/families";
 pub const LOCAL_OBSERVABILITY_SERIES_PATH: &str = "/_golem/local/observability/series";
 pub const LOCAL_OBSERVABILITY_SAMPLES_PATH: &str = "/_golem/local/observability/samples";
@@ -181,4 +182,66 @@ pub struct LocalMetricSamplesResponse {
     pub observed_to_unix_nanos: Option<i64>,
     pub original_point_count: u64,
     pub approximate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMetricDashboardRequest {
+    pub source: LocalMetricSource,
+    pub scope: LocalMetricScope,
+    pub range: LocalMetricTimeRange,
+    pub max_points: Option<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LocalMetricDashboardPanelKind {
+    TimeSeries,
+    Distribution,
+    Ranking,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMetricDashboardStat {
+    pub id: String,
+    pub label: String,
+    pub value: Option<f64>,
+    pub unit: String,
+    pub approximate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMetricDashboardSeries {
+    pub key: String,
+    pub label: String,
+    pub unit: String,
+    pub samples: Vec<LocalMetricSample>,
+    pub latest_value: Option<f64>,
+    pub approximate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMetricDashboardPanel {
+    pub id: String,
+    pub title: String,
+    pub kind: LocalMetricDashboardPanelKind,
+    pub series: Vec<LocalMetricDashboardSeries>,
+    pub empty_reason: Option<String>,
+    pub observed_from_unix_nanos: Option<i64>,
+    pub observed_to_unix_nanos: Option<i64>,
+    pub approximate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMetricDashboardResponse {
+    pub source: LocalMetricSource,
+    pub range: LocalMetricTimeRange,
+    pub generated_at_unix_nanos: i64,
+    pub freshest_sample_unix_nanos: Option<i64>,
+    pub stats: Vec<LocalMetricDashboardStat>,
+    pub panels: Vec<LocalMetricDashboardPanel>,
 }

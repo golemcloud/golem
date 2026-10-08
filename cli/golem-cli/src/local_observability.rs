@@ -13,10 +13,12 @@
 // limitations under the License.
 
 use crate::model::local_observability::{
-    LOCAL_OBSERVABILITY_CAPABILITY_PATH, LOCAL_OBSERVABILITY_FAMILIES_PATH,
-    LOCAL_OBSERVABILITY_SAMPLES_PATH, LOCAL_OBSERVABILITY_SERIES_PATH, LocalMetricFamiliesRequest,
-    LocalMetricFamiliesResponse, LocalMetricSamplesRequest, LocalMetricSamplesResponse,
-    LocalMetricSeriesRequest, LocalMetricSeriesResponse, LocalObservabilityCapability,
+    LOCAL_OBSERVABILITY_CAPABILITY_PATH, LOCAL_OBSERVABILITY_DASHBOARD_PATH,
+    LOCAL_OBSERVABILITY_FAMILIES_PATH, LOCAL_OBSERVABILITY_SAMPLES_PATH,
+    LOCAL_OBSERVABILITY_SERIES_PATH, LocalMetricDashboardRequest, LocalMetricDashboardResponse,
+    LocalMetricFamiliesRequest, LocalMetricFamiliesResponse, LocalMetricSamplesRequest,
+    LocalMetricSamplesResponse, LocalMetricSeriesRequest, LocalMetricSeriesResponse,
+    LocalObservabilityCapability,
 };
 use anyhow::{Context, bail};
 use reqwest::{Client, StatusCode, Url};
@@ -53,6 +55,13 @@ impl LocalObservabilityClient {
         request: &LocalMetricFamiliesRequest,
     ) -> anyhow::Result<LocalMetricFamiliesResponse> {
         self.post(LOCAL_OBSERVABILITY_FAMILIES_PATH, request).await
+    }
+
+    pub async fn dashboard(
+        &self,
+        request: &LocalMetricDashboardRequest,
+    ) -> anyhow::Result<LocalMetricDashboardResponse> {
+        self.post(LOCAL_OBSERVABILITY_DASHBOARD_PATH, request).await
     }
 
     pub async fn series(

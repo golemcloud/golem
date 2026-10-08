@@ -688,13 +688,15 @@ impl TuiApp {
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Metrics =>
             {
-                self.metrics.mode = self.metrics.mode.previous()
+                self.metrics.mode = self.metrics.mode.previous();
+                self.reload_metrics(event_tx);
             }
             KeyCode::Right
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Metrics =>
             {
-                self.metrics.mode = self.metrics.mode.next()
+                self.metrics.mode = self.metrics.mode.next();
+                self.reload_metrics(event_tx);
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
@@ -845,6 +847,16 @@ impl TuiApp {
             {
                 self.metrics.range = self.metrics.range.next();
                 self.reload_metrics(event_tx);
+            }
+            KeyCode::Char('l')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.metrics.live = !self.metrics.live;
+                if self.metrics.live {
+                    self.refresh_metrics(event_tx);
+                }
             }
             KeyCode::Char(' ')
                 if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -2612,6 +2624,7 @@ impl TuiApp {
         };
         Some(MetricsQuery {
             source,
+            mode: self.metrics.mode,
             agent_ids,
             selected_family: self.metrics.selected_family_name(),
             selected_series: self.metrics.selected_series_key(),
@@ -2667,6 +2680,16 @@ impl TuiApp {
     fn reload_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
         self.metrics.generation = self.metrics.generation.saturating_add(1);
         self.metrics.loading = false;
+        match self.metrics.mode {
+            MetricsMode::Dashboard => self.metrics.dashboard = None,
+            MetricsMode::Explore => {
+                self.metrics.families.clear();
+                self.metrics.series.clear();
+                self.metrics.samples.clear();
+                self.metrics.selected_family = 0;
+                self.metrics.selected_series = 0;
+            }
+        }
         self.refresh_metrics(event_tx);
     }
 
@@ -2687,6 +2710,8 @@ impl TuiApp {
             Ok(payload) => {
                 self.metrics.capability = Some(payload.capability);
                 self.metrics.source = payload.source;
+                self.metrics.mode = payload.mode;
+                self.metrics.dashboard = payload.dashboard;
                 self.metrics.families = payload.families;
                 self.metrics.series = payload.series;
                 self.metrics.samples = payload.samples;
@@ -2707,10 +2732,15 @@ impl TuiApp {
 
     fn move_metrics_selection(&mut self, down: bool, event_tx: Option<&TuiEventSender>) {
         if self.metrics.mode == MetricsMode::Dashboard {
-            let panel_count = match self.metrics.source {
-                crate::model::local_observability::LocalMetricSource::Agents => 6,
-                crate::model::local_observability::LocalMetricSource::Services => 9,
-            };
+            let panel_count = self
+                .metrics
+                .dashboard
+                .as_ref()
+                .map(|dashboard| dashboard.panels.len())
+                .unwrap_or(0);
+            if panel_count == 0 {
+                return;
+            }
             self.metrics.selected_panel = if down {
                 (self.metrics.selected_panel + 1).min(panel_count - 1)
             } else {
@@ -7642,8 +7672,13 @@ fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             ),
             (
                 "Metrics",
-                if app.metrics.samples.is_empty() {
-                    "no local samples loaded".to_string()
+                if let Some(dashboard) = &app.metrics.dashboard {
+                    match dashboard.freshest_sample_unix_nanos {
+                        Some(timestamp) => metric_freshness_label(timestamp),
+                        None => "dashboard loaded · no samples in range".to_string(),
+                    }
+                } else if app.metrics.samples.is_empty() {
+                    "no local metrics loaded".to_string()
                 } else {
                     format!("{} samples loaded", app.metrics.samples.len())
                 },
@@ -7879,10 +7914,6 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
-    let source = match app.metrics.source {
-        crate::model::local_observability::LocalMetricSource::Services => "Server",
-        crate::model::local_observability::LocalMetricSource::Agents => "Agents",
-    };
     let mode = match app.metrics.mode {
         MetricsMode::Dashboard => "[Dashboard] Explore",
         MetricsMode::Explore => "Dashboard [Explore]",
@@ -7896,6 +7927,14 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     } else {
         "[Paused]"
     };
+    let freshness = app
+        .metrics
+        .dashboard
+        .as_ref()
+        .and_then(|dashboard| dashboard.freshest_sample_unix_nanos)
+        .map(metric_freshness_label)
+        .map(|freshness| format!(" · {freshness}"))
+        .unwrap_or_default();
     let loading = if app.metrics.loading {
         " · refreshing…"
     } else {
@@ -7903,7 +7942,7 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     };
     PaneHeader {
         title: &format!(
-            "Metrics · {mode} · {sources} · scope environment · time [{}] · {live}{loading}",
+            "Metrics · {mode} · {sources} · scope environment · time [{}] · {live}{freshness}{loading}",
             app.metrics.range.label()
         ),
         focus: PaneFocus::Active,
@@ -7941,7 +7980,20 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
 
     if app.metrics.mode == MetricsMode::Dashboard {
-        render_metrics_dashboard(frame, body, app, source);
+        if app.metrics.dashboard.is_none() {
+            render_metrics_notice(
+                frame,
+                body,
+                NoticeKind::Info,
+                if app.metrics.loading {
+                    "Loading dashboard snapshot…"
+                } else {
+                    "No dashboard snapshot is available"
+                },
+            );
+        } else {
+            render_metrics_dashboard(frame, body, app);
+        }
         return;
     }
 
@@ -7971,50 +8023,18 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_metrics_chart(frame, areas[2], app);
 }
 
-fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, source: &str) {
-    let (stat_titles, panels): (&[&str], &[(&str, &str)]) = match app.metrics.source {
-        crate::model::local_observability::LocalMetricSource::Agents => (
-            &[
-                "Invocations started",
-                "Error events",
-                "Completed p95",
-                "Observed Agents",
-            ],
-            &[
-                ("Invocation rate", "golem.invocation.count"),
-                (
-                    "Completed duration p50 / p95",
-                    "golem.invocation.duration_ns",
-                ),
-                ("Reliability events by kind", "golem.error.count"),
-                ("Top Agent Types / Agents", "golem.invocation.count"),
-                ("Observed last-known memory", "golem.memory.growth_bytes"),
-                ("Active resources", "golem.resources.active"),
-            ],
-        ),
-        crate::model::local_observability::LocalMetricSource::Services => (
-            &["Request rate", "Failure %", "Request p95", "Active workers"],
-            &[
-                ("Success / failure throughput", "request"),
-                ("Request latency p50 / p95", "duration"),
-                ("Active HTTP / gRPC streams", "stream"),
-                ("Worker states / active invocations", "worker"),
-                ("Memory capacity", "memory"),
-                ("Admission pressure", "admission"),
-                ("Compilation", "compilation"),
-                ("Cache effectiveness", "cache"),
-                ("Scheduler / oplog / stream health", "scheduler"),
-            ],
-        ),
+fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let Some(dashboard) = &app.metrics.dashboard else {
+        return;
     };
     let stat_height = if area.height >= 8 { 3 } else { 1 };
     let [stats_area, panels_area] = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(stat_height), Constraint::Min(1)])
         .areas(area);
-    render_metric_stats(frame, stats_area, app, stat_titles);
+    render_metric_stats(frame, stats_area, &dashboard.stats);
 
-    if panels_area.height == 0 {
+    if panels_area.height == 0 || dashboard.panels.is_empty() {
         return;
     }
     let columns = if panels_area.width >= 96 { 2 } else { 1 };
@@ -8022,10 +8042,10 @@ fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, sou
         vec![
             app.metrics
                 .selected_panel
-                .min(panels.len().saturating_sub(1)),
+                .min(dashboard.panels.len().saturating_sub(1)),
         ]
     } else {
-        (0..panels.len()).collect::<Vec<_>>()
+        (0..dashboard.panels.len()).collect::<Vec<_>>()
     };
     let rows = visible_panels.len().div_ceil(columns).max(1);
     let row_constraints = (0..rows)
@@ -8042,33 +8062,48 @@ fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, sou
             .direction(Direction::Horizontal)
             .constraints((0..columns).map(|_| Constraint::Ratio(1, columns as u32)))
             .split(row_areas[row]);
-        let (title, family_hint) = panels[panel_index];
         render_metric_dashboard_panel(
             frame,
             column_areas[column],
             app,
             panel_index,
-            title,
-            family_hint,
-            source,
+            &dashboard.panels[panel_index],
         );
     }
 }
 
-fn render_metric_stats(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, titles: &[&str]) {
+fn render_metric_stats(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    stats: &[crate::model::local_observability::LocalMetricDashboardStat],
+) {
     if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if stats.is_empty() {
         return;
     }
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints((0..titles.len()).map(|_| Constraint::Ratio(1, titles.len() as u32)))
+        .constraints((0..stats.len()).map(|_| Constraint::Ratio(1, stats.len() as u32)))
         .split(area);
-    for (index, title) in titles.iter().enumerate() {
-        let value = dashboard_stat_value(app, index);
+    for (index, stat) in stats.iter().enumerate() {
+        let value = stat
+            .value
+            .map(|value| {
+                let prefix = if stat.approximate { "≈" } else { "" };
+                let suffix = if stat.unit == "1" {
+                    String::new()
+                } else {
+                    format!(" {}", stat.unit)
+                };
+                format!("{prefix}{}{suffix}", format_metric_value(value))
+            })
+            .unwrap_or_else(|| "—".to_string());
         let text = if area.height >= 3 {
-            format!("{title}\n{value}")
+            format!("{}\n{value}", stat.label)
         } else {
-            format!("{title}: {value}")
+            format!("{}: {value}", stat.label)
         };
         frame.render_widget(
             Paragraph::new(text)
@@ -8079,36 +8114,12 @@ fn render_metric_stats(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, titles: 
     }
 }
 
-fn dashboard_stat_value(app: &TuiApp, index: usize) -> String {
-    match (app.metrics.source, index) {
-        (crate::model::local_observability::LocalMetricSource::Agents, 3) => app
-            .metrics
-            .series
-            .iter()
-            .filter_map(|series| series.agent_id.as_deref())
-            .collect::<HashSet<_>>()
-            .len()
-            .to_string(),
-        (crate::model::local_observability::LocalMetricSource::Services, 3) => app
-            .metrics
-            .families
-            .iter()
-            .find(|family| family.name.contains("worker_count"))
-            .and_then(|family| family.latest_value)
-            .map(format_metric_value)
-            .unwrap_or_else(|| "—".to_string()),
-        _ => "—".to_string(),
-    }
-}
-
 fn render_metric_dashboard_panel(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &TuiApp,
     panel_index: usize,
-    title: &str,
-    family_hint: &str,
-    source: &str,
+    panel: &crate::model::local_observability::LocalMetricDashboardPanel,
 ) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -8123,7 +8134,7 @@ fn render_metric_dashboard_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border).bg(theme().surface))
         .title(Span::styled(
-            format!(" {title} "),
+            format!(" {} ", panel.title),
             Style::default()
                 .fg(if selected {
                     theme().accent_hover
@@ -8134,42 +8145,57 @@ fn render_metric_dashboard_panel(
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let family = app
-        .metrics
-        .families
-        .iter()
-        .find(|family| family.name.contains(family_hint));
     let mut lines = Vec::new();
-    if let Some(family) = family {
-        if app
-            .metrics
-            .families
-            .get(app.metrics.selected_family)
-            .is_some_and(|selected| selected.name == family.name)
-            && !app.metrics.samples.is_empty()
-        {
-            lines.push(Line::from(Span::styled(
-                metric_sparkline(&app.metrics.samples, inner.width as usize),
-                Style::default().fg(theme().accent),
-            )));
-        }
-        let latest = family
-            .latest_value
-            .map(format_metric_value)
-            .unwrap_or_else(|| "—".to_string());
-        lines.push(Line::from(format!(
-            "latest {latest} · {} series",
-            family.series_count
-        )));
+    if panel.series.is_empty() {
         lines.push(Line::from(Span::styled(
-            fit(&family.name, inner.width as usize),
+            panel
+                .empty_reason
+                .as_deref()
+                .unwrap_or("No samples in this range"),
             Style::default().fg(theme().text_muted),
         )));
     } else {
-        lines.push(Line::from(Span::styled(
-            format!("No {source} samples in this range"),
-            Style::default().fg(theme().text_muted),
-        )));
+        for series in panel.series.iter().take(inner.height.max(1) as usize) {
+            if !series.samples.is_empty() && inner.width >= 24 {
+                let sparkline_width = (inner.width as usize / 3).clamp(8, 20);
+                let chart = metric_sparkline(&series.samples, sparkline_width);
+                let value = series
+                    .latest_value
+                    .map(format_metric_value)
+                    .unwrap_or_else(|| "—".to_string());
+                let approximation = if series.approximate { "≈" } else { "" };
+                let unit = if series.unit == "1" {
+                    String::new()
+                } else {
+                    format!(" {}", series.unit)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{chart} "), Style::default().fg(theme().accent)),
+                    Span::styled(
+                        fit(
+                            &format!("{} {approximation}{value}{unit}", series.label),
+                            inner.width.saturating_sub(sparkline_width as u16 + 1) as usize,
+                        ),
+                        Style::default().fg(theme().text_secondary),
+                    ),
+                ]));
+            } else {
+                let value = series
+                    .latest_value
+                    .map(format_metric_value)
+                    .unwrap_or_else(|| "—".to_string());
+                lines.push(Line::from(fit(
+                    &format!("{}  {value} {}", series.label, series.unit),
+                    inner.width as usize,
+                )));
+            }
+        }
+        if panel.approximate {
+            lines.push(Line::from(Span::styled(
+                "≈ bounded/downsampled",
+                Style::default().fg(theme().text_muted),
+            )));
+        }
     }
     frame.render_widget(
         Paragraph::new(lines)
@@ -8177,6 +8203,16 @@ fn render_metric_dashboard_panel(
             .wrap(Wrap { trim: true }),
         inner,
     );
+}
+
+fn metric_freshness_label(timestamp_unix_nanos: i64) -> String {
+    let now = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(i64::MAX as u128) as i64;
+    let age_seconds = now.saturating_sub(timestamp_unix_nanos) / 1_000_000_000;
+    format!("fresh {age_seconds}s")
 }
 
 fn render_metrics_notice(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, message: &str) {
@@ -9966,6 +10002,7 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
         push_raw_help(&mut lines, width, "up / down", "Select family or series");
         push_raw_help(&mut lines, width, "ctrl+s", "Switch Agents / Server source");
         push_raw_help(&mut lines, width, "ctrl+t", "Cycle time range");
+        push_raw_help(&mut lines, width, "ctrl+l", "Toggle Live / Paused");
         push_raw_help(&mut lines, width, "ctrl+r", "Refresh now");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops.active() == OpsDestination::Configuration {
@@ -12707,6 +12744,11 @@ mod tests {
     use crate::command::GolemCliCommand;
     use crate::config::{AuthenticationConfig, Profile, ProfileName};
     use crate::log::{LogContext, Output, logln};
+    use crate::model::local_observability::{
+        LocalMetricDashboardPanel, LocalMetricDashboardPanelKind, LocalMetricDashboardResponse,
+        LocalMetricDashboardSeries, LocalMetricDashboardStat, LocalMetricSample, LocalMetricSource,
+        LocalMetricTimeRange,
+    };
     use clap::Parser;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -15064,8 +15106,88 @@ mod tests {
 
         assert_eq!(app.ops.active(), OpsDestination::Metrics);
         assert!(frame.contains("Metrics · [Dashboard] Explore"), "{frame}");
-        assert!(frame.contains("No Agents samples in this range"), "{frame}");
+        assert!(
+            frame.contains("No dashboard snapshot is available"),
+            "{frame}"
+        );
         assert!(!frame.contains("golem.agent.invocations"), "{frame}");
+    }
+
+    #[test]
+    fn production_metrics_dashboard_renders_typed_stats_and_series() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.dashboard = Some(LocalMetricDashboardResponse {
+            source: LocalMetricSource::Agents,
+            range: LocalMetricTimeRange {
+                from_unix_nanos: 10,
+                to_unix_nanos: 40,
+            },
+            generated_at_unix_nanos: 40,
+            freshest_sample_unix_nanos: Some(30),
+            stats: vec![LocalMetricDashboardStat {
+                id: "invocations".to_string(),
+                label: "Invocations started".to_string(),
+                value: Some(42.0),
+                unit: "1".to_string(),
+                approximate: false,
+            }],
+            panels: vec![LocalMetricDashboardPanel {
+                id: "invocation-rate".to_string(),
+                title: "Invocation rate".to_string(),
+                kind: LocalMetricDashboardPanelKind::TimeSeries,
+                series: vec![LocalMetricDashboardSeries {
+                    key: "all".to_string(),
+                    label: "All invocations".to_string(),
+                    unit: "invocations/s".to_string(),
+                    samples: vec![
+                        LocalMetricSample {
+                            timestamp_unix_nanos: 10,
+                            value: 1.0,
+                            statistic: "rate".to_string(),
+                            source_oplog_index: None,
+                        },
+                        LocalMetricSample {
+                            timestamp_unix_nanos: 20,
+                            value: 2.0,
+                            statistic: "rate".to_string(),
+                            source_oplog_index: None,
+                        },
+                    ],
+                    latest_value: Some(2.0),
+                    approximate: false,
+                }],
+                empty_reason: None,
+                observed_from_unix_nanos: Some(10),
+                observed_to_unix_nanos: Some(20),
+                approximate: false,
+            }],
+        });
+
+        let frame = render_app_text_at(&app, 120, 28);
+
+        assert!(frame.contains("Invocations started"), "{frame}");
+        assert!(frame.contains("42"), "{frame}");
+        assert!(frame.contains("Invocation rate"), "{frame}");
+        assert!(frame.contains("All invocations"), "{frame}");
+    }
+
+    #[test]
+    fn metrics_live_mode_is_visible_and_modifier_toggleable() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+
+        app.handle_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL));
+
+        assert!(!app.metrics.live);
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("[Paused]"), "{frame}");
+
+        app.handle_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL));
+
+        assert!(app.metrics.live);
+        let frame = render_app_text_at(&app, 120, 28);
+        assert!(frame.contains("[Live]"), "{frame}");
     }
 
     #[test]

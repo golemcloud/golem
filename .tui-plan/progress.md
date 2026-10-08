@@ -1,5 +1,28 @@
 # Progress
 
+## 2026-10-08: Stable Ops Navigation And Typed Metrics Foundation
+
+- Added stable typed Overview, Agents, Oplog, Stream, Metrics, Deployments, and
+  Configuration destinations with independent route stacks, direct leader
+  navigation, and a horizontally scrollable clickable tab bar.
+- Upgraded the local metrics store to schema version 2 with temporality and
+  exact source-oplog anchors. Families and series now page in SQL; samples use
+  bounded, reset-aware transforms with gauge seeds and approximation metadata.
+- Released the built-in OTLP exporter contract as 1.6.0, attached exact oplog
+  indexes to emitted metric points, rebuilt and validated the committed WASM,
+  and retained the manifest-generated skill updates from the rebuild.
+- Added a typed local Agent/Server dashboard endpoint. Agent snapshots expose
+  real totals, bounded p50/p95 duration series, invocation rates, rankings,
+  memory, resources, and explicit empty states. Server snapshots expose
+  reset-aware request/failure stats, histogram p95, current worker gauges, nine
+  curated metric groups, freshness, units, and approximation state.
+- Rewired the Metrics dashboard to consume typed snapshots instead of guessing
+  panels from the currently selected Explore family. Dashboard/Explore and
+  Agent/Server changes now reload the corresponding backend view.
+
+Still open in this slice: custom absolute ranges, chart cursor inspection and
+expansion, Explore paging/multi-series overlays, and visual axes/gap rendering.
+
 ## 2026-10-08: Stable Ops Rebuild Contract
 
 - Replaced the prototype subject-by-view matrix with stable Overview, Agents,
