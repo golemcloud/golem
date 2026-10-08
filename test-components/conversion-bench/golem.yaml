@@ -1,0 +1,63 @@
+manifestVersion: 1.6.0
+app: conversion-bench
+includes:
+  - ../golem-test-components-common.yaml
+
+componentTemplates:
+  effect-test-component:
+    guestLanguage: effect
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+  scala-bench:
+    guestLanguage: scala
+    build:
+      - command: sbt -batch -no-colors -Dsbt.supershell=false "golemBuildComponent conversion-bench:scala .golem/scala.js"
+      - injectToPrebuiltQuickjs: "{{ appRootDir }}/../../sdks/scala/.generated/agent-guest-target/wasm32-wasip2/release/agent_guest.wasm"
+        module: .golem/scala.js
+        into: "{{ golemTempDir }}/agents/conversion_bench_scala.dynamic.wasm"
+      - preinitializeJs: "{{ golemTempDir }}/agents/conversion_bench_scala.dynamic.wasm"
+        into: "{{ golemTempDir }}/agents/conversion_bench_scala.preinitialized.wasm"
+    componentWasm: "{{ golemTempDir }}/agents/conversion_bench_scala.preinitialized.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/conversion_bench_scala.wasm"
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/conversion_bench_scala.wasm" "{{ appRootDir }}/../conversion_bench_scala.wasm"
+  moonbit-bench:
+    guestLanguage: moonbit
+    build:
+      - command: moon run cmd -- reexports "{{ appRootDir }}/../../sdks/moonbit/golem_sdk" "{{ componentDir }}"
+        dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+      - command: moon run cmd -- agents "{{ componentDir }}" --component-dir .
+        dir: "{{ appRootDir }}/../../sdks/moonbit/golem_sdk_tools"
+      - command: moon -C "{{ appRootDir }}" build "{{ componentDir }}" --target wasm --release --target-dir "{{ componentDir }}/_build"
+      - command: wasm-tools component embed "{{ appRootDir }}/../../sdks/moonbit/golem_sdk/wit" "{{ componentDir }}/_build/wasm/release/build/golemcloud/conversion_bench_moonbit/conversion_bench_moonbit.wasm" --world agent-guest --encoding utf16 --output "{{ componentDir }}/_build/wasm/release/conversion_bench_moonbit.embed.wasm"
+      - command: wasm-tools component new "{{ componentDir }}/_build/wasm/release/conversion_bench_moonbit.embed.wasm" --output "{{ componentDir }}/_build/wasm/release/conversion_bench_moonbit.agent.wasm"
+      - command: wasm-tools validate --features all "{{ componentDir }}/_build/wasm/release/conversion_bench_moonbit.agent.wasm"
+    componentWasm: "{{ componentDir }}/_build/wasm/release/conversion_bench_moonbit.agent.wasm"
+    outputWasm: "{{ golemTempDir }}/agents/conversion_bench_moonbit.wasm"
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/conversion_bench_moonbit.wasm" "{{ appRootDir }}/../conversion_bench_moonbit.wasm"
+
+components:
+  conversion-bench:rust:
+    dir: rust
+    templates: rust, rust-test-component
+  conversion-bench:ts:
+    dir: ts
+    templates: ts, ts-test-component
+  conversion-bench:effect:
+    dir: effect
+    templates: effect, effect-test-component
+  conversion-bench:scala:
+    dir: scala
+    templates: scala-bench
+  conversion-bench:moonbit:
+    dir: moonbit
+    templates: moonbit-bench
+
+environments:
+  local:
+    server: local
+    componentPresets: release

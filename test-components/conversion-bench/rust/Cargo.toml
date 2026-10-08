@@ -1,0 +1,16 @@
+[package]
+name = "conversion_bench_rust"
+version = "0.0.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+
+[profile.release]
+opt-level = "s"
+lto = true

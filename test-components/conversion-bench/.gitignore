@@ -1,0 +1,7 @@
+golem-temp/
+node_modules/
+**/_build/
+**/target/
+**/.generated/
+**/.golem/
+.mooncakes/
