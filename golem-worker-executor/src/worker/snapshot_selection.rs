@@ -300,13 +300,22 @@ impl StartSelection {
         enabled: bool,
     ) -> Self {
         let filter = exclusions.filter(status, enabled, true);
-        let baseline = selected_baseline(status, filter);
+        let (baseline, replay_revision_without_unavailable) = match frozen_baseline(status) {
+            Some(baseline) => {
+                let revision = replay_revision(status, &baseline);
+                (baseline, revision)
+            }
+            None => (
+                filtered_baseline(status, filter),
+                replay_revision(
+                    status,
+                    &filtered_baseline(status, exclusions.filter(status, enabled, false)),
+                ),
+            ),
+        };
         Self {
             replay_revision: replay_revision(status, &baseline),
-            replay_revision_without_unavailable: replay_revision(
-                status,
-                &selected_baseline(status, exclusions.filter(status, enabled, false)),
-            ),
+            replay_revision_without_unavailable,
             baseline,
             candidate: start_candidate(status, filter),
         }
@@ -472,27 +481,36 @@ struct AutomaticSnapshotFilter<'a> {
     filesystem_snapshots_enabled: bool,
 }
 
-/// The baseline of a start of `status` under `filter`: the record of a snapshot-assisted head,
-/// else the record of a snapshot-based head, else a periodic record that passes, else the
-/// authoritative baseline, else the initial files.
-fn selected_baseline(
-    status: &AgentStatusRecord,
-    filter: AutomaticSnapshotFilter<'_>,
-) -> SelectedBaseline {
+/// The baseline that the head of the queue of `status` froze, which no filter changes: the
+/// record of a snapshot-assisted head, or the record of a snapshot-based head.
+fn frozen_baseline(status: &AgentStatusRecord) -> Option<SelectedBaseline> {
     match Head::of(status) {
-        Head::SelectedAssisted(head, selection) => SelectedBaseline::AssistedPending {
+        Head::SelectedAssisted(head, selection) => Some(SelectedBaseline::AssistedPending {
             snapshot: selection.snapshot.clone(),
             head: Arc::new(head.clone()),
-        },
+        }),
         Head::Other(
             head @ PendingUpdateRef {
                 kind: PendingUpdateKind::SnapshotBased { .. },
                 ..
             },
-        ) => SelectedBaseline::ManualPending {
+        ) => Some(SelectedBaseline::ManualPending {
             head: Arc::new(head.clone()),
             previous: status.authoritative_snapshot.clone(),
-        },
+        }),
+        Head::None | Head::UnselectedAutomatic(_) | Head::Other(_) => None,
+    }
+}
+
+/// The baseline of a start of `status` under `filter` when the head of the queue froze none: a
+/// periodic record that passes, else the authoritative baseline, else the initial files. For an
+/// unselected automatic head, the record that passes is the record of its snapshot-assisted
+/// strategy.
+fn filtered_baseline(
+    status: &AgentStatusRecord,
+    filter: AutomaticSnapshotFilter<'_>,
+) -> SelectedBaseline {
+    match Head::of(status) {
         Head::UnselectedAutomatic(head) => select_automatic_snapshot(status, filter).map_or_else(
             || authoritative_baseline(status),
             |snapshot| SelectedBaseline::AssistedPending {
@@ -500,10 +518,12 @@ fn selected_baseline(
                 head: Arc::new(head.clone()),
             },
         ),
-        Head::None | Head::Other(_) => select_automatic_snapshot(status, filter).map_or_else(
-            || authoritative_baseline(status),
-            SelectedBaseline::Periodic,
-        ),
+        Head::None | Head::SelectedAssisted(..) | Head::Other(_) => {
+            select_automatic_snapshot(status, filter).map_or_else(
+                || authoritative_baseline(status),
+                SelectedBaseline::Periodic,
+            )
+        }
     }
 }
 
@@ -855,7 +875,7 @@ mod tests {
         assert_eq!(
             replay_revision(
                 &status,
-                &selected_baseline(&status, filter(&HashSet::new()))
+                &filtered_baseline(&status, filter(&HashSet::new()))
             ),
             revision(1)
         );
@@ -903,7 +923,7 @@ mod tests {
             (Some(5), None)
         );
         assert_eq!(
-            replay_revision(&status, &selected_baseline(&status, rejecting(&both))),
+            replay_revision(&status, &filtered_baseline(&status, rejecting(&both))),
             revision(1)
         );
     }
