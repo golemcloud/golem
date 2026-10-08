@@ -245,7 +245,7 @@ build_rust_apps() {
       "$GOLEM_CLI" build --step check --yes
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
-      if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+      if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -f Cargo.toml ]; then
         # Independent fixtures can use the same Cargo package name and output path.
         # Remove root package artifacts while retaining compiled dependencies.
         cargo clean --package "$(cargo pkgid)" --target wasm32-wasip2 --release
