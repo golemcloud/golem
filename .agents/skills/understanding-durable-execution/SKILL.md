@@ -646,7 +646,8 @@ speculatively, `commit_consumed_entry` commits, `move_replay_idx` advances and e
 scheduling order that replay does not reproduce, so `claim_start_matching` claims the *first
 unclaimed matching* `Start` between cursor and target. That is the only justified use of
 scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
-to make different calls; when no matching `Start` exists, replay fails with a divergence error.
+to make different calls; when no matching `Start` exists, replay fails with a divergence error
+(after any active entity body that owns the cursor head has consumed it; see below).
 
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
@@ -688,6 +689,18 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
+- A `Start` claim that finds no match decides the missing `Start` only when no active entity
+  body owns the entry at the cursor head. `head_owner` (`cursor.rs`) is the one rule for the
+  owner of the head entry, shared with `check_parked_positional_read`: the parent of a nested
+  `Start`, or the entity attribution of any other entry. A tool call claims its entity `Start`
+  inline, but the cursor drains the body's first entries only when the spawned supervisor is
+  first polled. A clock call of the guest that claims in that gap stops at the body's unclaimed
+  `Start`. While `reconstruction_claims.is_body_active(owner)` holds, the claim is
+  `Blocked(BlockedOn::ActiveBody)` and waits for cursor progress or a change of the active-body
+  set (`CursorTx::active_body_owning_head`). It then gets `Claimed`, `ReplayEnded` or a strict
+  divergence. A body that settles without consuming the head, a top-level sibling `Start` at the
+  head, and a claim issued from inside the owning body stay strict divergence at once. The path
+  where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
