@@ -295,30 +295,6 @@ function resolveRemoteAgentWith(
   );
 }
 
-/** @internal Transport for compiler-emitted concrete codecs. */
-export function resolveWireRemoteAgent(
-  agentTypeName: string,
-  constructorTree: SchemaValueTree,
-  phantomId: Uuid | undefined,
-  config: ConstructorParameters<typeof WasmRpc>[3],
-  mode: 'durable' | 'ephemeral',
-): RemoteAgentHandle<SchemaValueTree> {
-  const agentId =
-    mode === 'ephemeral' ? agentTypeName : makeAgentId(agentTypeName, constructorTree, phantomId);
-  return remoteTransport(
-    new WasmRpc(agentTypeName, constructorTree, phantomId, config),
-    agentId,
-    (value) => value,
-    async (value) => value,
-    (value) => value,
-    (context, error) =>
-      new RemoteCallError(
-        context,
-        mapRemoteCallErrorCause(error, (value) => value),
-      ),
-  );
-}
-
 function remoteTransport<Value>(
   rpc: WasmRpc,
   agentId: string,

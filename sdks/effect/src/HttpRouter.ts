@@ -117,6 +117,7 @@ export function define<F extends ConfigFields = never>(
     auth: mount.authRequired,
     cors: [...mount.cors],
     staticBindings,
+    fileResponseHeaders: mount.fileResponseHeaders ? { ...mount.fileResponseHeaders } : undefined,
     openapiProviderMethod: providerMethod,
   }
   const register = (

@@ -74,6 +74,12 @@ final case class WireToolImplementation(descriptor: WitTool, bindings: List[Wire
 object WireToolImplementation {
   val executionContext: ExecutionContext = ExecutionContext.parasitic
 
+  def requiredOptionValue(reader: WireValuesReader, index: Int): Int =
+    reader.at(index) {
+      case WitSchemaValueNode.OptionValue(Some(value)) => value
+      case WitSchemaValueNode.OptionValue(None)        => throw SchemaDecodeError("missing required tool input")
+    }
+
   def arguments(input: WireToolInput, size: Int)(
     decode: (WireValuesReader, Vector[Int]) => Vector[Any]
   ): Vector[Any] = {

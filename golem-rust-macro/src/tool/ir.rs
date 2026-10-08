@@ -33,6 +33,8 @@ pub struct ToolDefinitionIr {
     pub version: Option<String>,
     /// Whether invocation requires a filesystem binding.
     pub requires_filesystem: bool,
+    /// Aliases for the root command.
+    pub aliases: Vec<String>,
     /// Doc comment on the trait.
     pub doc: DocIr,
     /// One entry per trait method, in declaration order.
@@ -101,6 +103,7 @@ pub struct CommandAnnotationsIr {
 /// is inferred from the parameter type during metadata synthesis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArgPlacement {
+    RootGlobal,
     Global,
     Positional,
     Option,
@@ -183,6 +186,7 @@ pub struct ArgIr {
     pub path_kind: Option<PathKindIr>,
     pub direction: Option<PathDirectionIr>,
     pub mime: Option<Vec<String>>,
+    pub extensions: Option<Vec<String>>,
     pub output_channel: Option<OutputChannelIr>,
 
     // --- url refinement ---
@@ -201,6 +205,7 @@ pub struct ArgIr {
 
     // --- documentation ---
     pub doc: Option<String>,
+    pub description: Option<String>,
     pub value_name: Option<String>,
 }
 
@@ -228,6 +233,7 @@ impl ArgIr {
             path_kind: None,
             direction: None,
             mime: None,
+            extensions: None,
             output_channel: None,
             schemes: None,
             raw_min: None,
@@ -235,6 +241,7 @@ impl ArgIr {
             bounds: None,
             unit: None,
             doc: None,
+            description: None,
             value_name: None,
         }
     }
@@ -275,11 +282,18 @@ pub enum ConstraintIr {
     },
 }
 
-/// `#[result(formatters = [...], default = "...")]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FormatterIr {
+    pub name: String,
+    pub doc: String,
+}
+
+/// `#[result(formatters = [...], default = "...", doc = "...")]`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResultIr {
-    pub formatters: Vec<String>,
+    pub formatters: Vec<FormatterIr>,
     pub default_formatter: Option<String>,
+    pub doc: Option<String>,
 }
 
 /// Doc comment, split into a summary and a longer description, plus any

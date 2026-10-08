@@ -58,7 +58,7 @@ export function agentStreamToHandle<T, E, R>(
   )
 }
 
-/** @internal Move a stream using a compiler-emitted concrete item codec. */
+/** @internal Move a stream using a wire item codec. */
 export function directAgentStreamToHandle<T, E, R>(
   stream: Stream.Stream<T, E, R>,
   itemCodec: DirectItemCodec<T>,
@@ -121,7 +121,7 @@ export function agentStreamFromHandle<T>(
   )
 }
 
-/** @internal Lift a wire stream using a compiler-emitted concrete item codec. */
+/** @internal Lift a wire stream using a wire item codec. */
 export function directAgentStreamFromHandle<T>(
   handle: GuestSchemaValueStreamHandle,
   itemCodec: DirectItemCodec<T>,

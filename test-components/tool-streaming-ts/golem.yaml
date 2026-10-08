@@ -1,7 +1,7 @@
 # Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# $schema: https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 # Schema for vscode-yaml:
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.8/golem.schema.json
+# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.6.0-dev.9/golem.schema.json
 
 manifestVersion: 1.6.0
 
@@ -20,14 +20,34 @@ components:
     dependencies:
       tools:
         - golem-it:tool-streaming-ts-provider/ts-streaming
+        - golem-it:tool-streaming-ts-provider/matrix-core
+        - golem-it:tool-streaming-ts-provider/matrix-resource
 
 tools:
   ts-streaming: {}
+  matrix-core: {}
+  matrix-resource: {}
+  matrix-permission-issuer: {}
 
 agents:
   TsToolStreamingCaller:
     tools:
       ts-streaming: {}
+      matrix-core: {}
+  TsResourceToolStreamingCaller:
+    tools:
+      matrix-resource: {}
+      matrix-permission-issuer: {}
+
+resourceDefaults:
+  local:
+    matrix-capacity:
+      limit:
+        type: Capacity
+        value: 16
+      enforcementAction: reject
+      unit: operation
+      units: operations
 
 environments:
   local:

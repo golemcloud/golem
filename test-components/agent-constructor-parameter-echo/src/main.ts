@@ -81,6 +81,9 @@ export const SnapshotCounterAgentImpl = SnapshotCounterAgent.implement({
 });
 
 // The constructor counts as an invocation, so a snapshot is taken after every odd method call.
+// `memDb` is in memory, so the snapshot holds its bytes. `fileDb` (an absolute path) and
+// `relativeDb` (a path relative to the working directory) are files in the agent filesystem, so
+// the snapshot holds their locations and the typed load reopens them there.
 export const SqliteSnapshotAgent = defineAgent({
     name: 'SqliteSnapshotAgent',
     id: { id: z.string() },
@@ -103,7 +106,9 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
         try { mkdirSync('/tmp'); } catch (_) {}
         const fileDb = new DatabaseSync('/tmp/sqlite-snapshot-test.db');
         fileDb.exec('CREATE TABLE log (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)');
-        return { label: 'initial', memDb, fileDb };
+        const relativeDb = new DatabaseSync('sqlite-relative-test.db');
+        relativeDb.exec('CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT)');
+        return { label: 'initial', memDb, fileDb, relativeDb };
     },
     methods: {
         async addItem({ value }) {
@@ -113,6 +118,7 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
             return row.id;
         },
         async addLog({ message }) {
+            this.relativeDb.prepare('INSERT INTO notes (message) VALUES (?)').run(message);
             const stmt = this.fileDb.prepare('INSERT INTO log (message) VALUES (?)');
             stmt.run(message);
             const row = this.fileDb.prepare('SELECT last_insert_rowid() as id').get() as { id: number };
@@ -124,22 +130,13 @@ export const SqliteSnapshotAgentImpl = SqliteSnapshotAgent.implement({
         async getState() {
             const items = this.memDb.prepare('SELECT value FROM items ORDER BY id').all() as Array<{ value: string }>;
             const logs = this.fileDb.prepare('SELECT message FROM log ORDER BY id').all() as Array<{ message: string }>;
+            const notes = this.relativeDb.prepare('SELECT message FROM notes ORDER BY id').all() as Array<{ message: string }>;
             return JSON.stringify({
                 label: this.label,
                 items: items.map((r) => r.value),
                 logs: logs.map((r) => r.message),
+                notes: notes.map((r) => r.message),
             });
-        },
-    },
-    snapshot: {
-        load(bytes) {
-            const { label } = JSON.parse(new TextDecoder().decode(bytes)) as { label: string };
-            mkdirSync('/tmp', { recursive: true });
-            return {
-                label,
-                memDb: new DatabaseSync(':memory:'),
-                fileDb: new DatabaseSync('/tmp/sqlite-snapshot-test.db'),
-            };
         },
     },
 });

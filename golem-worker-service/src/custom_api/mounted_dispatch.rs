@@ -18,10 +18,10 @@ use super::raw_handler::RawHandler;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RichRouteBehaviour, RouteExecutionResult};
 use golem_common::model::AgentId;
-use golem_common::model::agent::FileMapping;
+use golem_common::model::agent::{FileMapping, FileResponseHeader};
 use golem_service_base::custom_api::RouterFileIndexEntry;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
-use http::{Method, StatusCode};
+use http::{HeaderName, HeaderValue, Method, StatusCode};
 use std::sync::Arc;
 
 use crate::config::HttpSessionLimits;
@@ -184,8 +184,13 @@ pub(super) async fn dispatch_mount(
     selected: &ResolvedRouteEntry,
     backend: &mut impl MountBackend,
 ) -> Result<RouteExecutionResult, RequestHandlerError> {
-    let (mappings, router, agent_id) = match &selected.route.behavior {
-        RichRouteBehaviour::HttpRouter(router) => (&router.static_bindings, Some(router), None),
+    let (mappings, response_headers, router, agent_id) = match &selected.route.behavior {
+        RichRouteBehaviour::HttpRouter(router) => (
+            &router.static_bindings,
+            &router.file_response_headers,
+            Some(router),
+            None,
+        ),
         RichRouteBehaviour::AgentFilesystem(filesystem) => {
             let agent_id = CallAgentHandler::build_agent_id(
                 selected,
@@ -195,7 +200,12 @@ pub(super) async fn dispatch_mount(
                 &filesystem.constructor_parameters,
                 None,
             )?;
-            (&filesystem.filesystem_bindings, None, Some(agent_id))
+            (
+                &filesystem.filesystem_bindings,
+                &filesystem.file_response_headers,
+                None,
+                Some(agent_id),
+            )
         }
         _ => {
             return Err(RequestHandlerError::invariant_violated(
@@ -233,7 +243,13 @@ pub(super) async fn dispatch_mount(
                     directory_request,
                 }
             };
-            if let Some(response) = backend.file(request, selected, file).await? {
+            if let Some(mut response) = backend.file(request, selected, file).await? {
+                if matches!(
+                    response.status,
+                    StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
+                ) {
+                    apply_file_response_headers(&mut response, response_headers);
+                }
                 return Ok(response);
             }
             if router.is_some() {
@@ -246,6 +262,19 @@ pub(super) async fn dispatch_mount(
         backend.handler(request, selected).await
     } else {
         Ok(empty_response(StatusCode::NOT_FOUND))
+    }
+}
+
+fn apply_file_response_headers(
+    response: &mut RouteExecutionResult,
+    configured: &[FileResponseHeader],
+) {
+    for header in configured {
+        let name = HeaderName::from_bytes(header.name.as_bytes())
+            .expect("file response header names were validated during deployment");
+        let value = HeaderValue::from_bytes(header.value.as_bytes())
+            .expect("file response header values were validated during deployment");
+        response.headers.insert(name, value);
     }
 }
 
@@ -334,6 +363,10 @@ mod tests {
                 }
                 "initialization" => Err(anyhow::anyhow!("initialization failed").into()),
                 "found" => Ok(Some(empty_response(StatusCode::OK))),
+                "partial" => Ok(Some(empty_response(StatusCode::PARTIAL_CONTENT))),
+                "not-modified" => Ok(Some(empty_response(StatusCode::NOT_MODIFIED))),
+                "precondition" => Ok(Some(empty_response(StatusCode::PRECONDITION_FAILED))),
+                "range" => Ok(Some(empty_response(StatusCode::RANGE_NOT_SATISFIABLE))),
                 other => panic!("Unexpected file state {other}"),
             }
         }
@@ -554,6 +587,83 @@ mod tests {
                 assert_eq!(backend.handler_calls, 0);
             }
         }
+    }
+
+    #[test]
+    async fn configured_headers_apply_only_to_file_representation_responses() {
+        for (state, expected_status, has_headers) in [
+            ("found", StatusCode::OK, true),
+            ("partial", StatusCode::PARTIAL_CONTENT, true),
+            ("not-modified", StatusCode::NOT_MODIFIED, true),
+            ("permission", StatusCode::FORBIDDEN, false),
+            ("precondition", StatusCode::PRECONDITION_FAILED, false),
+            ("range", StatusCode::RANGE_NOT_SATISFIABLE, false),
+        ] {
+            let mut route = test_route(1, "/site", None, "router");
+            let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+                unreachable!()
+            };
+            router.static_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
+            router.file_index = vec![index_entry("/app.js")];
+            router.file_response_headers = vec![
+                FileResponseHeader {
+                    name: "content-security-policy".into(),
+                    value: "default-src 'none'".into(),
+                },
+                FileResponseHeader {
+                    name: "referrer-policy".into(),
+                    value: "no-referrer".into(),
+                },
+            ];
+            let resolver = test_resolver(vec![route]);
+            let request = poem::Request::builder()
+                .uri("/site/app.js".parse().unwrap())
+                .header("host", "example.com")
+                .finish();
+            let selected = resolver.resolve_matching_route(&request).await.unwrap();
+            let mut backend = Backend {
+                states: HashMap::from([("/app.js".into(), state.into())]),
+                ..Default::default()
+            };
+            let response = dispatch_mount(&mut RichRequest::new(request), &selected, &mut backend)
+                .await
+                .unwrap();
+            assert_eq!(response.status, expected_status);
+            assert_eq!(
+                response.headers.get("content-security-policy").is_some(),
+                has_headers
+            );
+            assert_eq!(
+                response.headers.get("referrer-policy").is_some(),
+                has_headers
+            );
+        }
+
+        let mut route = test_route(1, "/site", None, "router");
+        let RouteBehaviour::HttpRouter(router) = &mut route.behavior else {
+            unreachable!()
+        };
+        router.static_bindings = FileMapping::compile_list([("/app.js", "/app.js")]).unwrap();
+        router.handler = Some(handler("serve"));
+        router.file_response_headers = vec![FileResponseHeader {
+            name: "referrer-policy".into(),
+            value: "no-referrer".into(),
+        }];
+        let resolver = test_resolver(vec![route]);
+        let request = poem::Request::builder()
+            .uri("/site/missing.js".parse().unwrap())
+            .header("host", "example.com")
+            .finish();
+        let selected = resolver.resolve_matching_route(&request).await.unwrap();
+        let response = dispatch_mount(
+            &mut RichRequest::new(request),
+            &selected,
+            &mut Backend::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, StatusCode::ACCEPTED);
+        assert!(!response.headers.contains_key("referrer-policy"));
     }
 
     #[test]

@@ -14,7 +14,7 @@ pub struct EditFileResult {
     pub bytes_after: u64,
 }
 
-#[tool_definition(version = "0.4.0", requires_filesystem = true)]
+#[tool_definition(version = "0.4.1", requires_filesystem = true)]
 pub trait EditFile {
     /// Replaces exactly one occurrence of `old_text` in a known UTF-8 text file. The result reports
     /// replacement and byte counts. Missing text is stale, repeated text is ambiguous, and binary,

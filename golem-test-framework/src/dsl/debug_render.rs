@@ -286,8 +286,11 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                         "{pad}type:              snapshot-assisted automatic"
                     );
                 }
-                PublicUpdateDescription::SnapshotBased(_inner_params) => {
+                PublicUpdateDescription::SnapshotBased(inner_params) => {
                     let _ = writeln!(result, "{pad}type:              snapshot based");
+                    if let Some(name) = &inner_params.filesystem_snapshot {
+                        let _ = writeln!(result, "{pad}filesystem:        {name}");
+                    }
                 }
             }
         }
@@ -405,6 +408,9 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
         PublicOplogEntry::Snapshot(params) => {
             let _ = writeln!(result, "SNAPSHOT");
             let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            if let Some(name) = &params.filesystem_snapshot {
+                let _ = writeln!(result, "{pad}filesystem:        {name}");
+            }
             match &params.data {
                 PublicSnapshotData::Raw(data) => {
                     let _ = writeln!(result, "{pad}MIME type:         {}", data.mime_type);
@@ -436,6 +442,15 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                     }
                 }
             }
+        }
+        PublicOplogEntry::SnapshotConfirmed(params) => {
+            let _ = writeln!(result, "SNAPSHOT CONFIRMED");
+            let _ = writeln!(result, "{pad}at:                {}", params.timestamp);
+            let _ = writeln!(
+                result,
+                "{pad}filesystem:        {}",
+                params.filesystem_snapshot
+            );
         }
         PublicOplogEntry::OplogProcessorCheckpoint(params) => {
             let _ = writeln!(result, "OPLOG PROCESSOR CHECKPOINT");

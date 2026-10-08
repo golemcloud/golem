@@ -14,3 +14,5 @@ path = "src/lib.rs"
 [dependencies]
 futures-concurrency = "7.6.3"
 golem-rust = { path = "../../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

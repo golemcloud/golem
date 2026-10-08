@@ -261,15 +261,27 @@ object JsCorsOptions {
 }
 
 @js.native
+sealed trait JsFileResponseHeader extends js.Object {
+  def name: String  = js.native
+  def value: String = js.native
+}
+
+object JsFileResponseHeader {
+  def apply(name: String, value: String): JsFileResponseHeader =
+    js.Dynamic.literal("name" -> name, "value" -> value).asInstanceOf[JsFileResponseHeader]
+}
+
+@js.native
 sealed trait JsHttpMountDetails extends js.Object {
-  def pathPrefix: js.Array[JsPathSegment]         = js.native
-  def authDetails: js.UndefOr[JsAuthDetails]      = js.native
-  def phantomAgent: Boolean                       = js.native
-  def corsOptions: JsCorsOptions                  = js.native
-  def webhookSuffix: js.Array[JsPathSegment]      = js.native
-  def staticBindings: js.Array[JsFileMapping]     = js.native
-  def filesystemBindings: js.Array[JsFileMapping] = js.native
-  def openapiProviderMethod: js.UndefOr[String]   = js.native
+  def pathPrefix: js.Array[JsPathSegment]                 = js.native
+  def authDetails: js.UndefOr[JsAuthDetails]              = js.native
+  def phantomAgent: Boolean                               = js.native
+  def corsOptions: JsCorsOptions                          = js.native
+  def webhookSuffix: js.Array[JsPathSegment]              = js.native
+  def staticBindings: js.Array[JsFileMapping]             = js.native
+  def filesystemBindings: js.Array[JsFileMapping]         = js.native
+  def openapiProviderMethod: js.UndefOr[String]           = js.native
+  def fileResponseHeaders: js.Array[JsFileResponseHeader] = js.native
 }
 
 object JsHttpMountDetails {
@@ -280,16 +292,18 @@ object JsHttpMountDetails {
     webhookSuffix: js.Array[JsPathSegment],
     staticBindings: js.Array[JsFileMapping],
     filesystemBindings: js.Array[JsFileMapping],
+    fileResponseHeaders: js.Array[JsFileResponseHeader],
     openapiProviderMethod: js.UndefOr[String],
     authDetails: js.UndefOr[JsAuthDetails] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
-      "pathPrefix"         -> pathPrefix,
-      "phantomAgent"       -> phantomAgent,
-      "corsOptions"        -> corsOptions,
-      "webhookSuffix"      -> webhookSuffix,
-      "staticBindings"     -> staticBindings,
-      "filesystemBindings" -> filesystemBindings
+      "pathPrefix"          -> pathPrefix,
+      "phantomAgent"        -> phantomAgent,
+      "corsOptions"         -> corsOptions,
+      "webhookSuffix"       -> webhookSuffix,
+      "staticBindings"      -> staticBindings,
+      "filesystemBindings"  -> filesystemBindings,
+      "fileResponseHeaders" -> fileResponseHeaders
     )
     authDetails.foreach(a => obj.updateDynamic("authDetails")(a))
     openapiProviderMethod.foreach(p => obj.updateDynamic("openapiProviderMethod")(p))

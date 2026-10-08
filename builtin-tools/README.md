@@ -13,6 +13,10 @@ The filesystem component is implemented in Rust under `builtin-tools/filesystem-
 component provides the `read-file`, `write-file`, `edit-file`, `ls`, and `grep` tools and the
 universal `path-policy` middleware.
 
+Audit, output-redaction, persistent-rate-limit, and human-approval middleware are test-only
+fixtures under `test-components/`, not built-in exports. They are not published or provisioned as
+built-ins and are not intended for production reuse.
+
 The JavaScript and TypeScript tools are implemented under `builtin-tools/js-ts-tools/`. The
 `javascript-tools` component provides `node`, `npm`, and `npx`; the `typescript-tools` component
 provides `tsc`. `node` provides JavaScript execution through Golem's QuickJS-based Node-compatible

@@ -114,7 +114,7 @@ The sync script (`skills/sync-skills.ts`) strips AI-agent frontmatter, converts 
 
 ## Pre-commit Checks
 
-When this lived in its own repo, [Lefthook](https://github.com/evilmartians/lefthook) wired up automatic pre-commit hooks. In the monorepo we no longer auto-install them (Lefthook lives at the git root, which would conflict with the rest of the golem repo's hooks).
+The docs site installs no git hooks. Run the checks below before you push.
 
 CI enforces all of the following on every docs PR via `.github/workflows/docs.yaml` → `bun run build:check`:
 

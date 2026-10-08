@@ -2,7 +2,7 @@
 
 `app::builtin_bash::bound_bash_executes_scripts_tools_and_recovers` starts an isolated local
 server, builds the small Rust fixture from the in-tree SDK, deploys it with the protected
-`bash@0.2.0` release, creates its owner agents, and calls `golem tool invoke --agent`.
+`bash@0.2.1` release, creates its owner agents, and calls `golem tool invoke --agent`.
 Fetch the pinned built-in artifacts and build matching CLI/server binaries first:
 
 ```sh

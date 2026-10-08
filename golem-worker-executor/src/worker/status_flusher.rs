@@ -119,7 +119,8 @@ pub struct AgentStatusFlusher {
     /// Set once the worker starts deleting; prevents a concurrent background flush from resurrecting
     /// the blob after `remove_cached_status` has deleted it.
     delete_started: AtomicBool,
-    owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
+    /// Why the shard moved to another executor, once it has.
+    lost_shard: super::LostShard,
 }
 
 impl AgentStatusFlusher {
@@ -133,7 +134,7 @@ impl AgentStatusFlusher {
         persisted_status: Option<AgentStatusRecord>,
         current_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
-        owner_retirement: Arc<std::sync::OnceLock<super::OwnerRetirement>>,
+        lost_shard: super::LostShard,
     ) -> Arc<Self> {
         let base_known = persisted_status.is_some();
         let last_flushed = persisted_status.unwrap_or_default();
@@ -154,17 +155,13 @@ impl AgentStatusFlusher {
             }),
             dirty: AtomicBool::new(false),
             delete_started: AtomicBool::new(false),
-            owner_retirement,
+            lost_shard,
         })
     }
 
     /// Whether deletion or shard loss prevents this generation from writing status.
     fn writes_stopped(&self) -> bool {
-        self.delete_started.load(Ordering::Acquire)
-            || self
-                .owner_retirement
-                .get()
-                .is_some_and(|retirement| retirement.lost_shard.get().is_some())
+        self.delete_started.load(Ordering::Acquire) || self.lost_shard.borrow().is_some()
     }
 
     /// Called from the hot path whenever the in-memory status changed. Updates the recovery index
@@ -516,7 +513,9 @@ mod tests {
         }
         async fn get_running_workers_in_shards(
             &self,
-        ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<Vec<crate::services::worker::GetWorkerMetadataResult>, WorkerExecutorError>
+        {
             unimplemented!()
         }
         async fn remove(
@@ -526,6 +525,7 @@ mod tests {
             _agent_mode: AgentMode,
             _fingerprint: AgentFingerprint,
             _expected_epoch: Option<golem_common::model::ShardEpoch>,
+            _after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
         }
@@ -591,12 +591,13 @@ mod tests {
             Ok(())
         }
 
-        async fn remove_assignment_tracking(
+        async fn remove_if_stale(
             &self,
             _owned_agent_id: &OwnedAgentId,
-            _fingerprint: AgentFingerprint,
-        ) -> Result<(), String> {
-            Ok(())
+            _fingerprint: golem_common::model::AgentFingerprint,
+            _on_stale: crate::services::worker::OnStale<'_>,
+        ) -> Result<bool, WorkerExecutorError> {
+            Ok(false)
         }
     }
 
@@ -628,6 +629,27 @@ mod tests {
         Arc<ArcSwap<AgentStatusRecord>>,
         Arc<AtomicBool>,
     ) {
+        make_flusher_losing(
+            is_ephemeral,
+            background_enabled,
+            worker_service,
+            queue,
+            tokio::sync::watch::channel(None).1,
+        )
+    }
+
+    /// A flusher whose lost shard `lost_shard` reports.
+    fn make_flusher_losing(
+        is_ephemeral: bool,
+        background_enabled: bool,
+        worker_service: Arc<dyn WorkerService>,
+        queue: Arc<AgentStatusFlushQueue>,
+        lost_shard: super::super::LostShard,
+    ) -> (
+        Arc<AgentStatusFlusher>,
+        Arc<ArcSwap<AgentStatusRecord>>,
+        Arc<AtomicBool>,
+    ) {
         let current = Arc::new(ArcSwap::from_pointee(status(AgentStatus::Idle, 0)));
         let detached = Arc::new(AtomicBool::new(false));
         let flusher = AgentStatusFlusher::new(
@@ -640,7 +662,7 @@ mod tests {
             None,
             current.clone(),
             detached.clone(),
-            Arc::default(),
+            lost_shard,
         );
         (flusher, current, detached)
     }
@@ -723,7 +745,7 @@ mod tests {
             Some(persisted),
             current.clone(),
             detached,
-            Arc::default(),
+            tokio::sync::watch::channel(None).1,
         );
 
         current.store(Arc::new(status(AgentStatus::Running, 8)));
@@ -841,23 +863,14 @@ mod tests {
     async fn a_given_up_flusher_never_writes_the_status_blob() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, current, _) = make_flusher(false, true, ws.clone(), queue.clone());
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let (flusher, current, _) =
+            make_flusher_losing(false, true, ws.clone(), queue.clone(), lost);
 
         current.store(Arc::new(status(AgentStatus::Running, 1)));
         flusher.mark_dirty();
 
-        assert!(
-            flusher
-                .owner_retirement
-                .set(super::super::OwnerRetirement {
-                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: std::sync::OnceLock::from(
-                        super::super::RetirementReason::ShardRevoked
-                    ),
-                    stop: tokio::sync::OnceCell::new(),
-                })
-                .is_ok()
-        );
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
         let _ = flusher.flush(FlushReason::Forced).await;
         current.store(Arc::new(status(AgentStatus::Idle, 2)));
         flusher.mark_dirty();
@@ -877,20 +890,11 @@ mod tests {
     async fn a_given_up_flusher_leaves_the_recovery_index_alone() {
         let ws = MockWorkerService::arc();
         let queue = test_queue();
-        let (flusher, _current, _) = make_flusher(false, false, ws.clone(), queue.clone());
+        let (lose, lost) = tokio::sync::watch::channel(None);
+        let (flusher, _current, _) =
+            make_flusher_losing(false, false, ws.clone(), queue.clone(), lost);
 
-        assert!(
-            flusher
-                .owner_retirement
-                .set(super::super::OwnerRetirement {
-                    kind: golem_service_base::error::worker_executor::InterruptKind::ShardLost,
-                    lost_shard: std::sync::OnceLock::from(
-                        super::super::RetirementReason::ShardRevoked
-                    ),
-                    stop: tokio::sync::OnceCell::new(),
-                })
-                .is_ok()
-        );
+        lose.send_replace(Some(super::super::RetirementReason::ShardRevoked));
         flusher
             .on_status_changed(
                 &status(AgentStatus::Idle, 0),

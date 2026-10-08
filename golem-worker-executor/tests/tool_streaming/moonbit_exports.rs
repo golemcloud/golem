@@ -334,10 +334,18 @@ async fn moonbit_tool_guest_exports_stream_and_reject_invalid_calls(
         .await?
         .0
         .map_err(|error| anyhow::anyhow!("discover-tools rejected: {error:?}"))?;
-    if tools.len() != 1 {
-        bail!("expected one MoonBit tool, got {}", tools.len());
-    }
-    let native_tool = Tool::try_from(&tools[0])?;
+    let native_tool = tools
+        .iter()
+        .map(Tool::try_from)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|tool| {
+            tool.commands
+                .nodes
+                .first()
+                .is_some_and(|command| command.name == "moonbit-streaming")
+        })
+        .context("discover-tools omitted moonbit-streaming")?;
 
     let get = exported(&mut store, &instance, "get-tool")?
         .typed::<(String,), (Result<tool_wire::Tool, tool_wire::ToolError>,)>(&store)?;

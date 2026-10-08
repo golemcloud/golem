@@ -1,7 +1,21 @@
 use golem_rust::agentic::{
-    AgentStream, InputStream, OutputStream, Principal, pump_tool_stdin, spawn_local,
+    AgentStream, InputStream, OutputStream, Principal, Secret as ConfigSecret, pump_tool_stdin,
+    spawn_local,
 };
+use golem_rust::bindings::golem::permissions::{
+    derive as permission_derive, types as permission_types,
+};
+use golem_rust::golem_agentic::golem::agent::host as agent_host;
 use golem_rust::golem_agentic::golem::tool::host::{self as tool_host, ByteStreamFailure, ToolRpc};
+use golem_rust::quota::QuotaToken;
+use golem_rust::schema::wit::GuestPermissionCardHandle;
+use golem_rust::schema::wit::direct::{
+    WireError, WirePreflight, WireReader, WireSchemaBuilder, WireWriter,
+};
+use golem_rust::schema::wit::wire;
+use golem_rust::schema::{
+    FromSchemaError, QuotaTokenSpec, SchemaBuilder, SchemaType, SchemaValue, TypeId,
+};
 use golem_rust::secrets::GuestSecretHandle;
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoTypedSchemaValue, IntoWire, ToolError, WireSchema,
@@ -10,6 +24,460 @@ use golem_rust::{
 use wasi::filesystem::types::{DescriptorFlags, OpenFlags, PathFlags};
 
 const MARKER: &[u8] = b"marker:";
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixRequest {
+    pub source: String,
+    pub dimensions: MatrixDimensions,
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixResult {
+    pub provider: String,
+    pub command: String,
+    pub normalized_source: String,
+    pub weighted_size: i64,
+    pub label_summary: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct MatrixRejection {
+    pub field: String,
+    pub reason: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, ToolError)]
+pub enum MatrixError {
+    #[tool_error(kind = "usage-error", exit_code = 2)]
+    Rejected(MatrixRejection),
+}
+
+pub struct MatrixArtifactSubtree;
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixCore {
+    #[command(subtree = Artifact)]
+    fn artifact(&self) -> MatrixArtifactSubtree;
+}
+
+struct MatrixCoreImpl;
+
+#[tool_implementation]
+impl MatrixCore for MatrixCoreImpl {
+    fn artifact(&self) -> MatrixArtifactSubtree {
+        MatrixArtifactSubtree
+    }
+}
+
+#[tool_definition]
+pub trait Artifact {
+    async fn inspect(
+        &self,
+        request: MatrixRequest,
+        multiplier: i64,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<MatrixResult, MatrixError>;
+}
+
+struct MatrixArtifactImpl;
+
+fn matrix_principal(principal: &Principal) -> String {
+    match principal {
+        Principal::Anonymous => "anonymous".to_string(),
+        Principal::Oidc(value) => format!("oidc:{}", value.sub),
+        Principal::Agent(_) => "agent".to_string(),
+        Principal::GolemUser(_) => "golem-user".to_string(),
+    }
+}
+
+#[tool_implementation]
+impl Artifact for MatrixArtifactImpl {
+    async fn inspect(
+        &self,
+        request: MatrixRequest,
+        multiplier: i64,
+        principal: golem_rust::agentic::Principal,
+    ) -> Result<MatrixResult, MatrixError> {
+        if request.source == "reject.me" {
+            return Err(MatrixError::Rejected(MatrixRejection {
+                field: "request.source".to_string(),
+                reason: "unsupported source".to_string(),
+                retryable: false,
+            }));
+        }
+        let metadata = golem_rust::get_self_metadata().expect("matrix owner metadata");
+        Ok(MatrixResult {
+            provider: "rust".to_string(),
+            command: "artifact/inspect".to_string(),
+            normalized_source: request.source.to_uppercase(),
+            weighted_size: i64::from(request.dimensions.width)
+                * i64::from(request.dimensions.height)
+                * multiplier
+                + request.labels.len() as i64,
+            label_summary: request
+                .labels
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("|"),
+            principal: matrix_principal(&principal),
+            owner_agent_id: metadata.agent_id.agent_id,
+        })
+    }
+}
+
+pub struct MatrixCapacityToken(QuotaToken);
+
+impl WireSchema for MatrixCapacityToken {
+    fn wire_type_id() -> String {
+        QuotaToken::wire_type_id()
+    }
+
+    fn append_schema(builder: &mut WireSchemaBuilder) -> i32 {
+        builder.push(wire::SchemaTypeBody::QuotaTokenType(wire::QuotaTokenSpec {
+            resource_name: Some("matrix-capacity".to_string()),
+        }))
+    }
+}
+
+impl FromWire for MatrixCapacityToken {
+    fn read_wire(reader: &mut WireReader, index: i32) -> Result<Self, WireError> {
+        QuotaToken::read_wire(reader, index).map(Self)
+    }
+}
+
+impl IntoWire for MatrixCapacityToken {
+    fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
+        self.0.preflight(resources)
+    }
+
+    fn write_wire(&self, writer: &mut WireWriter) -> Result<i32, WireError> {
+        self.0.write_wire(writer)
+    }
+}
+
+impl IntoSchema for MatrixCapacityToken {
+    fn type_id() -> TypeId {
+        QuotaToken::type_id()
+    }
+
+    fn register_in(_builder: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::quota_token(QuotaTokenSpec {
+            resource_name: Some("matrix-capacity".to_string()),
+        })
+    }
+
+    fn to_value(&self) -> SchemaValue {
+        self.0.to_value()
+    }
+}
+
+impl FromSchema for MatrixCapacityToken {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        QuotaToken::from_value(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct SecretExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub revealed: bool,
+    pub secret: GuestSecretHandle,
+}
+
+#[derive(IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct QuotaExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub reserved: bool,
+    pub token: MatrixCapacityToken,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct PermissionExchange {
+    pub provider: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+    pub card: GuestPermissionCardHandle,
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+#[schema(rename_all = "camelCase")]
+pub struct PermissionIssue {
+    pub card: GuestPermissionCardHandle,
+    pub issuer: String,
+    pub principal: String,
+    pub owner_agent_id: String,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixPermissionIssuer {
+    async fn issue(&self, principal: golem_rust::agentic::Principal) -> PermissionIssue;
+}
+
+struct MatrixPermissionIssuerImpl;
+
+#[tool_implementation]
+impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
+    async fn issue(&self, principal: Principal) -> PermissionIssue {
+        let card = permission_derive::derive_from_wallet(&[], &[], &[], &[], None)
+            .expect("matrix permission issuer derives a card from the owner wallet");
+        let owner_agent_id = golem_rust::get_self_metadata()
+            .expect("matrix permission issuer owner metadata")
+            .agent_id
+            .agent_id;
+        PermissionIssue {
+            card: GuestPermissionCardHandle::new(card),
+            issuer: "rust".to_string(),
+            principal: matrix_principal(&principal),
+            owner_agent_id,
+        }
+    }
+}
+
+pub struct MatrixSecretSubtree;
+pub struct MatrixQuotaSubtree;
+pub struct MatrixPermissionsSubtree;
+pub struct MatrixTypedSubtree;
+
+#[tool_definition(version = "1.0.0")]
+pub trait MatrixResource {
+    #[command(subtree = Secret)]
+    fn secret(&self) -> MatrixSecretSubtree;
+
+    #[command(subtree = Quota)]
+    fn quota(&self) -> MatrixQuotaSubtree;
+
+    #[command(subtree = Permissions)]
+    fn permissions(&self) -> MatrixPermissionsSubtree;
+
+    #[command(subtree = Typed)]
+    fn typed(&self) -> MatrixTypedSubtree;
+}
+
+struct MatrixResourceImpl;
+
+#[tool_implementation]
+impl MatrixResource for MatrixResourceImpl {
+    fn secret(&self) -> MatrixSecretSubtree {
+        MatrixSecretSubtree
+    }
+
+    fn quota(&self) -> MatrixQuotaSubtree {
+        MatrixQuotaSubtree
+    }
+
+    fn permissions(&self) -> MatrixPermissionsSubtree {
+        MatrixPermissionsSubtree
+    }
+
+    fn typed(&self) -> MatrixTypedSubtree {
+        MatrixTypedSubtree
+    }
+}
+
+fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
+    let owner_agent_id = golem_rust::get_self_metadata()
+        .expect("matrix resource owner metadata")
+        .agent_id
+        .agent_id;
+    (
+        "rust".to_string(),
+        matrix_principal(principal),
+        owner_agent_id,
+    )
+}
+
+#[tool_definition]
+pub trait Secret {
+    async fn exchange(
+        &self,
+        secret: GuestSecretHandle,
+        principal: golem_rust::agentic::Principal,
+    ) -> SecretExchange;
+}
+
+struct SecretImpl;
+
+#[tool_implementation]
+impl Secret for SecretImpl {
+    async fn exchange(&self, secret: GuestSecretHandle, principal: Principal) -> SecretExchange {
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        let revealed = reveal_string(&secret)
+            .map(|value| value == "matrix-secret-value")
+            .unwrap_or(false);
+        SecretExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            revealed,
+            secret,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Quota {
+    async fn exchange(
+        &self,
+        token: MatrixCapacityToken,
+        principal: golem_rust::agentic::Principal,
+    ) -> QuotaExchange;
+}
+
+struct QuotaImpl;
+
+#[tool_implementation]
+impl Quota for QuotaImpl {
+    async fn exchange(&self, token: MatrixCapacityToken, principal: Principal) -> QuotaExchange {
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        let reserved = token
+            .0
+            .reserve(1)
+            .map(|reservation| reservation.commit(1))
+            .is_ok();
+        QuotaExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            reserved,
+            token,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Permissions {
+    async fn exchange(
+        &self,
+        card: GuestPermissionCardHandle,
+        principal: golem_rust::agentic::Principal,
+    ) -> PermissionExchange;
+}
+
+struct PermissionsImpl;
+
+#[tool_implementation]
+impl Permissions for PermissionsImpl {
+    async fn exchange(
+        &self,
+        card: GuestPermissionCardHandle,
+        principal: Principal,
+    ) -> PermissionExchange {
+        assert_eq!(
+            card.with_handle(permission_types::is_polymorphic),
+            Some(false),
+            "matrix resource permission card must be non-polymorphic"
+        );
+        let (provider, principal, owner_agent_id) = matrix_resource_evidence(&principal);
+        PermissionExchange {
+            provider,
+            principal,
+            owner_agent_id,
+            card,
+        }
+    }
+}
+
+#[tool_definition]
+pub trait Typed {
+    fn transform(&self, input: AgentStream<u32>) -> AgentStream<u32>;
+}
+
+struct TypedImpl;
+
+#[tool_implementation]
+impl Typed for TypedImpl {
+    fn transform(&self, mut input: AgentStream<u32>) -> AgentStream<u32> {
+        let (mut writer, output) = AgentStream::new();
+        spawn_local(async move {
+            while let Ok(Some(value)) = input.next().await {
+                if writer.write_one(value * 3 + 1).await.is_err() {
+                    break;
+                }
+            }
+        });
+        output
+    }
+}
+
+#[derive(Debug, Clone, IntoSchema, FromSchema, IntoWire, FromWire, WireSchema)]
+pub struct EnvironmentProbeEvidence {
+    pub marker: String,
+    pub secret: String,
+    pub reserved: bool,
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait EnvironmentProbe {
+    async fn observe(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence;
+}
+
+struct EnvironmentProbeImpl;
+
+fn owner_config_string(key: &str) -> Result<String, String> {
+    let graph =
+        golem_rust::schema::try_into_schema_graph::<String>().map_err(|error| error.to_string())?;
+    let expected = encode_schema_graph(&graph).map_err(|error| error.to_string())?;
+    let value = agent_host::get_config_value(&[key.to_string()], &expected)
+        .map_err(|error| format!("{error:?}"))?;
+    let value = decode_schema_value(value).map_err(|error| error.to_string())?;
+    String::from_value(&value).map_err(|error| error.to_string())
+}
+
+#[tool_implementation]
+impl EnvironmentProbe for EnvironmentProbeImpl {
+    async fn observe(
+        &self,
+        expected_use: u64,
+        amount: u64,
+        commit_amount: u64,
+    ) -> EnvironmentProbeEvidence {
+        let marker = owner_config_string("marker").expect("caller owner marker is configured");
+        let secret = ConfigSecret::<String>::new(vec!["secret".to_string()])
+            .get()
+            .expect("caller environment secret is readable and revealable");
+        let token = QuotaToken::new("owner-capacity", expected_use);
+        let reserved = match token.reserve(amount) {
+            Ok(reservation) => {
+                reservation.commit(commit_amount);
+                true
+            }
+            Err(_) => false,
+        };
+
+        EnvironmentProbeEvidence {
+            marker,
+            secret,
+            reserved,
+        }
+    }
+}
 
 #[tool_definition(version = "1.0.0")]
 pub trait MiddlewareProbe {
@@ -89,11 +557,27 @@ impl MiddlewareProbe for MiddlewareProbeImpl {
                 panic!("nested middleware child trap after parent return");
             }
         }
-        if value.starts_with("partial-completed(") || value.starts_with("partial-pending(") {
+        if value.starts_with("partial-completed(")
+            || value.starts_with("partial-pending(")
+            || value.starts_with("approval-")
+        {
             announce_middleware_probe_effect(&value).await;
             if value.starts_with("partial-pending(") {
                 wait_at_crash_checkpoint(&value, "middleware-partial-pending").await;
             }
+        }
+        if value.starts_with("lifecycle-effect(") {
+            announce_middleware_probe_effect(&value).await;
+        }
+        if value.starts_with("cascade-blocked(") {
+            wait_at_crash_checkpoint(&value, "cascade-blocked-leaf").await;
+        }
+        if value.starts_with("cascade-trap(") {
+            panic!("mixed lifecycle cascade trap");
+        }
+        if value.starts_with("rate-limit-crash(") {
+            announce_middleware_probe_effect(&value).await;
+            wait_at_crash_checkpoint(&value, "rate-limit-leaf-after-effect").await;
         }
         format!("leaf({value})")
     }
@@ -950,9 +1434,26 @@ impl Streaming for StreamingImpl {
 
         if matches!(
             mode.as_str(),
-            "marker-echo" | "trap" | "trap-after-clean-eof" | "declared-error"
+            "marker-echo"
+                | "trap"
+                | "trap-after-clean-eof"
+                | "declared-error"
+                | "explicit-stdout-failure"
+                | "finish-failure"
+                | "writer-abandonment"
+                | "finish-after-reader-drop"
+                | "stream-failure-success"
         ) {
-            summary.output_closed = !write_chunk(&mut stdout, MARKER.to_vec()).await;
+            if matches!(mode.as_str(), "declared-error" | "stream-failure-success") {
+                for byte in MARKER {
+                    if !write_chunk(&mut stdout, vec![*byte]).await {
+                        summary.output_closed = true;
+                        break;
+                    }
+                }
+            } else {
+                summary.output_closed = !write_chunk(&mut stdout, MARKER.to_vec()).await;
+            }
         }
 
         match mode.as_str() {
@@ -998,6 +1499,21 @@ impl Streaming for StreamingImpl {
                         summary.bytes_read += chunk.len() as u64;
                     }
                 }
+                return Ok(summary);
+            }
+            "explicit-stdout-failure" => {
+                stdout
+                    .fail(ByteStreamFailure::Failed(
+                        "rust provider explicit stdout failure".to_string(),
+                    ))
+                    .await
+                    .expect("fail stdout explicitly");
+                return Ok(summary);
+            }
+            "writer-abandonment" => return Ok(summary),
+            "finish-after-reader-drop" => {
+                while stdin.next().await.is_some() {}
+                summary.output_closed = stdout.finish().await.is_err();
                 return Ok(summary);
             }
             "hold-after-eof" => {
@@ -1060,6 +1576,14 @@ impl Streaming for StreamingImpl {
                 let _ = stdout.finish().await;
                 return Ok(summary);
             }
+            "stream-failure-success" => {
+                let _ = stdout
+                    .fail(ByteStreamFailure::Failed(
+                        "provider-selected-failure".to_string(),
+                    ))
+                    .await;
+                return Ok(summary);
+            }
             _ => {
                 while let Some(item) = stdin.next().await {
                     let Ok(chunk) = item else {
@@ -1111,7 +1635,7 @@ impl Streaming for StreamingImpl {
             return Ok(summary);
         }
 
-        let _ = stdout.finish().await;
+        summary.output_closed |= stdout.finish().await.is_err();
         Ok(summary)
     }
 
@@ -1141,6 +1665,21 @@ impl Streaming for StreamingImpl {
         mut stdout: OutputStream,
         mut diagnostics: OutputStream,
     ) -> Result<StreamSummary, StreamingError> {
+        if mode == "redaction-terminals" {
+            for byte in MARKER {
+                stdout.write(vec![*byte]).await.unwrap();
+            }
+            for byte in b"stderr-visible" {
+                diagnostics.write(vec![*byte]).await.unwrap();
+            }
+            stdout.finish().await.unwrap();
+            diagnostics.finish().await.unwrap();
+            return Ok(StreamSummary {
+                chunks_read: 0,
+                bytes_read: 0,
+                output_closed: false,
+            });
+        }
         announce_middleware_probe_effect(&format!("dual-reconstruct-{mode}")).await;
         match mode.as_str() {
             "before-either-output" => {}
