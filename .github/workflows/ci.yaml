@@ -156,8 +156,6 @@ jobs:
 
   builtin-artifacts:
     runs-on: blacksmith
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.value }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -192,6 +190,17 @@ jobs:
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+      - name: Package built-in artifacts
+        run: tar --zstd -cf tmp/builtin-artifacts.tar.zst -C tmp/builtin-artifacts .
+      - name: Upload built-in artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: builtin-artifacts
+          path: tmp/builtin-artifacts.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   worker-tests:
     env:
@@ -232,8 +241,6 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -268,8 +275,6 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -327,12 +332,17 @@ jobs:
           mkdir -pv tmp/golem-cli-test-binaries
           cp target/dev-release-ci/golem tmp/golem-cli-test-binaries/
           find tmp/golem-cli-test-binaries -type f | sort
+          tar --zstd -cf tmp/golem-cli-test-binaries.tar.zst -C tmp/golem-cli-test-binaries .
         timeout-minutes: 2
-      - name: Save CLI test binaries to cache
-        uses: actions/cache/save@v5
+      - name: Upload CLI test binaries
+        uses: actions/upload-artifact@v6
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
+          name: golem-cli-test-binaries
+          path: tmp/golem-cli-test-binaries.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   it:
     env:
@@ -403,8 +413,6 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -553,15 +561,14 @@ jobs:
           copy-to-target: 'true'
 
       - name: Restore CLI test binaries
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-cli-test-binaries
+          path: tmp
       - name: Install CLI test binaries
         run: |
           mkdir -pv target/dev-release-ci
-          cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
+          tar --zstd -xf tmp/golem-cli-test-binaries.tar.zst -C target/dev-release-ci
           chmod +x target/dev-release-ci/*
 
       - name: Restore streaming test components
@@ -570,8 +577,6 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -701,8 +706,6 @@ jobs:
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -1119,7 +1122,7 @@ jobs:
 
   build-test-components:
     runs-on: blacksmith-8vcpu-ubuntu-2204
-    # Test components only need a `golem-cli` binary, so they are built from the optimized CLI
+    # Test components only need a `golem` binary, so they are built from the optimized CLI
     # produced by build-cli-test-bins rather than waiting for the full build-and-store job. This
     # lets the component builds finish while build-and-store is still compiling test binaries.
     needs:
@@ -1143,13 +1146,15 @@ jobs:
           install-cargo-make: 'false'
           install-cargo-binstall: 'true'
       - name: Restore CLI test binaries
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-cli-test-binaries
+          path: tmp
       - name: Install golem
-        run: chmod +x tmp/golem-cli-test-binaries/golem
+        run: |
+          mkdir -pv tmp/golem-cli-test-binaries
+          tar --zstd -xf tmp/golem-cli-test-binaries.tar.zst -C tmp/golem-cli-test-binaries
+          chmod +x tmp/golem-cli-test-binaries/golem
 
       - name: Setup MoonBit
         if: matrix.chunk.needs-moonbit
