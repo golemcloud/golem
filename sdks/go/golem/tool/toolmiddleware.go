@@ -57,6 +57,7 @@ import (
 
 // MiddlewareSpec describes a middleware as a whole.
 type MiddlewareSpec struct {
+	// Version is the middleware's own version; it defaults to 0.0.0.
 	Version     string
 	Summary     string
 	Description string
@@ -531,7 +532,7 @@ func (d *definitions) buildToolMiddleware(e *middlewareEntry) (toolCommon.ToolMi
 
 	return toolCommon.ToolMiddleware{
 		Name:            e.name,
-		Version:         e.spec.Version,
+		Version:         versionOrDefault(e.spec.Version),
 		Aliases:         slices.Clone(e.spec.Aliases),
 		Doc:             toolDoc{summary: e.spec.Summary, description: e.spec.Description}.toWit(),
 		Scope:           scope,
@@ -638,4 +639,13 @@ func (d *definitions) passThrough(inv *middlewareInvocation) witTypes.Result[too
 	return witTypes.Ok[toolCommon.InvocationResult, types.ToolError](toolCommon.InvocationResult{
 		Result: wire, Stdout: witTypes.None[*witTypes.StreamReader[uint8]](), Stderr: witTypes.None[*witTypes.StreamReader[uint8]](),
 	})
+}
+
+// versionOrDefault is the published version of a middleware, 0.0.0 when it
+// declares none, as in the other SDKs.
+func versionOrDefault(v string) string {
+	if v == "" {
+		return "0.0.0"
+	}
+	return v
 }
