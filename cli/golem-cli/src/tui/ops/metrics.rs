@@ -25,7 +25,70 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub(in crate::tui) const REFRESH_INTERVAL: Duration = Duration::from_secs(5);
-const DEFAULT_RANGE: Duration = Duration::from_secs(15 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum MetricsMode {
+    Dashboard,
+    Explore,
+}
+
+impl MetricsMode {
+    pub(in crate::tui) fn previous(self) -> Self {
+        match self {
+            Self::Dashboard => Self::Explore,
+            Self::Explore => Self::Dashboard,
+        }
+    }
+
+    pub(in crate::tui) fn next(self) -> Self {
+        self.previous()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::tui) enum MetricsRange {
+    Minutes5,
+    Minutes15,
+    Hour1,
+    Hours6,
+    Hours24,
+    Days7,
+}
+
+impl MetricsRange {
+    pub(in crate::tui) const fn label(self) -> &'static str {
+        match self {
+            Self::Minutes5 => "5m",
+            Self::Minutes15 => "15m",
+            Self::Hour1 => "1h",
+            Self::Hours6 => "6h",
+            Self::Hours24 => "24h",
+            Self::Days7 => "7d",
+        }
+    }
+
+    const fn duration(self) -> Duration {
+        match self {
+            Self::Minutes5 => Duration::from_secs(5 * 60),
+            Self::Minutes15 => Duration::from_secs(15 * 60),
+            Self::Hour1 => Duration::from_secs(60 * 60),
+            Self::Hours6 => Duration::from_secs(6 * 60 * 60),
+            Self::Hours24 => Duration::from_secs(24 * 60 * 60),
+            Self::Days7 => Duration::from_secs(7 * 24 * 60 * 60),
+        }
+    }
+
+    pub(in crate::tui) fn next(self) -> Self {
+        match self {
+            Self::Minutes5 => Self::Minutes15,
+            Self::Minutes15 => Self::Hour1,
+            Self::Hour1 => Self::Hours6,
+            Self::Hours6 => Self::Hours24,
+            Self::Hours24 => Self::Days7,
+            Self::Days7 => Self::Minutes5,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum MetricsFocus {
@@ -58,6 +121,7 @@ pub(in crate::tui) struct MetricsQuery {
     pub(in crate::tui) agent_ids: Vec<String>,
     pub(in crate::tui) selected_family: Option<String>,
     pub(in crate::tui) selected_series: Option<String>,
+    pub(in crate::tui) range: MetricsRange,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +141,10 @@ pub(in crate::tui) struct MetricsState {
     pub(in crate::tui) loading: bool,
     pub(in crate::tui) capability: Option<LocalObservabilityCapability>,
     pub(in crate::tui) source: LocalMetricSource,
+    pub(in crate::tui) mode: MetricsMode,
+    pub(in crate::tui) range: MetricsRange,
+    pub(in crate::tui) live: bool,
+    pub(in crate::tui) selected_panel: usize,
     pub(in crate::tui) families: Vec<LocalMetricFamily>,
     pub(in crate::tui) series: Vec<LocalMetricSeries>,
     pub(in crate::tui) samples: Vec<LocalMetricSample>,
@@ -94,6 +162,10 @@ impl Default for MetricsState {
             loading: false,
             capability: None,
             source: LocalMetricSource::Agents,
+            mode: MetricsMode::Dashboard,
+            range: MetricsRange::Minutes15,
+            live: true,
+            selected_panel: 0,
             families: Vec::new(),
             series: Vec::new(),
             samples: Vec::new(),
@@ -157,7 +229,7 @@ pub(in crate::tui) async fn load(
             .await?;
         scope.environment_id = Some(environment.environment_id.0);
     }
-    let range = current_range();
+    let range = current_range(query.range);
     let families = client
         .families(&LocalMetricFamiliesRequest {
             source: query.source,
@@ -235,14 +307,14 @@ pub(in crate::tui) async fn load(
     })
 }
 
-fn current_range() -> LocalMetricTimeRange {
+fn current_range(preset: MetricsRange) -> LocalMetricTimeRange {
     let to = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         .min(i64::MAX as u128) as i64;
     LocalMetricTimeRange {
-        from_unix_nanos: to.saturating_sub(DEFAULT_RANGE.as_nanos() as i64),
+        from_unix_nanos: to.saturating_sub(preset.duration().as_nanos() as i64),
         to_unix_nanos: to,
     }
 }

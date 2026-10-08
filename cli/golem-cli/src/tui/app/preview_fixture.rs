@@ -55,11 +55,12 @@ fn render_fixture_buffer(
 }
 
 fn preview_app() -> TuiApp {
+    let mut ops = OpsApp::default();
+    ops.select(OpsDestination::Agents);
     let mut app = TuiApp {
         should_quit: false,
         active_workspace: Workspace::Ops,
-        ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
-        ops_view: OpsView::Overview,
+        ops,
         dev_primary: DevView::Repl,
         dev_focus: DevView::Repl,
         mode: ModeStack::default(),

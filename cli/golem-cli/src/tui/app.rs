@@ -54,9 +54,10 @@ use crate::tui::ops::activity::{
     self, ActivityAgent, ActivityRefreshPayload, ActivityRepresentation, ActivityState,
 };
 use crate::tui::ops::metrics::{
-    self, MetricsFocus, MetricsQuery, MetricsRefreshPayload, MetricsState,
+    self, MetricsFocus, MetricsMode, MetricsQuery, MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
+use crate::tui::ops::{AgentIdentity, OpsApp, OpsDestination, OpsRoute};
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
 use crate::tui::visual::active_style;
@@ -87,7 +88,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, ScrollbarState, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, ScrollbarState, Wrap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cell::Cell;
@@ -408,8 +409,7 @@ fn tui_auth_presenter(event_tx: &TuiEventSender) -> Arc<dyn AuthPresenter> {
 struct TuiApp {
     should_quit: bool,
     active_workspace: Workspace,
-    ops_subject: OpsSubject,
-    ops_view: OpsView,
+    ops: OpsApp,
     dev_primary: DevView,
     dev_focus: DevView,
     mode: ModeStack,
@@ -475,8 +475,7 @@ impl TuiApp {
         Self {
             should_quit: false,
             active_workspace,
-            ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
-            ops_view: OpsView::Overview,
+            ops: OpsApp::default(),
             dev_primary: DevView::BuildDeploy,
             dev_focus: DevView::BuildDeploy,
             mode: ModeStack::default(),
@@ -548,7 +547,10 @@ impl TuiApp {
                 self.finish_ops_environment_refresh(generation, result)
             }
             TuiEvent::MetricsRefreshTick => {
-                if self.active_workspace == Workspace::Ops && self.ops_view == OpsView::Metrics {
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && self.metrics.live
+                {
                     self.refresh_metrics(Some(event_tx));
                 }
             }
@@ -660,55 +662,69 @@ impl TuiApp {
         match key.code {
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Activity =>
+                    && self.ops.active() == OpsDestination::Oplog =>
             {
                 self.move_activity_selection(false)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Activity =>
+                    && self.ops.active() == OpsDestination::Oplog =>
             {
                 self.move_activity_selection(true)
             }
             KeyCode::Left
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Activity =>
+                    && self.ops.active() == OpsDestination::Oplog =>
             {
                 self.set_activity_representation(self.activity.representation.previous(), event_tx)
             }
             KeyCode::Right
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Activity =>
+                    && self.ops.active() == OpsDestination::Oplog =>
             {
                 self.set_activity_representation(self.activity.representation.next(), event_tx)
             }
+            KeyCode::Left
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.metrics.mode = self.metrics.mode.previous()
+            }
+            KeyCode::Right
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
+            {
+                self.metrics.mode = self.metrics.mode.next()
+            }
             KeyCode::Up
-                if self.active_workspace == Workspace::Ops && self.ops_view == OpsView::Metrics =>
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
             {
                 self.move_metrics_selection(false, event_tx)
             }
             KeyCode::Down
-                if self.active_workspace == Workspace::Ops && self.ops_view == OpsView::Metrics =>
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics =>
             {
                 self.move_metrics_selection(true, event_tx)
             }
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Resources =>
+                    && self.ops.active() == OpsDestination::Configuration =>
             {
                 self.move_resource_selection(false)
             }
             KeyCode::Down
                 if self.active_workspace == Workspace::Ops
-                    && self.ops_view == OpsView::Resources =>
+                    && self.ops.active() == OpsDestination::Configuration =>
             {
                 self.move_resource_selection(true)
             }
             KeyCode::Esc if self.agent_details_focused() => {
                 self.agents.focus = AgentOverviewFocus::List
             }
-            KeyCode::Esc if matches!(self.ops_subject, OpsSubject::Agent(_)) => {
-                self.ops_subject = OpsSubject::Root(OpsRootSubject::Agents)
+            KeyCode::Esc if self.active_workspace == Workspace::Ops => {
+                self.ops.pop_route();
             }
             KeyCode::Enter if self.focused_terminal_is_running() => self.enter_terminal_input(),
             KeyCode::PageUp if self.active_workspace == Workspace::Dev => {
@@ -793,21 +809,42 @@ impl TuiApp {
                 if self.active_workspace == Workspace::Ops
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                if self.ops_view == OpsView::Metrics {
-                    self.refresh_metrics(event_tx);
-                } else if self.ops_view == OpsView::Activity {
-                    self.refresh_activity(event_tx);
-                } else if self.ops_view == OpsView::Resources {
-                    self.refresh_resources(event_tx);
-                } else {
-                    match self.ops_subject.root() {
-                        OpsRootSubject::Agents => self.refresh_agents(event_tx),
-                        OpsRootSubject::Deployment | OpsRootSubject::Environment => {
-                            self.refresh_ops_environment(event_tx)
-                        }
-                        OpsRootSubject::Server => {}
+                match self.ops.active() {
+                    OpsDestination::Overview | OpsDestination::Deployments => {
+                        self.refresh_ops_environment(event_tx)
                     }
+                    OpsDestination::Agents => self.refresh_agents(event_tx),
+                    OpsDestination::Oplog => self.refresh_activity(event_tx),
+                    OpsDestination::Metrics => self.refresh_metrics(event_tx),
+                    OpsDestination::Configuration => self.refresh_resources(event_tx),
+                    OpsDestination::Stream => {}
                 }
+            }
+            KeyCode::Char('s')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.metrics.source = match self.metrics.source {
+                    crate::model::local_observability::LocalMetricSource::Agents => {
+                        crate::model::local_observability::LocalMetricSource::Services
+                    }
+                    crate::model::local_observability::LocalMetricSource::Services => {
+                        crate::model::local_observability::LocalMetricSource::Agents
+                    }
+                };
+                self.metrics.selected_family = 0;
+                self.metrics.selected_series = 0;
+                self.metrics.selected_panel = 0;
+                self.reload_metrics(event_tx);
+            }
+            KeyCode::Char('t')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Metrics
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.metrics.range = self.metrics.range.next();
+                self.reload_metrics(event_tx);
             }
             KeyCode::Char(' ')
                 if self.agent_list_focused() && key.modifiers.contains(KeyModifiers::CONTROL) =>
@@ -1106,16 +1143,33 @@ impl TuiApp {
                     }
                     (Workspace::Dev, KeyCode::Char('r')) => self.open_dev_workspace(DevView::Repl),
                     (Workspace::Ops, KeyCode::Char('o')) => {
-                        self.set_ops_view(OpsView::Overview, event_tx)
+                        self.select_ops_destination(OpsDestination::Overview, event_tx)
                     }
                     (Workspace::Ops, KeyCode::Char('a')) => {
-                        self.set_ops_view(OpsView::Activity, event_tx)
+                        self.select_ops_destination(OpsDestination::Agents, event_tx)
+                    }
+                    (Workspace::Ops, KeyCode::Char('l')) => {
+                        self.select_ops_destination(OpsDestination::Oplog, event_tx)
+                    }
+                    (Workspace::Ops, KeyCode::Char('s')) => {
+                        self.select_ops_destination(OpsDestination::Stream, event_tx)
                     }
                     (Workspace::Ops, KeyCode::Char('m')) => {
-                        self.set_ops_view(OpsView::Metrics, event_tx)
+                        self.select_ops_destination(OpsDestination::Metrics, event_tx)
                     }
-                    (Workspace::Ops, KeyCode::Char('r')) => {
-                        self.set_ops_view(OpsView::Resources, event_tx)
+                    (Workspace::Ops, KeyCode::Char('d')) => {
+                        self.select_ops_destination(OpsDestination::Deployments, event_tx)
+                    }
+                    (Workspace::Ops, KeyCode::Char('c')) => {
+                        self.select_ops_destination(OpsDestination::Configuration, event_tx)
+                    }
+                    (Workspace::Ops, KeyCode::Char('n')) => {
+                        self.ops.select_next();
+                        self.refresh_active_ops_destination(event_tx)
+                    }
+                    (Workspace::Ops, KeyCode::Char('p')) => {
+                        self.ops.select_previous();
+                        self.refresh_active_ops_destination(event_tx)
                     }
                     _ => {}
                 }
@@ -1467,6 +1521,10 @@ impl TuiApp {
             return;
         }
         match hit {
+            Some(RegionKind::OpsTab(destination)) => {
+                self.restore_default_mode();
+                self.select_ops_destination(destination, event_tx);
+            }
             Some(RegionKind::Workspace(Workspace::Ops)) => {
                 self.restore_default_mode();
                 self.open_ops_workspace(event_tx);
@@ -1742,8 +1800,14 @@ impl TuiApp {
                 self.cycle_agent_mode(event_tx);
                 self.close_palette();
             }
-            ActionId::CycleOpsView => {
-                self.set_ops_view(self.next_ops_view(), event_tx);
+            ActionId::NextOpsDestination => {
+                self.ops.select_next();
+                self.refresh_active_ops_destination(event_tx);
+                self.close_palette();
+            }
+            ActionId::PreviousOpsDestination => {
+                self.ops.select_previous();
+                self.refresh_active_ops_destination(event_tx);
                 self.close_palette();
             }
             ActionId::CycleAgentFindScope => {
@@ -1751,21 +1815,33 @@ impl TuiApp {
                 self.agents.reset_selection();
                 self.close_palette();
             }
+            ActionId::SelectOpsOverview => {
+                self.close_palette();
+                self.select_ops_destination(OpsDestination::Overview, event_tx);
+            }
             ActionId::SelectOpsAgents => {
                 self.close_palette();
-                self.select_ops_root(OpsRootSubject::Agents, event_tx);
+                self.select_ops_destination(OpsDestination::Agents, event_tx);
             }
-            ActionId::SelectOpsDeployment => {
+            ActionId::SelectOpsOplog => {
                 self.close_palette();
-                self.select_ops_root(OpsRootSubject::Deployment, event_tx);
+                self.select_ops_destination(OpsDestination::Oplog, event_tx);
             }
-            ActionId::SelectOpsEnvironment => {
+            ActionId::SelectOpsStream => {
                 self.close_palette();
-                self.select_ops_root(OpsRootSubject::Environment, event_tx);
+                self.select_ops_destination(OpsDestination::Stream, event_tx);
             }
-            ActionId::SelectOpsServer => {
+            ActionId::SelectOpsMetrics => {
                 self.close_palette();
-                self.select_ops_root(OpsRootSubject::Server, event_tx);
+                self.select_ops_destination(OpsDestination::Metrics, event_tx);
+            }
+            ActionId::SelectOpsDeployments => {
+                self.close_palette();
+                self.select_ops_destination(OpsDestination::Deployments, event_tx);
+            }
+            ActionId::SelectOpsConfiguration => {
+                self.close_palette();
+                self.select_ops_destination(OpsDestination::Configuration, event_tx);
             }
             ActionId::StartRepl => {
                 self.close_palette();
@@ -2028,10 +2104,10 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + 1) % visible.len()];
             }
-            Workspace::Ops if self.ops_view == OpsView::Metrics => {
+            Workspace::Ops if self.ops.active() == OpsDestination::Metrics => {
                 self.metrics.focus = self.metrics.focus.next()
             }
-            Workspace::Ops if self.ops_view == OpsView::Resources => {
+            Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
                 self.resources.focus_rows = !self.resources.focus_rows
             }
             Workspace::Ops => self.cycle_ops_pane_focus(),
@@ -2048,10 +2124,10 @@ impl TuiApp {
                     .unwrap_or(0);
                 self.dev_focus = visible[(current + visible.len() - 1) % visible.len()];
             }
-            Workspace::Ops if self.ops_view == OpsView::Metrics => {
+            Workspace::Ops if self.ops.active() == OpsDestination::Metrics => {
                 self.metrics.focus = self.metrics.focus.previous()
             }
-            Workspace::Ops if self.ops_view == OpsView::Resources => {
+            Workspace::Ops if self.ops.active() == OpsDestination::Configuration => {
                 self.resources.focus_rows = !self.resources.focus_rows
             }
             Workspace::Ops => self.cycle_ops_pane_focus(),
@@ -2064,27 +2140,8 @@ impl TuiApp {
             .get(self.agents.selected)
             .map(|agent| agent.identity());
         if let Some(identity) = identity {
-            self.ops_subject = OpsSubject::Agent(identity);
-            self.ops_view = OpsView::Overview;
+            self.ops.open_agent(identity);
             self.agents.details_scroll = 0;
-        }
-    }
-
-    fn select_ops_root(&mut self, subject: OpsRootSubject, event_tx: Option<&TuiEventSender>) {
-        self.active_workspace = Workspace::Ops;
-        self.ops_subject = OpsSubject::Root(subject);
-        self.ops_view = OpsView::Overview;
-        self.agents.details_scroll = 0;
-        match subject {
-            OpsRootSubject::Agents => {
-                if self.agents.agents.is_empty() && !self.agents.refresh_running {
-                    self.refresh_agents(event_tx);
-                }
-            }
-            OpsRootSubject::Deployment | OpsRootSubject::Environment => {
-                self.refresh_ops_environment(event_tx)
-            }
-            OpsRootSubject::Server => {}
         }
     }
 
@@ -2286,135 +2343,86 @@ impl TuiApp {
 
     fn open_ops_workspace(&mut self, event_tx: Option<&TuiEventSender>) {
         self.active_workspace = Workspace::Ops;
-        if self.ops_view == OpsView::Metrics {
-            self.refresh_metrics(event_tx);
-            return;
-        }
-        if self.ops_view == OpsView::Activity {
-            self.refresh_activity(event_tx);
-            return;
-        }
-        if self.ops_view == OpsView::Resources {
-            self.refresh_resources(event_tx);
-            return;
-        }
-        match self.ops_subject.root() {
-            OpsRootSubject::Agents => {
+        self.refresh_active_ops_destination(event_tx);
+    }
+
+    fn select_ops_destination(
+        &mut self,
+        destination: OpsDestination,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        self.active_workspace = Workspace::Ops;
+        self.ops.select(destination);
+        self.refresh_active_ops_destination(event_tx);
+    }
+
+    fn refresh_active_ops_destination(&mut self, event_tx: Option<&TuiEventSender>) {
+        match self.ops.active() {
+            OpsDestination::Overview | OpsDestination::Deployments => {
+                if self.ops_environment.snapshot.is_none() && !self.ops_environment.loading {
+                    self.refresh_ops_environment(event_tx);
+                }
+            }
+            OpsDestination::Agents => {
                 if self.agents.agents.is_empty() && !self.agents.refresh_running {
                     self.refresh_agents(event_tx);
                 }
             }
-            OpsRootSubject::Deployment | OpsRootSubject::Environment
-                if self.ops_environment.snapshot.is_none() && !self.ops_environment.loading =>
-            {
-                self.refresh_ops_environment(event_tx)
-            }
-            OpsRootSubject::Deployment | OpsRootSubject::Environment | OpsRootSubject::Server => {}
-        }
-    }
-
-    fn set_ops_view(&mut self, view: OpsView, event_tx: Option<&TuiEventSender>) {
-        if !self.ops_view_supported(view) {
-            return;
-        }
-        self.ops_view = view;
-        if view == OpsView::Metrics {
-            self.refresh_metrics(event_tx);
-        } else if view == OpsView::Activity {
-            self.refresh_activity(event_tx);
-        } else if view == OpsView::Resources {
-            self.refresh_resources(event_tx);
-        }
-    }
-
-    fn ops_view_supported(&self, view: OpsView) -> bool {
-        match (self.ops_subject.root(), view) {
-            (_, OpsView::Overview) => true,
-            (OpsRootSubject::Agents, OpsView::Activity | OpsView::Metrics) => true,
-            (OpsRootSubject::Server, OpsView::Metrics) => true,
-            (OpsRootSubject::Deployment | OpsRootSubject::Environment, OpsView::Resources) => true,
-            _ => false,
-        }
-    }
-
-    fn next_ops_view(&self) -> OpsView {
-        match self.ops_subject.root() {
-            OpsRootSubject::Agents => match self.ops_view {
-                OpsView::Overview => OpsView::Activity,
-                OpsView::Activity => OpsView::Metrics,
-                OpsView::Metrics | OpsView::Resources => OpsView::Overview,
-            },
-            OpsRootSubject::Server => match self.ops_view {
-                OpsView::Overview => OpsView::Metrics,
-                OpsView::Activity | OpsView::Metrics | OpsView::Resources => OpsView::Overview,
-            },
-            OpsRootSubject::Deployment | OpsRootSubject::Environment => match self.ops_view {
-                OpsView::Overview => OpsView::Resources,
-                OpsView::Activity | OpsView::Metrics | OpsView::Resources => OpsView::Overview,
-            },
+            OpsDestination::Oplog => self.refresh_activity(event_tx),
+            OpsDestination::Metrics => self.refresh_metrics(event_tx),
+            OpsDestination::Configuration => self.refresh_resources(event_tx),
+            OpsDestination::Stream => {}
         }
     }
 
     fn activity_scope(&self) -> Option<Vec<ActivityAgent>> {
-        match &self.ops_subject {
-            OpsSubject::Agent(agent) => Some(vec![ActivityAgent {
+        if let Some(agent) = self.ops.current_agent() {
+            return Some(vec![ActivityAgent {
                 component: agent.component.clone(),
                 agent_id: agent.agent_id.clone(),
-            }]),
-            OpsSubject::Root(OpsRootSubject::Agents) => {
-                let mut agents = if self.agents.included.is_empty() {
-                    self.filtered_agents()
-                        .get(self.agents.selected)
-                        .map(|agent| vec![agent.identity()])
-                        .unwrap_or_default()
-                } else {
-                    self.agents.included.iter().cloned().collect::<Vec<_>>()
-                };
-                agents.sort_by(|left, right| {
-                    left.component
-                        .cmp(&right.component)
-                        .then_with(|| left.agent_id.cmp(&right.agent_id))
-                });
-                Some(
-                    agents
-                        .into_iter()
-                        .map(|agent| ActivityAgent {
-                            component: agent.component,
-                            agent_id: agent.agent_id,
-                        })
-                        .collect(),
-                )
-            }
-            OpsSubject::Root(
-                OpsRootSubject::Deployment | OpsRootSubject::Environment | OpsRootSubject::Server,
-            ) => None,
+            }]);
         }
+        let mut agents = if self.agents.included.is_empty() {
+            self.filtered_agents()
+                .get(self.agents.selected)
+                .map(|agent| vec![agent.identity()])
+                .unwrap_or_default()
+        } else {
+            self.agents.included.iter().cloned().collect::<Vec<_>>()
+        };
+        agents.sort_by(|left, right| {
+            left.component
+                .cmp(&right.component)
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
+        });
+        Some(
+            agents
+                .into_iter()
+                .map(|agent| ActivityAgent {
+                    component: agent.component,
+                    agent_id: agent.agent_id,
+                })
+                .collect(),
+        )
     }
 
     fn refresh_activity(&mut self, event_tx: Option<&TuiEventSender>) {
         if self.activity.loading {
             return;
         }
-        if self.activity.representation == ActivityRepresentation::Live {
-            self.activity.error = Some(
-                "Live Activity requires a transient Agent stream and is not available in this build; Timeline and Journal use bounded oplog snapshots"
-                    .to_string(),
-            );
-            return;
-        }
         let Some(agents) = self.activity_scope() else {
             self.activity.error = Some(
-                "Activity is available for the Agents collection and individual Agents".to_string(),
+                "Oplog requires the selected Agent or an explicit included Agent set".to_string(),
             );
             return;
         };
         if agents.is_empty() {
-            self.activity.error = Some("Select an Agent before opening Activity".to_string());
+            self.activity.error = Some("Select an Agent before opening Oplog".to_string());
             return;
         }
         if agents.len() > activity::HARD_AGENT_LIMIT {
             self.activity.error = Some(format!(
-                "Activity is limited to {} Agents; narrow the loaded filter or include fewer Agents",
+                "Oplog is limited to {} Agents; narrow the loaded filter or include fewer Agents",
                 activity::HARD_AGENT_LIMIT
             ));
             return;
@@ -2495,16 +2503,13 @@ impl TuiApp {
     ) {
         self.activity.representation = representation;
         self.activity.error = None;
-        if representation == ActivityRepresentation::Live {
-            self.refresh_activity(event_tx);
-        }
+        self.refresh_activity(event_tx);
     }
 
     fn resource_scope(&self) -> Option<ResourceScope> {
-        match self.ops_subject.root() {
-            OpsRootSubject::Deployment => Some(ResourceScope::Deployment),
-            OpsRootSubject::Environment => Some(ResourceScope::Environment),
-            OpsRootSubject::Agents | OpsRootSubject::Server => None,
+        match self.ops.active() {
+            OpsDestination::Configuration => Some(ResourceScope::Environment),
+            _ => None,
         }
     }
 
@@ -2513,8 +2518,7 @@ impl TuiApp {
             return;
         }
         let Some(scope) = self.resource_scope() else {
-            self.resources.error =
-                Some("Resources are available for Deployment and Environment subjects".to_string());
+            self.resources.error = Some("Configuration is unavailable for this scope".to_string());
             return;
         };
         let Some(event_tx) = event_tx.cloned() else {
@@ -2599,28 +2603,19 @@ impl TuiApp {
     }
 
     fn metrics_query(&self) -> Option<MetricsQuery> {
-        let (source, agent_ids) = match &self.ops_subject {
-            OpsSubject::Root(OpsRootSubject::Server) => (
-                crate::model::local_observability::LocalMetricSource::Services,
-                Vec::new(),
-            ),
-            OpsSubject::Root(OpsRootSubject::Agents) => (
-                crate::model::local_observability::LocalMetricSource::Agents,
-                Vec::new(),
-            ),
-            OpsSubject::Agent(agent) => (
-                crate::model::local_observability::LocalMetricSource::Agents,
-                vec![agent.agent_id.clone()],
-            ),
-            OpsSubject::Root(OpsRootSubject::Deployment | OpsRootSubject::Environment) => {
-                return None;
+        let source = self.metrics.source;
+        let agent_ids = match (source, self.ops.current_agent()) {
+            (crate::model::local_observability::LocalMetricSource::Agents, Some(agent)) => {
+                vec![agent.agent_id.clone()]
             }
+            _ => Vec::new(),
         };
         Some(MetricsQuery {
             source,
             agent_ids,
             selected_family: self.metrics.selected_family_name(),
             selected_series: self.metrics.selected_series_key(),
+            range: self.metrics.range,
         })
     }
 
@@ -2669,6 +2664,12 @@ impl TuiApp {
         );
     }
 
+    fn reload_metrics(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.metrics.generation = self.metrics.generation.saturating_add(1);
+        self.metrics.loading = false;
+        self.refresh_metrics(event_tx);
+    }
+
     fn finish_metrics_refresh(
         &mut self,
         generation: u64,
@@ -2705,6 +2706,18 @@ impl TuiApp {
     }
 
     fn move_metrics_selection(&mut self, down: bool, event_tx: Option<&TuiEventSender>) {
+        if self.metrics.mode == MetricsMode::Dashboard {
+            let panel_count = match self.metrics.source {
+                crate::model::local_observability::LocalMetricSource::Agents => 6,
+                crate::model::local_observability::LocalMetricSource::Services => 9,
+            };
+            self.metrics.selected_panel = if down {
+                (self.metrics.selected_panel + 1).min(panel_count - 1)
+            } else {
+                self.metrics.selected_panel.saturating_sub(1)
+            };
+            return;
+        }
         match self.metrics.focus {
             MetricsFocus::Families => {
                 let last = self.metrics.families.len().saturating_sub(1);
@@ -2736,8 +2749,8 @@ impl TuiApp {
 
     fn ops_agents_focused(&self) -> bool {
         self.active_workspace == Workspace::Ops
-            && matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
-            && self.ops_view == OpsView::Overview
+            && self.ops.active() == OpsDestination::Agents
+            && matches!(self.ops.current_route(), OpsRoute::Root)
     }
 
     fn agents_focused(&self) -> bool {
@@ -2746,8 +2759,8 @@ impl TuiApp {
 
     fn ops_document_focused(&self) -> bool {
         self.active_workspace == Workspace::Ops
-            && self.ops_view == OpsView::Overview
-            && !matches!(self.ops_subject, OpsSubject::Root(OpsRootSubject::Agents))
+            && self.ops.active() == OpsDestination::Agents
+            && matches!(self.ops.current_route(), OpsRoute::Agent(_))
     }
 
     fn agent_details_open(&self) -> bool {
@@ -2777,8 +2790,8 @@ impl TuiApp {
     }
 
     fn cycle_ops_pane_focus(&mut self) {
-        match self.ops_view {
-            OpsView::Overview if self.agent_details_open() => {
+        match self.ops.active() {
+            OpsDestination::Agents if self.agent_details_open() => {
                 self.agents.focus = match self.agents.focus {
                     AgentOverviewFocus::List => AgentOverviewFocus::Details,
                     AgentOverviewFocus::Details => AgentOverviewFocus::List,
@@ -2787,10 +2800,13 @@ impl TuiApp {
                     self.mode.replace(InteractionMode::Normal);
                 }
             }
-            OpsView::Metrics => self.metrics.focus = self.metrics.focus.next(),
-            OpsView::Resources => self.resources.focus_rows = !self.resources.focus_rows,
-            OpsView::Overview => {}
-            OpsView::Activity => {}
+            OpsDestination::Metrics => self.metrics.focus = self.metrics.focus.next(),
+            OpsDestination::Configuration => self.resources.focus_rows = !self.resources.focus_rows,
+            OpsDestination::Overview
+            | OpsDestination::Agents
+            | OpsDestination::Oplog
+            | OpsDestination::Stream
+            | OpsDestination::Deployments => {}
         }
     }
 
@@ -3152,28 +3168,11 @@ impl TuiApp {
                 self.invalidate_metrics();
                 self.invalidate_activity();
                 self.invalidate_resources();
+                self.ops.reset_routes();
                 self.context_switcher.last_error = None;
                 self.restore_default_mode();
                 if self.active_workspace == Workspace::Ops {
-                    if self.ops_view == OpsView::Metrics {
-                        self.refresh_metrics(Some(event_tx));
-                        return;
-                    }
-                    if self.ops_view == OpsView::Activity {
-                        self.refresh_activity(Some(event_tx));
-                        return;
-                    }
-                    if self.ops_view == OpsView::Resources {
-                        self.refresh_resources(Some(event_tx));
-                        return;
-                    }
-                    match self.ops_subject.root() {
-                        OpsRootSubject::Agents => self.refresh_agents(Some(event_tx)),
-                        OpsRootSubject::Deployment | OpsRootSubject::Environment => {
-                            self.refresh_ops_environment(Some(event_tx))
-                        }
-                        OpsRootSubject::Server => {}
-                    }
+                    self.refresh_active_ops_destination(Some(event_tx));
                 }
             }
             Err(error) => {
@@ -5626,60 +5625,6 @@ impl AgentDatasetFilterState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpsRootSubject {
-    Agents,
-    Deployment,
-    Environment,
-    Server,
-}
-
-impl OpsRootSubject {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Agents => "Agents",
-            Self::Deployment => "Deployment",
-            Self::Environment => "Environment",
-            Self::Server => "Server",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum OpsSubject {
-    Root(OpsRootSubject),
-    Agent(AgentIdentity),
-}
-
-impl OpsSubject {
-    fn root(&self) -> OpsRootSubject {
-        match self {
-            Self::Root(root) => *root,
-            Self::Agent(_) => OpsRootSubject::Agents,
-        }
-    }
-
-    fn label(&self) -> String {
-        match self {
-            Self::Root(root) => root.label().to_string(),
-            Self::Agent(agent) => agent.agent_id.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpsView {
-    Overview,
-    Activity,
-    Metrics,
-    Resources,
-}
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct AgentIdentity {
-    component: String,
-    agent_id: String,
-}
-
 const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     PaneTableColumn {
         id: "agent_id",
@@ -7526,26 +7471,231 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
 
 fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     frame.render_widget(Paragraph::new("").style(surface_style()), area);
-    match (&app.ops_subject, app.ops_view) {
-        (OpsSubject::Root(OpsRootSubject::Agents), OpsView::Overview) => {
-            render_ops_agents_overview(frame, area, app)
-        }
-        (OpsSubject::Agent(identity), OpsView::Overview) => {
-            render_ops_agent_overview(frame, area, app, identity)
-        }
-        (OpsSubject::Root(OpsRootSubject::Deployment), OpsView::Overview) => {
-            render_ops_deployment_overview(frame, area, app)
-        }
-        (OpsSubject::Root(OpsRootSubject::Environment), OpsView::Overview) => {
-            render_ops_environment_overview(frame, area, app)
-        }
-        (OpsSubject::Root(OpsRootSubject::Server), OpsView::Overview) => {
-            render_ops_server_overview(frame, area, app)
-        }
-        (_, OpsView::Activity) => render_ops_activity(frame, area, app),
-        (_, OpsView::Metrics) => render_ops_metrics(frame, area, app),
-        (_, OpsView::Resources) => render_ops_resources(frame, area, app),
+    let tabs = Rect {
+        height: area.height.min(1),
+        ..area
+    };
+    let content = layout::ops_content_area(area);
+    render_ops_tabs(frame, tabs, app);
+    match app.ops.active() {
+        OpsDestination::Overview => render_ops_overview(frame, content, app),
+        OpsDestination::Agents => match app.ops.current_route() {
+            OpsRoute::Agent(identity) => render_ops_agent_overview(frame, content, app, identity),
+            _ => render_ops_agents_overview(frame, content, app),
+        },
+        OpsDestination::Oplog => render_ops_activity(frame, content, app),
+        OpsDestination::Stream => render_ops_stream(frame, content, app),
+        OpsDestination::Metrics => render_ops_metrics(frame, content, app),
+        OpsDestination::Deployments => render_ops_deployment_overview(frame, content, app),
+        OpsDestination::Configuration => render_ops_resources(frame, content, app),
     }
+}
+
+fn render_ops_tabs(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let visual = theme();
+    let surface = surface_style();
+    frame.render_widget(Paragraph::new("").style(surface), area);
+    frame.render_widget(
+        Paragraph::new(Span::styled("├─", surface.fg(visual.border_subtle))),
+        Rect {
+            width: area.width.min(2),
+            ..area
+        },
+    );
+
+    let available = area.width.saturating_sub(2) as usize;
+    if available == 0 {
+        return;
+    }
+    let active = app.ops.active().index();
+    let widths = OpsDestination::ALL
+        .iter()
+        .map(|destination| destination.label().chars().count() + 2)
+        .collect::<Vec<_>>();
+    let mut start = app.ops.tab_offset().min(active);
+    while start < active {
+        let left_marker = usize::from(start > 0) * 2;
+        let through_active = widths[start..=active].iter().sum::<usize>()
+            + active.saturating_sub(start)
+            + left_marker;
+        if through_active <= available {
+            break;
+        }
+        start += 1;
+    }
+
+    let mut used = usize::from(start > 0) * 2;
+    let mut end = start;
+    while end < OpsDestination::ALL.len() {
+        let separator = usize::from(end > start);
+        let right_marker = usize::from(end + 1 < OpsDestination::ALL.len()) * 2;
+        if used + separator + widths[end] + right_marker > available {
+            break;
+        }
+        used += separator + widths[end];
+        end += 1;
+    }
+    if end <= active {
+        end = (active + 1).min(OpsDestination::ALL.len());
+    }
+    app.ops.set_tab_offset(start);
+
+    let mut x = area.x.saturating_add(2);
+    if start > 0 && x < area.right() {
+        let marker = Rect::new(x, area.y, area.right().saturating_sub(x).min(2), 1);
+        frame.render_widget(
+            Paragraph::new(Span::styled("‹ ", surface.fg(visual.text_muted))),
+            marker,
+        );
+        x = x.saturating_add(marker.width);
+    }
+    for (visible_index, destination) in OpsDestination::ALL[start..end].iter().enumerate() {
+        if visible_index > 0 && x < area.right() {
+            frame.render_widget(
+                Paragraph::new(Span::styled("·", surface.fg(visual.border_subtle))),
+                Rect::new(x, area.y, 1, 1),
+            );
+            x = x.saturating_add(1);
+        }
+        let selected = *destination == app.ops.active();
+        let label = if selected {
+            format!("[{}]", destination.label())
+        } else {
+            format!(" {} ", destination.label())
+        };
+        let width = (label.chars().count() as u16).min(area.right().saturating_sub(x));
+        if width == 0 {
+            break;
+        }
+        let style = if selected {
+            surface.fg(visual.accent_hover).add_modifier(Modifier::BOLD)
+        } else {
+            surface.fg(visual.text_muted)
+        };
+        let tab_area = Rect::new(x, area.y, width, 1);
+        frame.render_widget(Paragraph::new(Span::styled(label, style)), tab_area);
+        app.geometry
+            .add_region(RegionKind::OpsTab(*destination), tab_area);
+        x = x.saturating_add(width);
+    }
+    if end < OpsDestination::ALL.len() && x < area.right() {
+        frame.render_widget(
+            Paragraph::new(Span::styled(" ›", surface.fg(visual.text_muted))),
+            Rect::new(x, area.y, area.right().saturating_sub(x).min(2), 1),
+        );
+    }
+}
+
+fn render_ops_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let mut lines = ops_environment_status_lines(app);
+    lines.push(
+        SectionHeading {
+            title: "Operations status",
+            detail: Some("open a card with the Ops destinations above"),
+        }
+        .line(&theme()),
+    );
+    if let Some(snapshot) = &app.ops_environment.snapshot {
+        let deployment = snapshot.deployment.as_ref();
+        let contract = format!(
+            "revision {} · diff v{} · compatibility {} · tools {} · version check {} · security overrides {}",
+            snapshot.environment_revision,
+            snapshot.diff_model_version,
+            flag_state(snapshot.compatibility_check),
+            snapshot.tool_compatibility_mode,
+            flag_state(snapshot.version_check),
+            flag_state(snapshot.security_overrides),
+        );
+        let identity = format!(
+            "account {} · application {} · environment {}",
+            snapshot.account_id, snapshot.application_id, snapshot.environment_id
+        );
+        for (label, value) in [
+            (
+                "Environment",
+                format!(
+                    "{}/{}",
+                    snapshot.application_name, snapshot.environment_name
+                ),
+            ),
+            (
+                "Deployment",
+                deployment
+                    .map(|deployment| {
+                        format!(
+                            "revision {} · {}",
+                            deployment.deployment_revision, deployment.version
+                        )
+                    })
+                    .unwrap_or_else(|| "not deployed".to_string()),
+            ),
+            (
+                "Agents",
+                if app.agents.refresh_running {
+                    "refreshing loaded collection".to_string()
+                } else {
+                    format!("{} loaded", app.agents.agents.len())
+                },
+            ),
+            (
+                "Metrics",
+                if app.metrics.samples.is_empty() {
+                    "no local samples loaded".to_string()
+                } else {
+                    format!("{} samples loaded", app.metrics.samples.len())
+                },
+            ),
+            ("Stream", "disconnected · no Agent selected".to_string()),
+            (
+                "Local server",
+                format!(
+                    "{} · {} · {}",
+                    app.server.run.status.title(),
+                    app.selected_target.context.stable_id(),
+                    app.selected_target.context.provenance()
+                ),
+            ),
+            ("Contract", contract),
+            ("Identity", identity),
+        ] {
+            lines.push(
+                FieldRow {
+                    label,
+                    value: &value,
+                    label_width: 14,
+                }
+                .line(&theme()),
+            );
+        }
+    }
+    render_ops_document(frame, area, app, "Overview", lines);
+}
+
+fn render_ops_stream(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    let lines = vec![
+        Notice {
+            kind: NoticeKind::Empty,
+            message: "No Agent stream is connected",
+        }
+        .line(&theme()),
+        Line::default(),
+        FieldRow {
+            label: "Scope",
+            value: "one exact Agent",
+            label_width: 12,
+        }
+        .line(&theme()),
+        FieldRow {
+            label: "Buffer",
+            value: "10,000 events / 16 MiB",
+            label_width: 12,
+        }
+        .line(&theme()),
+    ];
+    render_ops_document(frame, area, app, "Stream", lines);
 }
 
 fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
@@ -7555,9 +7705,8 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .areas(area);
     let representation = app.activity.representation;
     let choices = [
-        ActivityRepresentation::Timeline,
-        ActivityRepresentation::Journal,
-        ActivityRepresentation::Live,
+        ActivityRepresentation::Grouped,
+        ActivityRepresentation::Entries,
     ]
     .into_iter()
     .map(|choice| {
@@ -7576,8 +7725,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     };
     PaneHeader {
         title: &format!(
-            "{} · Activity · {choices} · {} Agent(s){loading}",
-            app.ops_subject.label(),
+            "Oplog · {choices} · {} Agent(s){loading}",
             app.activity.agents.len()
         ),
         focus: PaneFocus::Active,
@@ -7623,7 +7771,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         notice_lines.push(
             Notice {
                 kind: NoticeKind::Warning,
-                message: "Large Activity scope: up to 200 entries are read per Agent",
+                message: "Large Oplog scope: up to 200 entries are read per Agent",
             }
             .line(&theme()),
         );
@@ -7646,7 +7794,7 @@ fn render_ops_activity(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     }
     frame.render_widget(Paragraph::new(notice_lines).style(surface_style()), notices);
 
-    if representation == ActivityRepresentation::Journal {
+    if representation == ActivityRepresentation::Entries {
         let panes = if content.width >= 80 {
             Layout::default()
                 .direction(Direction::Horizontal)
@@ -7732,8 +7880,21 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .areas(area);
     let source = match app.metrics.source {
-        crate::model::local_observability::LocalMetricSource::Services => "service metrics",
-        crate::model::local_observability::LocalMetricSource::Agents => "agent metrics",
+        crate::model::local_observability::LocalMetricSource::Services => "Server",
+        crate::model::local_observability::LocalMetricSource::Agents => "Agents",
+    };
+    let mode = match app.metrics.mode {
+        MetricsMode::Dashboard => "[Dashboard] Explore",
+        MetricsMode::Explore => "Dashboard [Explore]",
+    };
+    let sources = match app.metrics.source {
+        crate::model::local_observability::LocalMetricSource::Services => "Agents [Server]",
+        crate::model::local_observability::LocalMetricSource::Agents => "[Agents] Server",
+    };
+    let live = if app.metrics.live {
+        "[Live]"
+    } else {
+        "[Paused]"
     };
     let loading = if app.metrics.loading {
         " · refreshing…"
@@ -7742,8 +7903,8 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     };
     PaneHeader {
         title: &format!(
-            "{} · Metrics · Now 15m · {source}{loading}",
-            app.ops_subject.label()
+            "Metrics · {mode} · {sources} · scope environment · time [{}] · {live}{loading}",
+            app.metrics.range.label()
         ),
         focus: PaneFocus::Active,
         left_connector: Some("├"),
@@ -7769,13 +7930,18 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         );
         return;
     }
-    if app.metrics.families.is_empty() {
+    if app.metrics.families.is_empty() && app.metrics.mode == MetricsMode::Explore {
         let message = if app.metrics.loading {
             "Loading metric families…"
         } else {
             "No samples in the last 15 minutes. New local deployments are attached automatically; existing deployments begin exporting after their next deploy."
         };
         render_metrics_notice(frame, body, NoticeKind::Info, message);
+        return;
+    }
+
+    if app.metrics.mode == MetricsMode::Dashboard {
+        render_metrics_dashboard(frame, body, app, source);
         return;
     }
 
@@ -7803,6 +7969,214 @@ fn render_ops_metrics(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
     render_metrics_families(frame, areas[0], app);
     render_metrics_series(frame, areas[1], app);
     render_metrics_chart(frame, areas[2], app);
+}
+
+fn render_metrics_dashboard(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, source: &str) {
+    let (stat_titles, panels): (&[&str], &[(&str, &str)]) = match app.metrics.source {
+        crate::model::local_observability::LocalMetricSource::Agents => (
+            &[
+                "Invocations started",
+                "Error events",
+                "Completed p95",
+                "Observed Agents",
+            ],
+            &[
+                ("Invocation rate", "golem.invocation.count"),
+                (
+                    "Completed duration p50 / p95",
+                    "golem.invocation.duration_ns",
+                ),
+                ("Reliability events by kind", "golem.error.count"),
+                ("Top Agent Types / Agents", "golem.invocation.count"),
+                ("Observed last-known memory", "golem.memory.growth_bytes"),
+                ("Active resources", "golem.resources.active"),
+            ],
+        ),
+        crate::model::local_observability::LocalMetricSource::Services => (
+            &["Request rate", "Failure %", "Request p95", "Active workers"],
+            &[
+                ("Success / failure throughput", "request"),
+                ("Request latency p50 / p95", "duration"),
+                ("Active HTTP / gRPC streams", "stream"),
+                ("Worker states / active invocations", "worker"),
+                ("Memory capacity", "memory"),
+                ("Admission pressure", "admission"),
+                ("Compilation", "compilation"),
+                ("Cache effectiveness", "cache"),
+                ("Scheduler / oplog / stream health", "scheduler"),
+            ],
+        ),
+    };
+    let stat_height = if area.height >= 8 { 3 } else { 1 };
+    let [stats_area, panels_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(stat_height), Constraint::Min(1)])
+        .areas(area);
+    render_metric_stats(frame, stats_area, app, stat_titles);
+
+    if panels_area.height == 0 {
+        return;
+    }
+    let columns = if panels_area.width >= 96 { 2 } else { 1 };
+    let visible_panels = if panels_area.width < 48 || panels_area.height < 8 {
+        vec![
+            app.metrics
+                .selected_panel
+                .min(panels.len().saturating_sub(1)),
+        ]
+    } else {
+        (0..panels.len()).collect::<Vec<_>>()
+    };
+    let rows = visible_panels.len().div_ceil(columns).max(1);
+    let row_constraints = (0..rows)
+        .map(|_| Constraint::Ratio(1, rows as u32))
+        .collect::<Vec<_>>();
+    let row_areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(row_constraints)
+        .split(panels_area);
+    for (visible, panel_index) in visible_panels.into_iter().enumerate() {
+        let row = visible / columns;
+        let column = visible % columns;
+        let column_areas = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints((0..columns).map(|_| Constraint::Ratio(1, columns as u32)))
+            .split(row_areas[row]);
+        let (title, family_hint) = panels[panel_index];
+        render_metric_dashboard_panel(
+            frame,
+            column_areas[column],
+            app,
+            panel_index,
+            title,
+            family_hint,
+            source,
+        );
+    }
+}
+
+fn render_metric_stats(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, titles: &[&str]) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints((0..titles.len()).map(|_| Constraint::Ratio(1, titles.len() as u32)))
+        .split(area);
+    for (index, title) in titles.iter().enumerate() {
+        let value = dashboard_stat_value(app, index);
+        let text = if area.height >= 3 {
+            format!("{title}\n{value}")
+        } else {
+            format!("{title}: {value}")
+        };
+        frame.render_widget(
+            Paragraph::new(text)
+                .style(Style::default().fg(theme().text).bg(theme().panel_strong))
+                .alignment(Alignment::Center),
+            columns[index],
+        );
+    }
+}
+
+fn dashboard_stat_value(app: &TuiApp, index: usize) -> String {
+    match (app.metrics.source, index) {
+        (crate::model::local_observability::LocalMetricSource::Agents, 3) => app
+            .metrics
+            .series
+            .iter()
+            .filter_map(|series| series.agent_id.as_deref())
+            .collect::<HashSet<_>>()
+            .len()
+            .to_string(),
+        (crate::model::local_observability::LocalMetricSource::Services, 3) => app
+            .metrics
+            .families
+            .iter()
+            .find(|family| family.name.contains("worker_count"))
+            .and_then(|family| family.latest_value)
+            .map(format_metric_value)
+            .unwrap_or_else(|| "—".to_string()),
+        _ => "—".to_string(),
+    }
+}
+
+fn render_metric_dashboard_panel(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    panel_index: usize,
+    title: &str,
+    family_hint: &str,
+    source: &str,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let selected = panel_index == app.metrics.selected_panel;
+    let border = if selected {
+        theme().accent
+    } else {
+        theme().border_subtle
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border).bg(theme().surface))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(if selected {
+                    theme().accent_hover
+                } else {
+                    theme().text_secondary
+                })
+                .add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let family = app
+        .metrics
+        .families
+        .iter()
+        .find(|family| family.name.contains(family_hint));
+    let mut lines = Vec::new();
+    if let Some(family) = family {
+        if app
+            .metrics
+            .families
+            .get(app.metrics.selected_family)
+            .is_some_and(|selected| selected.name == family.name)
+            && !app.metrics.samples.is_empty()
+        {
+            lines.push(Line::from(Span::styled(
+                metric_sparkline(&app.metrics.samples, inner.width as usize),
+                Style::default().fg(theme().accent),
+            )));
+        }
+        let latest = family
+            .latest_value
+            .map(format_metric_value)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(Line::from(format!(
+            "latest {latest} · {} series",
+            family.series_count
+        )));
+        lines.push(Line::from(Span::styled(
+            fit(&family.name, inner.width as usize),
+            Style::default().fg(theme().text_muted),
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            format!("No {source} samples in this range"),
+            Style::default().fg(theme().text_muted),
+        )));
+    }
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(surface_style())
+            .wrap(Wrap { trim: true }),
+        inner,
+    );
 }
 
 fn render_metrics_notice(frame: &mut Frame<'_>, area: Rect, kind: NoticeKind, message: &str) {
@@ -7991,7 +8365,7 @@ fn render_ops_resources(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         ""
     };
     PaneHeader {
-        title: &format!("{} · Resources · {scope}{loading}", app.ops_subject.label()),
+        title: &format!("Configuration · {scope}{loading}"),
         focus: PaneFocus::Active,
         left_connector: Some("├"),
         ending: PaneEnding::Top,
@@ -8259,93 +8633,6 @@ fn render_ops_deployment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiAp
         }
     }
     render_ops_document(frame, area, app, "Deployment · Overview", lines);
-}
-
-fn render_ops_environment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let mut lines = ops_environment_status_lines(app);
-    if let Some(snapshot) = &app.ops_environment.snapshot {
-        lines.push(
-            SectionHeading {
-                title: "Selected environment",
-                detail: None,
-            }
-            .line(&theme()),
-        );
-        let diff_model_version = snapshot.diff_model_version.to_string();
-        let compatibility_check = snapshot.compatibility_check.to_string();
-        let version_check = snapshot.version_check.to_string();
-        let security_overrides = snapshot.security_overrides.to_string();
-        for (label, value) in [
-            ("Application", snapshot.application_name.as_str()),
-            ("Environment", snapshot.environment_name.as_str()),
-            ("Account ID", snapshot.account_id.as_str()),
-            ("Application ID", snapshot.application_id.as_str()),
-            ("Environment ID", snapshot.environment_id.as_str()),
-            ("Revision", snapshot.environment_revision.as_str()),
-            ("Diff model", diff_model_version.as_str()),
-            ("Compatibility", compatibility_check.as_str()),
-            ("Tool mode", snapshot.tool_compatibility_mode.as_str()),
-            ("Version check", version_check.as_str()),
-            ("Security", security_overrides.as_str()),
-        ] {
-            lines.push(
-                FieldRow {
-                    label,
-                    value,
-                    label_width: 16,
-                }
-                .line(&theme()),
-            );
-        }
-    }
-    render_ops_document(frame, area, app, "Environment · Overview", lines);
-}
-
-fn render_ops_server_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
-    let stable_id = app.selected_target.context.stable_id();
-    let provenance = app.selected_target.context.provenance();
-    let process = app.server.run.status.title();
-    let bound_ports = app.server.run.bound_ports.as_ref().map_or_else(
-        || "not observed".to_string(),
-        |ports| {
-            format!(
-                "router {} · custom {} · MCP {}",
-                ports.router_port, ports.custom_request_port, ports.mcp_port
-            )
-        },
-    );
-    let mut lines = vec![
-        SectionHeading {
-            title: "Selected server target",
-            detail: None,
-        }
-        .line(&theme()),
-    ];
-    for (label, value) in [
-        ("Target ID", stable_id.as_str()),
-        ("Endpoint", app.selected_target.context.server.as_str()),
-        ("Provenance", provenance),
-        ("Local process", process),
-        ("Bound ports", bound_ports.as_str()),
-    ] {
-        lines.push(
-            FieldRow {
-                label,
-                value,
-                label_width: 14,
-            }
-            .line(&theme()),
-        );
-    }
-    lines.push(Line::default());
-    lines.push(
-        Notice {
-            kind: NoticeKind::Info,
-            message: "Process and ports-file evidence is shown without claiming HTTP readiness",
-        }
-        .line(&theme()),
-    );
-    render_ops_document(frame, area, app, "Server · Overview", lines);
 }
 
 fn ops_environment_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
@@ -9656,19 +9943,20 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "esc",
             "Return from scrollback to the prior input owner",
         );
-    } else if app.ops_view == OpsView::Activity {
-        push_section_break(&mut lines, width, "Activity");
+    } else if app.ops.active() == OpsDestination::Oplog {
+        push_section_break(&mut lines, width, "Oplog");
         push_raw_help(
             &mut lines,
             width,
             "left / right",
-            "Timeline, Journal, or Live",
+            "Grouped or exact Entries",
         );
         push_raw_help(&mut lines, width, "up / down", "Select an oplog entry");
         push_raw_help(&mut lines, width, "ctrl+r", "Refresh the bounded snapshot");
-        push_raw_help(&mut lines, width, "ctrl+x v o", "Return to Overview");
-    } else if app.ops_view == OpsView::Metrics {
+        push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
+    } else if app.ops.active() == OpsDestination::Metrics {
         push_section_break(&mut lines, width, "Metrics");
+        push_raw_help(&mut lines, width, "left / right", "Dashboard or Explore");
         push_raw_help(
             &mut lines,
             width,
@@ -9676,14 +9964,16 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             "Focus family, series, or chart",
         );
         push_raw_help(&mut lines, width, "up / down", "Select family or series");
+        push_raw_help(&mut lines, width, "ctrl+s", "Switch Agents / Server source");
+        push_raw_help(&mut lines, width, "ctrl+t", "Cycle time range");
         push_raw_help(&mut lines, width, "ctrl+r", "Refresh now");
-        push_raw_help(&mut lines, width, "ctrl+x v o", "Return to Overview");
-    } else if app.ops_view == OpsView::Resources {
-        push_section_break(&mut lines, width, "Resources");
+        push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
+    } else if app.ops.active() == OpsDestination::Configuration {
+        push_section_break(&mut lines, width, "Configuration");
         push_raw_help(&mut lines, width, "tab / shift+tab", "Focus kinds or items");
         push_raw_help(&mut lines, width, "up / down", "Select a kind or item");
         push_raw_help(&mut lines, width, "ctrl+r", "Refresh now");
-        push_raw_help(&mut lines, width, "ctrl+x v o", "Return to Overview");
+        push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
     } else if app.ops_agents_focused() {
         push_action_section_for_app(
             &mut lines,
@@ -9826,18 +10116,16 @@ fn leader_key_hints(app: &TuiApp) -> Vec<KeyHint<'static>> {
         Some(LeaderGroup::Views) if app.active_workspace == Workspace::Dev => {
             &[("b", "Build & Deploy"), ("s", "Server"), ("r", "REPL")]
         }
-        Some(LeaderGroup::Views) if matches!(app.ops_subject.root(), OpsRootSubject::Agents) => {
-            &[("o", "Overview"), ("a", "Activity"), ("m", "Metrics")]
-        }
-        Some(LeaderGroup::Views)
-            if matches!(
-                app.ops_subject.root(),
-                OpsRootSubject::Deployment | OpsRootSubject::Environment
-            ) =>
-        {
-            &[("o", "Overview"), ("r", "Resources")]
-        }
-        Some(LeaderGroup::Views) => &[("o", "Overview"), ("m", "Metrics")],
+        Some(LeaderGroup::Views) => &[
+            ("o", "Overview"),
+            ("a", "Agents"),
+            ("l", "Oplog"),
+            ("s", "Stream"),
+            ("m", "Metrics"),
+            ("d", "Deployments"),
+            ("c", "Configuration"),
+            ("n/p", "Next/Previous"),
+        ],
     };
     entries
         .iter()
@@ -11478,14 +11766,18 @@ enum ActionId {
     ToggleAgentAutoRefresh,
     CycleAgentMode,
     ToggleAgentDetails,
-    CycleOpsView,
+    NextOpsDestination,
+    PreviousOpsDestination,
     CycleAgentFindScope,
     SelectDev,
     SelectOps,
+    SelectOpsOverview,
     SelectOpsAgents,
-    SelectOpsDeployment,
-    SelectOpsEnvironment,
-    SelectOpsServer,
+    SelectOpsOplog,
+    SelectOpsStream,
+    SelectOpsMetrics,
+    SelectOpsDeployments,
+    SelectOpsConfiguration,
     StartRepl,
     StopRepl,
     ForceStopRepl,
@@ -11580,7 +11872,15 @@ impl ActionDefinition {
     fn leader_path(self) -> Option<&'static str> {
         match self.id {
             ActionId::SelectDev | ActionId::SelectOps => Some("ctrl+x w"),
-            ActionId::CycleOpsView
+            ActionId::NextOpsDestination
+            | ActionId::PreviousOpsDestination
+            | ActionId::SelectOpsOverview
+            | ActionId::SelectOpsAgents
+            | ActionId::SelectOpsOplog
+            | ActionId::SelectOpsStream
+            | ActionId::SelectOpsMetrics
+            | ActionId::SelectOpsDeployments
+            | ActionId::SelectOpsConfiguration
             | ActionId::SelectDevBuildDeploy
             | ActionId::SelectDevServer
             | ActionId::SelectDevRepl => Some("ctrl+x v"),
@@ -11877,9 +12177,19 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::CycleOpsView,
-        label: "Cycle Ops View",
-        description: "Cycle the views available for the current Ops subject",
+        id: ActionId::NextOpsDestination,
+        label: "Next Ops Destination",
+        description: "Open the next Ops destination",
+        shortcut: None,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::Context(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::PreviousOpsDestination,
+        label: "Previous Ops Destination",
+        description: "Open the previous Ops destination",
         shortcut: None,
         category: ActionCategory::GoTo,
         palette_placement: PalettePlacement::Context(Workspace::Ops),
@@ -11917,6 +12227,16 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
+        id: ActionId::SelectOpsOverview,
+        label: "Ops / Overview",
+        description: "Open status and routing",
+        shortcut: None,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
         id: ActionId::SelectOpsAgents,
         label: "Ops / Agents",
         description: "Open collection",
@@ -11927,9 +12247,9 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::SelectOpsDeployment,
-        label: "Ops / Deployment",
-        description: "Open overview",
+        id: ActionId::SelectOpsOplog,
+        label: "Ops / Oplog",
+        description: "Open durable history",
         shortcut: None,
         category: ActionCategory::GoTo,
         palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
@@ -11937,9 +12257,9 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::SelectOpsEnvironment,
-        label: "Ops / Environment",
-        description: "Open overview",
+        id: ActionId::SelectOpsStream,
+        label: "Ops / Stream",
+        description: "Open live Agent events",
         shortcut: None,
         category: ActionCategory::GoTo,
         palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
@@ -11947,9 +12267,29 @@ const ACTIONS: &[ActionDefinition] = &[
         palette_visible: true,
     },
     ActionDefinition {
-        id: ActionId::SelectOpsServer,
-        label: "Ops / Server",
-        description: "Open overview",
+        id: ActionId::SelectOpsMetrics,
+        label: "Ops / Metrics",
+        description: "Open dashboards and Explore",
+        shortcut: None,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::SelectOpsDeployments,
+        label: "Ops / Deployments",
+        description: "Open revisions and compare",
+        shortcut: None,
+        category: ActionCategory::GoTo,
+        palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
+        execution_kind: ActionExecution::ViewNavigation,
+        palette_visible: true,
+    },
+    ActionDefinition {
+        id: ActionId::SelectOpsConfiguration,
+        label: "Ops / Configuration",
+        description: "Open environment, account, and server configuration",
         shortcut: None,
         category: ActionCategory::GoTo,
         palette_placement: PalettePlacement::ContextAndGlobal(Workspace::Ops),
@@ -12061,6 +12401,16 @@ fn palette_actions(scope: PaletteScope, app: &TuiApp) -> Vec<ActionDefinition> {
 
 fn action_visible_for_state(id: ActionId, app: &TuiApp) -> bool {
     match id {
+        ActionId::RefreshAgents
+        | ActionId::OpenAgentDatasetFilter
+        | ActionId::OpenAgentColumns
+        | ActionId::IncludeAgentMatches
+        | ActionId::ExcludeAgentMatches
+        | ActionId::LoadMoreAgents
+        | ActionId::ToggleAgentAutoRefresh
+        | ActionId::CycleAgentMode
+        | ActionId::ToggleAgentDetails
+        | ActionId::CycleAgentFindScope => app.ops_agents_focused(),
         ActionId::StartServer => matches!(
             app.server.run.status,
             ServerStatus::Stopped | ServerStatus::Failed
@@ -12990,7 +13340,14 @@ mod tests {
             buffer.cell((0, 1)).expect("missing title cell").symbol(),
             "├"
         );
-        for y in 2..21 {
+        assert_eq!(
+            buffer
+                .cell((0, 2))
+                .expect("missing pane title cell")
+                .symbol(),
+            "├"
+        );
+        for y in 3..21 {
             let symbol = buffer.cell((0, y)).expect("missing cell").symbol();
             assert_eq!(symbol, "│", "missing rail at row {y}");
         }
@@ -13013,22 +13370,60 @@ mod tests {
     }
 
     #[test]
-    fn leader_shortcut_switches_ops_views() {
+    fn leader_shortcut_switches_ops_destinations() {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
         app.handle_key(key(KeyCode::Char('m')));
         let frame = render_app_text(&app);
-        assert_eq!(app.ops_view, OpsView::Metrics);
-        assert!(frame.contains("Agents · Metrics"), "{frame}");
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
+        assert!(frame.contains("Metrics · [Dashboard] Explore"), "{frame}");
 
         app.handle_key(modified_key(KeyCode::Char('x'), KeyModifiers::CONTROL));
         app.handle_key(key(KeyCode::Char('v')));
         app.handle_key(key(KeyCode::Char('o')));
         let frame = render_app_text(&app);
-        assert_eq!(app.ops_view, OpsView::Overview);
-        assert!(frame.contains("Agents · Overview"), "{frame}");
+        assert_eq!(app.ops.active(), OpsDestination::Overview);
+        assert!(frame.contains("Operations status"), "{frame}");
+    }
+
+    #[test]
+    fn ops_tabs_are_stable_clickable_and_keep_the_active_tab_visible() {
+        let mut app = test_app();
+        let wide = render_app_text_at(&app, 140, 28);
+        for label in [
+            "Overview",
+            "Agents",
+            "Oplog",
+            "Stream",
+            "Metrics",
+            "Deployments",
+            "Configuration",
+        ] {
+            assert!(wide.contains(label), "missing {label}: {wide}");
+        }
+
+        app.ops.select(OpsDestination::Configuration);
+        let narrow = render_app_text_at(&app, 42, 20);
+        assert!(narrow.contains("[Configuration]"), "{narrow}");
+        assert!(narrow.contains('‹'), "{narrow}");
+
+        app.ops.select(OpsDestination::Overview);
+        render_app_text_at(&app, 100, 24);
+        let metrics = app
+            .geometry
+            .region(RegionKind::OpsTab(OpsDestination::Metrics))
+            .expect("metrics tab");
+        app.handle_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                metrics.x,
+                metrics.y,
+            ),
+            None,
+        );
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
     }
 
     #[test]
@@ -13104,7 +13499,10 @@ mod tests {
 
         assert_eq!(filtered_area, all_area);
         assert_eq!(context_area, all_area);
-        assert_eq!(all_area.height, (all.len() + 9) as u16);
+        assert_eq!(
+            all_area.height,
+            ((all.len() + 9) as u16).min(terminal.height * 85 / 100)
+        );
         assert!(all_area.width <= terminal.width * 85 / 100);
         assert!(all_area.height <= terminal.height * 85 / 100);
         assert_eq!(all_area.x, (terminal.width - all_area.width) / 2);
@@ -13146,7 +13544,7 @@ mod tests {
                 .count()
         };
 
-        assert_eq!(visible_count(ActionCategory::GoTo), 11);
+        assert_eq!(visible_count(ActionCategory::GoTo), 15);
         assert_eq!(visible_count(ActionCategory::Run), 12);
         assert_eq!(visible_count(ActionCategory::View), 7);
         assert_eq!(visible_count(ActionCategory::Explore), 8);
@@ -14664,49 +15062,38 @@ mod tests {
         app.handle_key(key(KeyCode::Char('m')));
         let frame = render_app_text_at(&app, 120, 28);
 
-        assert_eq!(app.ops_view, OpsView::Metrics);
-        assert!(frame.contains("Agents · Metrics"), "{frame}");
-        assert!(
-            frame.contains("No samples in the last 15 minutes"),
-            "{frame}"
-        );
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
+        assert!(frame.contains("Metrics · [Dashboard] Explore"), "{frame}");
+        assert!(frame.contains("No Agents samples in this range"), "{frame}");
         assert!(!frame.contains("golem.agent.invocations"), "{frame}");
     }
 
     #[test]
     fn empty_metrics_view_does_not_invent_focusable_series() {
         let mut app = test_app();
-        app.ops_view = OpsView::Metrics;
+        app.ops.select(OpsDestination::Metrics);
         render_app_text_at(&app, 120, 16);
 
         app.handle_key(key(KeyCode::Down));
 
-        assert_eq!(app.ops_view, OpsView::Metrics);
+        assert_eq!(app.ops.active(), OpsDestination::Metrics);
         let frame = render_app_text_at(&app, 120, 16);
         assert!(!frame.contains("golem.agent.invocations"), "{frame}");
     }
 
     #[test]
-    fn ops_view_cycle_is_subject_aware() {
+    fn ops_destination_cycle_is_stable() {
         let mut app = test_app();
-        assert_eq!(app.next_ops_view(), OpsView::Activity);
-
-        app.ops_subject = OpsSubject::Root(OpsRootSubject::Server);
-        assert_eq!(app.next_ops_view(), OpsView::Metrics);
-        app.ops_view = OpsView::Metrics;
-        assert_eq!(app.next_ops_view(), OpsView::Overview);
-
-        app.ops_subject = OpsSubject::Root(OpsRootSubject::Deployment);
-        app.ops_view = OpsView::Overview;
-        assert_eq!(app.next_ops_view(), OpsView::Resources);
-        assert!(!app.ops_view_supported(OpsView::Activity));
+        assert_eq!(app.ops.active().next(), OpsDestination::Oplog);
+        app.ops.select(OpsDestination::Configuration);
+        assert_eq!(app.ops.active().next(), OpsDestination::Overview);
+        assert_eq!(app.ops.active().previous(), OpsDestination::Deployments);
     }
 
     #[test]
     fn resources_render_as_kind_items_and_safe_details_at_all_sizes() {
         let mut app = test_app();
-        app.ops_subject = OpsSubject::Root(OpsRootSubject::Environment);
-        app.ops_view = OpsView::Resources;
+        app.ops.select(OpsDestination::Configuration);
         app.resources.scope = ResourceScope::Environment;
         app.resources.rows = vec![resources::ResourceRow {
             kind: "Secrets".to_string(),
@@ -14716,7 +15103,7 @@ mod tests {
         app.resources.rebuild_kinds();
 
         let frame = render_app_text_at(&app, 120, 30);
-        assert!(frame.contains("Environment · Resources"), "{frame}");
+        assert!(frame.contains("Configuration · Environment"), "{frame}");
         assert!(frame.contains("Secrets"), "{frame}");
         assert!(frame.contains("/payments/token"), "{frame}");
         assert!(frame.contains("revision 7"), "{frame}");
@@ -14727,19 +15114,14 @@ mod tests {
     }
 
     #[test]
-    fn live_activity_does_not_mislabel_oplog_polling_as_a_stream() {
+    fn oplog_representation_switches_between_grouped_and_entries() {
         let mut app = test_app();
         app.agents.agents = sample_agents();
-        app.ops_view = OpsView::Activity;
+        app.ops.select(OpsDestination::Oplog);
 
-        app.set_activity_representation(ActivityRepresentation::Live, None);
+        app.set_activity_representation(ActivityRepresentation::Entries, None);
 
-        assert!(
-            app.activity
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("transient Agent stream"))
-        );
+        assert_eq!(app.activity.representation, ActivityRepresentation::Entries);
         assert!(!app.activity.loading);
     }
 
@@ -14861,16 +15243,16 @@ mod tests {
     }
 
     #[test]
-    fn enter_opens_agent_subject_and_escape_unwinds() {
+    fn enter_opens_agent_route_and_escape_unwinds() {
         let mut app = test_app();
         app.active_workspace = Workspace::Ops;
         app.agents.agents = sample_agents();
 
         app.handle_key(key(KeyCode::Enter));
-        assert!(matches!(app.ops_subject, OpsSubject::Agent(_)));
+        assert!(matches!(app.ops.current_route(), OpsRoute::Agent(_)));
 
         app.handle_key(key(KeyCode::Esc));
-        assert_eq!(app.ops_subject, OpsSubject::Root(OpsRootSubject::Agents));
+        assert_eq!(app.ops.current_route(), &OpsRoute::Root);
     }
 
     #[test]
@@ -15170,10 +15552,10 @@ mod tests {
         assert_eq!(
             &ids[1..5],
             &[
+                ActionId::SelectOpsOverview,
                 ActionId::SelectOpsAgents,
-                ActionId::SelectOpsDeployment,
-                ActionId::SelectOpsEnvironment,
-                ActionId::SelectOpsServer,
+                ActionId::SelectOpsOplog,
+                ActionId::SelectOpsStream,
             ]
         );
         assert_eq!(matches[0].rank, 0);
@@ -15233,14 +15615,14 @@ mod tests {
         let mut app = test_app();
 
         app.handle_key(modified_key(KeyCode::Char('p'), KeyModifiers::CONTROL));
-        for character in "cycle ops view".chars() {
+        for character in "ops / oplog".chars() {
             app.handle_key(key(KeyCode::Char(character)));
         }
         app.handle_key(key(KeyCode::Enter));
 
         let frame = render_app_text(&app);
-        assert_eq!(app.ops_view, OpsView::Activity);
-        assert!(frame.contains("Agents · Activity"), "{frame}");
+        assert_eq!(app.ops.active(), OpsDestination::Oplog);
+        assert!(frame.contains("Oplog · [Grouped]"), "{frame}");
         assert!(frame.contains("Select an Agent"), "{frame}");
         assert!(!frame.contains("[ Commands ]"), "{frame}");
     }
@@ -16698,11 +17080,12 @@ mod tests {
     }
 
     fn test_app() -> TuiApp {
+        let mut ops = OpsApp::default();
+        ops.select(OpsDestination::Agents);
         TuiApp {
             should_quit: false,
             active_workspace: Workspace::Ops,
-            ops_subject: OpsSubject::Root(OpsRootSubject::Agents),
-            ops_view: OpsView::Overview,
+            ops,
             dev_primary: DevView::Repl,
             dev_focus: DevView::Repl,
             mode: ModeStack::default(),

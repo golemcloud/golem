@@ -21,39 +21,35 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub(in crate::tui) const SOFT_AGENT_LIMIT: usize = 10;
-pub(in crate::tui) const HARD_AGENT_LIMIT: usize = 50;
+pub(in crate::tui) const HARD_AGENT_LIMIT: usize = 20;
 pub(in crate::tui) const ENTRIES_PER_AGENT: u64 = 200;
 const MAX_CONCURRENCY: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum ActivityRepresentation {
-    Timeline,
-    Journal,
-    Live,
+    Grouped,
+    Entries,
 }
 
 impl ActivityRepresentation {
     pub(in crate::tui) fn next(self) -> Self {
         match self {
-            Self::Timeline => Self::Journal,
-            Self::Journal => Self::Live,
-            Self::Live => Self::Timeline,
+            Self::Grouped => Self::Entries,
+            Self::Entries => Self::Grouped,
         }
     }
 
     pub(in crate::tui) fn previous(self) -> Self {
         match self {
-            Self::Timeline => Self::Live,
-            Self::Journal => Self::Timeline,
-            Self::Live => Self::Journal,
+            Self::Grouped => Self::Entries,
+            Self::Entries => Self::Grouped,
         }
     }
 
     pub(in crate::tui) fn label(self) -> &'static str {
         match self {
-            Self::Timeline => "Timeline",
-            Self::Journal => "Journal",
-            Self::Live => "Live",
+            Self::Grouped => "Grouped",
+            Self::Entries => "Entries",
         }
     }
 }
@@ -105,7 +101,7 @@ impl Default for ActivityState {
             generation: 0,
             context_id: None,
             loading: false,
-            representation: ActivityRepresentation::Timeline,
+            representation: ActivityRepresentation::Grouped,
             agents: Vec::new(),
             entries: Vec::new(),
             failures: Vec::new(),
@@ -121,7 +117,7 @@ pub(in crate::tui) async fn load(
 ) -> anyhow::Result<ActivityRefreshPayload> {
     anyhow::ensure!(
         agents.len() <= HARD_AGENT_LIMIT,
-        "Activity is limited to {HARD_AGENT_LIMIT} Agents; narrow the scope or include fewer Agents"
+        "Oplog is limited to {HARD_AGENT_LIMIT} Agents; narrow the scope or include fewer Agents"
     );
     let results = futures_util::stream::iter(agents.iter().cloned().map(|agent| {
         let context = context.clone();
@@ -164,10 +160,11 @@ pub(in crate::tui) async fn load(
         }
     }
     entries.sort_by(|left, right| {
-        left.timestamp
-            .cmp(&right.timestamp)
+        right
+            .timestamp
+            .cmp(&left.timestamp)
             .then_with(|| left.agent_id.cmp(&right.agent_id))
-            .then_with(|| left.index.cmp(&right.index))
+            .then_with(|| right.index.cmp(&left.index))
     });
     Ok(ActivityRefreshPayload {
         agents,

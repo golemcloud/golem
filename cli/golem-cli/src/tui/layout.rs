@@ -14,6 +14,7 @@
 
 use super::interaction::InteractionMode;
 use super::navigation::{DevView, Workspace};
+use super::ops::OpsDestination;
 use ratatui::layout::Rect;
 use std::cell::RefCell;
 
@@ -119,6 +120,7 @@ impl TuiLayoutState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RegionKind {
     Workspace(Workspace),
+    OpsTab(OpsDestination),
     Footer,
     WorkspaceBody,
     DevViewTitle(DevView),
@@ -287,7 +289,7 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
     );
     match input.active_workspace {
         Workspace::Dev => add_dev_regions(body, &input, &mut regions),
-        Workspace::Ops => add_ops_regions(body, &input, &mut regions),
+        Workspace::Ops => add_ops_regions(ops_content_area(body), &input, &mut regions),
     }
     add_modal_regions(&input, &mut regions);
 
@@ -296,6 +298,14 @@ pub(super) fn compute(input: LayoutInput) -> LayoutSnapshot {
         workspace_body: body,
         footer,
         regions,
+    }
+}
+
+pub(super) fn ops_content_area(area: Rect) -> Rect {
+    Rect {
+        y: area.y.saturating_add(area.height.min(1)),
+        height: area.height.saturating_sub(1),
+        ..area
     }
 }
 
