@@ -213,3 +213,61 @@ async fn rpc_caller_resumes_after_suspending_mid_call(
     assert_eq!(returned, "approved");
     Ok(())
 }
+
+/// Goroutines call several ledgers at once; after a restart the replay serves
+/// those calls from the oplog instead of re-issuing them, so a second round
+/// leaves every ledger at exactly twice the amount.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn go_parallel_rpc_from_goroutines_replays(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("RpcAgent", "go-rpc-parallel");
+    let worker_id = executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+    let regions: Vec<String> = (0..8).map(|i| format!("parallel-{i}")).collect();
+
+    let first = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "call-parallel",
+            data_value!(regions.clone(), 3i64),
+        )
+        .await?
+        .into_typed::<Vec<i64>>()?;
+    assert_eq!(first, vec![3; 8]);
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+
+    let second = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "call-parallel",
+            data_value!(regions, 3i64),
+        )
+        .await?
+        .into_typed::<Vec<i64>>()?;
+    assert_eq!(
+        second,
+        vec![6; 8],
+        "replaying the first round must not record on the ledgers again"
+    );
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}

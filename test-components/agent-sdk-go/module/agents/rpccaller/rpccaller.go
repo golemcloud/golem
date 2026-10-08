@@ -11,6 +11,11 @@ type CallIn struct {
 	Amount int64
 }
 
+type CallParallelIn struct {
+	Regions []string
+	Amount  int64
+}
+
 type AwaitRemoteIn struct {
 	Name     string
 	OplogIdx int64
@@ -26,6 +31,9 @@ var (
 	// AtomicCall makes the same RPC inside durability.Atomically — checks whether a
 	// cross-agent call settles before an atomic region closes.
 	AtomicCall = Agent.Method[CallIn, int64]("atomic-call", golem.Desc("Record via a synchronous RPC inside an atomic region"))
+	// CallParallel records on every region's ledger at once, one goroutine per
+	// region, and returns the totals in region order.
+	CallParallel = Agent.Method[CallParallelIn, []int64]("call-parallel", golem.Desc("Record on several ledgers concurrently from goroutines"))
 	// AwaitRemote blocks on another agent's promise through a synchronous RPC,
 	// so the caller stays inside the call for as long as the promise is open.
 	AwaitRemote = Agent.Method[AwaitRemoteIn, string]("await-remote", golem.Desc("Await a PromiseAgent's promise through a synchronous RPC"))

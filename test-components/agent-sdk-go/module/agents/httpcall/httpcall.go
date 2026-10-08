@@ -8,6 +8,8 @@ type Id struct{ Name string }
 
 type CallbackIn struct{ Payload string }
 
+type RunParallelIn struct{ N uint16 }
+
 var Agent = golem.DefineAgent[Id](golem.Spec{
 	Name: "HttpAgent", Description: "Durable outbound HTTP for replay tests", Mode: golem.Durable,
 })
@@ -25,3 +27,12 @@ var AtomicTimedCallback = Agent.Method[CallbackIn, string]("atomic-timed-callbac
 // AtomicCallback makes the same call inside durability.Atomically — the minimal case
 // for "does an outbound HTTP call settle before an atomic region closes?".
 var AtomicCallback = Agent.Method[CallbackIn, string]("atomic-callback", golem.Desc("GET the callback endpoint inside an atomic region"))
+
+var RunParallel = Agent.Method[RunParallelIn, []string]("run-parallel", golem.Desc("POST n requests from n goroutines at once, each tagged with its X-Test id, and return the bodies in id order"))
+
+type SpanContextIn struct {
+	Key   string
+	Value string
+}
+
+var SpanContext = Agent.Method[SpanContextIn, string]("span-context", golem.Desc("Set an attribute on a custom span and read it back through the invocation context"))

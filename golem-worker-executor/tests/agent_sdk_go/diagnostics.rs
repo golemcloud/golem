@@ -382,3 +382,43 @@ async fn diag_sched_trace_with_snapshots(
     drop(executor);
     Ok(())
 }
+
+/// A custom span from the `invocation` package is part of the invocation
+/// context while it is open: an attribute set on it reads back through the
+/// current context, which has a trace and a parent, and is gone once the span
+/// finishes.
+#[test]
+#[tracing::instrument]
+#[timeout("2m")]
+async fn go_custom_span_attributes_read_back_through_the_context(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_go)
+        .store()
+        .await?;
+    let agent_id = agent_id!("HttpAgent", "go-span-1");
+    executor
+        .start_agent_with(&component.id, agent_id.clone(), HashMap::new(), Vec::new())
+        .await?;
+
+    let report = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "span-context",
+            data_value!("order", "o-1"),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(
+        report,
+        "trace=true value=o-1 parent=true started=true after=false"
+    );
+    Ok(())
+}
