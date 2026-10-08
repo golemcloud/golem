@@ -162,6 +162,28 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWithStore<U> for HasSelf<DurableWork
     }
 }
 
+fn current_monotonic_time<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> wasmtime::Result<Instant> {
+    accessor.with(|mut access| {
+        let mut view = access.get().as_wasi_view();
+        WasiMonotonicClockHost::now(&mut view.clocks())
+            .now_or_never()
+            .expect("the WASI monotonic clock must be immediately ready")
+    })
+}
+
+fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
+    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
+) -> wasmtime::Result<Duration> {
+    accessor.with(|mut access| {
+        let mut view = access.get().as_wasi_view();
+        WasiMonotonicClockHost::resolution(&mut view.clocks())
+            .now_or_never()
+            .expect("the WASI monotonic clock must be immediately ready")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::TimerDeadline;
@@ -195,26 +217,4 @@ mod tests {
         .await
         .unwrap();
     }
-}
-
-fn current_monotonic_time<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-) -> wasmtime::Result<Instant> {
-    accessor.with(|mut access| {
-        let mut view = access.get().as_wasi_view();
-        WasiMonotonicClockHost::now(&mut view.clocks())
-            .now_or_never()
-            .expect("the WASI monotonic clock must be immediately ready")
-    })
-}
-
-fn current_monotonic_resolution<U: Send + 'static, Ctx: WorkerCtx>(
-    accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
-) -> wasmtime::Result<Duration> {
-    accessor.with(|mut access| {
-        let mut view = access.get().as_wasi_view();
-        WasiMonotonicClockHost::resolution(&mut view.clocks())
-            .now_or_never()
-            .expect("the WASI monotonic clock must be immediately ready")
-    })
 }
