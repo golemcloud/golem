@@ -419,7 +419,7 @@ jobs:
 
   it-cli:
     name: it-cli (${{ matrix.group.shard }})
-    env:
+    env: &cli-test-env
       CARGO_BUILD_JOBS: 10
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -430,7 +430,6 @@ jobs:
       - build-cli-test-bins
       - build-golem-scala
       - builtin-artifacts
-      - merge-test-components
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -438,12 +437,11 @@ jobs:
         group:
           - { name: cli-integration-tests-agents, shard: agents }
           - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
-          - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
           - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
           - { name: cli-integration-tests-deploy, shard: deploy }
           - { name: cli-integration-tests-core, shard: core }
-    steps:
+    steps: &cli-test-steps
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
@@ -595,6 +593,26 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  it-cli-streaming:
+    name: it-cli (${{ matrix.group.shard }})
+    env: *cli-test-env
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-effect
+      - build-golem-ts
+      - build-cli-test-bins
+      - build-golem-scala
+      - builtin-artifacts
+      - merge-test-components
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
+    steps: *cli-test-steps
+
   consolidate-test-reports:
     name: consolidate-test-reports
     if: ${{ always() }}
@@ -604,6 +622,7 @@ jobs:
       - worker-tests
       - it
       - it-cli
+      - it-cli-streaming
     steps:
       - name: Download test reports for this attempt
         uses: actions/download-artifact@v8
@@ -1457,6 +1476,7 @@ jobs:
       - managed-xfs-tests
       - it
       - it-cli
+      - it-cli-streaming
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20
