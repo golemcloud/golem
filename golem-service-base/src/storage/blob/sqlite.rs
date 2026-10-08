@@ -457,19 +457,30 @@ impl BlobStorageBackend for SqliteBlobStorage {
         path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
         let directory = path.text()?;
-        let query =
-            sqlx::query_as("SELECT DISTINCT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
-                .bind(Self::namespace(namespace))
-                .bind(directory.clone());
+        let (descendants_start, descendants_end) = descendant_bounds(&directory);
+
+        // The blobs whose parent is the directory, and the rows of directories at any depth below
+        // it. A blob and a directory at one path give that path one time. At the root every row
+        // of a directory in the namespace is below the directory.
+        let query = sqlx::query_as::<_, (String, String)>(
+            r#"SELECT DISTINCT parent, name FROM blob_storage WHERE namespace = ? AND
+                     ((parent = ?) OR (is_directory = TRUE AND (? = '' OR (parent >= ? AND parent < ?))));
+            "#,
+        )
+        .bind(Self::namespace(namespace))
+        .bind(directory.clone())
+        .bind(directory)
+        .bind(descendants_start)
+        .bind(descendants_end);
 
         let result = self
             .pool
             .with_ro(target_label, op_label)
-            .fetch_all_as::<(String,), _>(query)
+            .fetch_all_as::<(String, String), _>(query)
             .await
             .map(|rows| {
                 rows.into_iter()
-                    .map(|row| blob_child_path(&directory, &row.0).into())
+                    .map(|(parent, name)| blob_child_path(&parent, &name).into())
                     .collect()
             })?;
 
