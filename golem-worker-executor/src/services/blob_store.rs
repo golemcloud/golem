@@ -1027,7 +1027,7 @@ mod tests {
     /// The filesystem backend gives the three errors of the path, so the test reads the real
     /// rules and breaks if the type of their error changes. The NUL rule is a rule of MinIO,
     /// and every backend applies it, so the filesystem backend gives it here too. The backend
-    /// also gives an error of its own: a write that the filesystem cannot do.
+    /// also gives an error of its own: a write of a path that is too long for the filesystem.
     #[test]
     async fn blob_store_error_makes_an_error_of_the_input_permanent_and_a_backend_error_transient()
     {
@@ -1036,24 +1036,23 @@ mod tests {
         let namespace = BlobStorageNamespace::CustomStorage {
             environment_id: EnvironmentId::new(),
         };
-        let put = |path: &'static str| {
+        let put = |path: String| {
             let namespace = namespace.clone();
             let storage = &storage;
             async move {
                 storage
-                    .put_raw("test", "put-raw", namespace, Path::new(path), &[1])
+                    .put_raw("test", "put-raw", namespace, Path::new(&path), &[1])
                     .await
             }
         };
 
-        // A blob at `file` makes `file/blob` a path that the filesystem cannot write, because
-        // the parent of the blob is a file and not a directory.
-        put("file").await.unwrap();
-        let backend = blob_store_error(put("file/blob").await.unwrap_err());
+        // The backend writes a name of 3000 bytes as 6000 hex characters, so the path on disk
+        // is longer than the filesystem accepts.
+        let backend = blob_store_error(put("x".repeat(3000)).await.unwrap_err());
         let names = [
-            put("../escape").await.unwrap_err(),
-            put("/escape").await.unwrap_err(),
-            put("a\0b").await.unwrap_err(),
+            put("../escape".to_string()).await.unwrap_err(),
+            put("/escape".to_string()).await.unwrap_err(),
+            put("a\0b".to_string()).await.unwrap_err(),
             BlobRangeError { start: 3, end: 2 }.into(),
         ]
         .map(blob_store_error);
