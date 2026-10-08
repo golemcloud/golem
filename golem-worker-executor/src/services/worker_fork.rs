@@ -1861,6 +1861,16 @@ mod tests {
         ));
     }
 
+    /// The manual admission variant fits in the niche of the oplog entry, so a kept entry is no
+    /// larger than the oplog entry that the copy kept before.
+    #[test]
+    fn a_kept_update_entry_has_the_size_of_an_oplog_entry() {
+        assert_eq!(
+            std::mem::size_of::<KeptUpdateEntry>(),
+            std::mem::size_of::<OplogEntry>()
+        );
+    }
+
     #[test]
     fn a_fork_cancels_a_manual_update_invocation_that_no_pending_update_paired_after_the_queue() {
         let (cancelled, _) = fork_updates(
