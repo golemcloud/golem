@@ -2545,6 +2545,8 @@ async fn wait_for_promise_checkpoint_to_await(
 ) -> anyhow::Result<()> {
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
+            // A resident owner can park with a buffered Start; oplog reads only see commits.
+            executor.commit_oplog(worker_id).await?;
             let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
             let checkpoint_parent = oplog.iter().find_map(|entry| {
                 (entry.oplog_index == checkpoint.oplog_idx).then(|| match &entry.entry {

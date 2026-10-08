@@ -166,6 +166,27 @@ New evidence is kept separately under `tmp/gol706-final-merge/`. Earlier passes 
 are pre-merge evidence only. GOL-761/GOL-769 remain approved follow-ups; new correctness
 failures in this integration are not waived by those follow-ups.
 
+### Typed-input checkpoint follow-up
+
+Latest main was merged again in [d4eb65454](https://github.com/golemcloud/golem/commit/d4eb65454),
+and PR fixes were pulled through [33d790541](https://github.com/golemcloud/golem/commit/33d790541).
+The earlier 45-test integration run, clippy and engine compatibility checks completed
+successfully, but they do not certify this later source snapshot.
+
+The typed-input middleware test's provider checkpoint timeout reproduced in three
+isolated runs on the latest PR. The decorated provider entered `get_promise_result`,
+but its Start remained buffered while the test read only persisted oplog entries.
+The direct case happened to suspend and flush; suspension is not a prerequisite for
+this restart/content test. Its checkpoint helper now explicitly commits before each
+read, using the existing test utility. The timeout, wait-entry predicate, restart,
+exact content checks and duplicate-announcement checks are unchanged.
+
+Validation: the previously failing test passes three times with the fix; logs are in
+`tmp/gol706-typed-input-repro/fixed-{1,2,3}.log`. Oracle approved the narrow change
+and judged it ON TRACK; bug-finder `gol706-checkpoint-persistence` run 1 found no bugs.
+No production change or lifecycle refactor was needed. Full PR CI and the remaining
+final integration sign-off are still separate gates.
+
 ## M1 — establish what must change and where it integrates
 
 1. Recheck GOL-708 [PR4034](https://github.com/golemcloud/golem/pull/4034) and GOL-710
