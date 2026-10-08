@@ -215,7 +215,8 @@ const RESERVED_PARAM_NAMES: &[&str] = &[
     "configValue",
 ];
 
-const GUEST_RESERVED_PARAM_NAMES: &[&str] = &["__invocation", "__decoded"];
+const GUEST_RESERVED_PARAM_NAMES: &[&str] =
+    &["__invocation", "__decoded", "__inputCodec", "__outputCodec"];
 
 /// Member names a generated named type cannot use for a case-class field or a
 /// companion case object / case class, because they would clash with (or fail
@@ -907,15 +908,47 @@ impl ScalaBridgeGenerator {
             "final class {class_name} private[{object_name}] (resolved: {GUEST_REMOTE_AGENT_CLIENT}) {{"
         ));
         writer.indent();
+        let direct = self.guest_direct_input(&method.input_schema);
+        let parameter_type = if direct {
+            "_root_.golem.schema.wire.WitSchemaValueTree"
+        } else {
+            GUEST_SCHEMA_VALUE_TYPE
+        };
+        if direct {
+            self.write_guest_input_codec(writer, &method.input_schema)?;
+        }
         writer.line(format!(
-            "private def methodParameters({param_decls}): {GUEST_SCHEMA_VALUE_TYPE} = {{"
+            "private def methodParameters({param_decls}): {parameter_type} = {{"
         ));
         writer.indent();
-        self.write_param_record(writer, &method.input_schema)?;
+        if direct {
+            writer.line(format!(
+                "__inputCodec.encodeValue(_root_.scala.Vector({invoke_args}))"
+            ));
+        } else {
+            self.write_param_record(writer, &method.input_schema)?;
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
 
+        let async_encoder = if direct {
+            "_root_.golem.host.SchemaWireInterop.ownedValueTreeToJsAsync".to_string()
+        } else {
+            format!("{GUEST_CODEC}.encodeValueAsync")
+        };
+        let sync_encoder = if direct {
+            "_root_.golem.host.SchemaWireInterop.valueTreeToJs".to_string()
+        } else {
+            format!("{GUEST_CODEC}.encodeValue")
+        };
+
+        if let OutputSchema::Single(ty) = &method.output_schema {
+            if self.guest_direct_type(ty, &mut Vec::new()) {
+                let ty = self.type_reference(ty)?;
+                writer.line(format!("private lazy val __outputCodec = _root_.golem.schema.wire.ConcreteCodec.derived[{ty}]"));
+            }
+        }
         let (ret_ty, decode_block) = self.guest_output_return(&method.output_schema)?;
         let uses_streams = method.uses_streams(&self.agent_type.schema);
         let result_map = if uses_streams { "flatMap" } else { "map" };
@@ -931,7 +964,7 @@ impl ScalaBridgeGenerator {
             ));
             writer.indent();
             writer.line(format!(
-                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
                 "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).flatMap {{ __invocation =>"
@@ -964,7 +997,7 @@ impl ScalaBridgeGenerator {
             writer.line(format!("def apply({param_decls}): {FUTURE}[{ret_ty}] = {{"));
             writer.indent();
             writer.line(format!(
-                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
                 "resolved.asyncInvokeAndAwait({method_name_lit}, parameters).{result_map} {{ __result =>"
@@ -985,7 +1018,7 @@ impl ScalaBridgeGenerator {
             ));
             writer.indent();
             writer.line(format!(
-                "{GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "{async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
                 "{GUEST_RUNTIME_PKG}.FutureInterop.fromEither(resolved.cancelableAsyncInvokeAndAwaitWithMetadata({method_name_lit}, parameters)).map {{ __invocation =>"
@@ -1012,7 +1045,7 @@ impl ScalaBridgeGenerator {
             ));
             writer.indent();
             writer.line(format!(
-                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {GUEST_CODEC}.encodeValueAsync(methodParameters({invoke_args})).flatMap {{ parameters =>"
+                "var __underlying = _root_.scala.Option.empty[_root_.golem.runtime.rpc.CancellationToken]\nvar __cancelled = false\nval __token = _root_.golem.runtime.rpc.CancellationToken.fromFunction(() => {{ __cancelled = true; __underlying.foreach(_.cancel()) }})\nval __future = {async_encoder}(methodParameters({invoke_args})).flatMap {{ parameters =>"
             ));
             writer.line(format!(
                 "val (__rawFuture, __rawToken) = resolved.cancelableAsyncInvokeAndAwait({method_name_lit}, parameters)\n__underlying = _root_.scala.Some(__rawToken)\nif (__cancelled) __rawToken.cancel()\n__rawFuture.{result_map} {{ __result =>"
@@ -1044,7 +1077,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
         ));
         if ephemeral {
             writer.line(format!(
@@ -1074,7 +1107,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
         ));
         if ephemeral {
             writer.line(format!(
@@ -1099,7 +1132,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "val parameters = {GUEST_CODEC}.encodeValue(methodParameters({invoke_args}))"
+            "val parameters = {sync_encoder}(methodParameters({invoke_args}))"
         ));
         if ephemeral {
             writer.line(format!(
@@ -1187,11 +1220,26 @@ impl ScalaBridgeGenerator {
             .map(|(name, _)| name.clone())
             .collect::<Vec<_>>();
 
+        let direct = self.guest_direct_input(&input);
+        let parameter_type = if direct {
+            "_root_.golem.schema.wire.WitSchemaValueTree"
+        } else {
+            GUEST_SCHEMA_VALUE_TYPE
+        };
+        if direct {
+            self.write_guest_input_codec(writer, &input)?;
+        }
         writer.line(format!(
-            "private def constructorParameters({param_decls}): {GUEST_SCHEMA_VALUE_TYPE} = {{"
+            "private def constructorParameters({param_decls}): {parameter_type} = {{"
         ));
         writer.indent();
-        self.write_param_record(writer, &input)?;
+        if direct {
+            writer.line(format!(
+                "__inputCodec.encodeValue(_root_.scala.Vector({invoke_args}))"
+            ));
+        } else {
+            self.write_param_record(writer, &input)?;
+        }
         writer.dedent();
         writer.line("}");
         writer.blank();
@@ -1364,8 +1412,13 @@ impl ScalaBridgeGenerator {
         phantom_expr: &str,
         config_expr: &str,
     ) {
+        let encoder = if self.guest_direct_input(&self.agent_type.constructor.input_schema) {
+            "_root_.golem.host.SchemaWireInterop.valueTreeToJs".to_string()
+        } else {
+            format!("{GUEST_CODEC}.encodeValue")
+        };
         writer.line(format!(
-            "val constructorPayload = {GUEST_CODEC}.encodeValue(constructorParameters({invoke_args}))"
+            "val constructorPayload = {encoder}(constructorParameters({invoke_args}))"
         ));
         writer.line(format!(
             "{GUEST_REMOTE_AGENT_CLIENT}.resolve(agentTypeName, constructorPayload, {phantom_expr}, {config_expr}) match {{"
@@ -1393,6 +1446,14 @@ impl ScalaBridgeGenerator {
             OutputSchema::Unit => Ok((UNIT.to_string(), "()".to_string())),
             OutputSchema::Single(ty) => {
                 let ret_ty = self.type_reference(ty)?;
+                if self.guest_direct_type(ty, &mut Vec::new()) {
+                    return Ok((
+                        ret_ty,
+                        format!(
+                            "val __tree = __result.getOrElse(throw {GUEST_CLIENT_ERROR}(\"Missing result value for an await invocation\"))\n__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
+                        ),
+                    ));
+                }
                 let decode = self.rewrite_guest_runtime_refs(self.decode_expr("__value", ty, 0)?);
                 let block = format!(
                     "val __tree = __result.getOrElse(throw {GUEST_CLIENT_ERROR}(\"Missing result value for an await invocation\"))\nval __value = {GUEST_CODEC}.decodeValue(__tree)\n{decode}"
@@ -1400,6 +1461,96 @@ impl ScalaBridgeGenerator {
                 Ok((ret_ty, block))
             }
         }
+    }
+
+    fn guest_direct_input(&self, input: &InputSchema) -> bool {
+        self.input_multimodal(input)
+            .is_ok_and(|value| value.is_none())
+            && user_supplied_fields(input)
+                .iter()
+                .all(|field| self.guest_direct_type(&field.schema, &mut Vec::new()))
+    }
+
+    // ConcreteCodec derivation follows Scala structure. Shapes whose Scala
+    // representation does not identify the wire node retain schema-directed codecs.
+    fn guest_direct_type(&self, ty: &SchemaType, active: &mut Vec<SchemaType>) -> bool {
+        if active.contains(ty) {
+            return true;
+        }
+        if unstructured_text_restrictions(self.type_naming.graph(), ty)
+            .is_ok_and(|value| value.is_some())
+            || unstructured_binary_restrictions(self.type_naming.graph(), ty)
+                .is_ok_and(|value| value.is_some())
+            || matches!(
+                self.type_naming.type_name_for_type(ty),
+                Some(ScalaTypeName::Remapped(_))
+            )
+        {
+            return false;
+        }
+        active.push(ty.clone());
+        let eligible = match self.resolve_ref(ty) {
+            SchemaType::Bool { .. }
+            | SchemaType::S8 { .. }
+            | SchemaType::S16 { .. }
+            | SchemaType::S32 { .. }
+            | SchemaType::S64 { .. }
+            | SchemaType::U8 { .. }
+            | SchemaType::U16 { .. }
+            | SchemaType::U32 { .. }
+            | SchemaType::U64 { .. }
+            | SchemaType::F32 { .. }
+            | SchemaType::F64 { .. }
+            | SchemaType::Char { .. }
+            | SchemaType::String { .. }
+            | SchemaType::Datetime { .. }
+            | SchemaType::Enum { .. } => true,
+            SchemaType::Record { fields, .. } => fields
+                .iter()
+                .all(|field| self.guest_direct_type(&field.body, active)),
+            SchemaType::Variant { cases, .. } => {
+                cases.iter().any(|case| case.payload.is_some())
+                    && cases.iter().all(|case| {
+                        case.payload
+                            .as_ref()
+                            .is_none_or(|ty| self.guest_direct_type(ty, active))
+                    })
+            }
+            SchemaType::List { element, .. } | SchemaType::Option { inner: element, .. } => {
+                self.guest_direct_type(element, active)
+            }
+            SchemaType::Map { key, value, .. } => {
+                self.guest_direct_type(key, active) && self.guest_direct_type(value, active)
+            }
+            SchemaType::Tuple { elements, .. } => {
+                elements.iter().all(|ty| self.guest_direct_type(ty, active))
+            }
+            SchemaType::Result { spec, .. } => match (&spec.err, &spec.ok) {
+                (Some(err), Some(ok)) => {
+                    self.guest_direct_type(err, active) && self.guest_direct_type(ok, active)
+                }
+                _ => false,
+            },
+            SchemaType::Stream {
+                inner: Some(inner), ..
+            } => self.guest_direct_type(inner, active),
+            _ => false,
+        };
+        active.pop();
+        eligible
+    }
+
+    fn write_guest_input_codec(
+        &self,
+        writer: &mut ScalaWriter,
+        input: &InputSchema,
+    ) -> anyhow::Result<()> {
+        let fields = user_supplied_fields(input).iter().map(|field| {
+            let ty = self.type_reference(&field.schema)?;
+            Ok(format!("{} -> _root_.golem.schema.wire.ConcreteCodec.derived[{ty}].asInstanceOf[_root_.golem.schema.wire.ConcreteCodec[Any]]", scala_string_literal(&field.name)))
+        }).collect::<anyhow::Result<Vec<_>>>()?;
+        writer.line(format!("private lazy val __inputCodec = _root_.golem.schema.wire.ConcreteCodec.record(_root_.scala.Vector({}))", fields.join(", ")));
+        Ok(())
     }
 
     /// Emits the `<Agent>Client` object: configuration helpers, the per-method

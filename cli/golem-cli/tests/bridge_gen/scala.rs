@@ -388,6 +388,68 @@ class StreamRuntimeTest extends munit.FunSuite {
 /// Recursive stream leaves retain their structural position and compile to
 /// nested `AgentStream` values in both inputs and outputs.
 #[test]
+fn public_value_validation_does_not_skip_nested_checks() {
+    let pkg = GeneratedPackage::new(agent(
+        "ValidationAgent",
+        "scala",
+        vec![],
+        vec![],
+        vec![],
+        AgentMode::Durable,
+    ));
+    run_sbt_test(
+        pkg.package_dir().as_path(),
+        r#"
+package golem.bridge.runtime
+
+class StreamRuntimeTest extends munit.FunSuite {
+  import SchemaValue.*
+  test("buffered JSON rendering preserves escaping, order and nested signed zero") {
+    val json = golem.bridge.runtime.json.Json.parse("""{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""").toOption.get
+    assertEquals(json.render, """{"key\"\\":[-0,{"tab":"\t\n😀","integer":18446744073709551615}],"empty":[],"tail":{}}""")
+    val tagged = TupleValue(List(F32Value(-0.0f), F64Value(Double.NaN), U64Value(-1L), StringValue("\"\\\n😀")))
+    assertEquals(SchemaValueCodec.toJson(tagged).render, """{"kind":"tuple","value":{"elements":[{"kind":"f32","value":-0},{"kind":"f64","value":{"$float":"nan"}},{"kind":"u64","value":"18446744073709551615"},{"kind":"string","value":"\"\\\n😀"}]}}""")
+  }
+  test("validation-only traversal retains late checks and per-call budgets") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"record","value":{"fields":[{"name":"bytes","body":{"kind":"list","value":{"element":{"kind":"u8","value":{}}}}},{"name":"maybe","body":{"kind":"option","value":{"inner":{"kind":"tuple","value":{"elements":[{"kind":"string","value":{}},{"kind":"u16","value":{}}]}}}}}]}}}""")
+    val value = RecordValue(List(ListValue(List(U8Value(0), U8Value(251), U8Value(255))), OptionValue(Some(TupleValue(List(StringValue("árvíz😀"), U16Value(65535)))))))
+    (0 until 2).foreach { _ => assertEquals(codec.decode(codec.encode(value)), value) }
+    assertEquals(codec.encodeApplication(value).render, """{"bytes":[0,251,255],"maybe":["árvíz😀",65535]}""")
+    val invalid = RecordValue(List(ListValue(List(U8Value(255))), OptionValue(Some(TupleValue(List(StringValue("ok"), U16Value(65536)))))))
+    intercept[BridgeException](codec.encode(invalid))
+    intercept[BridgeException](codec.decode(SchemaValueCodec.toJson(invalid)))
+  }
+  test("union discriminator still observes application JSON during validation") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"list","value":{"element":{"kind":"union","value":{"spec":{"branches":[{"tag":"prefix","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"ok:"}}}]}}}}}}""")
+    val value = ListValue(List(UnionValue("prefix", StringValue("ok:árvíz"))))
+    assertEquals(codec.decode(codec.encode(value)), value)
+    intercept[BridgeException](codec.encode(ListValue(List(UnionValue("prefix", StringValue("wrong"))))))
+  }
+  test("stream aliases are rejected with fresh bookkeeping on repeated calls") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"list","value":{"element":{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}}}}""")
+    val stream = StreamReferenceValue(None, Some("stable-token"), None)
+    val value = ListValue(List(stream))
+    (0 until 2).foreach { _ => assertEquals(codec.decode(codec.encode(value)), value) }
+    intercept[BridgeException](codec.encode(ListValue(List(stream, stream))))
+    assertEquals(codec.decode(codec.encode(value)), value)
+  }
+  test("prepared recursive schemas share no invocation state and retain numeric restrictions") {
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"ref","value":{"id":"node"}},"defs":[{"id":"node","body":{"kind":"record","value":{"fields":[{"name":"n","body":{"kind":"u8","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}},{"name":"children","body":{"kind":"list","value":{"element":{"kind":"ref","value":{"id":"node"}}}}}]}}}]}""")
+    val leaf = RecordValue(List(U8Value(10), ListValue(Nil)))
+    val value = RecordValue(List(U8Value(20), ListValue(List(leaf))))
+    val calls = (0 until 8).map(_ => scala.concurrent.Future(codec.decode(codec.encode(value)))(scala.concurrent.ExecutionContext.global))
+    calls.foreach(call => assertEquals(scala.concurrent.Await.result(call, scala.concurrent.duration.Duration(10, "seconds")), value))
+    for (invalid <- List(9, 21)) {
+      intercept[BridgeException](codec.encode(RecordValue(List(U8Value(15), ListValue(List(RecordValue(List(U8Value(invalid), ListValue(Nil)))))))))
+    }
+    assertEquals(codec.decode(codec.encode(value)), value)
+  }
+}
+"#,
+    );
+}
+
+#[test]
 fn recursive_stream_agent_compiles() {
     let tree = SchemaType::record(vec![named_field(
         "children",
@@ -984,6 +1046,65 @@ fn guest_only_temporary_parameter_names_are_mode_scoped() {
 /// depend on the Scala SDK's guest runtime instead, so the generated client must
 /// not refer to the external-only `golem.bridge.runtime` package.
 #[test]
+fn guest_direct_clients_use_prepared_concrete_codecs_for_recursive_values() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let pkg = GeneratedPackage::new_with_mode(
+            agent(
+                "DirectAgent",
+                "scala",
+                vec![field("name", SchemaType::string())],
+                vec![
+                    method(
+                        "echo",
+                        vec![field("tree", ref_to("tree"))],
+                        Some(ref_to("tree")),
+                    ),
+                    method(
+                        "bytes",
+                        vec![field("__inputCodec", SchemaType::list(SchemaType::u8()))],
+                        Some(SchemaType::list(SchemaType::u8())),
+                    ),
+                    method(
+                        "fixed",
+                        vec![field("bytes", SchemaType::fixed_list(SchemaType::u8(), 2))],
+                        Some(SchemaType::fixed_list(SchemaType::u8(), 2)),
+                    ),
+                ],
+                vec![def(
+                    "tree",
+                    SchemaType::record(vec![named_field(
+                        "children",
+                        SchemaType::list(SchemaType::option(ref_to("tree"))),
+                    )]),
+                )],
+                mode,
+            ),
+            ScalaBridgeMode::GuestWasmRpc,
+        );
+        let source = std::fs::read_to_string(
+            pkg.package_dir()
+                .join("src/main/scala/golem/bridge/client/direct_agent/DirectAgentClient.scala"),
+        )
+        .unwrap();
+        assert!(source.contains(
+            "private lazy val __inputCodec = _root_.golem.schema.wire.ConcreteCodec.record"
+        ));
+        assert!(
+            source.contains("ConcreteCodec.derived[_root_.golem.bridge.client.direct_agent.Tree]")
+        );
+        assert!(source.contains(
+            "__outputCodec.decode(_root_.golem.host.SchemaWireInterop.valueTreeFromJs(__tree))"
+        ));
+        assert!(source.contains("ownedValueTreeToJsAsync(methodParameters("));
+        assert!(source.contains(
+            "__inputCodec_2: _root_.scala.collection.immutable.List[_root_.golem.UByte]"
+        ));
+        assert!(source.contains("SchemaRpcCodec.encodeValueAsync(methodParameters(bytes))"));
+        compile_guest_if_enabled(pkg.package_dir().as_path());
+    }
+}
+
+#[test]
 fn guest_wasm_rpc_does_not_emit_external_rest_runtime_references() {
     let pkg = GeneratedPackage::new_with_mode(
         agent(
@@ -1107,8 +1228,11 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains("resolved.asyncInvokeAndAwait"));
     assert!(client_source.contains("resolved.cancelableAsyncInvokeAndAwait"));
     assert!(client_source.contains("_root_.golem.runtime.rpc.CancellationToken"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.encodeValue"));
-    assert!(client_source.contains("_root_.golem.runtime.rpc.SchemaRpcCodec.decodeValue"));
+    assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeToJs"));
+    assert!(client_source.contains("_root_.golem.host.SchemaWireInterop.valueTreeFromJs"));
+    assert!(client_source.contains("ConcreteCodec.derived[_root_.golem.UInt]"));
+    assert!(!client_source.contains("SchemaRpcCodec.encodeValue"));
+    assert!(!client_source.contains("SchemaRpcCodec.decodeValue"));
     assert!(!client_source.contains("Bridge.createAgent"));
     assert!(!client_source.contains("golem.bridge.runtime"));
 
