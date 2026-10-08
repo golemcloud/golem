@@ -690,16 +690,20 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
 - A `Start` claim that finds no match decides the missing `Start` only when no active entity
-  body owns the entry at the cursor head. `head_owner` (`cursor.rs`) is the one rule for the
-  owner of the head entry, shared with `check_parked_positional_read`: the parent of a nested
-  `Start`, or the entity attribution of any other entry. A tool call claims its entity `Start`
-  inline, but the cursor drains the body's first entries only when the spawned supervisor is
-  first polled. A clock call of the guest that claims in that gap stops at the body's unclaimed
-  `Start`. While `reconstruction_claims.is_body_active(owner)` holds, the claim is
-  `Blocked(BlockedOn::ActiveBody)` and waits for cursor progress or a change of the active-body
-  set (`CursorTx::active_body_owning_head`). It then gets `Claimed`, `ReplayEnded` or a strict
-  divergence. A body that settles without consuming the head, a top-level sibling `Start` at the
-  head, and a claim issued from inside the owning body stay strict divergence at once. The path
+  body encloses the entry at the cursor head. A tool call claims its entity `Start` inline, but
+  the cursor drains the body's first entries only when the spawned supervisor is first polled. A
+  clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
+  `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
+  `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
+  any other entry. The pure rule `missing_start_waits_for` decides over the head's parent chain,
+  the claim's parent chain and the active-body set: the claim waits for the nearest active body
+  that encloses the head (also through a scope of that body), unless the claim is issued from
+  inside that body or its chain contains a live append. `CursorTx::active_body_owning_head` only
+  reads those chains, down to the earliest active body, and subscribes to the active-body set.
+  A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
+  change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
+  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
+  at the head, and a claim from inside the owning body stay strict divergence at once. The path
   where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
