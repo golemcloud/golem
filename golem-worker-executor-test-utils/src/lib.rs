@@ -1745,6 +1745,16 @@ impl TestWorkerExecutor {
             .diverge_next_completed_entity_reconstruction(agent_id.clone());
     }
 
+    /// Pauses the spawned supervisor of the next completed historical entity reconstruction
+    /// before it polls its body or its recorded terminal.
+    pub fn gate_next_completed_reconstruction_supervisor(
+        &self,
+        agent_id: &AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        self.additional_test_deps
+            .gate_next_completed_reconstruction_supervisor(agent_id.clone())
+    }
+
     /// Pauses the next historical entity reconstruction immediately after its resolver-owned
     /// reconstruction claim becomes visible.
     pub fn gate_next_entity_reconstruction_claim(
@@ -5934,6 +5944,8 @@ pub struct AdditionalTestDeps {
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     entity_reconstruction_claim_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    completed_supervisor_gates:
+        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
     /// One-shot gates pausing an agent's next replayed accessor-call admission
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
@@ -6001,6 +6013,7 @@ impl AdditionalTestDeps {
             entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            completed_supervisor_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6153,6 +6166,22 @@ impl AdditionalTestDeps {
         })
     }
 
+    fn gate_next_completed_reconstruction_supervisor(
+        &self,
+        agent_id: AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(EntityReconstructionClaimGate {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        self.completed_supervisor_gates
+            .lock()
+            .unwrap()
+            .insert(agent_id, gate.clone());
+        EntityReconstructionClaimGateHandle { entered_rx, gate }
+    }
+
     fn gate_next_entity_reconstruction_claim(
         &self,
         agent_id: AgentId,
@@ -6176,6 +6205,7 @@ impl AdditionalTestDeps {
         Some(Arc::new(TestEntityReconstructionClaimHook {
             agent_id,
             gates: self.entity_reconstruction_claim_gates.clone(),
+            supervisor_gates: self.completed_supervisor_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook,
@@ -7027,6 +7057,7 @@ mod replay_admission_gate_tests {
 struct TestEntityReconstructionClaimHook {
     agent_id: AgentId,
     gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    supervisor_gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
 }
 
 #[async_trait]
@@ -7043,6 +7074,20 @@ impl golem_worker_executor::workerctx::EntityReconstructionClaimHook
                 .acquire()
                 .await
                 .expect("entity reconstruction claim gate was closed")
+                .forget();
+        }
+    }
+
+    async fn before_completed_supervisor(&self, start_index: OplogIndex) {
+        let gate = self.supervisor_gates.lock().unwrap().remove(&self.agent_id);
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(start_index);
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("completed reconstruction supervisor gate was closed")
                 .forget();
         }
     }

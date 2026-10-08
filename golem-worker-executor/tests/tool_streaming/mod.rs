@@ -8623,6 +8623,7 @@ enum CompletedReconstructionExclusiveCase {
     Success,
     Divergence,
     ExecutorShutdownDuringBodyValidation,
+    CrashReplaySupervisorWindow,
 }
 
 async fn run_completed_reconstruction_exclusive_p2_case(
@@ -8678,6 +8679,9 @@ async fn run_completed_reconstruction_exclusive_p2_case(
         CompletedReconstructionExclusiveCase::Divergence => "exclusive-p2-divergence",
         CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
             "exclusive-p2-body-validation-shutdown"
+        }
+        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
+            "exclusive-p2-crash-replay-window"
         }
     };
     let agent_id = agent_id!("ToolStreamingCaller", case_name);
@@ -8736,6 +8740,24 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                 .await?;
         }
 
+        if case == CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow {
+            let mut supervisor = executor.gate_next_completed_reconstruction_supervisor(&worker_id);
+            let (crash, ()) = tokio::join!(executor.simulated_crash(&worker_id), async {
+                original_success.abort_as_restart();
+            });
+            crash?;
+            drop(original_success);
+            let start =
+                tokio::time::timeout(std::time::Duration::from_secs(30), supervisor.entered())
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("crash-replay reconstruction supervisor was not reached")
+                    })?;
+            assert_eq!(start, reconstruction_start);
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+            supervisor.release();
+            return Ok::<_, anyhow::Error>(());
+        }
         let mut reconstruction_body =
             executor.gate_next_completed_entity_reconstruction(&worker_id);
         if case == CompletedReconstructionExclusiveCase::Divergence {
@@ -8817,6 +8839,11 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                     futures::poll!(owner_failure.as_mut()),
                     std::task::Poll::Pending
                 ));
+                // The replay on the source revision that follows the failed update: hold the
+                // supervisor of its completed reconstruction after the claim and before it drains
+                // the recorded terminal, so the exclusive clock call claims in that window.
+                let mut source_claim =
+                    executor.gate_next_completed_reconstruction_supervisor(&worker_id);
                 reconstruction_body.release();
                 let owner_failure =
                     tokio::time::timeout(std::time::Duration::from_secs(30), owner_failure)
@@ -8836,7 +8863,19 @@ async fn run_completed_reconstruction_exclusive_p2_case(
                         .all(|entry| !matches!(entry.entry, PublicOplogEntry::SuccessfulUpdate(_))),
                     "divergent reconstruction permitted ReplayFinished update finalization"
                 );
+                let source_start = tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    source_claim.entered(),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("source-revision reconstruction supervisor was not reached")
+                })?;
+                assert_eq!(source_start, reconstruction_start);
+                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                source_claim.release();
             }
+            CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => unreachable!(),
             CompletedReconstructionExclusiveCase::ExecutorShutdownDuringBodyValidation => {
                 tokio::time::timeout(
                     std::time::Duration::from_secs(30),
@@ -8861,7 +8900,8 @@ async fn run_completed_reconstruction_exclusive_p2_case(
     let invocation_result = invocation_result
         .map_err(|_| anyhow::anyhow!("exclusive-P2 reconstruction invocation timed out"))?;
     match case {
-        CompletedReconstructionExclusiveCase::Success => {
+        CompletedReconstructionExclusiveCase::Success
+        | CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow => {
             invocation_result?;
         }
         CompletedReconstructionExclusiveCase::Divergence => {
@@ -8919,6 +8959,26 @@ async fn completed_reconstruction_settles_while_exclusive_p2_waits(
         provider,
         caller,
         CompletedReconstructionExclusiveCase::Success,
+    )
+    .await
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("5m")]
+async fn crash_replay_clock_claim_waits_for_completed_reconstruction_supervisor(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_completed_reconstruction_exclusive_p2_case(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CompletedReconstructionExclusiveCase::CrashReplaySupervisorWindow,
     )
     .await
 }

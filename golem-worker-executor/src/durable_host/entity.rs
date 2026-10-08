@@ -1068,7 +1068,15 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
+            #[cfg(feature = "test-utils")]
+            let supervisor_hook = store
+                .with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
+                .map(|hook| (hook, invocation.start_index()));
             let completed_supervisor = executor_tasks.spawn_entity(async move {
+                #[cfg(feature = "test-utils")]
+                if let Some((hook, start_index)) = supervisor_hook {
+                    hook.before_completed_supervisor(start_index).await;
+                }
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
