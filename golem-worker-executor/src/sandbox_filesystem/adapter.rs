@@ -2244,10 +2244,30 @@ fn native_name_comparison_mode(
             NativeNameComparisonMode::WindowsInsensitive
         });
     }
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (directory, probe);
+        Ok(macos_name_comparison_mode(source, parent))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (directory, parent, source, probe);
         Ok(NativeNameComparisonMode::Conservative)
+    }
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn macos_name_comparison_mode(
+    source: NativeNameModeSource,
+    parent: &SandboxDirectoryCoordinationKey,
+) -> NativeNameComparisonMode {
+    match (source, &parent.0) {
+        (NativeNameModeSource::ApfsExact(identity), NativeFileIdentity::Unix { device, .. })
+            if identity.device == *device =>
+        {
+            NativeNameComparisonMode::Exact
+        }
+        _ => NativeNameComparisonMode::Conservative,
     }
 }
 
@@ -4146,6 +4166,34 @@ mod tests {
         assert!(!first.may_conflict_with(&other_parent));
         assert!(first != exact);
         assert!(first.may_conflict_with(&exact));
+    }
+
+    #[test]
+    fn apfs_name_mode_uses_the_root_case_result_only_on_its_device() {
+        let parent =
+            |device| SandboxDirectoryCoordinationKey(NativeFileIdentity::Unix { device, inode: 1 });
+        let identity = FilesystemIdentity { device: 17 };
+        [
+            (1, 17, NativeNameComparisonMode::Exact),
+            (1, 18, NativeNameComparisonMode::Conservative),
+            (0, 17, NativeNameComparisonMode::Conservative),
+            (0, 18, NativeNameComparisonMode::Conservative),
+        ]
+        .into_iter()
+        .for_each(|(case_sensitive, device, expected)| {
+            let source = apfs_name_source(case_sensitive, identity).unwrap();
+            assert_eq!(
+                macos_name_comparison_mode(source, &parent(device)),
+                expected
+            );
+        });
+        [-1, 2].into_iter().for_each(|value| {
+            assert!(apfs_name_source(value, identity).is_err());
+        });
+        assert_eq!(
+            macos_name_comparison_mode(NativeNameModeSource::NativeDetection, &parent(17)),
+            NativeNameComparisonMode::Conservative,
+        );
     }
 
     #[cfg(target_os = "linux")]

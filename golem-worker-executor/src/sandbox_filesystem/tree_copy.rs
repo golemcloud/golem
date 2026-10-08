@@ -336,11 +336,7 @@ fn copy_out_entry(
         TreeEntryKind::Directory => std::fs::create_dir(&target),
         TreeEntryKind::File => {
             let source_file = open_file_nofollow(source, &entry.relative)?;
-            let target_file = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)?;
-            transfer_file(copy_mode, &source_file, &target_file)?;
+            let target_file = copy_new_file(copy_mode, &source_file, &target)?;
             target_file.set_permissions(host_permissions(&entry.permissions, &target_file)?)?;
             if let Some(modified) = entry.modified {
                 target_file.set_modified(modified)?;
@@ -359,6 +355,29 @@ fn copy_out_entry(
             Ok(())
         }
     }
+}
+
+fn copy_new_file(copy_mode: FileCopyMode, source: &File, target: &Path) -> std::io::Result<File> {
+    #[cfg(target_os = "macos")]
+    if copy_mode == FileCopyMode::Reflink {
+        let parent = File::open(
+            target
+                .parent()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
+        )?;
+        apfs::clone_file(
+            source,
+            &parent,
+            target
+                .file_name()
+                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?
+                .as_ref(),
+        )?;
+        return File::open(target);
+    }
+    let file = File::options().write(true).create_new(true).open(target)?;
+    transfer_file(copy_mode, source, &file)?;
+    Ok(file)
 }
 
 /// Gives a directory under the host directory `destination` the permissions and the modification
@@ -446,6 +465,12 @@ fn seed_file(
 ) -> std::io::Result<()> {
     let (parent, name) = create_capability_copy_parent(directory, destination)?;
     let source_file = open_file_nofollow(source_directory, &source.relative)?;
+    #[cfg(target_os = "macos")]
+    let mut temporary = match context.transfer {
+        SeedTransfer::Reflink => CapabilityTempFile::from_clone(parent, &source_file)?,
+        _ => CapabilityTempFile::new(parent)?,
+    };
+    #[cfg(not(target_os = "macos"))]
     let mut temporary = CapabilityTempFile::new(parent)?;
     let temporary_file = temporary.as_file().try_clone()?.into_std();
     match context.transfer {
@@ -453,13 +478,13 @@ fn seed_file(
             std::io::copy(&mut &source_file, temporary.as_file_mut())?;
         }
         SeedTransfer::Reflink => {
-            transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?
+            #[cfg(not(target_os = "macos"))]
+            transfer_file(FileCopyMode::Reflink, &source_file, &temporary_file)?;
         }
         SeedTransfer::ReflinkIntoProject(project_id) => {
             reflink_into_project(project_id, &temporary_file, &source_file)?
         }
     }
-    temporary_file.sync_all()?;
     temporary_file.set_permissions(seeded_permissions(
         host_permissions(&source.permissions, &temporary_file)?,
         context.access,
@@ -467,6 +492,7 @@ fn seed_file(
     if let Some(modified) = source.modified {
         temporary_file.set_modified(modified)?;
     }
+    temporary_file.sync_all()?;
     // `CreateNew` makes the name with one no-clobber call. Its `AlreadyExists` error applies the
     // `Refuse` row of `placement_action` for every object that is already there, atomically.
     match context.placement {
@@ -774,8 +800,7 @@ fn reflink_into_project(
     }
 }
 
-/// Writes the pending changes of the XFS volume that holds `materialization_root` to stable
-/// storage.
+/// Syncs the XFS volume or the directories of an APFS sandbox after a seed.
 ///
 /// A seed call does this once, after its last entry, also when an entry fails. Buffered copies do
 /// not sync the volume.
@@ -790,8 +815,12 @@ pub(super) fn sync_after_reflink(
             {
                 xfs::sync_volume(materialization_root)
             }
-            #[cfg(not(target_os = "linux"))]
-            unreachable!("XFS storage is unavailable on this platform")
+            #[cfg(target_os = "macos")]
+            {
+                apfs::sync_directories(materialization_root)
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            unreachable!("copy-on-write storage is unavailable on this platform")
         }
     }
 }

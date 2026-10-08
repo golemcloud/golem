@@ -2207,6 +2207,9 @@ pub enum FilesystemStorageMode {
     /// Copies are reflinks. The executor enforces no per-agent disk limit and measures no
     /// per-agent usage.
     ReflinkXfs { root: Box<Path> },
+    /// APFS storage for local development and tests on macOS. Copies are clones. The executor
+    /// enforces no per-agent disk limit and measures no per-agent usage.
+    Apfs { root: Box<Path> },
 }
 
 impl SafeDisplay for FilesystemStorageMode {
@@ -2216,6 +2219,7 @@ impl SafeDisplay for FilesystemStorageMode {
             Self::Directory { root } => format!("directory at {}", root.display()),
             Self::ManagedXfs { root } => format!("managed XFS at {}", root.display()),
             Self::ReflinkXfs { root } => format!("reflink XFS at {}", root.display()),
+            Self::Apfs { root } => format!("APFS for local development at {}", root.display()),
         }
     }
 }

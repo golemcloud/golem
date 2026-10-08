@@ -221,9 +221,9 @@ fn host_directories_task(
     provisioning: &SandboxFilesystemProvisioning,
 ) -> impl FnOnce() -> Result<HostDirectories, FilesystemStorageError> + Send + 'static {
     let root = volume_root(provisioning);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let anchor = provisioning.volume.copy_on_write_root().cloned();
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let anchor = None;
     let verify_no_project = provisioning.host_directory_check == HostDirectoryCheck::NoXfsProject;
     move || make_host_directories_blocking(root, anchor, verify_no_project)

@@ -286,6 +286,28 @@ mod tests {
     }
 
     #[test]
+    fn apfs_storage_mode_loads_and_roundtrips_with_its_root() {
+        let config = make_config_loader()
+            .default_figment()
+            .merge(Toml::string(
+                "[filesystem_storage.mode]\ntype = \"Apfs\"\n\
+                 [filesystem_storage.mode.config]\nroot = \"/tmp/golem/agents\"",
+            ))
+            .extract::<GolemConfig>()
+            .unwrap();
+        let mode = serde_json::to_value(&config.filesystem_storage.mode).unwrap();
+
+        assert_eq!(
+            mode,
+            serde_json::json!({"type": "Apfs", "config": {"root": "/tmp/golem/agents"}})
+        );
+        assert_eq!(
+            config.filesystem_storage.mode.to_safe_string(),
+            "APFS for local development at /tmp/golem/agents"
+        );
+    }
+
+    #[test]
     fn the_storage_mode_loads_from_the_environment() {
         Jail::expect_with(|jail| {
             jail.clear_env();
