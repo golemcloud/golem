@@ -18,13 +18,15 @@
 use super::completion::Completions;
 use super::highlight::{Paint, paints};
 use super::history::SessionHistory;
-use super::look::Palette;
+use super::look::{self, Palette};
 use super::syntax::is_complete;
+use crossterm::event::{Event, KeyEvent};
 use reedline::{
-    Color, ColumnarMenu, Completer, CompletionResult, DefaultHinter, Emacs, Highlighter, IdeMenu,
-    KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode, PromptHistorySearch,
-    PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu, Span, StyledText, Suggestion,
-    ValidationResult, Validator, default_emacs_keybindings,
+    Color, ColumnarMenu, Completer, CompletionResult, DefaultHinter, EditCommand, EditMode, Emacs,
+    Highlighter, IdeMenu, KeyCode, KeyModifiers, MenuBuilder, Prompt, PromptEditMode,
+    PromptHistorySearch, PromptHistorySearchStatus, Reedline, ReedlineEvent, ReedlineMenu,
+    ReedlineRawEvent, Span, StyledText, Suggestion, ValidationResult, Validator,
+    default_emacs_keybindings,
 };
 use std::borrow::Cow;
 use unicode_width::UnicodeWidthStr;
@@ -68,12 +70,94 @@ pub fn build(
         .with_menu(completion_menu(palette))
         .with_quick_completions(true)
         .with_partial_completions(true)
-        .with_edit_mode(Box::new(Emacs::new(keybindings)))
+        .with_edit_mode(Box::new(WithoutLateAnswer::of(Emacs::new(keybindings))))
         .with_ansi_colors(colorize);
     if colorize {
         editor.with_highlighter(Box::new(Coloured(completions)))
     } else {
         editor.with_highlighter(Box::new(Uncoloured))
+    }
+}
+
+/// The edit mode `keys`, without a terminal's late answer about its background.
+///
+/// A terminal that answers after the session has stopped waiting sends its answer to the line
+/// editor. The terminal layer under the editor reads the `ESC ]` that opens the answer as
+/// Alt+`]`, each character after it as a typed one, and the BEL or `ESC \` that ends it as
+/// Ctrl+G or Alt+`\`. So what comes after Alt+`]` is held back for as long as it reads like
+/// that answer. When the answer ends, what was held is dropped. When anything else comes, it
+/// was typed, and it is given back as text: nothing typed is lost or changed.
+struct WithoutLateAnswer<M> {
+    keys: M,
+    /// What came since Alt+`]`, while it can still be the answer.
+    held: Option<String>,
+}
+
+impl<M: EditMode> WithoutLateAnswer<M> {
+    fn of(keys: M) -> Self {
+        Self { keys, held: None }
+    }
+
+    fn pass(&mut self, event: Event) -> ReedlineEvent {
+        ReedlineRawEvent::try_from(event)
+            .map_or(ReedlineEvent::None, |event| self.keys.parse_event(event))
+    }
+}
+
+impl<M: EditMode> EditMode for WithoutLateAnswer<M> {
+    fn parse_event(&mut self, event: ReedlineRawEvent) -> ReedlineEvent {
+        let event = Event::from(event);
+        let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event
+        else {
+            // A window that changes size says nothing about what the keys around it are.
+            return self.pass(event);
+        };
+        let opens = (code, modifiers) == (KeyCode::Char(']'), KeyModifiers::ALT);
+        let Some(mut held) = self.held.take() else {
+            if opens {
+                self.held = Some(String::new());
+                return ReedlineEvent::None;
+            }
+            return self.pass(event);
+        };
+        match (code, modifiers) {
+            (KeyCode::Char(character), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                held.push(character);
+                if look::begins_background_answer(&held) {
+                    self.held = Some(held);
+                    return ReedlineEvent::None;
+                }
+                held.pop();
+            }
+            (KeyCode::Char('g'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('\\'), KeyModifiers::ALT)
+                if look::parse_background(format!("\x1b]{held}").as_bytes()).is_some() =>
+            {
+                return ReedlineEvent::None;
+            }
+            _ => {}
+        }
+        // It was typed.
+        let next = if opens {
+            self.held = Some(String::new());
+            ReedlineEvent::None
+        } else {
+            self.pass(event)
+        };
+        if held.is_empty() {
+            next
+        } else {
+            ReedlineEvent::Multiple(vec![
+                ReedlineEvent::Edit(vec![EditCommand::InsertString(held)]),
+                next,
+            ])
+        }
+    }
+
+    fn edit_mode(&self) -> PromptEditMode {
+        self.keys.edit_mode()
     }
 }
 
@@ -261,11 +345,16 @@ impl Prompt for SshPrompt {
 
 #[cfg(test)]
 mod tests {
-    use super::{Coloured, Finished, FromAgent, SshPrompt, selected_colours};
+    use super::{Coloured, Finished, FromAgent, SshPrompt, WithoutLateAnswer, selected_colours};
     use crate::command_handler::ssh::completion::{COMMANDS_SCRIPT, Completions, Fetch};
     use crate::command_handler::ssh::look::Palette;
+    use crossterm::event::{Event, KeyEvent};
     use reedline::Color;
-    use reedline::{Completer, Highlighter, Prompt, Suggestion, ValidationResult, Validator};
+    use reedline::{
+        Completer, EditCommand, EditMode, Emacs, Highlighter, KeyCode, KeyModifiers, Prompt,
+        ReedlineEvent, ReedlineRawEvent, Suggestion, ValidationResult, Validator,
+        default_emacs_keybindings,
+    };
     use std::sync::Arc;
     use test_r::test;
 
@@ -381,5 +470,139 @@ mod tests {
         let styled = Coloured(completions).highlight(line, 0);
         assert_eq!(styled.raw_string(), line);
         assert!(styled.buffer.len() > 4);
+    }
+
+    fn editing() -> WithoutLateAnswer<Emacs> {
+        WithoutLateAnswer::of(Emacs::new(default_emacs_keybindings()))
+    }
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> ReedlineRawEvent {
+        ReedlineRawEvent::try_from(Event::Key(KeyEvent::new(code, modifiers))).unwrap()
+    }
+
+    /// A character as the terminal layer reports it typed: a capital comes with Shift.
+    fn typed(character: char) -> ReedlineRawEvent {
+        let modifiers = if character.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        key(KeyCode::Char(character), modifiers)
+    }
+
+    /// `ESC ]`, which opens a terminal's answer, as the terminal layer reads it.
+    fn alt_bracket() -> ReedlineRawEvent {
+        key(KeyCode::Char(']'), KeyModifiers::ALT)
+    }
+
+    /// BEL and `ESC \`, either of which ends the answer, as the terminal layer reads them.
+    fn ends() -> [(KeyCode, KeyModifiers); 2] {
+        [
+            (KeyCode::Char('g'), KeyModifiers::CONTROL),
+            (KeyCode::Char('\\'), KeyModifiers::ALT),
+        ]
+    }
+
+    fn inserted(character: char) -> ReedlineEvent {
+        ReedlineEvent::Edit(vec![EditCommand::InsertChar(character)])
+    }
+
+    fn given_back(text: &str, then: ReedlineEvent) -> ReedlineEvent {
+        ReedlineEvent::Multiple(vec![
+            ReedlineEvent::Edit(vec![EditCommand::InsertString(text.to_string())]),
+            then,
+        ])
+    }
+
+    #[test]
+    fn a_late_answer_about_the_background_does_not_reach_the_line() {
+        for answer in [
+            "11;rgb:1414/1313/1b1b",
+            "11;rgba:1e/1e/1e/ff",
+            "11;rgb:FFFF/0/8",
+        ] {
+            for (code, modifiers) in ends() {
+                let mut mode = editing();
+                // What is typed before the answer and after it is typed as always.
+                assert_eq!(mode.parse_event(typed('l')), inserted('l'));
+                assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+                for character in answer.chars() {
+                    assert_eq!(
+                        mode.parse_event(typed(character)),
+                        ReedlineEvent::None,
+                        "{character:?} of {answer:?}"
+                    );
+                }
+                assert_eq!(mode.parse_event(key(code, modifiers)), ReedlineEvent::None);
+                assert_eq!(mode.parse_event(typed('s')), inserted('s'));
+            }
+        }
+    }
+
+    #[test]
+    fn keys_after_alt_bracket_that_are_not_the_answer_are_typed() {
+        // Nothing of an answer came: the key is typed at once.
+        let mut mode = editing();
+        assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+        assert_eq!(mode.parse_event(typed('l')), inserted('l'));
+        assert_eq!(mode.parse_event(typed('1')), inserted('1'));
+
+        // What read like the start of an answer was typed after all, and it is given back
+        // with the key that showed it.
+        let mut mode = editing();
+        assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+        for character in "11;".chars() {
+            assert_eq!(mode.parse_event(typed(character)), ReedlineEvent::None);
+        }
+        assert_eq!(
+            mode.parse_event(typed('x')),
+            given_back("11;", inserted('x'))
+        );
+        assert_eq!(mode.parse_event(typed('1')), inserted('1'));
+
+        // Enter runs the line with it.
+        let mut mode = editing();
+        let enter = || key(KeyCode::Enter, KeyModifiers::NONE);
+        let entered = Emacs::new(default_emacs_keybindings()).parse_event(enter());
+        assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+        assert_eq!(mode.parse_event(typed('1')), ReedlineEvent::None);
+        assert_eq!(mode.parse_event(enter()), given_back("1", entered));
+    }
+
+    #[test]
+    fn an_answer_that_ends_before_it_names_a_colour_is_given_back() {
+        for (code, modifiers) in ends() {
+            let mut mode = editing();
+            let ended = Emacs::new(default_emacs_keybindings()).parse_event(key(code, modifiers));
+            assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+            for character in "11;rgb:14/13".chars() {
+                assert_eq!(mode.parse_event(typed(character)), ReedlineEvent::None);
+            }
+            assert_eq!(
+                mode.parse_event(key(code, modifiers)),
+                given_back("11;rgb:14/13", ended)
+            );
+        }
+    }
+
+    #[test]
+    fn an_answer_is_followed_through_what_is_not_a_key() {
+        let mut mode = editing();
+        let resized = || ReedlineRawEvent::try_from(Event::Resize(80, 24)).unwrap();
+        assert_eq!(mode.parse_event(alt_bracket()), ReedlineEvent::None);
+        for character in "11;rgb:1414/".chars() {
+            assert_eq!(mode.parse_event(typed(character)), ReedlineEvent::None);
+        }
+        // The window changed size while the answer arrived.
+        assert_eq!(
+            mode.parse_event(resized()),
+            Emacs::new(default_emacs_keybindings()).parse_event(resized())
+        );
+        for character in "1313/1b1b".chars() {
+            assert_eq!(mode.parse_event(typed(character)), ReedlineEvent::None);
+        }
+        let (code, modifiers) = ends()[0];
+        assert_eq!(mode.parse_event(key(code, modifiers)), ReedlineEvent::None);
+        assert_eq!(mode.parse_event(typed('l')), inserted('l'));
     }
 }

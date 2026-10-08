@@ -92,6 +92,23 @@ pub fn parse_background(reply: &[u8]) -> Option<Rgb> {
     Some(Rgb(parts.next()??, parts.next()??, parts.next()??))
 }
 
+/// Whether `text` can be the start of a terminal's answer about its background, as it reads
+/// after the escape that opens it: `11;rgb:RRRR/GGGG/BBBB`, or `rgba:` with a fourth part.
+pub fn begins_background_answer(text: &str) -> bool {
+    const OPENING: &str = "11;rgb";
+    let Some(rest) = text.strip_prefix(OPENING) else {
+        return OPENING.starts_with(text);
+    };
+    let Some(parts) = rest.strip_prefix("a:").or_else(|| rest.strip_prefix(':')) else {
+        return rest.is_empty() || rest == "a";
+    };
+    let hex = |part: &str| part.len() <= 4 && part.bytes().all(|byte| byte.is_ascii_hexdigit());
+    let mut parts: Vec<&str> = parts.split('/').collect();
+    // Only the part that is still arriving may be empty.
+    let last = parts.pop().unwrap_or_default();
+    parts.len() <= 3 && hex(last) && parts.iter().all(|part| !part.is_empty() && hex(part))
+}
+
 /// The background a session shows in place of `background`: a little lighter on a dark one
 /// and a little darker on a light one, with a hint of purple, so that it reads as another
 /// shell without changing how the text on it reads.
@@ -939,9 +956,9 @@ pub fn cancelled(palette: Palette) -> String {
 mod tests {
     use super::{
         BACKGROUND_QUERY, CONTINUATION, Loader, Palette, Readiness, Rgb, VERBS, animation,
-        answered, band, banner, cancelled, context, detached, elapsed_text, finished, layout,
-        marker, parse_background, result, result_width, running, running_compact, session_shade,
-        shown, shown_message, split_agent, verb,
+        answered, band, banner, begins_background_answer, cancelled, context, detached,
+        elapsed_text, finished, layout, marker, parse_background, result, result_width, running,
+        running_compact, session_shade, shown, shown_message, split_agent, verb,
     };
     use std::time::Duration;
     use test_r::test;
@@ -1180,6 +1197,38 @@ mod tests {
         assert!(!answered(b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07"));
         assert!(!answered(b"\x1b[?62;4"));
         assert!(!answered(b""));
+    }
+
+    #[test]
+    fn the_start_of_an_answer_about_the_background_is_told_from_other_text() {
+        // The answer as it reads after its escape, cut off at any point.
+        for answer in [
+            "11;rgb:1414/1313/1b1b",
+            "11;rgba:1e/1e/1e/ff",
+            "11;rgb:F/0/8",
+        ] {
+            for end in 0..=answer.len() {
+                assert!(
+                    begins_background_answer(&answer[..end]),
+                    "{:?}",
+                    &answer[..end]
+                );
+            }
+        }
+        for other in [
+            "ls",
+            "12",
+            "11;rgx",
+            "11;rgbb",
+            "11;rgb:g",
+            "11;rgb:12345",
+            "11;rgb:/",
+            "11;rgb:1//2",
+            "11;rgb:1/2/3/4/5",
+            "11;rgb:1414/1313/1b1b ",
+        ] {
+            assert!(!begins_background_answer(other), "{other:?}");
+        }
     }
 
     #[test]
