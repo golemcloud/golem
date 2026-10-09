@@ -15,8 +15,8 @@
 use super::{
     Commit, CommitGate, DIRECTORY_ATTEMPTS, FileSystemBlobStorage, PathEntry, STAGING_DIRECTORY,
     STAGING_FILE_AGE, absent_on_not_found, add_files, add_names, blob_path_of, copy_staged,
-    directory_attempts, encoded_name, first_error, listed_entry, remove_unless_dropped,
-    staging_file_is_old, write_if_absent, write_staged,
+    directory_attempts, encoded_name, first_error, listed_entry, persist_with,
+    remove_unless_dropped, staging_file_is_old, write_if_absent, write_staged,
 };
 use crate::storage::blob::{
     BlobRangeError, BlobStorage, BlobStorageNamespace, ListedBlob, NormalizedBlobPath, PutIfAbsent,
@@ -1238,4 +1238,36 @@ fn a_write_makes_its_directory_again_when_a_remove_takes_a_directory_above_it() 
         .map_err(|error| error.kind());
 
     assert_eq!((placed, gone), (Ok("placed"), Err(ErrorKind::NotFound)));
+}
+
+/// A call that is dropped while its write makes the directory of the target never lands: the
+/// write checks the drop right before the step that names the target, after the directory.
+#[test]
+fn a_write_dropped_while_it_makes_its_directory_never_lands() {
+    let root = tempfile::tempdir().unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let commit = Commit {
+        dropped: dropped.clone(),
+        gate: None,
+    };
+    let staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+    let target = root.path().join("dir/blob");
+
+    let written = persist_with(
+        &commit,
+        staged,
+        &target,
+        |directory| {
+            std::fs::create_dir_all(directory)?;
+            dropped.store(true, std::sync::atomic::Ordering::Release);
+            Ok(())
+        },
+        |file| file.persist(&target).map(|_| ()),
+    )
+    .map_err(|error| error.kind());
+
+    assert_eq!(
+        (written, target.exists()),
+        (Err(ErrorKind::Interrupted), false)
+    );
 }

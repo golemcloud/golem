@@ -736,8 +736,8 @@ fn listed_entry<T>(found: std::io::Result<T>) -> std::io::Result<Option<T>> {
 ///
 /// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
 /// So a reader sees the whole new file or the one before. The new file gets the mode that
-/// `File::create` gives. A `commit` whose call was dropped stops the write before it makes a
-/// directory and before the step.
+/// `File::create` gives. A `commit` whose call was dropped before the write started makes nothing,
+/// and one that was dropped later stops the write before the step (`persist_in_directory_of`).
 fn write_staged(
     commit: &Commit,
     staging: &Path,
@@ -745,13 +745,9 @@ fn write_staged(
     data: &[u8],
 ) -> std::io::Result<()> {
     commit.go_on()?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     std::fs::create_dir_all(staging)?;
     let mut file = staged_put_file(staging)?;
     file.write_all(data)?;
-    commit.before_commit()?;
     persist_in_directory_of(commit, file, target, |file| {
         file.persist(target).map(|_| ())
     })
@@ -854,20 +850,36 @@ fn directory_attempts<T>(
 }
 
 /// Gives the staged `file` the name `target` with `persist`, in the directory of `target`
-/// (`in_directory_of`). Before each attempt after the first, a `commit` whose call was dropped
-/// stops the write.
+/// (`in_directory_of`). Each attempt makes the directory and then passes the last check of
+/// `commit` (`Commit::before_commit`) right before `persist`, so a call that was dropped while the
+/// write made the directory stops the write.
 fn persist_in_directory_of<T>(
     commit: &Commit,
     file: tempfile::NamedTempFile,
     target: &Path,
     persist: impl Fn(tempfile::NamedTempFile) -> Result<T, tempfile::PersistError>,
 ) -> std::io::Result<T> {
+    persist_with(
+        commit,
+        file,
+        target,
+        |directory| std::fs::create_dir_all(directory),
+        persist,
+    )
+}
+
+/// Runs `make` on the directory of `target` and then `persist`, as `persist_in_directory_of`
+/// does.
+fn persist_with<T>(
+    commit: &Commit,
+    file: tempfile::NamedTempFile,
+    target: &Path,
+    make: impl FnMut(&Path) -> std::io::Result<()>,
+    persist: impl Fn(tempfile::NamedTempFile) -> Result<T, tempfile::PersistError>,
+) -> std::io::Result<T> {
     let mut staged = Some(file);
-    let mut first = true;
-    in_directory_of(target, || {
-        if !std::mem::take(&mut first) {
-            commit.go_on()?;
-        }
+    directory_attempts(target, make, || {
+        commit.before_commit()?;
         let file = staged
             .take()
             .ok_or_else(|| std::io::Error::other("the staged file is gone"))?;
@@ -883,8 +895,8 @@ fn persist_in_directory_of<T>(
 /// The bytes go to a new file in `staging` first. Then the file gets the name `target` in one step.
 /// That step refuses a name that exists. So a reader sees the whole file or no file. Of two calls
 /// for one `target`, only one gives `Written`. The file in `staging` goes away when the step fails.
-/// A `commit` whose call was dropped stops the write before it makes a directory and before the
-/// step.
+/// A `commit` whose call was dropped before the write started makes nothing, and one that was
+/// dropped later stops the write before the step (`persist_in_directory_of`).
 fn write_if_absent(
     commit: &Commit,
     staging: &Path,
@@ -892,13 +904,9 @@ fn write_if_absent(
     data: &[u8],
 ) -> std::io::Result<PutIfAbsent> {
     commit.go_on()?;
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     std::fs::create_dir_all(staging)?;
     let mut file = tempfile::NamedTempFile::new_in(staging)?;
     file.write_all(data)?;
-    commit.before_commit()?;
     match persist_in_directory_of(commit, file, target, |file| file.persist_noclobber(target)) {
         Ok(_) => Ok(PutIfAbsent::Written),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -920,8 +928,9 @@ fn no_source_file(kind: std::io::ErrorKind) -> bool {
 /// Copies the file at `source` to `target` through a new file in `staging`, and gives false when
 /// `source` has no file: no entry, a directory, or a path below a file. The source is opened and
 /// checked before anything is written. The new file gets the permissions of the source before it
-/// gets the name `target`; when it cannot get them, the copy fails and names no file. A `commit` whose call was dropped stops the copy before it
-/// makes a directory and before the step that names the target.
+/// gets the name `target`; when it cannot get them, the copy fails and names no file. A `commit`
+/// whose call was dropped before the copy started makes nothing, and one that was dropped later
+/// stops the copy before the step that names the target (`persist_in_directory_of`).
 fn copy_staged(
     commit: &Commit,
     source: &Path,
@@ -938,15 +947,11 @@ fn copy_staged(
     if !metadata.is_file() {
         return Ok(false);
     }
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     std::fs::create_dir_all(staging)?;
     let mut staged = tempfile::NamedTempFile::new_in(staging)?;
     // A copy between two `File`s lets the standard library use the copy of the kernel.
     std::io::copy(&mut source, staged.as_file_mut())?;
     staged.as_file().set_permissions(metadata.permissions())?;
-    commit.before_commit()?;
     persist_in_directory_of(commit, staged, target, |file| {
         file.persist(target).map(|_| ())
     })?;
