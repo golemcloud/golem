@@ -758,8 +758,10 @@ impl TestDsl for TestWorkerExecutor {
                     environment_id: Some(latest_version.environment_id.into()),
                     cursor,
                     count: 100,
-                    query: query.to_string(),
+                    text: Some(query.to_string()),
                     auth_ctx: Some(self.auth_ctx().into()),
+                    from_timestamp_millis: None,
+                    to_timestamp_millis: None,
                 })
                 .await?
                 .into_inner();
@@ -767,20 +769,17 @@ impl TestDsl for TestWorkerExecutor {
             if let Some(chunk) = chunk.result {
                 match chunk {
                     search_oplog_response::Result::Success(chunk) => {
-                        if chunk.entries.is_empty() {
+                        result.extend(
+                            chunk
+                                .entries
+                                .into_iter()
+                                .map(|entry| entry.try_into())
+                                .collect::<Result<Vec<_>, _>>()
+                                .map_err(|err| anyhow!("Failed to convert oplog entry: {err}"))?,
+                        );
+                        cursor = chunk.next;
+                        if cursor.is_none() {
                             break;
-                        } else {
-                            result.extend(
-                                chunk
-                                    .entries
-                                    .into_iter()
-                                    .map(|entry| entry.try_into())
-                                    .collect::<Result<Vec<_>, _>>()
-                                    .map_err(|err| {
-                                        anyhow!("Failed to convert oplog entry: {err}")
-                                    })?,
-                            );
-                            cursor = chunk.next;
                         }
                     }
                     search_oplog_response::Result::Failure(error) => {

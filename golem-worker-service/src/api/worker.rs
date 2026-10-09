@@ -609,7 +609,6 @@ impl WorkerApi {
         from: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
-        query: Query<Option<String>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
@@ -621,53 +620,74 @@ impl WorkerApi {
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = self
-            .get_oplog_internal(agent_id, from.0, count.0, cursor.0, query.0, auth)
+            .worker_service
+            .get_oplog(
+                &agent_id,
+                OplogIndex::from_u64(from.0.unwrap_or(OplogIndex::INITIAL.as_u64())),
+                cursor.0,
+                count.0,
+                auth,
+            )
             .instrument(record.span.clone())
-            .await;
+            .await
+            .map(|mut response| {
+                for entry in &mut response.entries {
+                    entry.entry.redact_host_managed_values_for_external();
+                }
+                Json(response)
+            })
+            .map_err(ApiEndpointError::from);
 
         record.result(response)
     }
 
-    async fn get_oplog_internal(
+    /// Search the oplog of a worker
+    #[oai(
+        path = "/:component_id/workers/:agent_name/oplog/search",
+        method = "post",
+        operation_id = "search_oplog"
+    )]
+    async fn search_oplog(
         &self,
-        agent_id: AgentId,
-        from: Option<u64>,
-        count: u64,
-        cursor: Option<OplogCursor>,
-        query: Option<String>,
-        auth: AuthCtx,
-    ) -> Result<Json<GetOplogResponse>> {
-        let mut response = match (from, query) {
-            (Some(_), Some(_)) => {
-                return Err(ApiEndpointError::bad_request(
-                    api::error_code::INVALID_OPLOG_QUERY_PARAMS,
-                    golem_common::safe(
-                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                    ),
-                ));
-            }
-            (Some(from), None) => {
-                self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::from_u64(from), cursor, count, auth)
-                    .await?
-            }
-            (None, Some(query)) => {
-                self.worker_service
-                    .search_oplog(&agent_id, cursor, count, query, auth)
-                    .await?
-            }
-            (None, None) => {
-                self.worker_service
-                    .get_oplog(&agent_id, OplogIndex::INITIAL, cursor, count, auth)
-                    .await?
-            }
-        };
+        component_id: Path<ComponentId>,
+        agent_name: Path<String>,
+        request: Json<SearchOplogRequest>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<SearchOplogResponse>> {
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let agent_id = self
+            .normalize_agent_id(component_id.0, agent_name.as_str())
+            .await?;
+        let request = request.0;
+        if request.count == 0 {
+            return Err(ApiEndpointError::bad_request(
+                api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+                golem_common::safe("Oplog search count must be greater than zero".to_string()),
+            ));
+        }
+        if request
+            .from
+            .zip(request.to)
+            .is_some_and(|(from, to)| from > to)
+        {
+            return Err(ApiEndpointError::bad_request(
+                api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+                golem_common::safe("Oplog search 'from' must not be later than 'to'".to_string()),
+            ));
+        }
+        let record = recorded_http_api_request!("search_oplog", agent_id = agent_id.to_string());
+        let response = self
+            .worker_service
+            .search_oplog(&agent_id, request, auth)
+            .instrument(record.span.clone())
+            .await;
+        let mut response = record.result(response.map(Json).map_err(ApiEndpointError::from))?;
 
-        for entry in &mut response.entries {
+        for entry in &mut response.0.entries {
             entry.entry.redact_host_managed_values_for_external();
         }
 
-        Ok(Json(response))
+        Ok(response)
     }
 
     /// List files in a worker

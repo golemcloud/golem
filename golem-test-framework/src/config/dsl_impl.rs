@@ -29,7 +29,9 @@ use golem_client::api::{
     AgentClient, RegistryServiceClient, RegistryServiceClientLive, WorkerClient, WorkerClientLive,
     WorkerError,
 };
-use golem_client::model::{CompleteParameters, UpdateWorkerRequest, WorkersMetadataRequest};
+use golem_client::model::{
+    CompleteParameters, SearchOplogRequest, UpdateWorkerRequest, WorkersMetadataRequest,
+};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
@@ -645,7 +647,6 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
                     Some(from.as_u64()),
                     100,
                     cursor.as_ref(),
-                    None,
                 )
                 .await
                 .map_err(|e| anyhow!("get_oplog failed for agent {agent_id}: {e}"))?;
@@ -676,13 +677,16 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
 
         loop {
             let response = client
-                .get_oplog(
+                .search_oplog(
                     &agent_id.component_id.0,
                     &agent_id.agent_id,
-                    None,
-                    100,
-                    cursor.as_ref(),
-                    Some(query),
+                    &SearchOplogRequest {
+                        text: Some(query.to_string()),
+                        from: None,
+                        to: None,
+                        count: 100,
+                        cursor: cursor.clone(),
+                    },
                 )
                 .await
                 .map_err(|e| {

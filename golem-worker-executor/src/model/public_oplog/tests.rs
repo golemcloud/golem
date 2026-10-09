@@ -282,6 +282,188 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
 }
 
 #[test]
+async fn public_oplog_search_reports_bounded_progress_and_resumes_after_empty_page() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: golem_common::model::component::ComponentId::new(),
+        agent_id: "Agent(\"bounded-search\")".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    for (timestamp, message) in [(1_000, "first"), (2_000, "second"), (3_000, "needle")] {
+        oplog
+            .add(OplogEntry::Log {
+                timestamp: Timestamp::from(timestamp),
+                parent_start_index: None,
+                level: LogLevel::Info,
+                context: "search".to_string(),
+                message: message.to_string(),
+            })
+            .await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
+    let first = search_public_oplog(
+        components.clone(),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        ComponentRevision::INITIAL,
+        OplogIndex::INITIAL,
+        1,
+        2,
+        PublicOplogSearchQuery {
+            text: Some("needle"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(first.entries.is_empty());
+    assert!(first.scan_limit_reached);
+    assert_eq!(first.scanned_through_index, Some(OplogIndex::from_u64(2)));
+    assert_eq!(first.next_oplog_index, OplogIndex::from_u64(3));
+
+    let resumed = search_public_oplog(
+        components,
+        oplog_service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        first.current_component_revision,
+        first.next_oplog_index,
+        1,
+        2,
+        PublicOplogSearchQuery {
+            text: Some("needle"),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(resumed.entries.len(), 1);
+    assert_eq!(resumed.entries[0].oplog_index, OplogIndex::from_u64(3));
+    assert!(!resumed.scan_limit_reached);
+    assert_eq!(resumed.scanned_through_index, Some(OplogIndex::from_u64(3)));
+}
+
+#[test]
+async fn public_oplog_search_time_bounds_are_inclusive_and_skipped_updates_advance_revision() {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let oplog_service = Arc::new(
+        PrimaryOplogService::new(
+            indexed_storage,
+            blob_storage,
+            1,
+            1,
+            100,
+            RetryConfig::default(),
+        )
+        .await,
+    );
+    let account_id = AccountId::new();
+    let environment_id = EnvironmentId::new();
+    let agent_id = AgentId {
+        component_id: golem_common::model::component::ComponentId::new(),
+        agent_id: "Agent(\"time-search\")".to_string(),
+    };
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    let oplog = oplog_service
+        .open(
+            &mut oplog_service.lock_lifecycle(&owned_agent_id.agent_id).await,
+            &owned_agent_id,
+            AgentMode::Durable,
+            None,
+            make_agent_metadata(agent_id, account_id, environment_id),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+        )
+        .await;
+    let target_revision = ComponentRevision::new(2).unwrap();
+    oplog
+        .add(OplogEntry::SuccessfulUpdate {
+            timestamp: Timestamp::from(1_000),
+            target_revision,
+            new_component_size: 10,
+            new_total_linear_memory_size: None,
+            new_active_plugins: HashSet::new(),
+        })
+        .await;
+    for (timestamp, message) in [(2_000, "lower"), (3_000, "upper"), (4_000, "outside")] {
+        oplog
+            .add(OplogEntry::Log {
+                timestamp: Timestamp::from(timestamp),
+                parent_start_index: None,
+                level: LogLevel::Info,
+                context: "search".to_string(),
+                message: message.to_string(),
+            })
+            .await;
+    }
+    oplog.commit(CommitLevel::Always).await;
+
+    let result = search_public_oplog(
+        Arc::new(PanicComponentService),
+        oplog_service,
+        &owned_agent_id,
+        AgentMode::Durable,
+        None,
+        ComponentRevision::INITIAL,
+        OplogIndex::INITIAL,
+        10,
+        10,
+        PublicOplogSearchQuery {
+            from: Some(Timestamp::from(2_000)),
+            to: Some(Timestamp::from(3_000)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        result
+            .entries
+            .iter()
+            .map(|entry| entry.oplog_index)
+            .collect::<Vec<_>>(),
+        vec![OplogIndex::from_u64(2), OplogIndex::from_u64(3)]
+    );
+    assert_eq!(result.current_component_revision, target_revision);
+    assert_eq!(result.scanned_through_index, Some(OplogIndex::from_u64(4)));
+    assert!(!result.scan_limit_reached);
+}
+
+#[test]
 async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -797,7 +979,11 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
         1,
-        "last-entity-attribution-needle",
+        usize::MAX,
+        PublicOplogSearchQuery {
+            text: Some("last-entity-attribution-needle"),
+            ..Default::default()
+        },
     )
     .await
     .unwrap();

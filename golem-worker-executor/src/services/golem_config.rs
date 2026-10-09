@@ -433,6 +433,7 @@ pub struct Limits {
     pub epoch_interval: Duration,
     pub epoch_ticks: u64,
     pub max_oplog_query_pages_size: usize,
+    pub max_oplog_search_scan_size: usize,
     pub max_invocation_context_stack_depth: usize,
     /// Maximum accepted payload bytes in each completion-buffered tool attachment direction.
     pub max_tool_attachment_bytes: usize,
@@ -492,6 +493,11 @@ impl SafeDisplay for Limits {
             &mut result,
             "max oplog query pages: {}",
             self.max_oplog_query_pages_size
+        );
+        let _ = writeln!(
+            &mut result,
+            "max oplog search scan size: {}",
+            self.max_oplog_search_scan_size
         );
         let _ = writeln!(
             &mut result,
@@ -1942,6 +1948,7 @@ impl Default for Limits {
             epoch_interval: Duration::from_millis(10),
             epoch_ticks: 1,
             max_oplog_query_pages_size: 100,
+            max_oplog_search_scan_size: 10_000,
             max_invocation_context_stack_depth: 1024,
             max_tool_attachment_bytes: 16 * 1024 * 1024,
             max_invocation_duration: None,

@@ -40,10 +40,10 @@
 
 ## Oplog and Stream
 
-- [ ] Add executor scan-limit configuration and generated config updates.
-- [ ] Separate raw GET paging from structured POST search.
-- [ ] Carry scanned progress and continuations across gRPC/service/REST/client.
-- [ ] Add CLI time-range search flags and preserve structured entry output.
+- [x] Add executor scan-limit configuration and generated config updates.
+- [x] Separate raw GET paging from structured POST search.
+- [x] Carry scanned progress and continuations across gRPC/service/REST/client.
+- [x] Add CLI time-range search flags and preserve structured entry output.
 - [ ] Extract typed Oplog presentation and implement safe grouping.
 - [ ] Implement exact/mixed scope, order, Stop/Resume, and Load More.
 - [ ] Extract typed Stream transport from CLI output.

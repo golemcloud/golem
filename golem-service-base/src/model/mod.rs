@@ -29,7 +29,7 @@ use golem_common::model::component::{
 };
 use golem_common::model::oplog::{OplogCursor, PublicOplogEntryWithIndex};
 use golem_common::model::worker::{AgentFileSystemNode, AgentFileSystemNodeKind, AgentUpdateMode};
-use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor};
+use golem_common::model::{AgentFilter, AgentId, OplogIndex, ScanCursor, Timestamp};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -100,6 +100,28 @@ pub struct GetOplogResponse {
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct SearchOplogRequest {
+    pub text: Option<String>,
+    pub from: Option<Timestamp>,
+    pub to: Option<Timestamp>,
+    pub count: u64,
+    pub cursor: Option<OplogCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct SearchOplogResponse {
+    pub entries: Vec<PublicOplogEntryWithIndex>,
+    pub next: Option<OplogCursor>,
+    pub scanned_through_index: Option<u64>,
+    pub last_index: u64,
+    pub scan_limit_reached: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]

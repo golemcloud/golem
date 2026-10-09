@@ -26,7 +26,8 @@ use crate::durable_host::{
 };
 use crate::get_oplog_entry;
 use crate::model::public_oplog::{
-    PublicOplogEntryOps, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
+    PublicOplogEntryOps, PublicOplogSearchQuery, find_component_revision_at,
+    get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::host::{
@@ -341,7 +342,11 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         current_component_revision,
         entry.next_oplog_index,
         entry.page_size,
-        &entry.query,
+        usize::MAX,
+        PublicOplogSearchQuery {
+            text: Some(&entry.query),
+            ..Default::default()
+        },
     )
     .await
 }

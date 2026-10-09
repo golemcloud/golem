@@ -101,6 +101,20 @@ macro_rules! oplog_entry {
                 }
             )),*
         }
+
+        impl PublicOplogEntry {
+            pub fn timestamp(&self) -> Timestamp {
+                match self {
+                    $(Self::$case(params) => params.timestamp),*
+                }
+            }
+
+            pub fn kind(&self) -> &'static str {
+                match self {
+                    $(Self::$case(_) => stringify!($case)),*
+                }
+            }
+        }
     }
 }
 

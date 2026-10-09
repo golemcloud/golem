@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-09: Bounded Structured Oplog Search
+
+- Split exact raw Oplog paging from filtered search: raw reads remain GET while
+  text/time search is a structured POST request.
+- Added an executor scan budget, generated default TOML/environment configs,
+  and progress-bearing continuations that remain valid even when a bounded scan
+  returns no matches.
+- Applied inclusive time predicates before public-entry enrichment while still
+  advancing component-revision state through skipped entries.
+- Migrated the CLI and test clients to the new contract. `golem agent oplog`
+  now accepts `--from-time` and `--to-time`, preserves one structured document
+  per entry, and reports scan-budget progress while following continuations.
+- Added typed `kind()` and `timestamp()` accessors to public Oplog entries so
+  the upcoming TUI presentation layer does not infer core fields from JSON.
+
+Still open in this slice: typed grouping and the Oplog destination's retained
+scope/query, Stop/Resume, Load More, and metric handoff behavior.
+
 ## 2026-10-08: Stable Ops Navigation And Typed Metrics Foundation
 
 - Added stable typed Overview, Agents, Oplog, Stream, Metrics, Deployments, and

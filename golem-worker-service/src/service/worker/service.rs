@@ -73,7 +73,9 @@ use golem_common::schema::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{
+    ComponentFileSystemNode, GetOplogResponse, SearchOplogRequest, SearchOplogResponse,
+};
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 
@@ -1119,11 +1121,9 @@ impl WorkerService {
     pub async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        cursor: Option<OplogCursor>,
-        count: u64,
-        query: String,
+        request: SearchOplogRequest,
         auth_ctx: AuthCtx,
-    ) -> Result<GetOplogResponse, WorkerServiceError> {
+    ) -> Result<SearchOplogResponse, WorkerServiceError> {
         let component = self
             .component_service
             .get_current_by_id(agent_id.component_id)
@@ -1133,14 +1133,7 @@ impl WorkerService {
 
         let result = self
             .worker_client
-            .search_oplog(
-                agent_id,
-                cursor,
-                count,
-                query,
-                component.environment_id,
-                auth_ctx,
-            )
+            .search_oplog(agent_id, request, component.environment_id, auth_ctx)
             .await?;
 
         Ok(result)
@@ -2843,7 +2836,9 @@ mod tests {
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::component::Component;
-    use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+    use golem_service_base::model::{
+        ComponentFileSystemNode, GetOplogResponse, SearchOplogRequest, SearchOplogResponse,
+    };
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
@@ -3593,18 +3588,17 @@ mod tests {
         async fn search_oplog(
             &self,
             _: &AgentId,
-            _: Option<OplogCursor>,
-            _: u64,
-            _: String,
+            _: SearchOplogRequest,
             _: EnvironmentId,
             _: AuthCtx,
-        ) -> Result<GetOplogResponse, super::WorkerServiceError> {
+        ) -> Result<SearchOplogResponse, super::WorkerServiceError> {
             self.effects.lock().unwrap().push("search-oplog");
-            Ok(GetOplogResponse {
+            Ok(SearchOplogResponse {
                 entries: Vec::new(),
                 next: None,
-                first_index_in_chunk: 0,
+                scanned_through_index: None,
                 last_index: 0,
+                scan_limit_reached: false,
             })
         }
 

@@ -45,7 +45,9 @@ use golem_common::schema::{AgentConstructorSchema, AgentTypeSchema, SchemaGraph}
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{
+    ComponentFileSystemNode, GetOplogResponse, SearchOplogRequest, SearchOplogResponse,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -436,12 +438,10 @@ impl WorkerClient for RecordingWorkerClient {
     async fn search_oplog(
         &self,
         _: &AgentId,
-        _: Option<OplogCursor>,
-        _: u64,
-        _: String,
+        _: SearchOplogRequest,
         _: EnvironmentId,
         _: AuthCtx,
-    ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
+    ) -> Result<SearchOplogResponse, crate::service::worker::WorkerServiceError> {
         unimplemented!()
     }
 

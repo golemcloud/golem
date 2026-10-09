@@ -65,6 +65,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, Empty, OwnedAgentId,
+    Timestamp,
 };
 use golem_common::schema::agent::FieldSource;
 use golem_common::schema::{
@@ -602,6 +603,15 @@ pub struct PublicOplogSearchResult {
     pub next_oplog_index: OplogIndex,
     pub current_component_revision: ComponentRevision,
     pub last_index: OplogIndex,
+    pub scanned_through_index: Option<OplogIndex>,
+    pub scan_limit_reached: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PublicOplogSearchQuery<'a> {
+    pub text: Option<&'a str>,
+    pub from: Option<Timestamp>,
+    pub to: Option<Timestamp>,
 }
 
 pub async fn search_public_oplog(
@@ -613,48 +623,90 @@ pub async fn search_public_oplog(
     initial_component_revision: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
-    query: &str,
+    scan_limit: usize,
+    query: PublicOplogSearchQuery<'_>,
 ) -> Result<PublicOplogSearchResult, String> {
     let mut results = Vec::new();
-    let mut last_index;
-    let mut current_index = initial_oplog_index;
+    let mut current_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let mut current_component_revision = initial_component_revision;
+    let last_index = oplog_service
+        .get_last_index(owned_agent_id, agent_mode)
+        .await;
+    let parsed_query = query
+        .text
+        .filter(|text| !text.trim().is_empty())
+        .map(Query::parse)
+        .transpose()?;
+    let mut scanned = 0usize;
+    let mut scanned_through_index = None;
+    let mut attribution_resolver =
+        PublicOplogAttributionResolver::new(oplog_service.clone(), owned_agent_id, agent_mode);
 
-    let query = Query::parse(query)?;
-
-    loop {
-        let chunk = get_public_oplog_chunk(
-            component_service.clone(),
-            oplog_service.clone(),
-            owned_agent_id,
-            agent_mode,
-            agent_type_name,
-            current_component_revision,
-            current_index,
-            count,
-        )
-        .await?;
-
-        for entry in chunk.entries {
-            if entry.entry.matches(&query) {
-                results.push(entry);
-            }
-        }
-
-        last_index = chunk.last_index;
-        current_index = chunk.next_oplog_index;
-        current_component_revision = chunk.current_component_revision;
-
-        if current_index > last_index || results.len() >= count {
+    while current_index <= last_index && results.len() < count && scanned < scan_limit {
+        let available = last_index.as_u64() - current_index.as_u64() + 1;
+        let chunk_size = 100
+            .min(scan_limit.saturating_sub(scanned))
+            .min(usize::try_from(available).unwrap_or(usize::MAX));
+        let raw_entries = oplog_service
+            .read_exact(owned_agent_id, agent_mode, current_index, chunk_size as u64)
+            .await;
+        if raw_entries.is_empty() {
             break;
         }
+        for (index, raw_entry) in &raw_entries {
+            attribution_resolver.cache_entry(*index, raw_entry);
+        }
+        for (index, raw_entry) in raw_entries {
+            scanned = scanned.saturating_add(1);
+            scanned_through_index = Some(index);
+            current_index = index.next();
+            if let Some(revision) = raw_entry.specifies_component_revision() {
+                current_component_revision = revision;
+            }
+            let timestamp = raw_entry.timestamp();
+            if query.from.is_some_and(|from| timestamp < from)
+                || query.to.is_some_and(|to| timestamp > to)
+            {
+                continue;
+            }
+            let attribution = attribution_resolver
+                .attribution_for_entry(index, &raw_entry)
+                .await?;
+            let entry = PublicOplogEntry::from_oplog_entry(
+                index,
+                raw_entry,
+                oplog_service.clone(),
+                component_service.clone(),
+                owned_agent_id,
+                agent_mode,
+                agent_type_name,
+                current_component_revision,
+            )
+            .await?;
+            if parsed_query
+                .as_ref()
+                .is_none_or(|query| entry.matches(query))
+            {
+                results.push(PublicOplogEntryWithIndex {
+                    oplog_index: index,
+                    attribution,
+                    entry,
+                });
+            }
+            if results.len() >= count {
+                break;
+            }
+        }
     }
+    let scan_limit_reached = scanned >= scan_limit && current_index <= last_index;
 
     Ok(PublicOplogSearchResult {
         entries: results,
         next_oplog_index: current_index,
         current_component_revision,
         last_index,
+        scanned_through_index,
+        scan_limit_reached,
     })
 }
 

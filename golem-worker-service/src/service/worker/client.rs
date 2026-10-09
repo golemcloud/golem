@@ -39,7 +39,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CreateWorkerRequest, DeactivatePluginRequest, DeliverCardTransferRequest,
     DurableStreamAttachmentControlRequest, DurableStreamSegmentReadRequest, ForkWorkerRequest,
     InterruptWorkerRequest, ProcessOplogEntriesRequest, ResolveRevertLastInvocationsRequest,
-    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    ResumeWorkerRequest, RevertWorkerRequest, SearchOplogResponse as GrpcSearchOplogResponse,
+    UpdateWorkerRequest,
 };
 use golem_common::model::RetryConfig;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -62,7 +63,9 @@ use golem_common::model::{AgentInvocationOutput, AgentInvocationResult, Invocati
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::model::auth::AuthCtx;
-use golem_service_base::model::{ComponentFileSystemNode, GetOplogResponse};
+use golem_service_base::model::{
+    ComponentFileSystemNode, GetOplogResponse, SearchOplogRequest, SearchOplogResponse,
+};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use std::future::Future;
 use std::pin::Pin;
@@ -403,12 +406,10 @@ pub trait WorkerClient: Send + Sync {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        cursor: Option<OplogCursor>,
-        count: u64,
-        query: String,
+        request: SearchOplogRequest,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> Result<GetOplogResponse, WorkerServiceError>;
+    ) -> Result<SearchOplogResponse, WorkerServiceError>;
 
     async fn get_file_system_node(
         &self,
@@ -1258,27 +1259,27 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn search_oplog(
         &self,
         agent_id: &AgentId,
-        cursor: Option<OplogCursor>,
-        count: u64,
-        query: String,
+        request: SearchOplogRequest,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-    ) -> Result<GetOplogResponse, WorkerServiceError> {
+    ) -> Result<SearchOplogResponse, WorkerServiceError> {
         let agent_id = agent_id.clone();
         self.call_worker_executor(
             agent_id.clone(),
             "search_oplog",
             move |worker_executor_client| {
                 let agent_id = agent_id.clone();
-                let query_clone = query.clone();
+                let request = request.clone();
                 Box::pin(
                     worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
                         agent_id: Some(agent_id.into()),
-                        query: query_clone,
-                        cursor: cursor.clone().map(|c| c.into()),
-                        count,
+                        text: request.text,
+                        cursor: request.cursor.map(Into::into),
+                        count: request.count,
                         environment_id: Some(environment_id.into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
+                        from_timestamp_millis: request.from.map(|timestamp| timestamp.to_millis()),
+                        to_timestamp_millis: request.to.map(|timestamp| timestamp.to_millis()),
                     }),
                 )
             },
@@ -1289,6 +1290,8 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                              workerexecutor::v1::SearchOplogSuccessResponse {
                                  entries,
                                  next,
+                                 scanned_through_index,
+                                 scan_limit_reached,
                                  last_index,
                              },
                          )),
@@ -1298,18 +1301,18 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
-                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
-                    Ok(GetOplogResponse {
+                    Ok(SearchOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
-                        first_index_in_chunk,
+                        scanned_through_index,
                         last_index,
+                        scan_limit_reached,
                     })
                 }
-                SearchOplogResponse {
+                GrpcSearchOplogResponse {
                     result: Some(workerexecutor::v1::search_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
-                SearchOplogResponse { .. } => Err("Empty response".into()),
+                GrpcSearchOplogResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
         )

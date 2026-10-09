@@ -1696,8 +1696,8 @@ pub mod worker {
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query.
-            #[arg(long, conflicts_with = "query")]
+            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with search filters.
+            #[arg(long, conflicts_with_all = ["query", "from_time", "to_time"])]
             from: Option<u64>,
             #[arg(
                 long,
@@ -1707,6 +1707,12 @@ pub mod worker {
                 verbatim_doc_comment,
             )]
             query: Option<String>,
+            /// Include entries at or after this time (ISO 8601 / RFC 3339).
+            #[arg(long, conflicts_with = "from")]
+            from_time: Option<DateTime<Utc>>,
+            /// Include entries at or before this time (ISO 8601 / RFC 3339).
+            #[arg(long, conflicts_with = "from")]
+            to_time: Option<DateTime<Utc>>,
         },
         /// DESTRUCTIVE: Rewrites the agent's oplog by undoing recent operations. Reverted entries are lost. This action is irreversible. Use `-Y/--yes` to skip the interactive confirmation.
         #[command(after_help = crate::command_examples::AGENT_REVERT)]

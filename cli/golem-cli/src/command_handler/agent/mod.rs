@@ -248,7 +248,12 @@ impl AgentCommandHandler {
                     agent_id,
                     from,
                     query,
-                } => self.cmd_oplog(agent_id, from, query).await,
+                    from_time,
+                    to_time,
+                } => {
+                    self.cmd_oplog(agent_id, from, query, from_time, to_time)
+                        .await
+                }
                 AgentSubcommand::Revert {
                     agent_id,
                     last_oplog_index,
@@ -810,34 +815,66 @@ impl AgentCommandHandler {
         agent_id: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
+        from_time: Option<DateTime<Utc>>,
+        to_time: Option<DateTime<Utc>>,
     ) -> anyhow::Result<()> {
+        ensure!(
+            from_time.zip(to_time).is_none_or(|(from, to)| from <= to),
+            "--from-time must not be later than --to-time"
+        );
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let (component, agent_id) = self.component_by_agent_id_match(&agent_id_match).await?;
 
         let batch_size = self.ctx.http_batch_size();
+        let query = query.filter(|query| !query.trim().is_empty());
+        let is_search = query.is_some() || from_time.is_some() || to_time.is_some();
         let mut cursor = Option::<OplogCursor>::None;
         let mut had_entries = false;
         loop {
             let mut entries = Vec::<PublicOplogEntryWithIndex>::new();
             cursor = {
                 let clients = self.ctx.golem_clients().await?;
-
-                let result = clients
-                    .worker
-                    .get_oplog(
-                        &component.id.0,
-                        &agent_id.0,
-                        from,
-                        batch_size,
-                        cursor.as_ref(),
-                        query.as_deref(),
-                    )
-                    .await
-                    .map_service_error()?;
-
-                entries.extend(result.entries);
-                result.next
+                if is_search {
+                    let result = clients
+                        .worker
+                        .search_oplog(
+                            &component.id.0,
+                            &agent_id.0,
+                            &golem_client::model::SearchOplogRequest {
+                                text: query.clone(),
+                                from: from_time,
+                                to: to_time,
+                                count: batch_size,
+                                cursor: cursor.clone(),
+                            },
+                        )
+                        .await
+                        .map_service_error()?;
+                    if result.scan_limit_reached {
+                        let progress = result
+                            .scanned_through_index
+                            .map(|index| format!(" at oplog index {index}"))
+                            .unwrap_or_default();
+                        log_warn(format!("Search scan limit reached{progress}; continuing."));
+                    }
+                    entries.extend(result.entries);
+                    result.next
+                } else {
+                    let result = clients
+                        .worker
+                        .get_oplog(
+                            &component.id.0,
+                            &agent_id.0,
+                            from,
+                            batch_size,
+                            cursor.as_ref(),
+                        )
+                        .await
+                        .map_service_error()?;
+                    entries.extend(result.entries);
+                    result.next
+                }
             };
 
             if !entries.is_empty() {
@@ -901,24 +938,38 @@ impl AgentCommandHandler {
         let mut entries = Vec::new();
         while entries.len() < max_entries as usize {
             let remaining = max_entries.saturating_sub(entries.len() as u64);
-            let result = clients
-                .worker
-                .get_oplog(
-                    &component.id.0,
-                    &agent_id.0,
-                    from,
-                    remaining.min(self.ctx.http_batch_size()),
-                    cursor.as_ref(),
-                    query,
-                )
-                .await
-                .map_service_error()?;
-            entries.extend(result.entries.into_iter().map(|entry| AgentOplogEntryView {
+            let count = remaining.min(self.ctx.http_batch_size());
+            let (page_entries, next) = if let Some(query) = query {
+                let result = clients
+                    .worker
+                    .search_oplog(
+                        &component.id.0,
+                        &agent_id.0,
+                        &golem_client::model::SearchOplogRequest {
+                            text: Some(query.to_owned()),
+                            from: None,
+                            to: None,
+                            count,
+                            cursor: cursor.clone(),
+                        },
+                    )
+                    .await
+                    .map_service_error()?;
+                (result.entries, result.next)
+            } else {
+                let result = clients
+                    .worker
+                    .get_oplog(&component.id.0, &agent_id.0, from, count, cursor.as_ref())
+                    .await
+                    .map_service_error()?;
+                (result.entries, result.next)
+            };
+            entries.extend(page_entries.into_iter().map(|entry| AgentOplogEntryView {
                 index: entry.oplog_index.as_u64(),
                 attribution: entry.attribution,
                 entry: entry.entry,
             }));
-            cursor = result.next;
+            cursor = next;
             if cursor.is_none() {
                 break;
             }

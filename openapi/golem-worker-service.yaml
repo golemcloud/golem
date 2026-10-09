@@ -1000,13 +1000,6 @@ paths:
         required: false
         deprecated: false
         explode: true
-      - name: query
-        schema:
-          type: string
-        in: query
-        required: false
-        deprecated: false
-        explode: true
       responses:
         '200':
           description: ''
@@ -1072,6 +1065,98 @@ paths:
       - Cookie: []
       - Token: []
       operationId: get_oplog
+  /v1/components/{component_id}/workers/{agent_name}/oplog/search:
+    post:
+      tags:
+      - Worker
+      summary: Search the oplog of a worker
+      parameters:
+      - name: component_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: agent_name
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SearchOplogRequest'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SearchOplogResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '413':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '415':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: search_oplog
   /v1/components/{component_id}/workers/{agent_name}/files/{file_name}:
     get:
       tags:
@@ -7978,6 +8063,47 @@ components:
             - permission-card
           value:
             $ref: '#/components/schemas/PermissionCardValuePayload'
+    SearchOplogRequest:
+      type: object
+      title: SearchOplogRequest
+      required:
+      - count
+      properties:
+        text:
+          type: string
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        count:
+          type: integer
+          format: uint64
+        cursor:
+          $ref: '#/components/schemas/OplogCursor'
+    SearchOplogResponse:
+      type: object
+      title: SearchOplogResponse
+      required:
+      - entries
+      - lastIndex
+      - scanLimitReached
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+        next:
+          $ref: '#/components/schemas/OplogCursor'
+        scannedThroughIndex:
+          type: integer
+          format: uint64
+        lastIndex:
+          type: integer
+          format: uint64
+        scanLimitReached:
+          type: boolean
     SecretSpec:
       type: object
       properties:

@@ -21,7 +21,7 @@ use crate::durable_host::agent_monomorphization_context;
 use crate::grpc::invocation::{CanStartWorker, from_proto_invocation_context};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
-    find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
+    PublicOplogSearchQuery, find_component_revision_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::model::{LastError, LookupResult, ReadFileResult};
 use crate::services::events::Event;
@@ -1394,7 +1394,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
-
         let chunk = match request.cursor {
             Some(cursor) => {
                 let current_component_revision =
@@ -1498,6 +1497,28 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     "agent {owned_agent_id} does not exist"
                 ))
             })?;
+        if request.count == 0 {
+            return Err(WorkerExecutorError::invalid_request(
+                "oplog search count must be greater than zero",
+            ));
+        }
+        if request
+            .from_timestamp_millis
+            .zip(request.to_timestamp_millis)
+            .is_some_and(|(from, to)| from > to)
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "oplog search 'from' must not be later than 'to'",
+            ));
+        }
+        let query = PublicOplogSearchQuery {
+            text: request.text.as_deref(),
+            from: request.from_timestamp_millis.map(Timestamp::from),
+            to: request.to_timestamp_millis.map(Timestamp::from),
+        };
+        let count = usize::try_from(request.count)
+            .unwrap_or(usize::MAX)
+            .min(self.services.config().limits.max_oplog_query_pages_size);
 
         let chunk = match request.cursor {
             Some(cursor) => {
@@ -1516,11 +1537,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     current_component_revision,
                     OplogIndex::from_u64(cursor.next_oplog_index),
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
-                    &request.query,
+                    count,
+                    self.services.config().limits.max_oplog_search_scan_size,
+                    query,
                 )
                 .await
                 .map_err(WorkerExecutorError::unknown)?
@@ -1542,24 +1561,22 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     agent_type_name.as_ref(),
                     initial_component_revision,
                     start,
-                    min(
-                        request.count as usize,
-                        self.services.config().limits.max_oplog_query_pages_size,
-                    ),
-                    &request.query,
+                    count,
+                    self.services.config().limits.max_oplog_search_scan_size,
+                    query,
                 )
                 .await
                 .map_err(WorkerExecutorError::unknown)?
             }
         };
 
-        let next = if chunk.entries.is_empty() {
-            None
-        } else {
+        let next = if chunk.next_oplog_index <= chunk.last_index {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
                 current_component_revision: chunk.current_component_revision.into(),
             })
+        } else {
+            None
         };
 
         Ok(SearchOplogResponse {
@@ -1573,6 +1590,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(WorkerExecutorError::unknown)?,
                         next,
+                        scanned_through_index: chunk.scanned_through_index.map(Into::into),
+                        scan_limit_reached: chunk.scan_limit_reached,
                         last_index: chunk.last_index.into(),
                     },
                 ),
