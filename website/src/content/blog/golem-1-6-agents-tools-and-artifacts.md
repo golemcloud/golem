@@ -4,6 +4,8 @@ date: "2026-10-09"
 author: "John A. De Goes"
 tags: ["Announcements", "Product Updates"]
 slug: "golem-1-6-agents-tools-and-artifacts"
+description: "Golem 1.6 lets you deploy agents, their tools, and their artifacts to one durable runtime — reliable, secure, and scalable."
+image: "/blog-images/golem-1-6-agents-tools-and-artifacts.png"
 draft: false
 ---
 
