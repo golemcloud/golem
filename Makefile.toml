@@ -608,10 +608,12 @@ description = "Runs the dev-tools workspace unit tests"
 command = "cargo"
 args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
+# Worker-executor test tasks use production's 32 MiB native stacks to avoid
+# allocating a temporary invocation stack on every poll.
 [tasks.worker-executor-tests]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
+env = { "RUST_MIN_STACK" = "33554432", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
 args = [
     "test",
@@ -626,7 +628,7 @@ args = [
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
@@ -641,7 +643,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-ignite-service]
 dependencies = ["wit"]
 description = "Runs ignite service worker-executor-tests (requires GOLEM_IGNITE_URL=ignite://host:10800 and a running Apache Ignite 2.x node)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
@@ -649,7 +651,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 1/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group1" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -658,7 +660,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group2]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 2/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -669,7 +671,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group3]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 3/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -678,7 +680,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group4]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 4/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -687,7 +689,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-tool-streaming]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs tool streaming worker executor tests with bounded concurrency"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
