@@ -56,6 +56,13 @@ impl PreviewCase {
 const CASES: &[PreviewCase] = &[
     PreviewCase::new("ops-overview", "Ops / overview", 120, 30),
     PreviewCase::new("ops-agents", "Ops / agents overview", 120, 30),
+    PreviewCase::new("ops-agent-detail", "Ops / Agent details", 120, 30),
+    PreviewCase::new("ops-oplog", "Ops / Oplog", 140, 32),
+    PreviewCase::new("ops-stream", "Ops / Stream", 120, 30),
+    PreviewCase::new("ops-metrics-dashboard", "Ops / Metrics dashboard", 140, 36),
+    PreviewCase::new("ops-metrics-explore", "Ops / Metrics Explore", 140, 34),
+    PreviewCase::new("ops-deployments", "Ops / deployments", 120, 30),
+    PreviewCase::new("ops-configuration", "Ops / configuration", 140, 32),
 ];
 
 pub fn main() -> anyhow::Result<()> {
@@ -533,16 +540,16 @@ mod tests {
 
     #[test]
     fn production_cases_render_at_representative_and_extreme_sizes() {
-        for case_id in ["ops-overview", "ops-agents"] {
-            for (width, height) in [(160, 40), (120, 30), (100, 8), (32, 24), (12, 4), (1, 1)] {
+        for case in CASES {
+            for (width, height) in [(140, 40), (100, 30), (60, 24), (100, 12), (12, 4), (1, 1)] {
                 let result =
-                    std::panic::catch_unwind(|| render_preview_buffer(case_id, width, height));
+                    std::panic::catch_unwind(|| render_preview_buffer(case.id, width, height));
                 match result {
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => {
-                        panic!("{case_id} failed at {width}x{height}: {error}")
+                        panic!("{} failed at {width}x{height}: {error}", case.id)
                     }
-                    Err(_) => panic!("{case_id} panicked at {width}x{height}"),
+                    Err(_) => panic!("{} panicked at {width}x{height}", case.id),
                 }
             }
         }
@@ -570,6 +577,24 @@ mod tests {
     }
 
     #[test]
+    fn destination_fixtures_contain_meaningful_ready_state() {
+        for (case_id, expected) in [
+            ("ops-agent-detail", "Agent type metadata"),
+            ("ops-oplog", "ExportedFunctionInvoked"),
+            ("ops-stream", "payment authorization started"),
+            ("ops-metrics-dashboard", "Invocation rate"),
+            ("ops-metrics-explore", "golem.agent.invocations"),
+            ("ops-deployments", "demo-12"),
+            ("ops-configuration", "/payments/provider-token"),
+        ] {
+            let case = CASES.iter().find(|case| case.id == case_id).unwrap();
+            let text =
+                buffer_text(&render_preview_buffer(case_id, case.width, case.height).unwrap());
+            assert!(text.contains(expected), "{case_id}: {text}");
+        }
+    }
+
+    #[test]
     fn rejects_unknown_cases() {
         assert!(render_preview_buffer("missing", 80, 24).is_err());
     }
@@ -591,6 +616,8 @@ mod tests {
         assert!(html.contains("Production preview"));
         assert!(html.contains("data-case=\"ops-overview\""));
         assert!(html.contains("data-case=\"ops-agents\""));
+        assert!(html.contains("data-case=\"ops-metrics-dashboard\""));
+        assert!(html.contains("data-case=\"ops-configuration\""));
         assert!(html.contains("id=\"case\""));
         assert!(html.contains("id=\"font\""));
         assert!(!html.contains("id=\"variant\""));

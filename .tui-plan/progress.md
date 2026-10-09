@@ -1,5 +1,24 @@
 # Progress
 
+## 2026-10-09: Ops Destination Preview Catalogue
+
+- Expanded the feature-gated real-renderer gallery from Overview and Agents to
+  every stable Ops destination, with additional fixtures for a full Agent and
+  both Metrics Dashboard and Explore.
+- Populated the fixtures with typed ready-state data: mixed grouped Oplog
+  entries and scan progress, typed Stream events and drop counts, six curated
+  dashboard panels, paged Explore families and overlaid series, deployment
+  history, and masked Configuration metadata.
+- Applied the wide, medium, narrow, short, and 1×1 no-panic render matrix to all
+  nine cases and asserted that each destination exposes meaningful content.
+- Updated the preview registry and review ledger. Exceptional states and the
+  remaining nested routes stay explicit follow-up coverage rather than being
+  conflated with destination-ready acceptance.
+
+Still open in this slice: exceptional/nested-route preview fixtures, final
+browser and terminal visual acceptance, and the larger `OpsApp` ownership
+cleanup.
+
 ## 2026-10-09: Explicit Agent Scope Handoffs
 
 - Added contextual Agent actions that transfer the exact full-Agent route or

@@ -61,7 +61,7 @@
 
 - [x] Add deployment, Agent signal, server/collector, Stream, and issue cards.
 - [x] Add explicit cross-destination scope/range handoff.
-- [ ] Add all page/state preview fixtures behind `tui-preview`.
-- [ ] Complete wide/medium/narrow/short/1×1 automated render coverage.
+- [~] Add all page/state preview fixtures behind `tui-preview` (all ready-state destinations complete; exceptional and nested route states remain).
+- [x] Complete wide/medium/narrow/short/1×1 automated render coverage.
 - [ ] Complete focused tests, checks, generated artifacts, and manual demo run.
 - [ ] Update review ledger and mark the Ops foundation accepted.

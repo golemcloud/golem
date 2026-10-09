@@ -88,7 +88,15 @@ active.
 
 | Preview case | Last reviewed | Active notes |
 |---|---|---|
-| `ops-agents` | automated production-render check | `UX-024` |
+| `ops-overview` | automated render check; visual review pending | `UX-025` |
+| `ops-agents` | automated render check; visual review pending | `UX-025` |
+| `ops-agent-detail` | automated render check; visual review pending | `UX-025` |
+| `ops-oplog` | automated render check; visual review pending | `UX-025` |
+| `ops-stream` | automated render check; visual review pending | `UX-025` |
+| `ops-metrics-dashboard` | automated render check; visual review pending | `UX-025` |
+| `ops-metrics-explore` | automated render check; visual review pending | `UX-025` |
+| `ops-deployments` | automated render check; visual review pending | `UX-025` |
+| `ops-configuration` | automated render check; visual review pending | `UX-025` |
 
 ## Historical Themed Batches
 
@@ -634,3 +642,27 @@ renderers are no longer live contracts.
   remembered scope plus deterministic visible match ranking/highlighting.
   Focused automated acceptance is green; real-terminal acceptance remains
   pending.
+
+### UX-025 — Accept stable destination-first Ops
+
+- Status: implemented; awaiting browser and terminal review
+- Preview: all production-rendered cases in the Preview Coverage table
+- Area: stable Ops navigation, explicit scope handoff, Overview, Agents,
+  Oplog, Stream, Metrics, Deployments, and Configuration
+- Theme: information architecture | observability | investigation | terminal
+- Problem: the earlier subject/view prototype made navigation hard to predict,
+  mixed unrelated page languages, and did not provide a credible TUI metrics
+  surface.
+- Desired outcome: a minimal read-only Ops workspace with stable destinations,
+  retained page routes, explicit scope transfer, bounded data access, and
+  Grafana-like curated charts without introducing a separate visual system.
+- Scope: production ready states for all destinations; Dashboard and Explore;
+  grouped and exact Oplog; exact-Agent Stream; deployment history and compare;
+  typed Environment, Account, and Server Configuration; Overview routing.
+- Dependencies: the accepted shell foundation and local observability backend.
+- Acceptance: every destination has deterministic production-render coverage
+  at wide, medium, narrow, short, and 1×1 sizes; the remaining exceptional and
+  nested-route fixtures are green; the local demo passes a real terminal review.
+- Outcome: the ready-state catalogue and size matrix are implemented and
+  automated checks are green. Exceptional/nested-route fixtures and manual
+  visual acceptance remain open.

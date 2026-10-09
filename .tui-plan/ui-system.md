@@ -14,8 +14,10 @@ tooling without entering the normal CLI build. Run `cargo make tui-preview`
 for the watched browser, `cargo make tui-preview-terminal` for the watched
 terminal, or `cargo make tui-preview-export` for an artifact under `target/`.
 
-The baseline registry contains one `ops-agents` fixture constructed in a
-feature-gated child module of the production application. It renders through
+The baseline registry contains production-rendered ready-state fixtures for
+Overview, Agents, one full Agent, Oplog, Stream, Metrics Dashboard, Metrics
+Explore, Deployments, and Configuration. They are constructed in a
+feature-gated child module of the production application and render through
 the same Ratatui tree as the live TUI rather than a synthetic parallel
 renderer. The browser URL preserves case, font, and font size. Browser
 ligatures are disabled; pinned Fira Code and Iosevka Term assets must pass
@@ -81,10 +83,12 @@ This document owns their visual and interaction representation.
 
 ## Preview Review Policy
 
-The persistent preview baseline is the real production-rendered Ops Agents
-case. Add the smallest case set required for an active design question and
-retain a case afterward only when normal production render tests cannot provide
-the same regression coverage.
+The persistent preview baseline is the production-rendered Ops destination
+catalogue. Add loading, empty, partial, unavailable, stale, or failed cases
+only when those states materially differ from their ready-state destination or
+when a concrete design question requires them. Retain a case afterward only
+when normal production render tests cannot provide the same regression
+coverage.
 
 Shortcut visibility uses progressive disclosure:
 
