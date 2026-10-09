@@ -2,7 +2,8 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-rust_test_apps=("oplog-processor" "host-api-tests" "http-tests" "initial-file-system" "agent-counters" "agent-counters-v2" "agent-updates-v1" "agent-updates-v2" "agent-updates-v3" "agent-updates-v4" "scalability" "agent-sdk-rust" "agent-invocation-context" "agent-mcp" "tool-streaming" "tool-runtime-bypass" "trapped-leaf-observer" "external-durable-streams" "audit-middleware" "output-redaction")
+# Spread the multi-component applications across chunks to balance compilation cost.
+rust_test_apps=("tool-streaming" "external-durable-streams" "agent-counters-v2" "trapped-leaf-observer" "agent-updates-v1" "agent-mcp" "agent-updates-v4" "tool-runtime-bypass" "agent-sdk-rust" "agent-counters" "agent-updates-v3" "initial-file-system" "scalability" "output-redaction" "host-api-tests" "agent-updates-v2" "oplog-processor" "audit-middleware" "agent-invocation-context" "http-tests")
 ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-sdk-ts" "agent-self-rpc" "agent-rpc" "tool-streaming-ts" "git-network-probe")
 effect_test_apps=("tool-streaming-effect")
 scala_test_apps=("tool-streaming-scala")
@@ -146,36 +147,32 @@ else
 fi
 
 if [[ -z "${GOLEM_CLI:-}" ]]; then
-  if [[ "$clean_only" = true ]]; then
-    cli_candidates=(
-      "${TARGET_DIR}/debug/golem"
-      "${TARGET_DIR}/debug/golem.exe"
-      "${TARGET_DIR}/debug/golem-cli"
-      "${TARGET_DIR}/debug/golem-cli.exe"
-      "${TARGET_DIR}/release/golem"
-      "${TARGET_DIR}/release/golem.exe"
-      "${TARGET_DIR}/release/golem-cli"
-      "${TARGET_DIR}/release/golem-cli.exe"
-    )
-    for candidate in "${cli_candidates[@]}"; do
-      if [[ -x "$candidate" ]]; then
-        GOLEM_CLI="$candidate"
-        break
-      fi
-    done
-
-    if [[ -z "${GOLEM_CLI:-}" ]]; then
-      if command -v golem >/dev/null 2>&1; then
-        GOLEM_CLI="$(command -v golem)"
-      elif command -v golem-cli >/dev/null 2>&1; then
-        GOLEM_CLI="$(command -v golem-cli)"
-      else
-        echo "Cleaning test components requires a pre-built or globally installed golem or golem-cli" >&2
-        exit 1
-      fi
+  cli_candidates=(
+    "${TARGET_DIR}/debug/golem"
+    "${TARGET_DIR}/debug/golem.exe"
+    "${TARGET_DIR}/debug/golem-cli"
+    "${TARGET_DIR}/debug/golem-cli.exe"
+    "${TARGET_DIR}/release/golem"
+    "${TARGET_DIR}/release/golem.exe"
+    "${TARGET_DIR}/release/golem-cli"
+    "${TARGET_DIR}/release/golem-cli.exe"
+  )
+  for candidate in "${cli_candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      GOLEM_CLI="$candidate"
+      break
     fi
-  else
-    GOLEM_CLI="${TARGET_DIR}/debug/golem-cli"
+  done
+
+  if [[ -z "${GOLEM_CLI:-}" ]]; then
+    if command -v golem >/dev/null 2>&1; then
+      GOLEM_CLI="$(command -v golem)"
+    elif command -v golem-cli >/dev/null 2>&1; then
+      GOLEM_CLI="$(command -v golem-cli)"
+    else
+      echo "Test components require a pre-built or globally installed golem or golem-cli" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -245,6 +242,11 @@ build_rust_apps() {
       "$GOLEM_CLI" build --step check --yes
     elif [ "$clean_only" = false ]; then
       echo "Building $subdir..."
+      if [ -n "${CARGO_TARGET_DIR:-}" ] && [ -f Cargo.toml ]; then
+        # Independent fixtures can use the same Cargo package name and output path.
+        # Remove root package artifacts while retaining compiled dependencies.
+        cargo clean --package "$(cargo pkgid)" --target wasm32-wasip2 --release
+      fi
       "$GOLEM_CLI" --preset release build --yes --skip-check
       "$GOLEM_CLI" --preset release exec copy
     fi
