@@ -64,10 +64,29 @@ tag_suite!(agents, agents);
 // Native guest bridge suites run in `agents_guest_bridge`; other tagged app suites run in
 // `deploy`.
 // The untagged remainder (`:tag:`) is the `core` shard, which is only `app::app`.
+tag_suite!(effect_source_conformance, agents_guest_bridge_sources);
+tag_suite!(mcp_import, agents_guest_bridge_sources);
+tag_suite!(mcp_oauth, agents_guest_bridge_sources);
+tag_suite!(moonbit_guest_streams, agents_guest_bridge_sources);
+tag_suite!(moonbit_mcp_import, agents_guest_bridge_sources);
+tag_suite!(moonbit_native_tool, agents_guest_bridge_sources);
+tag_suite!(scala_guest_streams, agents_guest_bridge_sources);
+tag_suite!(
+    scala_gol40_reflection_acceptance,
+    agents_guest_bridge_sources
+);
+tag_suite!(scala_http_router, agents_guest_bridge_sources);
+tag_suite!(scala_tool_sources, agents_guest_bridge_sources);
 tag_suite!(account, deploy);
 tag_suite!(build_and_deploy_all, deploy);
 tag_suite!(builtin_bash, deploy);
 tag_suite!(cards, deploy);
+tag_suite!(account, deploy_runtime);
+tag_suite!(build_and_deploy_all, deploy_runtime);
+tag_suite!(builtin_bash, deploy_runtime);
+tag_suite!(cards, deploy_runtime);
+tag_suite!(secrets, deploy_runtime);
+tag_suite!(ssh, deploy_runtime);
 tag_suite!(chunk_f_policy_boundary, deploy);
 tag_suite!(directory_source_ifs, deploy);
 tag_suite!(effect_source_conformance, agents_guest_bridge);
@@ -605,7 +624,7 @@ impl TestContext {
         let ctx = Self {
             quiet,
             golem_path: test_binary_path(&binary_profile, "golem"),
-            golem_cli_path: test_binary_path(&binary_profile, "golem-cli"),
+            golem_cli_path: test_binary_path(&binary_profile, "golem"),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),

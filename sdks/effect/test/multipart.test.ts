@@ -75,6 +75,20 @@ describe("multipart encode/decode", () => {
     })
   }
 
+  it.each(["\r\n", "\n"])(
+    "preserves binary data with %j framing and false delimiter starts",
+    (newline) => {
+      const boundary = "abcdef0123456789abcdef0123456789"
+      const body = `\n\n--almost\n--${boundary.slice(0, -1)}x\r\n\r\nend\n`
+      const raw =
+        `--${boundary}${newline}` +
+        `Content-Type: application/octet-stream${newline}` +
+        `Content-Disposition: attachment; name="db"${newline}${newline}` +
+        `${body}${newline}--${boundary}--${newline}`
+      expect(decodeMultipart(enc(raw), boundary)[0]!.body).toEqual(enc(body))
+    },
+  )
+
   for (const suffix of ["", "\r", "x", "--", "--\r", "--x"]) {
     it(`classifies final-position collisions after false candidates: ${JSON.stringify(suffix)}`, () => {
       const first = "11111111111111111111111111111111"

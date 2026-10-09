@@ -617,7 +617,11 @@ entries are consumed as a replay-inert subtree). Incomplete: the block goes live
 original root `Start` and the **whole body re-runs**, re-recording nested calls as new physical
 `Start`s. This is the one ordinary durable path where a completed nested effect legitimately
 repeats; the block author owns its idempotency (`reference/timelines.md` §15,
-`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`).
+`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`). A root
+custom invocation of an entity body records the entity invocation `Start` as its
+`parent_start_index` (and claims with it), like every other durable call of that body, so replay
+can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
+initiation) keeps using the custom parent.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
@@ -646,7 +650,8 @@ speculatively, `commit_consumed_entry` commits, `move_replay_idx` advances and e
 scheduling order that replay does not reproduce, so `claim_start_matching` claims the *first
 unclaimed matching* `Start` between cursor and target. That is the only justified use of
 scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
-to make different calls; when no matching `Start` exists, replay fails with a divergence error.
+to make different calls; when no matching `Start` exists, replay fails with a divergence error
+(after any active entity body that owns the cursor head has consumed it; see below).
 
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
@@ -688,6 +693,27 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
+- A `Start` claim that finds no match decides the missing `Start` only when no active entity
+  body encloses the entry at the cursor head. A tool call claims its entity `Start` inline, but
+  the cursor drains the body's first entries only when the spawned supervisor is first polled. A
+  clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
+  `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
+  `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
+  any other entry. `nearest_active_body` (a pure function) resolves the nearest active body that
+  encloses the head, and the one that encloses the claim's parent: it walks parents and stops at
+  the first active body, so a scope of a nested entity resolves to that entity even after the
+  outer body settled. The parents come from state the cursor already holds: each resolver
+  awaiter records the `parent_start_index` of its claimed `Start` at registration, and retained
+  `Start`s keep their entries. The missing-claim path reads no oplog entry; a custom invocation
+  claim takes the head from its own exact-id scan. The pure rule
+  `missing_start_waits_for` then decides: the claim waits for the head's body, unless that body
+  issued the claim or the claim's parent was appended live. A call of an entity nested inside
+  the head's body still waits, because that entity is another Store.
+  A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
+  change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
+  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
+  at the head, and a claim issued by the body that encloses the head stay strict divergence at
+  once. The path where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
