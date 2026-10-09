@@ -5,21 +5,30 @@ No server, external service, guest component, generated WASM, or production fix 
 
 ## Run
 
-Controls (expected to pass):
+Controls:
 
 ```shell
-cargo test --locked -p golem-worker-executor --lib -- stalled_replay --report-time
+cargo test --profile dev-ci --locked -p golem-worker-executor --lib -- stalled_replay --report-time
 ```
 
 Explicit regression expectation (ignored in the default suite):
 
 ```shell
-cargo test --locked -p golem-worker-executor --lib -- stalled_replay_omitted_delivered_call_reports_divergence --ignored --report-time
+cargo test --profile dev-ci --locked -p golem-worker-executor --lib -- stalled_replay_omitted_delivered_call_reports_divergence --include-ignored --report-time
 ```
 
 The regression has a one-second deadline and fails with the cursor, replay target, and blocking
 entry indexes instead of hanging the test process. Its expected correct outcome is
 `UnexpectedOplogEntry`, identifying the unclaimed call.
+
+Use `--include-ignored` with this exact test filter. In the pinned test-r version,
+`--ignored` alone selects the test but still reports it as ignored without executing it.
+
+Surrounding replay-state unit tests:
+
+```shell
+cargo test --profile dev-ci --locked -p golem-worker-executor --lib -- durable_host::replay_state::tests --report-time
+```
 
 ## Minimal history
 
@@ -54,9 +63,23 @@ These are cursor-level tests, not evidence that the complete SDK/snapshot chain 
 GOL-740 occurs in an application. A full recovery test would separately need an actual Store
 reconstruction and the affected SDK fixture.
 
-## Verification checkpoint
+## Verified behavior
 
-The tests have not been compiled or executed yet. Local disk usage is at the local-workflow
-skill's 90% build gate, and there is no reusable executor unit-test binary in alt-02. Formatting
-and patch checks can run without a dependency-heavy build; the commands above remain necessary
-before treating the reproducer as confirmed.
+Compiled and verified on 2026-10-09 against the branch base above:
+
+- Both controls pass: the omitted direct environment call does not stall, and a late concurrent
+  timer owner unblocks the original clock reader.
+- The explicitly enabled regression fails consistently in three runs, at its one-second
+  deadline, with this diagnostic:
+
+  ```text
+  replay stalled: the only reader cannot claim Start(5) beyond the unclaimed
+  wait-for Start(2) and CompletionDelivered(4); cursor=1, target=7
+  ```
+
+- The surrounding replay-state suite passes by default: 190 passed, no failures, and this
+  regression ignored. Its ignore attribute keeps the test-only branch green; explicitly enabling
+  it demonstrates the unresolved stall rather than asserting that the bug is fixed.
+
+Verification used the commands above with `--offline` as well. The `dev-ci` profile avoids
+incremental artifact retention and reuses the locally built test binary on subsequent runs.
