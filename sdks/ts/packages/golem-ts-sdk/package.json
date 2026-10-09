@@ -107,7 +107,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
-    "@golemcloud/http-contract": "file:../../../http-contract",
+    "@golemcloud/http-contract": "link:../../../http-contract",
     "arktype": "^2.1.0",
     "effect": "^3.10.0",
     "valibot": "^1.0.0",
