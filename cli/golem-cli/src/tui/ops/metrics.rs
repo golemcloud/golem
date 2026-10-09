@@ -64,28 +64,44 @@ pub(in crate::tui) enum MetricsRange {
     Hours6,
     Hours24,
     Days7,
+    Custom(LocalMetricTimeRange),
 }
 
 impl MetricsRange {
-    pub(in crate::tui) const fn label(self) -> &'static str {
+    pub(in crate::tui) const PRESETS: [Self; 6] = [
+        Self::Minutes5,
+        Self::Minutes15,
+        Self::Hour1,
+        Self::Hours6,
+        Self::Hours24,
+        Self::Days7,
+    ];
+
+    pub(in crate::tui) fn label(self) -> String {
         match self {
-            Self::Minutes5 => "5m",
-            Self::Minutes15 => "15m",
-            Self::Hour1 => "1h",
-            Self::Hours6 => "6h",
-            Self::Hours24 => "24h",
-            Self::Days7 => "7d",
+            Self::Minutes5 => "5m".to_string(),
+            Self::Minutes15 => "15m".to_string(),
+            Self::Hour1 => "1h".to_string(),
+            Self::Hours6 => "6h".to_string(),
+            Self::Hours24 => "24h".to_string(),
+            Self::Days7 => "7d".to_string(),
+            Self::Custom(range) => format!(
+                "{} → {}",
+                range_endpoint_label(range.from_unix_nanos),
+                range_endpoint_label(range.to_unix_nanos)
+            ),
         }
     }
 
-    const fn duration(self) -> Duration {
+    const fn duration(self) -> Option<Duration> {
         match self {
-            Self::Minutes5 => Duration::from_secs(5 * 60),
-            Self::Minutes15 => Duration::from_secs(15 * 60),
-            Self::Hour1 => Duration::from_secs(60 * 60),
-            Self::Hours6 => Duration::from_secs(6 * 60 * 60),
-            Self::Hours24 => Duration::from_secs(24 * 60 * 60),
-            Self::Days7 => Duration::from_secs(7 * 24 * 60 * 60),
+            Self::Minutes5 => Some(Duration::from_secs(5 * 60)),
+            Self::Minutes15 => Some(Duration::from_secs(15 * 60)),
+            Self::Hour1 => Some(Duration::from_secs(60 * 60)),
+            Self::Hours6 => Some(Duration::from_secs(6 * 60 * 60)),
+            Self::Hours24 => Some(Duration::from_secs(24 * 60 * 60)),
+            Self::Days7 => Some(Duration::from_secs(7 * 24 * 60 * 60)),
+            Self::Custom(_) => None,
         }
     }
 
@@ -97,8 +113,33 @@ impl MetricsRange {
             Self::Hours6 => Self::Hours24,
             Self::Hours24 => Self::Days7,
             Self::Days7 => Self::Minutes5,
+            Self::Custom(_) => Self::Minutes5,
         }
     }
+
+    pub(in crate::tui) fn previous(self) -> Self {
+        match self {
+            Self::Minutes5 => Self::Days7,
+            Self::Minutes15 => Self::Minutes5,
+            Self::Hour1 => Self::Minutes15,
+            Self::Hours6 => Self::Hour1,
+            Self::Hours24 => Self::Hours6,
+            Self::Days7 => Self::Hours24,
+            Self::Custom(_) => Self::Days7,
+        }
+    }
+
+    pub(in crate::tui) const fn is_custom(self) -> bool {
+        matches!(self, Self::Custom(_))
+    }
+}
+
+fn range_endpoint_label(timestamp_unix_nanos: i64) -> String {
+    let seconds = timestamp_unix_nanos.div_euclid(1_000_000_000);
+    let nanos = timestamp_unix_nanos.rem_euclid(1_000_000_000) as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
+        .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%SZ").to_string())
+        .unwrap_or_else(|| format!("{timestamp_unix_nanos}ns"))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -536,13 +577,17 @@ async fn load_series_samples(
 }
 
 pub(in crate::tui) fn current_range(preset: MetricsRange) -> LocalMetricTimeRange {
+    if let MetricsRange::Custom(range) = preset {
+        return range;
+    }
     let to = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos()
         .min(i64::MAX as u128) as i64;
     LocalMetricTimeRange {
-        from_unix_nanos: to.saturating_sub(preset.duration().as_nanos() as i64),
+        from_unix_nanos: to
+            .saturating_sub(preset.duration().expect("preset metric range").as_nanos() as i64),
         to_unix_nanos: to,
     }
 }

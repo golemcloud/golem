@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-09: Preset And Absolute Metrics Ranges
+
+- Replaced blind `ctrl+t` cycling with a stable Metrics time-range chooser.
+  The popup keeps the six relative presets and adds editable absolute From/To
+  fields with visible cursor ownership and explicit RFC3339 timezone input.
+- Added centered validation feedback without changing popup size, retained edit
+  cancel semantics, and rendered the active absolute bounds in the Metrics
+  header and chart axis text.
+- Custom absolute ranges propagate unchanged to every Metrics request and pause
+  Live refresh. Attempting to enable Live explains that a relative preset is
+  required; selecting a preset preserves explicit paused/live ownership.
+- Covered preset selection, invalid ordering, exact custom propagation, Live
+  behavior, editing help/cursor styling, and 1×1-safe rendering.
+
+Still open in this slice: explicit single/included-Agent handoff actions, the
+remaining destination/state previews, final terminal visual acceptance, and
+the larger `OpsApp` ownership cleanup.
+
 ## 2026-10-09: Metric Bucket To Oplog Handoff
 
 - Extended the local sample response with the exact aggregation bucket width;

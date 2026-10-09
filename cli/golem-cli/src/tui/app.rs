@@ -57,7 +57,7 @@ use crate::tui::ops::activity::{
 };
 use crate::tui::ops::deployments::{self, DeploymentChangeKind, DeploymentsState, RECENT_LIMIT};
 use crate::tui::ops::metrics::{
-    self, MAX_EXPLORE_SERIES, MetricsFocus, MetricsLoad, MetricsMode, MetricsQuery,
+    self, MAX_EXPLORE_SERIES, MetricsFocus, MetricsLoad, MetricsMode, MetricsQuery, MetricsRange,
     MetricsRefreshPayload, MetricsState,
 };
 use crate::tui::ops::overview::{
@@ -430,6 +430,121 @@ enum MetricOplogTarget {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MetricsRangeFormField {
+    Apply,
+    Preset,
+    From,
+    To,
+}
+
+impl MetricsRangeFormField {
+    const ALL: [Self; 4] = [Self::Apply, Self::Preset, Self::From, Self::To];
+}
+
+#[derive(Clone, Debug)]
+struct MetricsRangeForm {
+    selected: usize,
+    preset: MetricsRange,
+    custom: bool,
+    from: TextEditState,
+    to: TextEditState,
+    editing: bool,
+    editing_original: Option<String>,
+    error: Option<String>,
+}
+
+impl MetricsRangeForm {
+    fn new(
+        range: MetricsRange,
+        loaded_range: Option<crate::model::local_observability::LocalMetricTimeRange>,
+    ) -> Self {
+        let exact_range = match range {
+            MetricsRange::Custom(range) => range,
+            _ => loaded_range.unwrap_or_else(|| metrics::current_range(range)),
+        };
+        Self {
+            selected: 0,
+            preset: if range.is_custom() {
+                MetricsRange::Minutes15
+            } else {
+                range
+            },
+            custom: range.is_custom(),
+            from: TextEditState::new(&format_metrics_range_input(exact_range.from_unix_nanos)),
+            to: TextEditState::new(&format_metrics_range_input(exact_range.to_unix_nanos)),
+            editing: false,
+            editing_original: None,
+            error: None,
+        }
+    }
+
+    fn selected_field(&self) -> MetricsRangeFormField {
+        MetricsRangeFormField::ALL[self.selected.min(MetricsRangeFormField::ALL.len() - 1)]
+    }
+
+    fn move_focus(&mut self, forward: bool) {
+        self.selected = if forward {
+            (self.selected + 1) % MetricsRangeFormField::ALL.len()
+        } else {
+            (self.selected + MetricsRangeFormField::ALL.len() - 1)
+                % MetricsRangeFormField::ALL.len()
+        };
+        self.error = None;
+    }
+
+    fn editor(&self) -> Option<&TextEditState> {
+        match self.selected_field() {
+            MetricsRangeFormField::From => Some(&self.from),
+            MetricsRangeFormField::To => Some(&self.to),
+            _ => None,
+        }
+    }
+
+    fn editor_mut(&mut self) -> Option<&mut TextEditState> {
+        match self.selected_field() {
+            MetricsRangeFormField::From => Some(&mut self.from),
+            MetricsRangeFormField::To => Some(&mut self.to),
+            _ => None,
+        }
+    }
+
+    fn cycle_preset(&mut self, forward: bool) {
+        self.preset = if forward {
+            self.preset.next()
+        } else {
+            self.preset.previous()
+        };
+        self.custom = false;
+        self.error = None;
+    }
+
+    fn begin_edit(&mut self) {
+        let Some(editor) = self.editor() else {
+            return;
+        };
+        self.editing_original = Some(editor.draft.clone());
+        self.editing = true;
+        self.custom = true;
+        self.error = None;
+    }
+
+    fn finish_edit(&mut self) {
+        self.editing = false;
+        self.editing_original = None;
+    }
+
+    fn cancel_edit(&mut self) {
+        let original = self.editing_original.take();
+        if let Some(original) = original
+            && let Some(editor) = self.editor_mut()
+        {
+            *editor = TextEditState::new(&original);
+        }
+        self.editing = false;
+    }
+}
+
 struct TuiApp {
     should_quit: bool,
     active_workspace: Workspace,
@@ -461,6 +576,7 @@ struct TuiApp {
     overview: OverviewState,
     deployments: DeploymentsState,
     metrics: MetricsState,
+    metrics_range_form: Option<MetricsRangeForm>,
     activity: ActivityState,
     resources: ResourcesState,
     stream: StreamState,
@@ -530,6 +646,7 @@ impl TuiApp {
             overview: OverviewState::default(),
             deployments: DeploymentsState::default(),
             metrics: MetricsState::default(),
+            metrics_range_form: None,
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
             stream: StreamState::default(),
@@ -710,6 +827,7 @@ impl TuiApp {
                 self.handle_agent_dataset_filter_key(key, event_tx)
             }
             InteractionMode::AgentColumns => self.handle_agent_columns_key(key),
+            InteractionMode::MetricsRange => self.handle_metrics_range_key(key, event_tx),
             InteractionMode::TerminalInput => self.handle_terminal_input_key(key),
             InteractionMode::TerminalScrollback => self.handle_terminal_scrollback_key(key),
         }
@@ -1231,17 +1349,27 @@ impl TuiApp {
                     && self.ops.active() == OpsDestination::Metrics
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.metrics.range = self.metrics.range.next();
-                self.reload_metrics(event_tx);
+                self.open_metrics_range_form();
             }
             KeyCode::Char('l')
                 if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Metrics
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.metrics.live = !self.metrics.live;
-                if self.metrics.live {
-                    self.refresh_metrics_live(event_tx);
+                if self.metrics.range.is_custom() {
+                    self.metrics.live = false;
+                    self.open_metrics_range_form();
+                    if let Some(form) = self.metrics_range_form.as_mut() {
+                        form.error = Some(
+                            "Live refresh requires a relative preset; choose one and Apply"
+                                .to_string(),
+                        );
+                    }
+                } else {
+                    self.metrics.live = !self.metrics.live;
+                    if self.metrics.live {
+                        self.refresh_metrics_live(event_tx);
+                    }
                 }
             }
             KeyCode::Char(' ')
@@ -1650,7 +1778,9 @@ impl TuiApp {
         }
         if matches!(
             self.mode.current(),
-            InteractionMode::CommandForm | InteractionMode::SessionForm
+            InteractionMode::CommandForm
+                | InteractionMode::SessionForm
+                | InteractionMode::MetricsRange
         ) {
             return;
         }
@@ -2658,6 +2788,7 @@ impl TuiApp {
         let valid = match self.mode.current() {
             InteractionMode::CommandForm => self.command_form.is_some(),
             InteractionMode::SessionForm => self.session_form.is_some(),
+            InteractionMode::MetricsRange => self.metrics_range_form.is_some(),
             _ => true,
         };
         if !valid {
@@ -3822,6 +3953,119 @@ impl TuiApp {
         issues
     }
 
+    fn open_metrics_range_form(&mut self) {
+        self.metrics_range_form = Some(MetricsRangeForm::new(
+            self.metrics.range,
+            self.metrics.time_range,
+        ));
+        self.open_transient_mode(InteractionMode::MetricsRange);
+    }
+
+    fn handle_metrics_range_key(&mut self, key: KeyEvent, event_tx: Option<&TuiEventSender>) {
+        if key.code == KeyCode::Char('x') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_leader();
+            return;
+        }
+        if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_palette(self.palette.scope);
+            return;
+        }
+        if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.request_quit();
+            return;
+        }
+        if key.code == KeyCode::Char('h') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            self.open_help();
+            return;
+        }
+
+        let Some(form) = self.metrics_range_form.as_mut() else {
+            self.close_transient_mode();
+            return;
+        };
+        if form.editing {
+            match key.code {
+                KeyCode::Esc => form.cancel_edit(),
+                KeyCode::Enter => form.finish_edit(),
+                KeyCode::Left => form.editor_mut().expect("range editor").move_left(),
+                KeyCode::Right => form.editor_mut().expect("range editor").move_right(),
+                KeyCode::Home => form.editor_mut().expect("range editor").cursor = 0,
+                KeyCode::End => {
+                    let editor = form.editor_mut().expect("range editor");
+                    editor.cursor = editor.draft.len();
+                }
+                KeyCode::Backspace => form.editor_mut().expect("range editor").backspace(),
+                KeyCode::Delete => form.editor_mut().expect("range editor").delete(),
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    form.editor_mut().expect("range editor").clear()
+                }
+                KeyCode::Char(character)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    form.editor_mut().expect("range editor").insert(character)
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c')
+                if key.code == KeyCode::Esc || key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.metrics_range_form = None;
+                self.close_transient_mode();
+            }
+            KeyCode::Up | KeyCode::BackTab => form.move_focus(false),
+            KeyCode::Down | KeyCode::Tab => form.move_focus(true),
+            KeyCode::Left if form.selected_field() == MetricsRangeFormField::Preset => {
+                form.cycle_preset(false)
+            }
+            KeyCode::Right | KeyCode::Char(' ')
+                if form.selected_field() == MetricsRangeFormField::Preset =>
+            {
+                form.cycle_preset(true)
+            }
+            KeyCode::Enter => match form.selected_field() {
+                MetricsRangeFormField::Apply | MetricsRangeFormField::Preset => {
+                    self.apply_metrics_range_form(event_tx)
+                }
+                MetricsRangeFormField::From | MetricsRangeFormField::To => form.begin_edit(),
+            },
+            _ => {}
+        }
+    }
+
+    fn apply_metrics_range_form(&mut self, event_tx: Option<&TuiEventSender>) {
+        let result = self
+            .metrics_range_form
+            .as_ref()
+            .ok_or_else(|| "The time range form is unavailable".to_string())
+            .and_then(|form| {
+                if form.custom {
+                    parse_metrics_range(&form.from.draft, &form.to.draft).map(MetricsRange::Custom)
+                } else {
+                    Ok(form.preset)
+                }
+            });
+        let range = match result {
+            Ok(range) => range,
+            Err(error) => {
+                if let Some(form) = self.metrics_range_form.as_mut() {
+                    form.error = Some(error);
+                }
+                return;
+            }
+        };
+        self.metrics.range = range;
+        if range.is_custom() {
+            self.metrics.live = false;
+        }
+        self.metrics_range_form = None;
+        self.close_transient_mode();
+        self.reload_metrics(event_tx);
+    }
+
     fn metrics_query(&self, load: MetricsLoad) -> Option<MetricsQuery> {
         let source = self.metrics.source;
         let agent_ids = match (source, self.ops.current_agent()) {
@@ -4017,6 +4261,7 @@ impl TuiApp {
     }
 
     fn invalidate_metrics(&mut self) {
+        self.metrics_range_form = None;
         self.metrics = MetricsState {
             generation: self.metrics.generation.saturating_add(1),
             ..MetricsState::default()
@@ -9399,6 +9644,7 @@ fn render_tree(frame: &mut Frame<'_>, app: &TuiApp) {
         InteractionMode::AgentFilter => {}
         InteractionMode::AgentDatasetFilter => render_agent_dataset_filter(frame, app),
         InteractionMode::AgentColumns => render_agent_columns(frame, app),
+        InteractionMode::MetricsRange => render_metrics_range_form(frame, app),
         InteractionMode::CommandForm => render_command_form(frame, app),
         InteractionMode::SessionForm => render_session_form(frame, app),
         InteractionMode::TerminalInput => {}
@@ -11385,12 +11631,16 @@ fn render_metrics_chart(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
         let unit = if unit == "1" { "" } else { unit };
         let timestamps = app.metrics_chart_timestamps();
         let cursor_timestamp = metrics_cursor_timestamp(app, &timestamps);
+        let x_axis = if app.metrics.range.is_custom() {
+            app.metrics.range.label()
+        } else {
+            format!("-{} → now", app.metrics.range.label())
+        };
         lines.push(Line::from(Span::styled(
             format!(
-                "y {}{unit} … {}{unit} · x -{} → now · gaps · shared scale",
+                "y {}{unit} … {}{unit} · x {x_axis} · gaps · shared scale",
                 format_metric_value(value_min),
                 format_metric_value(value_max),
-                app.metrics.range.label(),
             ),
             Style::default().fg(theme().text_muted),
         )));
@@ -11542,6 +11792,33 @@ fn metric_timestamp_label(timestamp_unix_nanos: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanos)
         .map(|timestamp| timestamp.format("%Y-%m-%d %H:%M:%S%.3fZ").to_string())
         .unwrap_or_else(|| format!("{timestamp_unix_nanos} ns"))
+}
+
+fn format_metrics_range_input(timestamp_unix_nanos: i64) -> String {
+    datetime_from_unix_nanos(timestamp_unix_nanos)
+        .map(|timestamp| timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+        .unwrap_or_else(|| timestamp_unix_nanos.to_string())
+}
+
+fn parse_metrics_range(
+    from: &str,
+    to: &str,
+) -> Result<crate::model::local_observability::LocalMetricTimeRange, String> {
+    let parse = |label: &str, value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value.trim())
+            .map_err(|_| format!("{label} must be an RFC3339 timestamp with a timezone"))?
+            .timestamp_nanos_opt()
+            .ok_or_else(|| format!("{label} is outside the supported timestamp range"))
+    };
+    let from_unix_nanos = parse("From", from)?;
+    let to_unix_nanos = parse("To", to)?;
+    if from_unix_nanos >= to_unix_nanos {
+        return Err("From must be earlier than To".to_string());
+    }
+    Ok(crate::model::local_observability::LocalMetricTimeRange {
+        from_unix_nanos,
+        to_unix_nanos,
+    })
 }
 
 fn datetime_from_unix_nanos(timestamp_unix_nanos: i64) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -13804,7 +14081,12 @@ fn help_lines(app: &TuiApp, width: usize) -> Vec<Line<'static>> {
             }
         }
         push_raw_help(&mut lines, width, "ctrl+s", "Switch Agents / Server source");
-        push_raw_help(&mut lines, width, "ctrl+t", "Cycle time range");
+        push_raw_help(
+            &mut lines,
+            width,
+            "ctrl+t",
+            "Choose preset or absolute time range",
+        );
         push_raw_help(&mut lines, width, "ctrl+l", "Toggle Live / Paused");
         push_raw_help(&mut lines, width, "ctrl+r", "Refresh now");
         push_raw_help(&mut lines, width, "ctrl+x v o", "Open Overview");
@@ -14755,6 +15037,180 @@ fn pad_or_ellipsis(text: &str, width: usize) -> String {
         format!("{text}{}", " ".repeat(width - len))
     } else {
         text
+    }
+}
+
+fn render_metrics_range_form(frame: &mut Frame<'_>, app: &TuiApp) {
+    let Some(form) = app.metrics_range_form.as_ref() else {
+        return;
+    };
+    let area = content_popup_rect(frame.area(), 72, 16);
+    let content = OverlayFrame::content_area(area);
+    let row_width = content.width as usize;
+    let label_width = 10;
+    let mut lines = vec![
+        ActionButton {
+            label: "Apply",
+            selected: form.selected_field() == MetricsRangeFormField::Apply,
+        }
+        .line(&theme()),
+        Line::default(),
+    ];
+    lines.extend(
+        wrap_styled_line(
+            Notice {
+                kind: NoticeKind::Info,
+                message: "Presets end at now. Absolute RFC3339 ranges pause Live refresh.",
+            }
+            .popup_line(&theme()),
+            row_width,
+        )
+        .into_iter()
+        .map(|line| line.alignment(Alignment::Center)),
+    );
+    lines.push(Line::default());
+
+    let preset_value = MetricsRange::PRESETS
+        .into_iter()
+        .map(|preset| {
+            let label = preset.label();
+            if preset == form.preset {
+                format!("[{label}]")
+            } else {
+                label
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    let preset_label = if form.custom {
+        format!("{preset_value}  · custom active")
+    } else {
+        preset_value
+    };
+    lines.push(
+        ReviewFieldRow {
+            label: "Preset",
+            value: &preset_label,
+            label_width,
+            selected: form.selected_field() == MetricsRangeFormField::Preset,
+            editing: false,
+        }
+        .line(row_width, &theme()),
+    );
+
+    let mut cursor = None;
+    for (field, label, editor) in [
+        (MetricsRangeFormField::From, "From UTC", &form.from),
+        (MetricsRangeFormField::To, "To UTC", &form.to),
+    ] {
+        let selected = form.selected_field() == field;
+        let editing = selected && form.editing;
+        let template = ReviewFieldRow {
+            label,
+            value: &editor.draft,
+            label_width,
+            selected,
+            editing,
+        };
+        let value_offset = template.value_offset(row_width);
+        let row_y = content.y.saturating_add(lines.len() as u16);
+        let (value, cursor_column) = if editing {
+            editor.viewport(row_width.saturating_sub(value_offset))
+        } else {
+            (editor.draft.clone(), 0)
+        };
+        if editing {
+            cursor = Some(Position::new(
+                content
+                    .x
+                    .saturating_add(value_offset as u16)
+                    .saturating_add(cursor_column as u16),
+                row_y,
+            ));
+        }
+        lines.push(
+            ReviewFieldRow {
+                label,
+                value: &value,
+                label_width,
+                selected,
+                editing,
+            }
+            .line(row_width, &theme()),
+        );
+    }
+
+    lines.push(Line::default());
+    if let Some(error) = &form.error {
+        lines.extend(
+            wrap_styled_line(
+                Notice {
+                    kind: NoticeKind::Warning,
+                    message: error,
+                }
+                .popup_line(&theme()),
+                row_width,
+            )
+            .into_iter()
+            .map(|line| line.alignment(Alignment::Center)),
+        );
+    }
+    let normal_hints = [
+        KeyHint {
+            key: "↑/↓",
+            label: "Field",
+        },
+        KeyHint {
+            key: "←/→",
+            label: "Preset",
+        },
+        KeyHint {
+            key: "enter",
+            label: "Apply / edit",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel",
+        },
+    ];
+    let editing_hints = [
+        KeyHint {
+            key: "type / arrows",
+            label: "Edit",
+        },
+        KeyHint {
+            key: "enter",
+            label: "Done",
+        },
+        KeyHint {
+            key: "esc",
+            label: "Cancel edit",
+        },
+    ];
+    let footer = shortcut_line(
+        if form.editing {
+            &editing_hints
+        } else {
+            &normal_hints
+        },
+        &theme(),
+        Alignment::Center,
+    );
+    OverlayFrame {
+        title: Some("Metrics time range"),
+    }
+    .render_aligned(
+        frame,
+        area,
+        overlay_lines_with_footer(lines, footer, content.height),
+        Alignment::Left,
+        &theme(),
+    );
+    if let Some(cursor) = cursor
+        && cursor.x < content.right()
+        && cursor.y < content.bottom()
+    {
+        frame.set_cursor_position(cursor);
     }
 }
 
@@ -19198,6 +19654,105 @@ mod tests {
     }
 
     #[test]
+    fn metrics_range_form_applies_absolute_range_and_pauses_live() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.metrics.live = true;
+
+        app.handle_key(modified_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+
+        assert_eq!(app.mode, InteractionMode::MetricsRange);
+        let frame = render_app_text_at(&app, 100, 28);
+        assert!(frame.contains("Metrics time range"), "{frame}");
+        assert!(frame.contains("Preset"), "{frame}");
+        assert!(frame.contains("From UTC"), "{frame}");
+        assert!(frame.contains("To UTC"), "{frame}");
+        assert!(frame.contains("Apply / edit"), "{frame}");
+        render_app_text_at(&app, 1, 1);
+
+        let form = app.metrics_range_form.as_mut().unwrap();
+        form.custom = true;
+        form.from = TextEditState::new("2026-10-09T10:00:00.000Z");
+        form.to = TextEditState::new("2026-10-09T11:30:00.000Z");
+        app.handle_key(key(KeyCode::Enter));
+
+        let expected =
+            parse_metrics_range("2026-10-09T10:00:00.000Z", "2026-10-09T11:30:00.000Z").unwrap();
+        assert_eq!(app.metrics.range, MetricsRange::Custom(expected));
+        assert!(!app.metrics.live);
+        assert_eq!(app.mode, InteractionMode::Normal);
+        assert!(app.metrics_range_form.is_none());
+
+        app.handle_key(modified_key(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(app.mode, InteractionMode::MetricsRange);
+        assert!(
+            app.metrics_range_form
+                .as_ref()
+                .and_then(|form| form.error.as_deref())
+                .is_some_and(|error| error.contains("requires a relative preset"))
+        );
+    }
+
+    #[test]
+    fn metrics_range_form_keeps_invalid_absolute_input_open() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.handle_key(modified_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        let form = app.metrics_range_form.as_mut().unwrap();
+        form.custom = true;
+        form.from = TextEditState::new("2026-10-09T12:00:00Z");
+        form.to = TextEditState::new("2026-10-09T11:00:00Z");
+
+        app.handle_key(key(KeyCode::Enter));
+
+        assert_eq!(app.mode, InteractionMode::MetricsRange);
+        assert!(
+            app.metrics_range_form
+                .as_ref()
+                .and_then(|form| form.error.as_deref())
+                .is_some_and(|error| error.contains("earlier than To"))
+        );
+        let frame = render_app_text_at(&app, 100, 28);
+        assert!(frame.contains("From must be earlier than To"), "{frame}");
+    }
+
+    #[test]
+    fn metrics_range_editor_shows_cursor_and_editing_help() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.handle_key(modified_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Enter));
+
+        assert!(app.metrics_range_form.as_ref().unwrap().editing);
+        let (_, cursor) = render_app_text_and_cursor(&app);
+        let buffer = render_app_buffer_at(&app, 100, 24);
+        assert_ne!((cursor.x, cursor.y), (0, 0));
+        assert_eq!(buffer[(cursor.x, cursor.y)].bg, theme().input_background);
+        let frame = render_buffer_text(&buffer);
+        assert!(frame.contains("enter Done"), "{frame}");
+        assert!(frame.contains("esc Cancel edit"), "{frame}");
+    }
+
+    #[test]
+    fn metrics_range_form_applies_presets_and_custom_range_is_exact() {
+        let mut app = test_app();
+        app.ops.select(OpsDestination::Metrics);
+        app.handle_key(modified_key(KeyCode::Char('t'), KeyModifiers::CONTROL));
+        app.handle_key(key(KeyCode::Down));
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.metrics.range, MetricsRange::Hour1);
+
+        let range = LocalMetricTimeRange {
+            from_unix_nanos: 123,
+            to_unix_nanos: 456,
+        };
+        assert_eq!(metrics::current_range(MetricsRange::Custom(range)), range);
+    }
+
+    #[test]
     fn metrics_explore_marks_and_limits_compatible_series_overlays() {
         let mut app = test_app();
         app.ops.select(OpsDestination::Metrics);
@@ -21906,6 +22461,7 @@ mod tests {
             overview: OverviewState::default(),
             deployments: DeploymentsState::default(),
             metrics: MetricsState::default(),
+            metrics_range_form: None,
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
             stream: StreamState::default(),

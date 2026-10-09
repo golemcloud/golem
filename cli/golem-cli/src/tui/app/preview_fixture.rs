@@ -93,6 +93,7 @@ fn preview_app(case_id: &str) -> TuiApp {
         overview: OverviewState::default(),
         deployments: DeploymentsState::default(),
         metrics: MetricsState::default(),
+        metrics_range_form: None,
         activity: ActivityState::default(),
         resources: ResourcesState::default(),
         stream: StreamState::default(),
