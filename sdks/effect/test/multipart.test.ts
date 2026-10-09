@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
+import { vi } from "vitest"
 import { decodeMultipart, encodeMultipart, extractBoundary } from "../src/internal/multipart.js"
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s)
@@ -39,13 +40,57 @@ describe("multipart encode/decode", () => {
   })
 
   it("regenerates boundary if it would appear in any body", () => {
-    // Force a deterministic boundary by stuffing the part body with
-    // many candidate boundaries — encoder must keep regenerating.
-    const parts = [{ name: "state", contentType: "application/json", body: enc("hello") }]
-    const { data, boundary } = encodeMultipart(parts)
-    expect(data.length).toBeGreaterThan(0)
-    expect(boundary).toBeTruthy()
+    const colliding = "11111111-1111-1111-1111-111111111111"
+    const safe = "22222222-2222-2222-2222-222222222222"
+    const randomUUID = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce(colliding)
+      .mockReturnValue(safe)
+    try {
+      const marker = `\r\n--${colliding.replace(/-/g, "")}`
+      const body = enc(`\r\r\n--almost\r\n--111x${marker}`)
+      const { data, boundary } = encodeMultipart([
+        { name: "db", contentType: "application/x-sqlite3", body },
+      ])
+      expect(boundary).toBe(safe.replace(/-/g, ""))
+      expect(decodeMultipart(data, boundary)[0]!.body).toEqual(body)
+    } finally {
+      randomUUID.mockRestore()
+    }
   })
+
+  it("round-trips multi-MB binary parts between JSON parts without aliasing the input", () => {
+    const body = new Uint8Array(4 * 1024 * 1024)
+    for (let i = 0; i < body.length; i++) body[i] = i % 256
+    const parts = [
+      { name: "state", contentType: "application/json", body: enc('{"count":17}') },
+      { name: "db", contentType: "application/x-sqlite3", body },
+      { name: "tail", contentType: "application/json", body: enc('{"last":true}') },
+    ]
+    const { data, boundary } = encodeMultipart(parts)
+    const decoded = decodeMultipart(data, boundary)
+    expect(decoded.map((part) => part.name)).toEqual(["state", "db", "tail"])
+    expect(decoded.map((part) => part.contentType)).toEqual(parts.map((part) => part.contentType))
+    for (let i = 0; i < parts.length; i++) {
+      expect(Buffer.from(decoded[i]!.body).equals(Buffer.from(parts[i]!.body))).toBe(true)
+    }
+    data.fill(0)
+    expect(Buffer.from(decoded[1]!.body).equals(Buffer.from(body))).toBe(true)
+  })
+
+  it.each(["\r\n", "\n"])(
+    "preserves binary data with %j framing and false delimiter starts",
+    (newline) => {
+      const boundary = "abcdef0123456789abcdef0123456789"
+      const body = `\n\n--almost\n--${boundary.slice(0, -1)}x\r\n\r\nend\n`
+      const raw =
+        `--${boundary}${newline}` +
+        `Content-Type: application/octet-stream${newline}` +
+        `Content-Disposition: attachment; name="db"${newline}${newline}` +
+        `${body}${newline}--${boundary}--${newline}`
+      expect(decodeMultipart(enc(raw), boundary)[0]!.body).toEqual(enc(body))
+    },
+  )
 
   it("decoder accepts bare LF line endings (decode-side robustness)", () => {
     // Hand-craft a multipart body with bare \n separators.
