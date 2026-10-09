@@ -185,11 +185,18 @@ async fn effect_duplex_websocket_crash_continuation(
             loop {
                 executor.commit_oplog(&worker).await?;
                 let entries = executor.get_oplog(&worker, boundary.next()).await?;
-                let completed = |suffix: &str| entries.iter().any(|entry| {
+                let completed_internal_clock = entries.iter().any(|entry| {
                     matches!(&entry.entry, PublicOplogEntry::Start(start)
-                        if start.function_name.ends_with(suffix) && has_terminal(&entries, entry.oplog_index))
+                        if start.function_name.ends_with("monotonic-clock::now")
+                            && start.parent_start_index.is_some()
+                            && has_terminal(&entries, entry.oplog_index))
                 });
-                if completed("monotonic-clock::now") && completed("client::receive") {
+                let completed_receive = entries.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::Start(start)
+                        if start.function_name.ends_with("client::receive")
+                            && has_terminal(&entries, entry.oplog_index))
+                });
+                if completed_internal_clock && completed_receive {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
