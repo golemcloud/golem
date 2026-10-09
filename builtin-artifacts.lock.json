@@ -19,8 +19,8 @@
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.11",
-      "sha256": "5481fc55548eeba73dfe3f948c62aa5050bd0bd89b700ab2cdd923dfcba0d5dc"
+      "version": "0.0.12",
+      "sha256": "e9c9735429c572e6b2e08561d95df25e94bf82ecb8b1cd255199d077e30db811"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
@@ -29,8 +29,8 @@
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.10",
-      "sha256": "5c8094cac5f4d39f063be4c90e9227687ccb140eb58872f0208639258ecd5f01"
+      "version": "0.0.11",
+      "sha256": "d2be87dc545a9d0f80c029860cfb1aa920549ae6efdbc180d6afa2beb9dfdbde"
     },
     "web_fetch": {
       "component": "web-fetch",
