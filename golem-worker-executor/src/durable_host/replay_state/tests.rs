@@ -29,6 +29,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;
 
+mod stalled_replay;
+
 type StoredExternalPayload = (PayloadId, Vec<u8>, Vec<u8>);
 
 /// Minimal in-memory `Oplog` used to drive a [`ReplayState`] over hand-built entries.
