@@ -164,9 +164,7 @@ const server = createServer((req, res) => {
   res.end('Hello from Golem');
 });
 
-export const router = defineHttpRouter('Web')
-  .mount('/')
-  .implementRaw(nodeHttpHandler(server));
+export const router = defineHttpRouter('Web').mount('/').implementRaw(nodeHttpHandler(server));
 ```
 
 List `Web` in the HTTP API deployment's `agents` map in `golem.yaml`, just as for other
@@ -182,7 +180,7 @@ components:
   my-app:main:
     templates: ts
     nodeHttpRouters:
-      "3000":
+      '3000':
         name: Web
         mount: /web
         auth: true
