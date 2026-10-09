@@ -79,6 +79,7 @@ use crate::services::agent_filesystem::{
 };
 use crate::services::agent_filesystem_snapshots;
 use crate::services::card_interest::CardInterestIndex;
+use crate::services::component::component_support_error;
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::linear_memory::{LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR};
@@ -303,7 +304,8 @@ enum TargetChargeAction {
     /// The target resolved: charge it with the resolved module size.
     ChargeTarget(ResolvedComponentCharge),
     /// The target cannot load for good (it does not exist, the component service
-    /// refused it, or any other error but an unavailable component service):
+    /// refused it, the executor does not support it, or metadata failed with any error
+    /// but an unavailable component service):
     /// `create_instance` will fail the update and load the current revision, so
     /// charge the current revision instead.
     FallBackToCurrent,
@@ -317,6 +319,7 @@ struct ResolvedComponentCharge {
     module_bytes: u64,
     initial_linear_memory_bytes: u64,
     reserved_linear_memory_bytes: u64,
+    supported: bool,
 }
 
 struct StartupComponentChargeRequirement {
@@ -350,10 +353,13 @@ const CONSUMER_DELETION_FINALIZATION_TIMEOUT: Duration = Duration::from_secs(30)
 /// outcome table: only an unavailable component service leaves the update pending, so
 /// only that is retried. Any other error fails the update at the start, which then
 /// loads the current revision, so the charge falls back to the current revision.
+/// An unsupported target also charges the current revision: startup refuses
+/// it before loading it, even when its advertised memory would not fit.
 fn classify_target_charge(
     result: &Result<ResolvedComponentCharge, WorkerExecutorError>,
 ) -> TargetChargeAction {
     match result {
+        Ok(charge) if !charge.supported => TargetChargeAction::FallBackToCurrent,
         Ok(charge) => TargetChargeAction::ChargeTarget(*charge),
         Err(error) => match start_outcome::FetchProblem::of(error) {
             start_outcome::FetchProblem::Unavailable => TargetChargeAction::Retry,
@@ -5438,6 +5444,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         module_bytes: target.component_size,
                         initial_linear_memory_bytes,
                         reserved_linear_memory_bytes: initial_linear_memory_bytes,
+                        supported: component_support_error(&target.metadata).is_none(),
                     }
                 });
             match classify_target_charge(&result) {
@@ -10357,17 +10364,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
     }
 
-    async fn restart_on_oom(
+    async fn restart_with_memory_admission(
         this: Arc<Worker<Ctx>>,
         called_from_invocation_loop: bool,
         delay: Option<Duration>,
         oom_retry_count: u32,
         start_attempt: Option<Uuid>,
+        reason: UnloadReason,
     ) -> Result<Option<Uuid>, WorkerExecutorError> {
         this.stop_internal(
             called_from_invocation_loop,
             None,
-            UnloadRequest::ordinary(UnloadReason::OutOfMemory),
+            UnloadRequest::ordinary(reason),
             FinalWorkerState::Unloaded {
                 startup_failure: None,
             },
@@ -11565,14 +11573,17 @@ impl StartFilesystem {
     }
 }
 
-pub(crate) struct CreateWorkerInstanceError {
-    pub(crate) error: WorkerExecutorError,
-    pub(crate) filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
+pub(crate) enum CreateWorkerInstanceError {
+    ReacquireMemory,
+    Failed {
+        error: WorkerExecutorError,
+        filesystem_cleanup_failure: Option<UnloadCleanupFailure>,
+    },
 }
 
 impl From<WorkerExecutorError> for CreateWorkerInstanceError {
     fn from(error: WorkerExecutorError) -> Self {
-        Self {
+        Self::Failed {
             error,
             filesystem_cleanup_failure: None,
         }
@@ -11856,7 +11867,13 @@ impl RunningWorker {
             | start_outcome::StartAction::Retry(_)
             | start_outcome::StartAction::Succeed) => {
                 let cleaned = cleanup(raw).await;
-                if cleaned.filesystem_cleanup_failure.is_some() {
+                if matches!(
+                    cleaned,
+                    CreateWorkerInstanceError::Failed {
+                        filesystem_cleanup_failure: Some(_),
+                        ..
+                    }
+                ) {
                     return cleaned;
                 }
                 CreateWorkerInstanceError::from(
@@ -11894,7 +11911,7 @@ impl RunningWorker {
                 (active_agent, generation)
             });
         let Some(entity_generation) = entity_generation else {
-            return Err(CreateWorkerInstanceError {
+            return Err(CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::Interrupted {
                     kind: InterruptKind::ShardLost,
                 },
@@ -12005,6 +12022,35 @@ impl RunningWorker {
                 },
             );
 
+            if let Some(head) = &pending_update_ref {
+                let metadata = parent
+                    .component_service()
+                    .get_metadata(component_id, Some(component_revision))
+                    .await;
+                if let Err(error) = &metadata
+                    && matches!(
+                        start_outcome::FetchProblem::of(error),
+                        start_outcome::FetchProblem::Unavailable
+                    )
+                {
+                    return Err(WorkerExecutorError::RecoveryRequired {
+                        retry_from: None,
+                        details: error.to_string(),
+                    }
+                    .into());
+                }
+                let problem = match &metadata {
+                    Ok(metadata) => component_support_error(&metadata.metadata)
+                        .map(start_outcome::RawStartError::TargetUnsupported),
+                    Err(error) => Some(start_outcome::RawStartError::TargetFetch(error)),
+                };
+                if let Some(problem) = problem {
+                    let action = Self::start_action(&parent, &role, Some(head), problem);
+                    Self::perform_start_action(&parent, action).await?;
+                    return Err(CreateWorkerInstanceError::ReacquireMemory);
+                }
+            }
+
             match parent
                 .component_service()
                 .get(&parent.engine(), component_id, component_revision)
@@ -12056,15 +12102,27 @@ impl RunningWorker {
                 Err(error) => match &pending_update_ref {
                     Some(pending_update_ref) => {
                         warn!(
-                            "Attempting update to revision {component_revision} failed with {error}"
+                            component_revision = %component_revision,
+                            error = %error,
+                            "Loading the pending-update target failed"
                         );
                         let action = Self::start_action(
                             &parent,
                             &role,
                             Some(pending_update_ref),
-                            start_outcome::RawStartError::TargetFetch(&error),
+                            start_outcome::RawStartError::TargetLoad(&error),
                         );
-                        Self::perform_start_action(&parent, action).await?;
+                        Self::perform_start_action(&parent, action)
+                            .await
+                            .map_err(|error| match error {
+                                WorkerExecutorError::Runtime { .. } => {
+                                    WorkerExecutorError::RecoveryRequired {
+                                        retry_from: None,
+                                        details: error.to_string(),
+                                    }
+                                }
+                                error => error,
+                            })?;
                         return Box::pin(Self::create_instance(
                             parent,
                             concurrent_agent_permit,
@@ -12077,8 +12135,22 @@ impl RunningWorker {
             }
         };
 
-        if component_metadata.metadata.has_shared_linear_memory() {
-            return Err(shared_linear_memory_error(&parent).into());
+        if let Some(reason) = component_support_error(&component_metadata.metadata) {
+            if let Some(head) = &pending_update_ref {
+                let action = Self::start_action(
+                    &parent,
+                    &role,
+                    Some(head),
+                    start_outcome::RawStartError::TargetUnsupported(reason),
+                );
+                Self::perform_start_action(&parent, action).await?;
+                return Err(CreateWorkerInstanceError::ReacquireMemory);
+            }
+            return Err(WorkerExecutorError::worker_creation_failed(
+                parent.owned_agent_id.agent_id(),
+                reason,
+            )
+            .into());
         }
 
         // Refresh the snapshot used by the read-only cache key. The component
@@ -12208,7 +12280,7 @@ impl RunningWorker {
             });
         let limits = filesystems
             .resolved_limits(parent.resource_entry.max_disk_space_limit())
-            .map_err(|error| CreateWorkerInstanceError {
+            .map_err(|error| CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(error.to_string()),
                 filesystem_cleanup_failure: error.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(error.to_string()))
@@ -12228,7 +12300,7 @@ impl RunningWorker {
                 pressure_recovery,
             )
             .await
-            .map_err(|failure| CreateWorkerInstanceError {
+            .map_err(|failure| CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(failure.source.to_string()),
                 filesystem_cleanup_failure: failure.source.cleanup_failed().then(|| {
                     UnloadCleanupFailure::Other(WorkerExecutorError::runtime(
@@ -12264,7 +12336,7 @@ impl RunningWorker {
                 let startup_error = WorkerExecutorError::runtime(failure.source.to_string());
                 return Err(match delete_created(failure.filesystem).await {
                     Ok(()) => startup_error.into(),
-                    Err(cleanup_error) => CreateWorkerInstanceError {
+                    Err(cleanup_error) => CreateWorkerInstanceError::Failed {
                         error: WorkerExecutorError::runtime(format!(
                             "{startup_error}; additionally failed to clean up the created agent filesystem: {}",
                             cleanup_error.source
@@ -12683,13 +12755,13 @@ async fn cleanup_typed_agent_filesystem<Adapter: SandboxFilesystemAdapter>(
     close_error: Option<WorkerExecutorError>,
 ) -> CreateWorkerInstanceError {
     match delete_agent_filesystem(filesystem).await {
-        Ok(()) => CreateWorkerInstanceError {
+        Ok(()) => CreateWorkerInstanceError::Failed {
             error: startup_error,
             filesystem_cleanup_failure: close_error.map(UnloadCleanupFailure::Other),
         },
         Err(cleanup_error) => {
             warn!(error = %cleanup_error.source, "Failed to clean up filesystem after worker startup failure");
-            CreateWorkerInstanceError {
+            CreateWorkerInstanceError::Failed {
                 error: WorkerExecutorError::runtime(format!(
                     "{startup_error}; additionally failed to clean up the agent filesystem: {}",
                     cleanup_error.source
@@ -14466,13 +14538,28 @@ mod tests {
                 module_bytes: 4096,
                 initial_linear_memory_bytes: 8192,
                 reserved_linear_memory_bytes: 16384,
+                supported: true,
             })),
             TargetChargeAction::ChargeTarget(ResolvedComponentCharge {
                 module_bytes: 4096,
                 initial_linear_memory_bytes: 8192,
                 reserved_linear_memory_bytes: 16384,
+                supported: true,
             }),
             "a resolved target is charged with its own module size"
+        );
+    }
+
+    #[test]
+    fn classify_target_charge_falls_back_for_unsupported_target_even_when_oversized() {
+        assert_eq!(
+            classify_target_charge(&Ok(ResolvedComponentCharge {
+                module_bytes: 4096,
+                initial_linear_memory_bytes: 4 * 1024 * 1024 * 1024,
+                reserved_linear_memory_bytes: 4 * 1024 * 1024 * 1024,
+                supported: false,
+            })),
+            TargetChargeAction::FallBackToCurrent,
         );
     }
 
