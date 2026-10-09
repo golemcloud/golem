@@ -502,13 +502,13 @@ enum NativeNameModeSource {
     NativeDetection,
     #[cfg(target_os = "linux")]
     ValidatedXfs(xfs::ValidatedXfsNameMode),
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(all(unix, any(test, target_os = "macos")))]
     ApfsExact(FilesystemIdentity),
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(all(unix, any(test, target_os = "macos")))]
     ApfsConservative,
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(all(unix, any(test, target_os = "macos")))]
 fn apfs_name_source(
     case_sensitive: i64,
     identity: FilesystemIdentity,
@@ -568,13 +568,13 @@ struct AppendCoordinatorRegistry {
 
 impl AppendCoordinatorRegistry {
     fn coordinator(&self, identity: NativeFileIdentity) -> Arc<AsyncMutex<()>> {
-        #[cfg(test)]
-        self.lookups
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut coordinators = self
             .coordinators
             .lock()
             .expect("sandbox filesystem append coordinator lock poisoned");
+        #[cfg(test)]
+        self.lookups
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         coordinators.retain(|_, coordinator| coordinator.strong_count() != 0);
         match coordinators.get(&identity).and_then(Weak::upgrade) {
             Some(coordinator) => coordinator,
@@ -1543,7 +1543,7 @@ fn record_capability_copy_parent(base: &cap_std::fs::Dir, parent: &CapabilityCop
 
 struct CapabilityTempFile<'a> {
     directory: CapabilityCopyParent<'a>,
-    name: Option<PathBuf>,
+    name: Option<Box<Path>>,
     file: cap_std::fs::File,
 }
 
@@ -1557,7 +1557,7 @@ impl<'a> CapabilityTempFile<'a> {
                 Ok(file) => {
                     return Ok(Self {
                         directory,
-                        name: Some(name),
+                        name: Some(name.into_boxed_path()),
                         file,
                     });
                 }
@@ -1583,7 +1583,7 @@ impl<'a> CapabilityTempFile<'a> {
         match directory.as_dir().open(&name) {
             Ok(file) => Ok(Self {
                 directory,
-                name: Some(name),
+                name: Some(name.into_boxed_path()),
                 file,
             }),
             Err(error) => {
@@ -1861,6 +1861,42 @@ mod tests {
             )
         );
         assert_eq!(error.io_kind(), Some(std::io::ErrorKind::PermissionDenied));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn apfs_startup_refuses_other_platforms_without_creating_the_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents");
+        let storage = FilesystemStorageMode::Apfs {
+            root: root.as_path().into(),
+        };
+        let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("initialize APFS storage on a non-macOS platform")
+        );
+        assert!(!root.exists());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apfs_startup_refuses_a_file_as_its_root_with_a_clear_error() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("agents");
+        std::fs::write(&root, b"not a directory").unwrap();
+        let storage = FilesystemStorageMode::Apfs {
+            root: root.as_path().into(),
+        };
+        let error = SandboxFilesystemProvisioning::new(&storage, RetryConfig::default())
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("create APFS development root"));
+        assert!(error.to_string().contains(root.to_str().unwrap()));
+        assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
     }
 
     #[cfg(target_os = "macos")]

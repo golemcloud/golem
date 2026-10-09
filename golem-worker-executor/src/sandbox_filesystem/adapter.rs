@@ -2256,7 +2256,7 @@ fn native_name_comparison_mode(
     }
 }
 
-#[cfg(any(test, target_os = "macos"))]
+#[cfg(all(unix, any(test, target_os = "macos")))]
 fn macos_name_comparison_mode(
     source: NativeNameModeSource,
     parent: &SandboxDirectoryCoordinationKey,
@@ -4168,6 +4168,7 @@ mod tests {
         assert!(first.may_conflict_with(&exact));
     }
 
+    #[cfg(unix)]
     #[test]
     fn apfs_name_mode_uses_the_root_case_result_only_on_its_device() {
         let parent =
@@ -4279,6 +4280,37 @@ mod tests {
             NativeNameComparisonMode::Exact
         );
         assert_eq!(probes.get(), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    async fn apfs_native_name_mode_matches_the_volumes_filename_behavior() {
+        let root = tempfile::tempdir().unwrap();
+        let provisioning = SandboxFilesystemProvisioning::new(
+            &FilesystemStorageMode::Apfs {
+                root: root.path().into(),
+            },
+            RetryConfig::default(),
+        )
+        .unwrap();
+        let filesystem = provisioning.create_fresh(name()).await.unwrap();
+        std::fs::write(filesystem.root().join("CaseProbe"), b"case").unwrap();
+        let case_sensitive = !filesystem.root().join("caseprobe").exists();
+        let target = filesystem
+            .resolve_namespace_target(SandboxPath::at_root("sibling"))
+            .await
+            .unwrap();
+        assert_eq!(
+            target.coordination_key().name.mode,
+            if case_sensitive {
+                NativeNameComparisonMode::Exact
+            } else {
+                NativeNameComparisonMode::Conservative
+            },
+        );
+        <SandboxFilesystem as SandboxFilesystemAdapter>::delete_and_verify(filesystem)
+            .await
+            .unwrap();
     }
 
     #[cfg(target_os = "linux")]

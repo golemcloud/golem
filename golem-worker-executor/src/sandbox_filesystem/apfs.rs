@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use cap_fs_ext::DirExt as _;
 use rustix::fs::{CloneFlags, StatVfsMountFlags, fclonefileat, fstatvfs};
 use std::io::Write;
 use std::os::fd::AsRawFd;
@@ -27,7 +26,7 @@ pub(super) fn bind(
         .map_err(|error| FilesystemStorageError::io("create APFS development root", root, error))?;
     let directory = File::open(root)
         .map_err(|error| FilesystemStorageError::io("open APFS development root", root, error))?;
-    probe_clone(root)?;
+    probe_clone(root, probe_contents)?;
     let name_mode = name_mode(&directory).map_err(|error| {
         FilesystemStorageError::io("read APFS volume case sensitivity", root, error)
     })?;
@@ -38,12 +37,15 @@ pub(super) fn bind(
     ))
 }
 
-fn probe_clone(root: &Path) -> Result<(), FilesystemStorageError> {
+fn probe_clone(
+    root: &Path,
+    contents: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<(), FilesystemStorageError> {
     let probe = tempfile::Builder::new()
         .prefix(".golem-apfs-clone-probe-")
         .tempdir_in(root)
         .map_err(|error| FilesystemStorageError::io("create APFS clone probe", root, error))?;
-    let result = probe_contents(probe.path());
+    let result = contents(probe.path());
     probe.close().map_err(|error| {
         FilesystemStorageError::cleanup_io("remove APFS clone probe", root, error)
     })?;
@@ -138,6 +140,37 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn apfs_failed_clone_probe_reports_the_root_and_removes_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let error = probe_clone(root.path(), |probe| {
+            std::fs::write(probe.join("source"), b"probe")?;
+            Err(std::io::Error::from_raw_os_error(libc::ENOTSUP))
+        })
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("probe APFS clone for local development")
+        );
+        assert!(error.to_string().contains(root.path().to_str().unwrap()));
+        assert_eq!(
+            error.io_kind(),
+            Some(std::io::Error::from_raw_os_error(libc::ENOTSUP).kind())
+        );
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn apfs_clone_across_system_and_data_volumes_fails() {
+        let source = File::open("/System/Library/CoreServices/SystemVersion.plist").unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let parent = File::open(target.path()).unwrap();
+        let error = clone_file(&source, &parent, Path::new("clone")).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::EXDEV));
+        assert!(!target.path().join("clone").exists());
+    }
+
+    #[test]
     #[test_r::timeout("120s")]
     async fn apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes() {
         const FILE_BYTES: usize = 64 * 1024 * 1024;
@@ -168,7 +201,9 @@ mod tests {
             .create_new(true)
             .open(&path)
             .unwrap();
-        source.write_all(&vec![0x5a; FILE_BYTES]).unwrap();
+        source
+            .write_all(&vec![0x5a; FILE_BYTES].into_boxed_slice())
+            .unwrap();
         source.sync_all().unwrap();
         source.seek(SeekFrom::Start(0)).unwrap();
         source.write_all(b"unflushed").unwrap();
@@ -208,10 +243,13 @@ mod tests {
         );
         assert!(!capture.path().as_path().join("excluded").exists());
         assert!(!capture.path().as_path().join("other-name").exists());
-        let copied = std::fs::read(capture.path().as_path().join("file")).unwrap();
+        let copied = std::fs::read(capture.path().as_path().join("file"))
+            .unwrap()
+            .into_boxed_slice();
         assert_eq!(copied.len(), FILE_BYTES + 4);
         assert_eq!(&copied[..9], b"unflushed");
         assert_eq!(&copied[FILE_BYTES..], b"tail");
+        let before_seed = available(observe_space_blocking(provisioning.volume()).unwrap());
         <SandboxFilesystem as SandboxFilesystemAdapter>::seed(
             &filesystem,
             Box::new([SeedEntry {
@@ -223,15 +261,24 @@ mod tests {
         )
         .await
         .unwrap();
+        let after_seed = available(observe_space_blocking(provisioning.volume()).unwrap());
+        assert!(
+            before_seed.saturating_sub(after_seed) < FILE_BYTES as u64 / 4,
+            "a seed clone must not allocate the file bytes"
+        );
         source.seek(SeekFrom::Start(0)).unwrap();
         source.write_all(b"changed").unwrap();
         assert_eq!(
-            std::fs::read(filesystem.root().join("seeded/file")).unwrap(),
-            copied
+            std::fs::read(filesystem.root().join("seeded/file"))
+                .unwrap()
+                .as_slice(),
+            copied.as_ref()
         );
         assert_eq!(
-            std::fs::read(capture.path().as_path().join("file")).unwrap(),
-            copied
+            std::fs::read(capture.path().as_path().join("file"))
+                .unwrap()
+                .as_slice(),
+            copied.as_ref()
         );
         capture.discard().await.unwrap();
         SandboxFilesystem::delete_and_verify(filesystem)
