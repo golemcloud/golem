@@ -124,6 +124,12 @@ impl SqliteBlobStorage {
                     PRIMARY KEY (namespace, parent, name, is_directory)   -- A blob and a directory can hold one path
                 );
                 "#)).await?;
+        self.pool
+            .with_rw("blob_storage", "init")
+            .execute(sqlx::query(
+                "CREATE INDEX IF NOT EXISTS blob_storage_directories ON blob_storage (namespace, parent, name) WHERE is_directory = TRUE;",
+            ))
+            .await?;
         Ok(())
     }
 
@@ -459,19 +465,15 @@ impl BlobStorageBackend for SqliteBlobStorage {
         let directory = path.text()?;
         let (descendants_start, descendants_end) = descendant_bounds(&directory);
 
-        // The blobs whose parent is the directory, and the rows of directories at any depth below
-        // it. A blob and a directory at one path give that path one time. At the root every row
-        // of a directory in the namespace is below the directory.
-        let query = sqlx::query_as::<_, (String, String)>(
-            r#"SELECT DISTINCT parent, name FROM blob_storage WHERE namespace = ? AND
-                     ((parent = ?) OR (is_directory = TRUE AND (? = '' OR (parent >= ? AND parent < ?))));
-            "#,
-        )
-        .bind(Self::namespace(namespace))
-        .bind(directory.clone())
-        .bind(directory)
-        .bind(descendants_start)
-        .bind(descendants_end);
+        let query = if directory.is_empty() {
+            sqlx::query_as::<_, (String, String)>(LIST_ROOT_DIR).bind(Self::namespace(namespace))
+        } else {
+            sqlx::query_as::<_, (String, String)>(LIST_DIR)
+                .bind(Self::namespace(namespace))
+                .bind(directory)
+                .bind(descendants_start)
+                .bind(descendants_end)
+        };
 
         let result = self
             .pool
@@ -620,6 +622,21 @@ impl BlobStorageBackend for SqliteBlobStorage {
     }
 }
 
+/// The rows whose parent is the directory `?2`, and the rows of directories at any depth below it,
+/// whose parents are from `?3` to before `?4` (`descendant_bounds`). The first part searches the
+/// primary key and the second the index of the rows of directories, so the listing reads no row of
+/// a blob that is deeper below the directory. The union gives a path that a blob and a directory
+/// hold one time.
+const LIST_DIR: &str = r#"SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND parent = ?2
+UNION
+SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND is_directory = TRUE AND parent >= ?3 AND parent < ?4;"#;
+
+/// [`LIST_DIR`] at the root, where every row of a directory in the namespace is below the
+/// directory.
+const LIST_ROOT_DIR: &str = r#"SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND parent = ''
+UNION
+SELECT parent, name FROM blob_storage WHERE namespace = ?1 AND is_directory = TRUE;"#;
+
 /// Gives the bounds of the `parent` of each row below the directory `dir`, at any depth. The
 /// first bound is in the range and the second is not.
 ///
@@ -646,5 +663,65 @@ impl DBMetadata {
             last_modified_at,
             size: self.size as u64,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LIST_DIR, LIST_ROOT_DIR, SqliteBlobStorage};
+    use crate::db::PoolApi;
+    use crate::db::sqlite::SqlitePool;
+    use golem_common::config::DbSqliteConfig;
+    use test_r::test;
+
+    /// Gives the plan of `sql` with the arguments of a listing, one detail per step.
+    async fn plan(pool: &SqlitePool, sql: &str, arguments: &[&'static str]) -> Vec<String> {
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let query = arguments.iter().fold(
+            sqlx::query_as::<_, (i64, i64, i64, String)>(&explain),
+            |query, argument| query.bind(*argument),
+        );
+        pool.with_ro("test", "plan")
+            .fetch_all_as::<(i64, i64, i64, String), _>(query)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, detail)| detail)
+            .collect()
+    }
+
+    /// Each read of the table in a listing searches the key range of the parent, or the index of
+    /// the rows of directories, so a listing does not read every row of the namespace.
+    #[test]
+    async fn a_listing_reads_only_the_rows_below_its_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::configured(&DbSqliteConfig {
+            database: root.path().join("blobs.db").to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        SqliteBlobStorage::new(pool.clone()).await.unwrap();
+
+        for (sql, arguments) in [
+            (LIST_DIR, &["namespace", "dir", "dir/", "dir0"][..]),
+            (LIST_ROOT_DIR, &["namespace"][..]),
+        ] {
+            let reads = plan(&pool, sql, arguments)
+                .await
+                .into_iter()
+                .filter(|detail| detail.contains("blob_storage"))
+                .collect::<Vec<_>>();
+            assert!(
+                !reads.is_empty()
+                    && reads.iter().all(|detail| {
+                        detail.starts_with("SEARCH")
+                            && (detail.contains("parent")
+                                || detail.contains("blob_storage_directories"))
+                    }),
+                "{sql}: {reads:?}"
+            );
+        }
     }
 }
