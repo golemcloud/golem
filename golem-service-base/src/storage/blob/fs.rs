@@ -38,7 +38,8 @@ use tokio_stream::StreamExt;
 /// Each name of a path is a directory on disk, and the last name of the path of a blob is a file
 /// in the directory of the names before it (`encoded_name`). A blob and a directory at one path so
 /// have two entries on disk, and a blob can be below another blob. A directory that `create_dir`
-/// made holds the file [`CREATED_MARKER`]; a directory that only holds blobs has no such file.
+/// made holds the file [`CREATED_MARKER`]; a directory that only holds blobs has no such file. A
+/// delete removes each directory that it leaves empty (`prune_empty_directories`).
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
     root: PathBuf,
@@ -462,15 +463,11 @@ impl BlobStorageBackend for FileSystemBlobStorage {
                 .await;
         }
 
-        if let Some(parent) = full_path.parent()
-            && async_fs::metadata(parent).await.is_err()
-        {
-            async_fs::create_dir_all(parent).await?;
-        }
-
-        async_fs::write(&full_path, data).await?;
-
-        Ok(())
+        let data: Box<[u8]> = Box::from(data);
+        Ok(tokio::task::spawn_blocking(move || {
+            in_directory_of(&full_path, || std::fs::write(&full_path, &data))
+        })
+        .await??)
     }
 
     async fn put_raw_if_absent_at(
@@ -501,13 +498,12 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         let full_path = self.blob_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
 
-        if let Some(parent) = full_path.parent()
-            && async_fs::metadata(parent).await.is_err()
-        {
-            async_fs::create_dir_all(parent).await?;
-        }
-
-        let file = tokio::fs::File::create(&full_path).await?;
+        let file = tokio::fs::File::from_std(
+            tokio::task::spawn_blocking(move || {
+                in_directory_of(&full_path, || std::fs::File::create(&full_path))
+            })
+            .await??,
+        );
 
         let mut writer = tokio::io::BufWriter::new(file);
 
@@ -530,14 +526,17 @@ impl BlobStorageBackend for FileSystemBlobStorage {
     ) -> Result<(), Error> {
         let full_path = self.blob_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
+        let namespace_root = self.namespace_path(&namespace);
 
         if matches!(namespace, BlobStorageNamespace::FilesystemSnapshots { .. }) {
             return self
-                .unless_dropped(move |commit| remove_unless_dropped(commit, &full_path))
+                .unless_dropped(move |commit| {
+                    remove_unless_dropped(commit, &full_path, &namespace_root)
+                })
                 .await;
         }
 
-        Ok(absent_on_not_found(async_fs::remove_file(&full_path).await).map(|_| ())?)
+        Ok(tokio::task::spawn_blocking(move || remove_blob(&full_path, &namespace_root)).await??)
     }
 
     async fn create_dir_at(
@@ -596,8 +595,12 @@ impl BlobStorageBackend for FileSystemBlobStorage {
     ) -> Result<bool, Error> {
         let full_path = self.directory_of(&namespace, path)?;
         self.ensure_path_is_inside_root(&full_path)?;
+        let namespace_root = self.namespace_path(&namespace);
 
-        Ok(tokio::task::spawn_blocking(move || remove_directory(&full_path)).await??)
+        Ok(
+            tokio::task::spawn_blocking(move || remove_directory(&full_path, &namespace_root))
+                .await??,
+        )
     }
 
     async fn exists_at(
@@ -749,8 +752,9 @@ fn write_staged(
     let mut file = staged_put_file(staging)?;
     file.write_all(data)?;
     commit.before_commit()?;
-    file.persist(target).map_err(|error| error.error)?;
-    Ok(())
+    persist_in_directory_of(commit, file, target, |file| {
+        file.persist(target).map(|_| ())
+    })
 }
 
 /// A new file in `staging` with the mode of [`STAGED_PUT_MODE`], which the umask then masks.
@@ -768,12 +772,94 @@ fn staged_put_file(staging: &Path) -> std::io::Result<tempfile::NamedTempFile> {
     tempfile::NamedTempFile::new_in(staging)
 }
 
-/// Removes the file at `target`. A `target` with no file changes nothing. A `commit` whose call was
-/// dropped stops the remove.
-fn remove_unless_dropped(commit: &Commit, target: &Path) -> std::io::Result<()> {
+/// Removes the file at `target`, as [`remove_blob`] does. A `commit` whose call was dropped stops
+/// the remove.
+fn remove_unless_dropped(commit: &Commit, target: &Path, root: &Path) -> std::io::Result<()> {
     commit.go_on()?;
     commit.before_commit()?;
-    absent_on_not_found(std::fs::remove_file(target)).map(|_| ())
+    remove_blob(target, root)
+}
+
+/// Removes the file of a blob at `target`, and then each directory above it, below `root`, that
+/// the remove left empty (`prune_empty_directories`). A `target` with no file changes nothing.
+fn remove_blob(target: &Path, root: &Path) -> std::io::Result<()> {
+    absent_on_not_found(std::fs::remove_file(target))?;
+    if let Some(directory) = target.parent() {
+        prune_empty_directories(directory, root);
+    }
+    Ok(())
+}
+
+/// Removes `directory` and each directory above it, below `root`, while the directory is empty.
+///
+/// An empty directory holds no blob and no marker of `create_dir`, so it is no entry of the
+/// storage and the remove changes no answer. It only keeps a check of a directory from reading
+/// the directories of blobs that are gone. A directory that is not empty, or not there, ends the
+/// remove, and so does any other error, because an empty directory that stays only takes space.
+/// A write that makes a directory that this remove takes away makes it again
+/// (`in_directory_of`).
+fn prune_empty_directories(directory: &Path, root: &Path) {
+    let mut directory = Some(directory);
+    while let Some(empty) =
+        directory.filter(|directory| *directory != root && directory.starts_with(root))
+    {
+        if std::fs::remove_dir(empty).is_err() {
+            break;
+        }
+        directory = empty.parent();
+    }
+}
+
+/// The number of times that a write makes the directory of its file before it gives the error of
+/// a directory that is not there (`in_directory_of`).
+const DIRECTORY_ATTEMPTS: usize = 8;
+
+/// Makes the directory of `target` and runs `place`, which puts a file at `target`.
+///
+/// A remove of an empty directory (`prune_empty_directories`) can take the directory away between
+/// the two steps, and `place` then gives [`ErrorKind::NotFound`]. The call then makes the
+/// directory again and runs `place` again, at most [`DIRECTORY_ATTEMPTS`] times in all.
+fn in_directory_of<T>(
+    target: &Path,
+    mut place: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        match place() {
+            Err(error) if error.kind() == ErrorKind::NotFound && attempt < DIRECTORY_ATTEMPTS => {
+                attempt += 1;
+            }
+            placed => return placed,
+        }
+    }
+}
+
+/// Gives the staged `file` the name `target` with `persist`, in the directory of `target`
+/// (`in_directory_of`). Before each attempt after the first, a `commit` whose call was dropped
+/// stops the write.
+fn persist_in_directory_of<T>(
+    commit: &Commit,
+    file: tempfile::NamedTempFile,
+    target: &Path,
+    persist: impl Fn(tempfile::NamedTempFile) -> Result<T, tempfile::PersistError>,
+) -> std::io::Result<T> {
+    let mut staged = Some(file);
+    let mut first = true;
+    in_directory_of(target, || {
+        if !std::mem::take(&mut first) {
+            commit.go_on()?;
+        }
+        let file = staged
+            .take()
+            .ok_or_else(|| std::io::Error::other("the staged file is gone"))?;
+        persist(file).map_err(|error| {
+            staged = Some(error.file);
+            error.error
+        })
+    })
 }
 
 /// Writes `data` as the file at `target` when `target` has no file.
@@ -797,12 +883,12 @@ fn write_if_absent(
     let mut file = tempfile::NamedTempFile::new_in(staging)?;
     file.write_all(data)?;
     commit.before_commit()?;
-    match file.persist_noclobber(target) {
+    match persist_in_directory_of(commit, file, target, |file| file.persist_noclobber(target)) {
         Ok(_) => Ok(PutIfAbsent::Written),
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             Ok(PutIfAbsent::AlreadyExists)
         }
-        Err(error) => Err(error.error),
+        Err(error) => Err(error),
     }
 }
 
@@ -845,7 +931,9 @@ fn copy_staged(
     std::io::copy(&mut source, staged.as_file_mut())?;
     staged.as_file().set_permissions(metadata.permissions())?;
     commit.before_commit()?;
-    staged.persist(target).map_err(|error| error.error)?;
+    persist_in_directory_of(commit, staged, target, |file| {
+        file.persist(target).map(|_| ())
+    })?;
     Ok(true)
 }
 
@@ -990,8 +1078,9 @@ fn add_created_directories(
 }
 
 /// Tells if `directory` holds a blob or a directory that `create_dir` made, at any depth. A
-/// `directory` that does not exist holds nothing, and so does a tree of directories that the
-/// removes of its blobs left behind.
+/// `directory` that does not exist holds nothing, and so does a tree of empty directories, which a
+/// remove of empty directories that failed can leave (`prune_empty_directories`). The walk ends at
+/// the first entry that it finds.
 fn holds_an_entry(directory: &Path) -> std::io::Result<bool> {
     let Some(entries) = listed_entry(std::fs::read_dir(directory))? else {
         return Ok(false);
@@ -1013,21 +1102,23 @@ fn holds_an_entry(directory: &Path) -> std::io::Result<bool> {
     Ok(false)
 }
 
-/// Removes `directory` and everything below it, and tells if it held a blob or a directory that
-/// `create_dir` made (`holds_an_entry`). A `directory` that does not exist gives false.
-fn remove_directory(directory: &Path) -> std::io::Result<bool> {
+/// Removes `directory` and everything below it, and each directory above it, below `root`, that
+/// the remove left empty (`prune_empty_directories`). Tells if `directory` held a blob or a
+/// directory that `create_dir` made (`holds_an_entry`). A `directory` that does not exist gives
+/// false.
+fn remove_directory(directory: &Path, root: &Path) -> std::io::Result<bool> {
     let held = holds_an_entry(directory)?;
     absent_on_not_found(std::fs::remove_dir_all(directory))?;
+    if let Some(parent) = directory.parent() {
+        prune_empty_directories(parent, root);
+    }
     Ok(held)
 }
 
 /// Makes the directory of `marker` and the marker in it, which tells that `create_dir` made the
 /// directory. A marker that is there gets the time of this call.
 fn mark_created(marker: &Path) -> std::io::Result<()> {
-    if let Some(directory) = marker.parent() {
-        std::fs::create_dir_all(directory)?;
-    }
-    std::fs::File::create(marker)?.set_modified(SystemTime::now())
+    in_directory_of(marker, || std::fs::File::create(marker))?.set_modified(SystemTime::now())
 }
 
 /// The file in the directory of a path that tells that `create_dir` made the directory. Its name
