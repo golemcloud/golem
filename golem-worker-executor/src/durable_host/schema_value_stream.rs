@@ -20,7 +20,7 @@ use crate::durable_host::durable_session::{
     ForwardedDurableInput,
 };
 use crate::durable_host::stream_transport::{
-    LiveInputProducer, LiveStreamEndpoint, output_stream_pair, relay_stream_pair,
+    LiveInputProducer, LiveStreamEndpoint, accounted_output_stream_pair, relay_stream_pair,
 };
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::schema_value::{
@@ -224,8 +224,10 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
         } else {
             let source = stream.take_host_endpoint::<LiveStreamEndpoint>()?;
             let source_lifecycle = source.lifecycle();
+            let activity = source.external_activity();
             let mut source = source.activate();
             tokio::spawn(async move {
+                let _activity = activity;
                 loop {
                     let event = tokio::select! {
                         biased;
@@ -525,8 +527,18 @@ impl<T: WorkerCtx, Ctx: WorkerCtx> HostSchemaValueStreamWithStore<T> for CoreTyp
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
                 let interrupt = access.get().create_interrupt_signal();
-                let (consumer, stream) = output_stream_pair(capacity, runtime_teardown, interrupt)
-                    .map_err(wasmtime::Error::msg)?;
+                let runtime_source = access
+                    .get()
+                    .runtime_suspension
+                    .as_ref()
+                    .map(|runtime| runtime.source());
+                let (consumer, stream) = accounted_output_stream_pair(
+                    capacity,
+                    runtime_teardown,
+                    runtime_source,
+                    interrupt,
+                )
+                .map_err(wasmtime::Error::msg)?;
                 reader.pipe(&mut access, consumer)?;
                 access
                     .get()

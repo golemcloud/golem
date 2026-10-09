@@ -3888,6 +3888,7 @@ async fn sleep_less_than_suspend_threshold(
 }
 
 #[test]
+#[timeout("60s")]
 #[tracing::instrument]
 async fn sleep_longer_than_suspend_threshold(
     last_unique_id: &LastUniqueId,
@@ -3908,11 +3909,22 @@ async fn sleep_longer_than_suspend_threshold(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
 
     let start = Instant::now();
-    executor
-        .invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64))
-        .await?;
+    let sleep = executor.invoke_and_await_agent(&component, &agent_id, "sleep", data_value!(12u64));
+    tokio::pin!(sleep);
+    tokio::select! {
+        result = &mut sleep => return Err(anyhow!("long sleep returned before unloading: {result:?}")),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => {
+            status?;
+        }
+    }
+    tokio::select! {
+        result = &mut sleep => return Err(anyhow!("long sleep returned before unloading: {result:?}")),
+        unloaded = wait_for_timer_owner_unload(&executor, &owned_agent_id) => { unloaded?; }
+    }
+    sleep.await?;
 
     let result = executor
         .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
@@ -3927,6 +3939,338 @@ async fn sleep_longer_than_suspend_threshold(
     assert!(duration.as_secs() >= 12);
     assert!(result);
 
+    Ok(())
+}
+
+async fn wait_for_timer_owner_unload(
+    executor: &TestWorkerExecutor,
+    owner: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while executor.worker_is_loaded(owner).await {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("suspended timer owner did not unload within 5s"))
+}
+
+async fn assert_short_p3_timer_wins_without_suspension(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::model::component::ComponentDto,
+    agent_id: &golem_common::model::agent::ParsedAgentId,
+    worker_id: &golem_common::model::AgentId,
+    timers: Vec<u64>,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    executor
+        .invoke_and_await_agent(component, agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(worker_id).await?;
+    let invocation =
+        executor.invoke_and_await_agent(component, agent_id, "race_p3_sleeps", data_value!(timers));
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => assert_eq!(result?.into_typed::<u64>()?, 2),
+        status = executor.wait_for_status(worker_id, AgentStatus::Suspended, Duration::from_secs(5)) => {
+            status?;
+            return Err(anyhow!("a long sibling timer suspended the owner before the two-second timer completed"));
+        }
+    }
+    assert!(
+        executor
+            .get_oplog(worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "short timer race must not suspend, even transiently"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_with_long_watchdog(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    p3_short_timer_blocks_suspension(last_unique_id, deps, host_api_tests, vec![2, 60]).await
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_with_multiple_long_watchdogs(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    p3_short_timer_blocks_suspension(last_unique_id, deps, host_api_tests, vec![2, 60, 600]).await
+}
+
+async fn p3_short_timer_blocks_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    timers: Vec<u64>,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", format!("p3-short-timer-{timers:?}"));
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    assert_short_p3_timer_wins_without_suspension(
+        &executor, &component, &agent_id, &worker_id, timers,
+    )
+    .await
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_polling_loop_completes_without_watchdog_suspension(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-polling-loop");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "polling_loop_vs_watchdog",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "flag");
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "polling loop with a short timer must not suspend"
+    );
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_all_long_timers_suspend_and_resume_at_earliest_deadline(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-all-long-timers");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let owned_agent_id = OwnedAgentId::new(context.default_environment_id, &worker_id);
+    let started = Instant::now();
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_p3_sleeps",
+        data_value!(vec![12u64, 60u64]),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => return Err(anyhow!("all-long timer race returned before suspension: {result:?}")),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => { status?; }
+    }
+    tokio::select! {
+        result = &mut invocation => return Err(anyhow!("all-long timer race returned before unloading: {result:?}")),
+        unloaded = wait_for_timer_owner_unload(&executor, &owned_agent_id) => { unloaded?; }
+    }
+    assert_eq!(invocation.await?.into_typed::<u64>()?, 12);
+    assert!(started.elapsed() >= Duration::from_secs(12));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn p3_repeated_short_timer_races_preserve_shared_scheduler_wakeups(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+
+    for index in 0..20 {
+        let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-short-{index}"));
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        let timers = if index % 2 == 0 {
+            vec![2, 60]
+        } else {
+            vec![2, 60, 600]
+        };
+        assert_short_p3_timer_wins_without_suspension(
+            &executor, &component, &agent_id, &worker_id, timers,
+        )
+        .await?;
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+                .await?
+                .into_typed::<bool>()?
+        );
+    }
+
+    let run_long_race = |index| {
+        let executor = &executor;
+        let component = &component;
+        let context = &context;
+        async move {
+            let agent_id = agent_id!("Clock", format!("p3-shared-scheduler-long-{index}"));
+            let worker_id = executor
+                .start_agent(&component.id, agent_id.clone())
+                .await?;
+            let owner = OwnedAgentId::new(context.default_environment_id, &worker_id);
+            let started = Instant::now();
+            let invocation = executor.invoke_and_await_agent(
+                component,
+                &agent_id,
+                "race_p3_sleeps",
+                data_value!(vec![12u64, 60u64, 600u64]),
+            );
+            tokio::pin!(invocation);
+            tokio::select! {
+                result = &mut invocation => return Err(anyhow!("long timer owner {index} returned before suspension: {result:?}")),
+                status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(15)) => { status?; }
+            }
+            tokio::select! {
+                result = &mut invocation => return Err(anyhow!("long timer owner {index} returned before unloading: {result:?}")),
+                unloaded = wait_for_timer_owner_unload(executor, &owner) => { unloaded?; }
+            }
+            assert_eq!(invocation.await?.into_typed::<u64>()?, 12);
+            assert!(started.elapsed() >= Duration::from_secs(12));
+            Ok::<(), anyhow::Error>(())
+        }
+    };
+    tokio::try_join!(run_long_race(0), run_long_race(1))?;
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p3_short_timer_blocks_suspension_while_promise_is_pending(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::data_value;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p3-promise-short-timer");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+    let invocation = executor.invoke_and_await_agent(
+        &component,
+        &agent_id,
+        "race_promise_and_p3_sleep",
+        data_value!(2u64),
+    );
+    tokio::pin!(invocation);
+    tokio::select! {
+        result = &mut invocation => assert_eq!(result?.into_typed::<String>()?, "timer"),
+        status = executor.wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(5)) => {
+            status?;
+            return Err(anyhow!("pending promise overrode the short timer and suspended the owner"));
+        }
+    }
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(
+                    entry.entry,
+                    golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+                )
+            }),
+        "promise with short timer must not suspend, even transiently"
+    );
     Ok(())
 }
 
@@ -4968,6 +5312,7 @@ async fn sleep_longer_than_suspend_threshold_while_awaiting_response_2(
 /// would drop the pending host call and re-execute the HTTP request on resume, so the server
 /// receiving the request exactly once proves the P3 completion was delivered.
 #[test]
+#[timeout("30s")]
 #[tracing::instrument]
 async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     last_unique_id: &LastUniqueId,
@@ -4991,6 +5336,7 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     let worker_id = executor
         .start_agent(&component.id, agent_id.clone())
         .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
 
     let start = Instant::now();
     let result = executor
@@ -5005,8 +5351,13 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    server.abort();
-    drop(executor);
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?,
+        "the worker must accept a follow-up invocation after the mixed P2/P3 call"
+    );
 
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
@@ -5020,6 +5371,182 @@ async fn p3_request_completes_while_blocked_in_p2_sleep_past_suspend_threshold(
     );
     assert!(duration.as_secs() >= 15);
 
+    let suspend_count = executor
+        .get_oplog(&worker_id, boundary)
+        .await?
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.entry,
+                golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+            )
+        })
+        .count();
+    assert!(
+        suspend_count <= 1,
+        "the completed request may leave the P2 timer as the sole suspendable operation, but the \
+         mixed invocation must not repeatedly suspend"
+    );
+
+    server.abort();
+    drop(executor);
+
+    Ok(())
+}
+
+/// Opposite mixed-ABI completion order: the P2 sleep completes first while the P3 HTTP request
+/// remains pending. Neither operation may be replayed, and a pending request must prevent a
+/// suspension after the P2 timer completes.
+#[test]
+#[timeout("35s")]
+#[tracing::instrument]
+async fn p2_sleep_completes_while_p3_request_remains_pending(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let (port, server, request_count) = counting_slow_request_server(Duration::from_secs(16)).await;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env("Clock", vec![("PORT".to_string(), port.to_string())])
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-first-completion");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    let boundary = executor.oplog_max_index(&worker_id).await?;
+
+    let started = Instant::now();
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_sleep_during_request",
+            data_value!(12u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert_eq!(result, "slow response, slept");
+    assert_eq!(request_count.load(Ordering::Acquire), 1);
+    assert!(started.elapsed() >= Duration::from_secs(16));
+    assert!(started.elapsed() < Duration::from_secs(30));
+    assert!(
+        executor
+            .get_oplog(&worker_id, boundary)
+            .await?
+            .iter()
+            .all(|entry| !matches!(
+                entry.entry,
+                golem_common::model::oplog::PublicOplogEntry::Suspend(_)
+            )),
+        "the executor must not suspend while the HTTP request remains pending"
+    );
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+
+    server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("30s")]
+#[tracing::instrument]
+async fn p2_poll_preserves_duplicate_indices_and_repeated_readiness(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "clock-service-p2-poll-duplicates");
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "p2_poll_duplicate_handles",
+            data_value!(12_000u64, 100u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+
+    assert_eq!(result, "[1, 2];[0, 1];[0];[0];[0]");
+    assert!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+            .await?
+            .into_typed::<bool>()?
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn p2_file_pollables_ready_and_block_survive_full_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::{agent_id, data_value};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(full_replay_config)),
+            ..TestExecutorOverrides::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent_id = agent_id!("Clock", "p2-file-pollables-replay");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    for (contents, expected) in [("abcdefg", "abcdefg"), ("HIJKL", "abcdefgHIJKL")] {
+        let result = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent_id,
+                "p2_file_pollables",
+                data_value!(contents.to_string()),
+            )
+            .await?
+            .into_typed::<String>()?;
+        assert_eq!(result, format!("true;true;{expected}"));
+        executor.simulated_crash(&worker_id).await?;
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &agent_id, "healthcheck", data_value!())
+                .await?
+                .into_typed::<bool>()?
+        );
+    }
     Ok(())
 }
 

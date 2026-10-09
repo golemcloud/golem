@@ -261,6 +261,16 @@ object JsCorsOptions {
 }
 
 @js.native
+sealed trait JsPhantomIdBinding extends js.Object
+
+object JsPhantomIdBinding {
+  def path(name: String, optional: Boolean): JsPhantomIdBinding                            = binding("path", name, optional)
+  def query(name: String, optional: Boolean): JsPhantomIdBinding                           = binding("query", name, optional)
+  private def binding(source: String, name: String, optional: Boolean): JsPhantomIdBinding =
+    JsShape.tagged[JsPhantomIdBinding](source, js.Dynamic.literal("name" -> name, "optional" -> optional))
+}
+
+@js.native
 sealed trait JsFileResponseHeader extends js.Object {
   def name: String  = js.native
   def value: String = js.native
@@ -273,6 +283,7 @@ object JsFileResponseHeader {
 
 @js.native
 sealed trait JsHttpMountDetails extends js.Object {
+  def phantomIdBinding: js.UndefOr[JsPhantomIdBinding]    = js.native
   def pathPrefix: js.Array[JsPathSegment]                 = js.native
   def authDetails: js.UndefOr[JsAuthDetails]              = js.native
   def phantomAgent: Boolean                               = js.native
@@ -294,9 +305,11 @@ object JsHttpMountDetails {
     filesystemBindings: js.Array[JsFileMapping],
     fileResponseHeaders: js.Array[JsFileResponseHeader],
     openapiProviderMethod: js.UndefOr[String],
-    authDetails: js.UndefOr[JsAuthDetails] = js.undefined
+    authDetails: js.UndefOr[JsAuthDetails] = js.undefined,
+    phantomIdBinding: js.UndefOr[JsPhantomIdBinding] = js.undefined
   ): JsHttpMountDetails = {
     val obj = js.Dynamic.literal(
+      "phantomIdBinding"    -> phantomIdBinding,
       "pathPrefix"          -> pathPrefix,
       "phantomAgent"        -> phantomAgent,
       "corsOptions"         -> corsOptions,

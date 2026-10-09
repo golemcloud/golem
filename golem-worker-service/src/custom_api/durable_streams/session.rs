@@ -161,10 +161,15 @@ impl DurableStreamsHandler {
         let mut result = response(created_status(created.replayed));
         result.headers.insert(
             http::header::LOCATION,
-            format!(
-                "{}/invocations/{session}",
-                request.underlying.uri().path().trim_end_matches('/')
-            )
+            super::resource_url(
+                request,
+                route,
+                behaviour,
+                &format!(
+                    "{}/invocations/{session}",
+                    request.underlying.uri().path().trim_end_matches('/')
+                ),
+            )?
             .parse()
             .map_err(anyhow::Error::from)?,
         );

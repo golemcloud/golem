@@ -26,9 +26,6 @@ use crate::durable_host::durable_session::{
 use crate::durable_host::durable_stream::SessionError;
 use crate::durable_host::permissions::resolve_invocation_scope_card;
 use crate::durable_host::secrets::secret_hold_targets_for_value;
-use crate::durable_host::suspendable_wait::{
-    ParkOutcome, SuspendableWaitContext, SuspendableWaitRegistration, park_registered_wait,
-};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::common::AgentError as WitAgentError;
 use crate::preview2::golem::agent::host::{
@@ -44,6 +41,7 @@ use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::{InvocationContextManagement, WorkerCtx};
 use anyhow::Error;
 use async_trait::async_trait;
+use futures::FutureExt;
 use futures::future::Either;
 use golem_common::base_model::agent::{AgentMode, Principal};
 use golem_common::model::account::AccountId;
@@ -103,7 +101,7 @@ use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 
 use golem_common::model::oplog::payload::HostRequestGolemRpcCreate;
 use golem_common::model::worker::AgentConfigEntryDto;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 
 /// Host-side resource table entry backing the `golem:agent/host.wasm-rpc` resource.
@@ -833,18 +831,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
             let interrupt_signal = self.create_interrupt_signal();
             let remote_result = {
-                let _wait = register_rpc_wait(self);
                 let rpc = self.rpc();
                 let agent_id = self.agent_id().clone();
                 let created_by = self.created_by();
                 let stack = self.clone_as_inherited_stack(span.span_id());
-                let interrupt_signal = Box::pin(wait_for_rpc_suspend(
-                    rpc_wait_context(self),
-                    interrupt_signal,
-                    || self.state.safe_to_suspend(),
-                ));
+                let interrupt_signal = interrupt_signal.map(Error::from);
                 let call = Box::pin(await_streaming_rpc_acceptance(
                     &streams,
+                    None,
                     acceptance,
                     rpc.invoke_and_await_streaming(
                         &remote_agent_id,
@@ -884,12 +878,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(anyhow::Error::msg)?;
                     let value = {
-                        let _wait = register_rpc_wait(self);
-                        let interrupt_signal = Box::pin(wait_for_rpc_suspend(
-                            rpc_wait_context(self),
-                            self.create_interrupt_signal(),
-                            || self.state.safe_to_suspend(),
-                        ));
+                        let interrupt_signal = self.create_interrupt_signal().map(Error::from);
                         let materialize = streams.materialize_remote_result(
                             remote_result.value,
                             output_mappings,
@@ -2138,15 +2127,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         };
         let stack = self.clone_as_inherited_stack(&span_id);
         let demand = {
-            let _wait = register_rpc_wait(self);
             let rpc = self.rpc();
             let created_by = self.created_by();
             let agent_id = self.agent_id().clone();
-            let interrupt_signal = Box::pin(wait_for_rpc_suspend(
-                rpc_wait_context(self),
-                self.create_interrupt_signal(),
-                || self.state.safe_to_suspend(),
-            ));
+            let interrupt_signal = self.create_interrupt_signal().map(Error::from);
             let activation = activate_rpc_target(
                 rpc.as_ref(),
                 remote_agent_id,
@@ -3237,58 +3221,6 @@ fn prepare_rpc_invocation<Ctx: WorkerCtx>(
     }))
 }
 
-fn register_rpc_wait<Ctx: WorkerCtx>(
-    ctx: &DurableWorkerCtx<Ctx>,
-) -> Option<SuspendableWaitRegistration> {
-    (ctx.agent_mode() == AgentMode::Durable).then(|| {
-        SuspendableWaitRegistration::rpc(
-            ctx.state.next_suspendable_wait_id(),
-            ctx.state.config.suspend.rpc_resume_after,
-            ctx.state.suspendable_waits(),
-        )
-    })
-}
-
-fn rpc_wait_context<Ctx: WorkerCtx>(ctx: &DurableWorkerCtx<Ctx>) -> SuspendableWaitContext {
-    let mut suspend = ctx.state.config.suspend.clone();
-    suspend.wait_suspend_grace = suspend.rpc_suspend_after;
-    SuspendableWaitContext {
-        wait_id: ctx.state.next_suspendable_wait_id(),
-        agent_mode: ctx.agent_mode(),
-        suspend,
-        wait_deadline: None,
-        suspendable_waits: ctx.state.suspendable_waits(),
-        wakeup_scheduler: ctx.state.wakeup_scheduler(),
-    }
-}
-
-async fn wait_for_rpc_suspend(
-    context: SuspendableWaitContext,
-    interrupt: std::pin::Pin<Box<dyn std::future::Future<Output = InterruptKind> + Send>>,
-    safe_to_suspend: impl FnMut() -> bool,
-) -> anyhow::Error {
-    if context.agent_mode == AgentMode::Ephemeral {
-        return interrupt.await.into();
-    }
-    // The caller races this with the actual operation and owns its registration. Async RPCs
-    // keep that registration in their task, including before the guest consumes the result.
-    match park_registered_wait(
-        context,
-        interrupt,
-        std::future::pending::<()>,
-        || false,
-        safe_to_suspend,
-        || None,
-    )
-    .await
-    {
-        Ok(ParkOutcome::SuspendWorker(timestamp)) => InterruptKind::Suspend(timestamp).into(),
-        Ok(ParkOutcome::Interrupted(kind)) => kind.into(),
-        Err(error) => error.into(),
-        Ok(ParkOutcome::Ready | ParkOutcome::EphemeralTooLong { .. }) => unreachable!(),
-    }
-}
-
 async fn run_invoke_and_await<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     resource: Resource<WasmRpcEntry>,
@@ -3351,12 +3283,7 @@ async fn run_invoke_and_await<Ctx: WorkerCtx>(
             }
 
             let result = {
-                let _wait = register_rpc_wait(ctx);
-                let interrupt_signal = Box::pin(wait_for_rpc_suspend(
-                    rpc_wait_context(ctx),
-                    interrupt_signal,
-                    || ctx.state.safe_to_suspend(),
-                ));
+                let interrupt_signal = interrupt_signal.map(Error::from);
                 let either_result = futures::future::select(
                     rpc.invoke_and_await(
                         &remote_agent_id,
@@ -3539,20 +3466,17 @@ async fn run_invoke<Ctx: WorkerCtx>(
 type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
 type FutureInvokeTaskHandle = Arc<tokio::sync::Mutex<RpcTask>>;
 
-#[derive(Clone)]
-struct RpcWaitRegistration(Arc<std::sync::Mutex<Option<SuspendableWaitRegistration>>>);
-
-impl Drop for RpcWaitRegistration {
-    fn drop(&mut self) {
-        self.0.lock().unwrap().take();
-    }
-}
-
 struct RpcTask {
     task: AbortOnDropJoinHandle<FutureInvokeTaskResult>,
-    // Revoked synchronously when the owner is dropped; aborting the Tokio task alone
-    // does not drop its registration before the durable call can finish cancellation.
-    _registration: RpcWaitRegistration,
+    revoker: Option<crate::worker::suspension::RpcActivityRevoker>,
+}
+
+impl Drop for RpcTask {
+    fn drop(&mut self) {
+        if let Some(revoker) = &self.revoker {
+            revoker.revoke();
+        }
+    }
 }
 
 impl std::future::Future for RpcTask {
@@ -3834,14 +3758,19 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                 let (response, delivery) = if handle.is_live() {
                     let task =
                         task.expect("a live future-invoke-result must own its background task");
-                    let interrupt_signal = accessor.with(|mut access| {
+                    let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
                         let ctx = access.get();
-                        (rpc_wait_context(ctx), ctx.create_interrupt_signal())
-                    });
-                    let interrupt_signal =
-                        wait_for_rpc_suspend(interrupt_signal.0, interrupt_signal.1, || {
-                            accessor.with(|mut access| access.get().state.safe_to_suspend())
+                        let wait = accessor.runtime_activity().and_then(|activity| {
+                            ctx.runtime_suspension.as_ref().and_then(|runtime| {
+                                runtime.rpc_wait(
+                                    activity,
+                                    ctx.state.config.suspend.rpc_suspend_after,
+                                    ctx.state.config.suspend.rpc_resume_after,
+                                )
+                            })
                         });
+                        (wait, ctx.create_interrupt_signal())
+                    });
                     let task_result = {
                         let mut guard = task.lock().await;
                         #[cfg(feature = "test-utils")]
@@ -3855,18 +3784,30 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                         tokio::select! {
                             biased;
                             _ = cancel_token.cancelled() => None,
-                            interrupt_kind = interrupt_signal => {
-                                drop(guard);
-                                drop(task);
-                                return Err(handle.trap(interrupt_kind));
-                            }
                             result = async {
-                                #[cfg(feature = "test-utils")]
-                                if let Some(observer) = observer {
-                                    return observer.observe(&mut *guard).await;
+                                let ready = async {
+                                    #[cfg(feature = "test-utils")]
+                                    if let Some(observer) = observer {
+                                        return observer.observe(&mut *guard).await;
+                                    }
+                                    (&mut *guard).await
+                                };
+                                match rpc_wait {
+                                    Some(wait) => wait.wait_result(ready, interrupt_signal).await,
+                                    None => tokio::select! {
+                                        biased;
+                                        kind = interrupt_signal => Err(kind),
+                                        result = ready => Ok(result),
+                                    },
                                 }
-                                (&mut *guard).await
-                            } => Some(result),
+                            } => match result {
+                                Ok(result) => Some(result),
+                                Err(interrupt_kind) => {
+                                    drop(guard);
+                                    drop(task);
+                                    return Err(handle.trap(interrupt_kind));
+                                }
+                            },
                         }
                     };
                     let task_result = match task_result {
@@ -3905,7 +3846,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                             // The background RPC failed hard after its in-task retries. This is a
                             // trap, not a durable result: abandon the call, leaving its `Start`
                             // incomplete for durable-scope recovery, instead of recording an `End`.
-                            return Err(handle.trap(anyhow::anyhow!(err.to_string())));
+                            return Err(handle.trap(err));
                         }
                     }
                 } else {
@@ -3957,24 +3898,39 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     ),
                                 }
                             });
-                            let interrupt_signal = accessor.with(|mut access| {
+                            let (rpc_wait, interrupt_signal) = accessor.with(|mut access| {
                                 let ctx = access.get();
-                                (rpc_wait_context(ctx), ctx.create_interrupt_signal())
+                                let wait = accessor.runtime_activity().and_then(|activity| {
+                                    ctx.runtime_suspension.as_ref().and_then(|runtime| {
+                                        runtime.rpc_wait(
+                                            activity,
+                                            ctx.state.config.suspend.rpc_suspend_after,
+                                            ctx.state.config.suspend.rpc_resume_after,
+                                        )
+                                    })
+                                });
+                                (wait, ctx.create_interrupt_signal())
                             });
-                            let interrupt_signal = wait_for_rpc_suspend(
-                                interrupt_signal.0,
-                                interrupt_signal.1,
-                                || accessor.with(|mut access| access.get().state.safe_to_suspend()),
-                            );
                             let task_result = {
                                 tokio::select! {
                                 biased;
                                 _ = cancel_token.cancelled() => None,
-                                interrupt_kind = interrupt_signal => {
-                                    drop(task);
-                                    return Err(live.trap(interrupt_kind));
-                                }
-                                result = &mut task => Some(result),
+                                result = async {
+                                    match rpc_wait {
+                                        Some(wait) => wait.wait_result(&mut task, interrupt_signal).await,
+                                        None => tokio::select! {
+                                            biased;
+                                            kind = interrupt_signal => Err(kind),
+                                            result = &mut task => Ok(result),
+                                        },
+                                    }
+                                } => match result {
+                                    Ok(result) => Some(result),
+                                    Err(interrupt_kind) => {
+                                        drop(task);
+                                        return Err(live.trap(interrupt_kind));
+                                    }
+                                },
                                 }
                             };
                             match task_result {
@@ -4005,7 +3961,7 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostFutureInvokeResultWithStore<U>
                                     .map_err(anyhow::Error::from)?
                                 }
                                 Some(Err(err)) => {
-                                    return Err(live.trap(anyhow::anyhow!(err.to_string())));
+                                    return Err(live.trap(err));
                                 }
                             }
                         }
@@ -4618,14 +4574,9 @@ async fn ensure_rpc_target_activated<Ctx: WorkerCtx>(
     let stack = ctx.clone_as_inherited_stack(&span_id);
     let rpc = ctx.rpc();
     let demand = {
-        let _wait = register_rpc_wait(ctx);
         let created_by = ctx.created_by();
         let agent_id = ctx.agent_id().clone();
-        let interrupt_signal = Box::pin(wait_for_rpc_suspend(
-            rpc_wait_context(ctx),
-            ctx.create_interrupt_signal(),
-            || ctx.state.safe_to_suspend(),
-        ));
+        let interrupt_signal = ctx.create_interrupt_signal().map(Error::from);
         let activation = activate_rpc_target(
             rpc.as_ref(),
             &remote_agent_id,
@@ -4719,7 +4670,7 @@ fn known_fresh_dispatch_allowed(
 }
 
 fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
-    registration: Option<SuspendableWaitRegistration>,
+    activity: Option<crate::worker::suspension::RpcActivity>,
     rpc: Arc<dyn Rpc>,
     remote_agent_id: OwnedAgentId,
     idempotency_key: IdempotencyKey,
@@ -4760,6 +4711,8 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         idempotency_key = %idempotency_key,
     );
 
+    let revoker = activity.as_ref().map(|activity| activity.revoker());
+    let remote = revoker.clone();
     let invoke = move || {
         let rpc = rpc.clone();
         let remote_agent_id = remote_agent_id.clone();
@@ -4774,6 +4727,7 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
         let target_activation = target_activation.clone();
         let config = config.clone();
         let scope_card = scope_card.clone();
+        let remote = remote.clone();
         let freshness_disposition = take_dispatch_freshness(&first_dispatch);
         async move {
             let _demand = if let Some(target_activation) = target_activation {
@@ -4796,91 +4750,89 @@ fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
                 None
             };
 
-            let result = rpc
-                .invoke_and_await(
-                    &remote_agent_id,
-                    Some(idempotency_key),
-                    freshness_disposition,
-                    method_name,
-                    input,
-                    created_by,
-                    &agent_id,
-                    &env,
-                    stack,
-                    config,
-                    &auth_ctx,
-                    scope_card,
-                )
-                .await
-                .map_err(RpcTaskError::Rpc)?;
+            let invocation = rpc.invoke_and_await(
+                &remote_agent_id,
+                Some(idempotency_key),
+                freshness_disposition,
+                method_name,
+                input,
+                created_by,
+                &agent_id,
+                &env,
+                stack,
+                config,
+                &auth_ctx,
+                scope_card,
+            );
+            let result = match &remote {
+                Some(remote) => remote.remote_wait(invocation).await,
+                None => invocation.await,
+            }
+            .map_err(RpcTaskError::Rpc)?;
             Ok(result)
         }
     };
 
-    let registration = RpcWaitRegistration(Arc::new(std::sync::Mutex::new(registration)));
-    let task_registration = registration.clone();
-    let task = wasmtime_wasi::runtime::spawn(
-        async move {
-            let _registration = task_registration;
-            let scope = crate::worker::tasks::TaskScope::default();
-            if let Some(params) = &retry_params {
-                scope.bind(&params.worker.tasks).map_err(Error::msg)?;
-            }
-            scope
-                .run(async move {
-                    let result = if let Some(retry_params) = retry_params {
-                        let execution_status = retry_params.execution_status;
-                        let current_retry_policy_state = retry_params
-                            .worker
-                            .get_last_known_status()
-                            .await
-                            .current_retry_state
-                            .get(&retry_params.retry_point)
-                            .cloned();
-                        let task_ctx = crate::durable_host::durability::TaskRetryContext {
-                            retry_point: retry_params.retry_point,
-                            entity_parent_start_index: retry_params.entity_parent_start_index,
-                            environment_state_service: retry_params.environment_state_service,
-                            environment_id: retry_params.environment_id,
-                            default_retry_policy: retry_params.default_retry_policy,
-                            agent_config_retry_policies: retry_params.agent_config_retry_policies,
-                            runtime_retry_policy_mutations: retry_params
-                                .runtime_retry_policy_mutations,
-                            max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
-                            current_retry_policy_state,
-                            retry_properties: retry_params.retry_properties,
-                            worker: retry_params.worker,
-                        };
-                        crate::durable_host::durability::in_task_retry_loop(
-                            task_ctx,
-                            classify_rpc_task_error,
-                            invoke,
-                            || {
-                                execution_status
-                                    .read()
-                                    .unwrap()
-                                    .create_await_interrupt_signal()
-                            },
-                        )
-                        .await
-                    } else {
-                        invoke().await
-                    };
-                    match result {
-                        Ok(result) => Ok(Ok(result)),
-                        Err(RpcTaskError::Rpc(err)) => Ok(Err(err)),
-                        Err(RpcTaskError::Host(err)) => Err(err),
-                    }
-                })
-                .await
-                .unwrap_or_else(|| Err(Error::msg("Worker is being deleted")))
+    let application = async move {
+        let scope = crate::worker::tasks::TaskScope::default();
+        if let Some(params) = &retry_params {
+            scope.bind(&params.worker.tasks).map_err(Error::msg)?;
         }
-        .instrument(retry_span),
-    );
-    RpcTask {
-        task,
-        _registration: registration,
-    }
+        scope
+            .run(async move {
+                let result = if let Some(retry_params) = retry_params {
+                    let execution_status = retry_params.execution_status;
+                    let current_retry_policy_state = retry_params
+                        .worker
+                        .get_last_known_status()
+                        .await
+                        .current_retry_state
+                        .get(&retry_params.retry_point)
+                        .cloned();
+                    let task_ctx = crate::durable_host::durability::TaskRetryContext {
+                        retry_point: retry_params.retry_point,
+                        entity_parent_start_index: retry_params.entity_parent_start_index,
+                        environment_state_service: retry_params.environment_state_service,
+                        environment_id: retry_params.environment_id,
+                        default_retry_policy: retry_params.default_retry_policy,
+                        agent_config_retry_policies: retry_params.agent_config_retry_policies,
+                        runtime_retry_policy_mutations: retry_params.runtime_retry_policy_mutations,
+                        max_in_function_retry_delay: retry_params.max_in_function_retry_delay,
+                        current_retry_policy_state,
+                        retry_properties: retry_params.retry_properties,
+                        worker: retry_params.worker,
+                    };
+                    crate::durable_host::durability::in_task_retry_loop(
+                        task_ctx,
+                        classify_rpc_task_error,
+                        invoke,
+                        || {
+                            execution_status
+                                .read()
+                                .unwrap()
+                                .create_await_interrupt_signal()
+                        },
+                    )
+                    .await
+                } else {
+                    invoke().await
+                };
+                match result {
+                    Ok(result) => Ok(Ok(result)),
+                    Err(RpcTaskError::Rpc(err)) => Ok(Err(err)),
+                    Err(RpcTaskError::Host(err)) => Err(err),
+                }
+            })
+            .await
+            .unwrap_or_else(|| Err(Error::msg("Worker is being deleted")))
+    };
+    let task = match activity {
+        Some(activity) => {
+            wasmtime_wasi::runtime::spawn(activity.coordinate(application).instrument(retry_span))
+        }
+        None => wasmtime_wasi::runtime::spawn(application.instrument(retry_span)),
+    };
+    RpcTask { task, revoker }
 }
 
 fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
@@ -4918,8 +4870,14 @@ fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
             execution_status: ctx.execution_status.clone(),
         })
     };
+    let activity = ctx.runtime_suspension.as_ref().map(|runtime| {
+        runtime.rpc_activity(
+            ctx.state.config.suspend.rpc_suspend_after,
+            ctx.state.config.suspend.rpc_resume_after,
+        )
+    });
     spawn_rpc_task_with_retry(
-        register_rpc_wait(ctx),
+        activity,
         ctx.rpc(),
         remote_agent_id.clone(),
         idempotency_key,
@@ -4955,6 +4913,7 @@ struct DurableStreamingTaskParams {
 /// failure; the inner result is the RPC's.
 async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
+    activity: Option<&crate::worker::suspension::RpcActivityRevoker>,
     mut acceptance: tokio::sync::oneshot::Receiver<
         golem_api_grpc::proto::golem::worker::InvocationAccepted,
     >,
@@ -4966,7 +4925,12 @@ async fn await_streaming_rpc_acceptance(
     tokio::pin!(invocation);
     let (accepted, result) = tokio::select! {
         biased;
-        result = &mut invocation => (acceptance.try_recv().ok(), Some(result)),
+        result = async {
+            match activity {
+                Some(activity) => activity.remote_wait(&mut invocation).await,
+                None => invocation.as_mut().await,
+            }
+        } => (acceptance.try_recv().ok(), Some(result)),
         accepted = &mut acceptance => (accepted.ok(), None),
     };
     if let Some(accepted) = accepted {
@@ -4989,7 +4953,10 @@ async fn await_streaming_rpc_acceptance(
     }
     Ok(match result {
         Some(result) => result,
-        None => invocation.await,
+        None => match activity {
+            Some(activity) => activity.remote_wait(invocation).await,
+            None => invocation.await,
+        },
     })
 }
 
@@ -5010,10 +4977,15 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
     let created_by = ctx.created_by();
     let agent_id = ctx.agent_id().clone();
     let stack = ctx.clone_as_inherited_stack(span_id);
-    let registration = RpcWaitRegistration(Arc::new(std::sync::Mutex::new(register_rpc_wait(ctx))));
-    let task_registration = registration.clone();
-    let task = wasmtime_wasi::runtime::spawn(async move {
-        let _registration = task_registration;
+    let activity = ctx.runtime_suspension.as_ref().map(|runtime| {
+        runtime.rpc_activity(
+            ctx.state.config.suspend.rpc_suspend_after,
+            ctx.state.config.suspend.rpc_resume_after,
+        )
+    });
+    let revoker = activity.as_ref().map(|activity| activity.revoker());
+    let remote = revoker.clone();
+    let application = async move {
         let scope = crate::worker::tasks::TaskScope::default();
         scope
             .bind(params.streams.producer.tasks())
@@ -5042,6 +5014,7 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                 let (accepted_inputs, acceptance) = tokio::sync::oneshot::channel();
                 let result = await_streaming_rpc_acceptance(
                     &params.streams,
+                    remote.as_ref(),
                     acceptance,
                     rpc.invoke_and_await_streaming(
                         &remote_agent_id,
@@ -5101,11 +5074,12 @@ fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
             })
             .await
             .unwrap_or_else(|| Err(Error::msg("Worker is being deleted")))
-    });
-    RpcTask {
-        task,
-        _registration: registration,
-    }
+    };
+    let task = match activity {
+        Some(activity) => wasmtime_wasi::runtime::spawn(activity.coordinate(application)),
+        None => wasmtime_wasi::runtime::spawn(application),
+    };
+    RpcTask { task, revoker }
 }
 
 pub struct WasmRpcEntryPayload {
@@ -5624,6 +5598,40 @@ mod tests {
     use wasmtime::component::ResourceTable;
 
     #[test]
+    async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {
+        use crate::worker::suspension::OwnerSuspension;
+        use crate::worker::suspension::tests::{blocked_timer, eligible_now};
+        use std::future::{Future, pending};
+        use std::task::Context;
+        use std::time::Instant;
+
+        let owner = OwnerSuspension::new();
+        let (store, _, _timer) = blocked_timer(&owner, Instant::now() + Duration::from_secs(30));
+        let activity = store.rpc_activity(Duration::ZERO, Duration::from_secs(5));
+        let revoker = activity.revoker();
+        let remote = revoker.clone();
+        // Retain the coordinated future independently to delay background task cleanup.
+        let mut delayed_cleanup =
+            Box::pin(activity.coordinate(async move {
+                remote.remote_wait(pending::<anyhow::Result<()>>()).await
+            }));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(delayed_cleanup.as_mut().poll(&mut cx).is_pending());
+        assert!(eligible_now(&owner));
+        let task = RpcTask {
+            task: wasmtime_wasi::runtime::spawn(pending()),
+            revoker: Some(revoker),
+        };
+
+        drop(task);
+        assert!(!eligible_now(&owner));
+        assert!(delayed_cleanup.as_mut().poll(&mut cx).is_pending());
+        assert!(!eligible_now(&owner));
+        drop(delayed_cleanup);
+        assert!(eligible_now(&owner));
+    }
+
+    #[test]
     fn logical_ephemeral_rpc_connection_creation_is_local_durability() {
         use crate::durable_host::durability::{DurableExecutionState, InFunctionRetryController};
 
@@ -5676,35 +5684,6 @@ mod tests {
         assert_eq!(cross_trace.links[0].trace_id, trace_a);
         assert_eq!(cross_trace.links[0].span_id, connection);
         assert_eq!(cross_trace.links[0].trace_states, vec!["a=1".to_string()]);
-    }
-
-    #[test]
-    async fn dropping_rpc_task_revokes_wait_before_task_cleanup() {
-        let waits = Arc::new(Mutex::new(BTreeMap::new()));
-        let _sleep = SuspendableWaitRegistration::new(1, None, waits.clone());
-        let registration = RpcWaitRegistration(Arc::new(Mutex::new(Some(
-            SuspendableWaitRegistration::rpc(2, Duration::from_secs(5), waits.clone()),
-        ))));
-        // Keep the task's cleanup guard alive to model an abort not yet processed by Tokio.
-        let delayed_cleanup = registration.clone();
-        let task = RpcTask {
-            task: wasmtime_wasi::runtime::spawn(std::future::pending()),
-            _registration: registration,
-        };
-        assert_eq!(waits.lock().unwrap().len(), 2);
-        drop(task);
-        // After the RPC's durable terminal, only a sleep and an active HTTP call remain live.
-        assert!(
-            !crate::durable_host::PrivateDurableWorkerState::suspend_admissible(
-                2,
-                waits.lock().unwrap().len(),
-                false,
-                false,
-            )
-        );
-        assert_eq!(waits.lock().unwrap().len(), 1);
-        drop(delayed_cleanup);
-        assert_eq!(waits.lock().unwrap().len(), 1);
     }
 
     struct FixedDemand {
@@ -6011,13 +5990,8 @@ mod tests {
             invoke_called: AtomicBool::new(false),
         });
 
-        let waits = Arc::new(Mutex::new(BTreeMap::new()));
         let result = spawn_rpc_task_with_retry::<crate::workerctx::default::Context>(
-            Some(SuspendableWaitRegistration::rpc(
-                1,
-                Duration::from_secs(5),
-                waits.clone(),
-            )),
+            None,
             rpc.clone(),
             OwnedAgentId::new(EnvironmentId::new(), &agent_id("target")),
             IdempotencyKey::new("first-authorized-activation".to_string()),
@@ -6042,7 +6016,6 @@ mod tests {
 
         result.unwrap().unwrap();
         assert!(rpc.invoke_called.load(Ordering::SeqCst));
-        assert!(waits.lock().unwrap().is_empty());
     }
 
     #[test]

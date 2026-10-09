@@ -5,7 +5,9 @@
 use super::super::route_schema::StreamSlotSchema;
 use super::super::schema_mapping::render_output_schema;
 use super::*;
-use golem_service_base::custom_api::{DurableStreamRepresentation, MethodParameter};
+use golem_service_base::custom_api::{
+    DurableStreamRepresentation, MethodParameter, PhantomSelection,
+};
 
 const OFFSET: &str = "GolemDSOffset";
 const READ_OFFSET: &str = "GolemDSReadOffset";
@@ -58,6 +60,16 @@ pub(super) fn emit(
         components,
         &mut creation_parameters,
     )?;
+    let identity_parameter = match &behaviour.phantom_selection {
+        PhantomSelection::Query { name, .. } => {
+            let index = creation_parameters
+                .iter()
+                .position(|p| p["in"] == "query" && p["name"] == name.as_str())
+                .expect("Lowered phantom query selector is missing");
+            Some(creation_parameters.remove(index))
+        }
+        _ => None,
+    };
     let path_parameters: Vec<_> = creation_parameters
         .iter()
         .filter(|p| p["in"] == "path")
@@ -68,11 +80,14 @@ pub(super) fn emit(
     let mut operation = |path: &str,
                          method: &str,
                          label: &str,
-                         parameters: Vec<Value>,
+                         mut parameters: Vec<Value>,
                          body: Option<Value>,
                          responses: Value,
                          slot: Option<&StreamSlotSchema>|
      -> Result<(), String> {
+        if let Some(selector) = &identity_parameter {
+            parameters.push(selector.clone());
+        }
         let mut op = json!({
             "operationId": format!("{}-{}-{}-{}", behaviour.agent_type.0, behaviour.method_name, method, hex_path(path)),
             "summary": label,

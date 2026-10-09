@@ -118,6 +118,7 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ct
 /// [`ReplayState`] shares its cursor; it does not create another cursor over the same oplog.
 pub struct OwnerExecution {
     owner_id: OwnedAgentId,
+    suspension: Mutex<Arc<super::suspension::OwnerSuspension>>,
     oplog: Arc<dyn Oplog>,
     replay: tokio::sync::RwLock<Option<ReplayState>>,
     commit: Arc<OwnerCommitController>,
@@ -186,6 +187,7 @@ impl OwnerExecution {
         let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
+            suspension: Mutex::new(super::suspension::OwnerSuspension::new()),
             oplog,
             replay: tokio::sync::RwLock::new(None),
             commit,
@@ -207,6 +209,10 @@ impl OwnerExecution {
 
     pub fn owner_id(&self) -> &OwnedAgentId {
         &self.owner_id
+    }
+
+    pub(crate) fn suspension(&self) -> Arc<super::suspension::OwnerSuspension> {
+        self.suspension.lock().unwrap().clone()
     }
 
     pub fn oplog(&self) -> Arc<dyn Oplog> {
@@ -298,6 +304,9 @@ impl OwnerExecution {
         )
         .await?;
         *self.replay.write().await = Some(replay.clone());
+        // Observation state follows the existing replay generation. Old Store callbacks retain
+        // the old coordinator and cannot alter eligibility of the reconstructed generation.
+        *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
         Ok(())
     }
 
@@ -775,6 +784,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
+        let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
+        store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
+        store
+            .as_context_mut()
+            .set_runtime_observer(runtime)
+            .map_err(anyhow::Error::from)?;
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);
@@ -1262,7 +1277,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use test_r::{test, timeout};
     use wasmtime::component::{Component, Linker};
-    use wasmtime::{Config, Engine};
+    use wasmtime::{AsContextMut, Config, Engine};
 
     struct FuelTestContext {
         borrowed: bool,
@@ -1343,6 +1358,10 @@ mod tests {
         scope.freeze_cause(Cause::Interrupt);
         let returned_at = Arc::new(AtomicU64::new(u64::MAX));
         let dropped = Arc::new(AtomicBool::new(false));
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
         let result = async {
             let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
                 &engine,
@@ -1353,6 +1372,7 @@ mod tests {
                 },
                 Some(&scope),
             ));
+            store.as_context_mut().set_runtime_observer(runtime)?;
             store.set_fuel(123)?;
             store.set_epoch_deadline(1);
             scope.seal();
@@ -1368,6 +1388,7 @@ mod tests {
             result.unwrap_err().downcast_ref::<wasmtime::Trap>(),
             Some(&wasmtime::Trap::UnreachableCodeReached)
         );
+        assert!(observer.upgrade().is_none());
         assert!(dropped.load(Ordering::Acquire));
         assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
         assert_eq!(
@@ -1404,6 +1425,10 @@ mod tests {
         let dropped = Arc::new(AtomicBool::new(false));
         let entered = Arc::new(AtomicBool::new(false));
         let entered_callback = entered.clone();
+        let runtime = super::super::suspension::RuntimeStore::new(
+            super::super::suspension::OwnerSuspension::new(),
+        );
+        let observer = Arc::downgrade(&runtime);
         let mut initializing = Box::pin(async {
             let mut store = StoreFuelGuard::new(ObservedPrimaryStore::new(
                 &engine,
@@ -1414,6 +1439,7 @@ mod tests {
                 },
                 Some(&scope),
             ));
+            store.as_context_mut().set_runtime_observer(runtime)?;
             store.set_fuel(123)?;
             store.set_epoch_deadline(0);
             store.epoch_deadline_callback(move |_| {
@@ -1437,6 +1463,7 @@ mod tests {
         assert!(!dropped.load(Ordering::Acquire));
         metrics.advance(2000);
         drop(initializing);
+        assert!(observer.upgrade().is_none());
         assert!(dropped.load(Ordering::Acquire));
         assert_ne!(returned_at.load(Ordering::Acquire), u64::MAX);
         assert_eq!(

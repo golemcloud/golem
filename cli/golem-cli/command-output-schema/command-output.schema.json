@@ -6935,17 +6935,28 @@
     },
     "HttpMountDetails": {
       "type": "object",
-      "required": ["pathPrefix", "authDetails", "phantomAgent", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
+      "required": ["pathPrefix", "authDetails", "phantomAgent", "phantomIdBinding", "corsOptions", "webhookSuffix", "staticBindings", "filesystemBindings", "fileResponseHeaders", "openapiProviderMethod"],
       "properties": {
         "pathPrefix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "authDetails": { "oneOf": [{ "$ref": "#/definitions/AgentHttpAuthDetails" }, { "type": "null" }] },
         "phantomAgent": { "type": "boolean" },
+        "phantomIdBinding": { "oneOf": [{ "$ref": "#/definitions/PhantomIdBinding" }, { "type": "null" }] },
         "corsOptions": { "$ref": "#/definitions/CorsOptions" },
         "webhookSuffix": { "type": "array", "items": { "$ref": "#/definitions/PathSegment" } },
         "staticBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
         "filesystemBindings": { "type": "array", "items": { "$ref": "#/definitions/FileMapping" } },
         "fileResponseHeaders": { "type": "array", "items": { "$ref": "#/definitions/FileResponseHeader" } },
         "openapiProviderMethod": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "PhantomIdBinding": {
+      "type": "object",
+      "required": ["type", "name", "optional"],
+      "properties": {
+        "type": { "type": "string", "enum": ["Path", "Query"] },
+        "name": { "type": "string" },
+        "optional": { "type": "boolean" }
       },
       "additionalProperties": false
     },

@@ -388,6 +388,15 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         key_value_storage
     }
 
+    /// Wraps scheduler persistence after the configured backend has been constructed. The default
+    /// is the identity; deterministic integration tests use this boundary to pause a real insert.
+    fn wrap_scheduler_storage(
+        &self,
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    ) -> Arc<dyn SchedulerStorage + Send + Sync> {
+        scheduler_storage
+    }
+
     fn create_key_value_service(
         &self,
         key_value_storage: &Arc<dyn KeyValueStorage + Send + Sync>,
@@ -795,7 +804,8 @@ pub async fn create_worker_executor_impl<
             golem_config.key_value_storage_retry.clone(),
         )));
 
-    let scheduler_storage = build_scheduler_storage(&golem_config.scheduler_storage).await?;
+    let scheduler_storage = bootstrap
+        .wrap_scheduler_storage(build_scheduler_storage(&golem_config.scheduler_storage).await?);
 
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {

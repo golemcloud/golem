@@ -35,25 +35,46 @@ use golem_schema::schema::{
 use test_r::test;
 use uuid::Uuid;
 
-fn receive_guard_counts(
-    with_source_wait: bool,
-) -> (
-    ReceiveGuard,
-    Arc<std::sync::atomic::AtomicUsize>,
-    crate::durable_host::suspendable_wait::SuspendableWaitRegistry,
-) {
+fn receive_guard_counts() -> (ReceiveGuard, Arc<std::sync::atomic::AtomicUsize>) {
     let live_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let waits: crate::durable_host::suspendable_wait::SuspendableWaitRegistry = Default::default();
-    let source_wait =
-        with_source_wait.then(|| SuspendableWaitRegistration::new(1, None, waits.clone()));
     let guard = ReceiveGuard {
-        source_wait,
         _live_call: LiveCallPermit::new(live_calls.clone()),
         interrupt: None,
         #[cfg(feature = "test-utils")]
         observer: None,
     };
-    (guard, live_calls, waits)
+    (guard, live_calls)
+}
+
+fn receive_wait_for_test() -> (
+    DurableReadWait,
+    Arc<crate::worker::suspension::OwnerSuspension>,
+    crate::worker::suspension::SuspensionWait,
+) {
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::blocked_timer;
+    use wasmtime::component::{RuntimeActivityKind, RuntimeObservation, RuntimeObserver};
+
+    let owner = OwnerSuspension::new();
+    let (runtime, activity_id, timer) =
+        blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+    runtime.observe(RuntimeObservation::ActivityStarted {
+        activity: activity_id,
+        kind: RuntimeActivityKind::Import,
+    });
+    let activity = Arc::new(OnceLock::new());
+    activity.set(activity_id).unwrap();
+    (
+        DurableReadWait {
+            runtime,
+            activity,
+            grace: Duration::ZERO,
+            recheck: Duration::from_secs(30),
+            interrupt: Box::pin(std::future::pending()),
+        },
+        owner,
+        timer,
+    )
 }
 
 async fn local_binding(
@@ -216,13 +237,14 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
             .await
             .unwrap(),
     );
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (guard, live_calls) = receive_guard_counts();
     let (stop, signal) = oneshot::channel();
     let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
         golem_common::model::Timestamp::now_utc(),
     );
-    guard.interrupt = Some(Box::pin(async move { signal.await.unwrap() }));
-    input.pending = Some(input.input.receive(Some(guard)));
+    let (mut suspension, owner, _timer) = receive_wait_for_test();
+    suspension.interrupt = Box::pin(async move { signal.await.unwrap() });
+    input.pending = Some(input.input.receive(Some(guard), Some(suspension)));
     let mut cx = Context::from_waker(futures::task::noop_waker_ref());
     assert!(
         input
@@ -234,7 +256,7 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
             .is_pending()
     );
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
-    assert_eq!(waits.lock().unwrap().len(), 1);
+    assert!(crate::worker::suspension::tests::eligible_now(&owner));
     let before = oplog.current_oplog_index().await;
     stop.send(kind).unwrap();
     let read = tokio::time::timeout(Duration::from_millis(100), input.pending.take().unwrap())
@@ -248,7 +270,7 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
     assert_eq!(input.input.consumer_read_ordinal, 0);
     assert_eq!(oplog.current_oplog_index().await, before);
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
-    assert!(waits.lock().unwrap().is_empty());
+    assert!(!crate::worker::suspension::tests::eligible_now(&owner));
     assert!(
         !streams
             .has_journaled_consumer_terminal(&mapping)
@@ -391,24 +413,25 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
             .await
             .unwrap(),
     );
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (guard, live_calls) = receive_guard_counts();
     let stop = tokio_util::sync::CancellationToken::new();
     let cancelled = stop.clone();
     let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
         golem_common::model::Timestamp::now_utc(),
     );
-    guard.interrupt = Some(Box::pin(async move {
+    let (mut suspension, owner, _timer) = receive_wait_for_test();
+    suspension.interrupt = Box::pin(async move {
         cancelled.cancelled().await;
         kind
-    }));
-    let mut receive = input.input.receive(Some(guard));
+    });
+    let mut receive = input.input.receive(Some(guard), Some(suspension));
     let mut cx = Context::from_waker(futures::task::noop_waker_ref());
     tokio::select! {
         biased;
         _ = journal.entered.notified() => {},
         _ = &mut receive => panic!("receive finished before its withheld journal commit"),
     }
-    assert!(waits.lock().unwrap().is_empty());
+    assert!(!crate::worker::suspension::tests::eligible_now(&owner));
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
     stop.cancel();
     assert!(
@@ -448,9 +471,9 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
             .await
             .unwrap(),
     );
-    let (mut guard, _, _) = receive_guard_counts(false);
+    let (mut guard, _) = receive_guard_counts();
     guard.interrupt = Some(Box::pin(std::future::ready(kind)));
-    let read = resumed.input.receive(Some(guard)).await.unwrap();
+    let read = resumed.input.receive(Some(guard), None).await.unwrap();
     assert!(read.journaled);
     assert_eq!(read.event.as_ref().unwrap().offset, first_offset);
     assert!(matches!(
@@ -465,10 +488,9 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
 }
 
 #[test]
-fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
-    let (guard, live_calls, waits) = receive_guard_counts(true);
+fn receive_guard_drop_before_poll_releases_live_call() {
+    let (guard, live_calls) = receive_guard_counts();
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
-    assert_eq!(waits.lock().unwrap().len(), 1);
 
     let future = Box::pin(async move {
         let _guard = guard;
@@ -477,50 +499,364 @@ fn receive_guard_drop_before_poll_releases_wait_and_live_call() {
     drop(future);
 
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
-    assert!(waits.lock().unwrap().is_empty());
 }
 
 #[test]
-fn receive_guard_clears_source_wait_but_covers_post_receive_work() {
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+fn receive_guard_covers_post_receive_work() {
+    let (guard, live_calls) = receive_guard_counts();
     let (_commit, commit_wait) = tokio::sync::oneshot::channel::<()>();
     let mut future = Box::pin(async move {
-        guard.clear_source_wait();
+        let _guard = guard;
         commit_wait.await.map_err(|error| error.to_string())?;
         Ok::<(), String>(())
     });
 
     let mut context = Context::from_waker(futures::task::noop_waker_ref());
     assert!(future.as_mut().poll(&mut context).is_pending());
-    assert!(waits.lock().unwrap().is_empty());
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
 
     drop(future);
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
 
-    let (mut guard, live_calls, waits) = receive_guard_counts(true);
+    let (guard, live_calls) = receive_guard_counts();
     let mut failed = Box::pin(async move {
-        guard.clear_source_wait();
+        let _guard = guard;
         Err::<(), _>("journal commit failed")
     });
     assert!(failed.as_mut().poll(&mut context).is_ready());
-    assert!(waits.lock().unwrap().is_empty());
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
 }
 
 #[test]
-fn replay_receive_guard_has_live_call_without_source_wait() {
-    let (guard, live_calls, waits) = receive_guard_counts(false);
+fn replay_receive_guard_has_live_call() {
+    let (guard, live_calls) = receive_guard_counts();
     assert_eq!(live_calls.load(Ordering::Acquire), 1);
-    assert!(waits.lock().unwrap().is_empty());
     drop(guard);
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn durable_read_wait_late_binding_preserves_source_and_revokes_on_ready_or_drop() {
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, eligible_now};
+    use wasmtime::component::{RuntimeActivityKind, RuntimeObservation, RuntimeObserver};
+
+    for complete in [false, true] {
+        let owner = OwnerSuspension::new();
+        let (runtime, activity_id, _timer) =
+            blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+        runtime.observe(RuntimeObservation::ActivityStarted {
+            activity: activity_id,
+            kind: RuntimeActivityKind::Import,
+        });
+        let activity = Arc::new(OnceLock::new());
+        let wait = DurableReadWait {
+            runtime,
+            activity: activity.clone(),
+            grace: Duration::ZERO,
+            recheck: Duration::from_secs(30),
+            interrupt: Box::pin(std::future::pending()),
+        };
+        let (tx, rx) = oneshot::channel();
+        let starts = Arc::new(AtomicU64::new(0));
+        let source_starts = starts.clone();
+        let mut future = Box::pin(wait.wait(async move {
+            source_starts.fetch_add(1, Ordering::Relaxed);
+            rx.await.unwrap()
+        }));
+        let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        assert!(!eligible_now(&owner));
+        activity.set(activity_id).unwrap();
+        assert!(future.as_mut().poll(&mut cx).is_pending());
+        assert!(eligible_now(&owner));
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        if complete {
+            tx.send(37).unwrap();
+            assert!(matches!(future.as_mut().poll(&mut cx), Poll::Ready(Ok(37))));
+            // The caller has not journaled or delivered this result yet.
+            assert!(!eligible_now(&owner));
+        } else {
+            drop(future);
+            assert!(!eligible_now(&owner));
+            assert!(tx.send(37).is_err());
+        }
+        assert_eq!(starts.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn durable_read_wait_explicit_interrupt_wins_committed_suspension() {
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, commit_now};
+    use wasmtime::component::{RuntimeActivityKind, RuntimeObservation, RuntimeObserver};
+
+    let owner = OwnerSuspension::new();
+    let (runtime, activity_id, _timer) =
+        blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+    runtime.observe(RuntimeObservation::ActivityStarted {
+        activity: activity_id,
+        kind: RuntimeActivityKind::Import,
+    });
+    let activity = Arc::new(OnceLock::new());
+    activity.set(activity_id).unwrap();
+    let (tx, rx) = oneshot::channel();
+    let wait = DurableReadWait {
+        runtime,
+        activity,
+        grace: Duration::ZERO,
+        recheck: Duration::from_secs(30),
+        interrupt: Box::pin(async move { rx.await.unwrap() }),
+    };
+    let mut future = Box::pin(wait.wait(std::future::pending::<()>()));
+    let mut cx = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(future.as_mut().poll(&mut cx).is_pending());
+    assert!(commit_now(&owner));
+    tx.send(InterruptKind::Interrupt(Timestamp::now_utc()))
+        .unwrap();
+    let Poll::Ready(Err(kind)) = future.as_mut().poll(&mut cx) else {
+        panic!("both signals are ready, so explicit interruption must win");
+    };
+    assert!(matches!(kind, InterruptKind::Interrupt(_)));
+    let error = DurableReceiveError::from(kind);
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodInput,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::AgentHostedInput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let session_key = StreamRegistrationInvocation::Local(identity.invocation.idempotency_key);
+    let mapping = StreamSessionMappingRecord {
+        transport_stream_id: 0,
+        handle: handle.clone(),
+        role: SessionStreamRole::Input,
+    };
+    let binding = persist_local_mapping(&producer, session_key.clone(), &mapping).await;
+    let session = StreamSession::open(producer.clone(), oplog.clone(), session_key, [binding])
+        .await
+        .unwrap();
+    let endpoint = session
+        .endpoint(handle.clone(), 0, SessionStreamRole::Input)
+        .await
+        .unwrap();
+    let mut consumer = DurableInputProducer::new(endpoint);
+    let before = oplog.current_oplog_index().await;
+    let trap = consumer.finish_receive(Err(error)).unwrap_err();
+    assert!(matches!(
+        trap.downcast_ref::<InterruptKind>(),
+        Some(InterruptKind::Interrupt(_))
+    ));
+    assert!(!consumer.finished);
+    assert!(!consumer.dropping);
+    assert!(!consumer.input.source_terminal);
+    assert!(consumer.pending.is_none());
+    assert_eq!(oplog.current_oplog_index().await, before);
+    let head = producer.stream_head(&handle).await.unwrap();
+    assert!(!head.closed && !head.cancelled);
 }
 
 #[test]
 async fn fork_consumer_payloads_preserve_observations_under_new_identities() {
     assert_fork_consumer_payloads(false).await;
     assert_fork_consumer_payloads(true).await;
+}
+
+async fn assert_local_source_wait_provenance(source_kind: StreamSourceKind, expected: bool) {
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, eligible_now};
+    use wasmtime::component::{RuntimeActivityKind, RuntimeObservation, RuntimeObserver};
+
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let root = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: if source_kind == StreamSourceKind::InvocationOutput {
+                        StreamRootKind::MethodResult
+                    } else {
+                        StreamRootKind::MethodInput
+                    },
+                    recursive_value_path: Vec::new(),
+                },
+                source_kind,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let mut handles = vec![root];
+    let mut offsets = Vec::new();
+    for _ in 0..2 {
+        let parent = handles.last().unwrap();
+        let written = producer
+            .write_items_with_nested(
+                None,
+                parent.stream_id,
+                0,
+                StreamItemsPayload::Values(vec![
+                    ProtoSchemaValue {
+                        value: Some(schema_value::Value::StreamReference(
+                            SchemaValueStreamReference { stream_id: 0 },
+                        )),
+                    }
+                    .encode_to_vec(),
+                ]),
+                vec![registration(
+                    &identity,
+                    StreamRegistrationCoordinate::Nested {
+                        parent_stream_id: parent.stream_id,
+                        parent_producer_sequence: 0,
+                        recursive_value_path: Vec::new(),
+                    },
+                    StreamSourceKind::Nested,
+                )],
+            )
+            .await
+            .unwrap();
+        offsets.push(Some(written.value[0]));
+        handles.push(producer.nested_handles(parent.stream_id, 0).await.unwrap()[0].clone());
+    }
+    offsets.push(None);
+
+    for reconstructed in [false, true] {
+        let producer = if reconstructed {
+            DurableStreamStore::load(
+                oplog.clone(),
+                identity.environment_id,
+                identity.agent_id.clone(),
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap()
+        } else {
+            producer.clone()
+        };
+        // A forwarded original handle is foreign in the consumer journal even when
+        // its producer is this owner. Its registration still determines the wait.
+        for forwarded in [false, true] {
+            for (index, (handle, after)) in handles.iter().zip(&offsets).enumerate() {
+                let mapping = StreamSessionMappingRecord {
+                    transport_stream_id: index as u64,
+                    handle: handle.clone(),
+                    role: SessionStreamRole::Input,
+                };
+                let key = StreamRegistrationInvocation::Local(IdempotencyKey::new(format!(
+                    "provenance-{reconstructed}-{forwarded}-{index}"
+                )));
+                let binding = if forwarded {
+                    StreamBindingRecord::foreign(&mapping)
+                } else {
+                    local_binding(&producer, &mapping).await
+                };
+                let session = StreamSession::open(
+                    producer.clone(),
+                    oplog.clone(),
+                    key.clone(),
+                    [binding.clone()],
+                )
+                .await
+                .unwrap();
+                session
+                    .append_record(
+                        None,
+                        StreamSessionRecord::Mapping(StreamSessionMappingUpdateRecord {
+                            format_version: DURABLE_STREAM_FORMAT_VERSION,
+                            session_key: key,
+                            mapping: binding,
+                        }),
+                    )
+                    .await
+                    .unwrap();
+                let reader = session.stream_reader(mapping, *after).await.unwrap();
+                assert_eq!(reader.source_wait_can_suspend(), expected);
+                let mut endpoint = session
+                    .endpoint(handle.clone(), index as u64, SessionStreamRole::Input)
+                    .await
+                    .unwrap();
+                endpoint.reader = Some(reader);
+                let owner = OwnerSuspension::new();
+                let (runtime, activity_id, _timer) =
+                    blocked_timer(&owner, Instant::now() + Duration::from_secs(60));
+                runtime.observe(RuntimeObservation::ActivityStarted {
+                    activity: activity_id,
+                    kind: RuntimeActivityKind::Import,
+                });
+                let activity = Arc::new(OnceLock::new());
+                activity.set(activity_id).unwrap();
+                let wait = DurableReadWait {
+                    runtime,
+                    activity,
+                    grace: Duration::ZERO,
+                    recheck: Duration::from_secs(30),
+                    interrupt: Box::pin(std::future::pending()),
+                };
+                let mut receive = endpoint.receive(None, Some(wait));
+                assert!(futures::poll!(&mut receive).is_pending());
+                assert_eq!(
+                    eligible_now(&owner),
+                    expected,
+                    "depth {index}, reconstructed={reconstructed}, forwarded={forwarded}"
+                );
+                drop(receive);
+                assert!(!eligible_now(&owner));
+            }
+        }
+    }
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn external_inline_local_readers_and_nested_descendants_do_not_suspend() {
+    assert_local_source_wait_provenance(StreamSourceKind::ExternalInlineInput, false).await;
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn agent_hosted_local_readers_and_nested_descendants_can_suspend() {
+    assert_local_source_wait_provenance(StreamSourceKind::AgentHostedInput, true).await;
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn invocation_output_local_readers_and_nested_descendants_can_suspend() {
+    assert_local_source_wait_provenance(StreamSourceKind::InvocationOutput, true).await;
 }
 
 async fn assert_fork_consumer_payloads(overlay_before_fork: bool) {
@@ -956,6 +1292,7 @@ async fn unbound_rpc_inputs_cancel_only_local_inputs_and_release_empty_drains() 
         let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
         let lifecycle = endpoint.lifecycle();
         let drain = PendingOwnedStreamDrain {
+            activity: None,
             handle: mappings[0].handle.clone(),
             endpoint,
             element_type: SchemaType::u8(),
@@ -1105,6 +1442,7 @@ async fn cancelled_owned_input_replays_committed_items_before_closing() {
         streams
             .drain_output(
                 PendingOwnedStreamDrain {
+                    activity: None,
                     handle,
                     endpoint,
                     element_type: SchemaType::u64(),
@@ -1431,6 +1769,92 @@ async fn mapping_records_preserve_construction_and_insertion_rules() {
 }
 
 #[test]
+#[test_r::timeout("30s")]
+async fn output_coordinator_collects_cancelled_children_after_suspension_commit() {
+    use crate::durable_host::stream_transport::accounted_output_stream_pair;
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, commit_now, eligible_now};
+
+    let owner = OwnerSuspension::new();
+    let (runtime, _, _timer) = blocked_timer(
+        &owner,
+        std::time::Instant::now() + std::time::Duration::from_secs(60),
+    );
+    let identity = identity();
+    let oplog = Arc::new(TestOplog::default());
+    let producer = DurableStreamStore::load(
+        oplog.clone(),
+        identity.environment_id,
+        identity.agent_id.clone(),
+        identity.fingerprint,
+        None,
+    )
+    .await
+    .unwrap();
+    let handle = producer
+        .register(
+            None,
+            registration(
+                &identity,
+                StreamRegistrationCoordinate::Root {
+                    invocation_id: identity.invocation.clone(),
+                    root_kind: StreamRootKind::MethodResult,
+                    recursive_value_path: Vec::new(),
+                },
+                StreamSourceKind::InvocationOutput,
+            ),
+        )
+        .await
+        .unwrap()
+        .value;
+    let streams = StreamSession::new(
+        producer,
+        oplog.clone(),
+        StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+        [],
+    )
+    .with_runtime_source(Some(runtime.source()));
+    let (consumer, stream) = accounted_output_stream_pair(
+        2,
+        Arc::new(|| true),
+        Some(runtime.source()),
+        Box::pin(std::future::pending()),
+    )
+    .unwrap();
+    let endpoint = stream.take_host_endpoint::<LiveStreamEndpoint>().unwrap();
+    let lifecycle = endpoint.lifecycle();
+    let drain = PendingOwnedStreamDrain {
+        activity: streams.drain_activity(&endpoint),
+        handle,
+        endpoint,
+        element_type: SchemaType::u32(),
+        role: SessionStreamRole::Output,
+    };
+    assert!(!eligible_now(&owner), "unpolled child must veto");
+    let coordinator_activity = runtime.external_activity();
+    let entries = oplog.length().await;
+    let mut coordinator = Box::pin(streams.drain_materialized_result(
+        vec![drain],
+        Arc::new(SchemaGraph::anonymous(SchemaType::u32())),
+        Some(runtime.source()),
+        Some(coordinator_activity),
+    ));
+    while !eligible_now(&owner) {
+        assert!(futures::poll!(coordinator.as_mut()).is_pending());
+        tokio::task::yield_now().await;
+    }
+    assert!(commit_now(&owner));
+    lifecycle.abort();
+    coordinator.await.unwrap();
+    assert_eq!(
+        oplog.length().await,
+        entries,
+        "cleanup must not invent a terminal"
+    );
+    drop(consumer);
+}
+
+#[test]
 async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     let identity = identity();
     let oplog = Arc::new(TestOplog::default());
@@ -1469,6 +1893,7 @@ async fn guest_owned_u8_output_uses_the_packed_durable_path() {
     let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
     let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
     let drain = PendingOwnedStreamDrain {
+        activity: None,
         handle: handle.clone(),
         endpoint,
         element_type: SchemaType::u8(),
@@ -1529,6 +1954,7 @@ async fn guest_byte_drain_after_partial_fork_replays_prefix_and_resumes_suffix()
         let (publisher, endpoint) = test_output_stream_pair(4).unwrap();
         let (nested_tx, _nested_rx) = mpsc::unbounded_channel();
         let drain = PendingOwnedStreamDrain {
+            activity: None,
             handle,
             endpoint,
             element_type: SchemaType::u8(),
@@ -1819,6 +2245,7 @@ async fn nested_output_drain_recovers_transport_ids_allocated_by_another_runtime
     drain
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: parent,
                 endpoint,
                 element_type,
@@ -2099,6 +2526,7 @@ async fn assert_local_nested_stream_drains_after_root_admission(root_kind: Strea
 
     for (handle, expected) in [(first_handle, 17), (second_handle, 29)] {
         let mut reader = DurableStreamReader::Owned {
+            source_wait_can_suspend: producer.source_wait_can_suspend(&handle).await.unwrap(),
             reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
             source: producer.clone(),
             handle: Box::new(handle),
@@ -4593,6 +5021,7 @@ async fn owned_tail_backlog_uses_source_history() {
         .unwrap()
         .value;
     let mut reader = DurableStreamReader::Owned {
+        source_wait_can_suspend: producer.source_wait_can_suspend(&handle).await.unwrap(),
         reader: Box::new(producer.catch_up(handle.clone(), None).await.unwrap()),
         source: producer.clone(),
         handle: Box::new(handle.clone()),
@@ -4936,9 +5365,8 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     let mut replay = replay.activate();
     let request = requests.recv().await.unwrap();
     assert!(!request.opens_source);
-    assert!(!request.source_wait);
     assert_eq!(request.ordinal, 0);
-    let (guard, live_calls, _) = receive_guard_counts(false);
+    let (guard, live_calls) = receive_guard_counts();
     assert!(request.result.send(Ok(guard)).is_ok());
     assert!(matches!(replay.recv().await.unwrap().payload,
         LiveStreamEventPayload::Item(SchemaValue::Record { fields })
@@ -4946,7 +5374,6 @@ async fn consumer_value_is_committed_before_delivery_and_replay_is_a_no_op() {
     assert_eq!(live_calls.load(Ordering::Acquire), 0);
     let request = requests.recv().await.unwrap();
     assert!(request.opens_source);
-    assert!(request.source_wait);
     assert_eq!(request.ordinal, 1);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), replay.recv())
@@ -5114,11 +5541,11 @@ async fn cold_consumer_replays_nested_history_without_a_producer_connection() {
             .endpoint(root, 0, SessionStreamRole::Input)
             .await
             .unwrap();
-        let mut root_read = root_endpoint.receive(None).await.unwrap();
+        let mut root_read = root_endpoint.receive(None, None).await.unwrap();
         assert!(root_read.journaled);
         assert!(root_read.reader.is_none());
         let mut child_endpoint = root_read.endpoints.remove(&0).unwrap();
-        let mut child_read = child_endpoint.receive(None).await.unwrap();
+        let mut child_read = child_endpoint.receive(None, None).await.unwrap();
         assert!(child_read.journaled);
         assert!(child_read.reader.is_none());
         assert_eq!(
@@ -5127,7 +5554,7 @@ async fn cold_consumer_replays_nested_history_without_a_producer_connection() {
         );
         child_endpoint.complete_receive(&mut child_read);
         if terminal {
-            let end = child_endpoint.receive(None).await.unwrap();
+            let end = child_endpoint.receive(None, None).await.unwrap();
             assert!(end.journaled);
             assert!(end.reader.is_none());
             assert_eq!(
@@ -5136,7 +5563,7 @@ async fn cold_consumer_replays_nested_history_without_a_producer_connection() {
             );
         } else {
             assert!(
-                child_endpoint.receive(None).await.is_err(),
+                child_endpoint.receive(None, None).await.is_err(),
                 "continuing beyond the recorded prefix requires a source connection"
             );
         }
@@ -7203,6 +7630,7 @@ async fn projected_durable_output_rematerializes_system_cancellation_as_permanen
     streams
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: output.clone(),
                 endpoint: projected,
                 element_type: target_schema.root.clone(),
@@ -7415,7 +7843,7 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
         let mut target = target.activate();
         let request = receiver.recv().await.unwrap();
         assert!(request.opens_source);
-        let (guard, live_calls, waits) = receive_guard_counts(true);
+        let (guard, live_calls) = receive_guard_counts();
         if grant {
             assert!(request.result.send(Ok(guard)).is_ok());
             assert!(
@@ -7439,7 +7867,6 @@ async fn projected_durable_store_loss_aborts_without_terminal_or_cancel() {
                 .is_err()
         );
         assert_eq!(live_calls.load(Ordering::Acquire), 0);
-        assert!(waits.lock().unwrap().is_empty());
         assert!(drop_events.try_recv().is_err());
         assert_eq!(oplog.current_oplog_index().await, before);
         assert!(
@@ -10837,6 +11264,7 @@ async fn forwarded_output_intents_survive_result_and_nested_publication_cuts() {
             destination
                 .drain_output(
                     PendingOwnedStreamDrain {
+                        activity: None,
                         handle: parent,
                         endpoint,
                         element_type: root,
@@ -11357,6 +11785,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
                 destination
                     .drain_output(
                         PendingOwnedStreamDrain {
+                            activity: None,
                             handle: parent,
                             endpoint,
                             element_type: element_type.clone(),
@@ -11541,6 +11970,7 @@ async fn nested_forwarding_respects_recovery_and_concurrent_terminal_fences() {
             destination
                 .drain_output(
                     PendingOwnedStreamDrain {
+                        activity: None,
                         handle: parent.clone(),
                         endpoint,
                         element_type: element_type.clone(),
@@ -12206,6 +12636,7 @@ async fn forwarded_nested_stream_is_persisted_by_full_handle_without_re_registra
     streams
         .drain_output(
             PendingOwnedStreamDrain {
+                activity: None,
                 handle: parent.clone(),
                 endpoint,
                 element_type: SchemaType::list(SchemaType::stream(Some(element_type))),

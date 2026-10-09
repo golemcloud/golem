@@ -9090,6 +9090,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         })],
         auth_details: None,
         phantom_agent: false,
+        phantom_id_binding: None,
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },

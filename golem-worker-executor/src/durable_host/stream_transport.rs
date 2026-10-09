@@ -18,6 +18,7 @@ use crate::durable_host::stream_bus::{
     LiveStreamEventPayload, LiveStreamPublishError, LiveStreamPublisher, LiveStreamReceiveError,
     PrimaryLiveStreamSubscriber, ReservedPrimaryLiveStreamSubscriber, live_output_stream_bus,
 };
+use crate::worker::suspension::{ExternalActivity, RuntimeSource};
 use crate::workerctx::WorkerCtx;
 use golem_schema::schema::wit::wire::SchemaValueTree;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with_streams};
@@ -67,9 +68,20 @@ impl SourceLifecycle {
 pub(crate) struct LiveStreamEndpoint {
     primary: Option<ReservedPrimaryLiveStreamSubscriber<SchemaValue>>,
     lifecycle: Arc<SourceLifecycle>,
+    runtime_source: Option<RuntimeSource>,
 }
 
 impl LiveStreamEndpoint {
+    pub(crate) fn runtime_source(&self) -> Option<RuntimeSource> {
+        self.runtime_source.clone()
+    }
+
+    pub(crate) fn external_activity(&self) -> Option<ExternalActivity> {
+        self.runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity)
+    }
+
     pub(crate) fn lifecycle(&self) -> Arc<SourceLifecycle> {
         self.lifecycle.clone()
     }
@@ -92,9 +104,19 @@ impl Drop for LiveStreamEndpoint {
 
 pub(crate) type FrontendInterrupt = Pin<Box<dyn Future<Output = InterruptKind> + Send>>;
 
+#[cfg(test)]
 pub(super) fn output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    interrupt: FrontendInterrupt,
+) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
+    accounted_output_stream_pair(capacity, runtime_teardown, None, interrupt)
+}
+
+pub(super) fn accounted_output_stream_pair(
+    capacity: usize,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    runtime_source: Option<RuntimeSource>,
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveOutputConsumer, SchemaValueStream), String> {
     let cancellation = CancellationToken::new();
@@ -104,6 +126,7 @@ pub(super) fn output_stream_pair(
     let endpoint = LiveStreamEndpoint {
         primary: Some(primary),
         lifecycle: lifecycle.clone(),
+        runtime_source: runtime_source.clone(),
     };
     Ok((
         LiveOutputConsumer {
@@ -114,17 +137,30 @@ pub(super) fn output_stream_pair(
             terminal_requested: false,
             runtime_teardown,
             interrupt,
+            runtime_source,
         },
         SchemaValueStream::from_host_endpoint(endpoint),
     ))
 }
 
+#[cfg(test)]
 pub(super) fn byte_output_stream_pair(
     capacity: usize,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     interrupt: FrontendInterrupt,
 ) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
     let (consumer, stream) = output_stream_pair(capacity, runtime_teardown, interrupt)?;
+    Ok((LiveByteOutputConsumer(consumer), stream))
+}
+
+pub(super) fn accounted_byte_output_stream_pair(
+    capacity: usize,
+    runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
+    runtime_source: Option<RuntimeSource>,
+    interrupt: FrontendInterrupt,
+) -> Result<(LiveByteOutputConsumer, SchemaValueStream), String> {
+    let (consumer, stream) =
+        accounted_output_stream_pair(capacity, runtime_teardown, runtime_source, interrupt)?;
     Ok((LiveByteOutputConsumer(consumer), stream))
 }
 
@@ -179,6 +215,7 @@ pub(crate) fn relay_stream_pair(
         LiveStreamEndpoint {
             primary: Some(primary),
             lifecycle,
+            runtime_source: None,
         },
     ))
 }
@@ -201,6 +238,7 @@ pub(super) struct LiveOutputConsumer {
     terminal_requested: bool,
     runtime_teardown: Arc<dyn Fn() -> bool + Send + Sync + 'static>,
     interrupt: FrontendInterrupt,
+    runtime_source: Option<RuntimeSource>,
 }
 
 impl LiveOutputConsumer {
@@ -261,7 +299,12 @@ impl Drop for LiveOutputConsumer {
         let publisher = self.publisher.clone();
         let lifecycle = self.lifecycle.clone();
         let runtime_teardown = self.runtime_teardown.clone();
+        let activity = self
+            .runtime_source
+            .as_ref()
+            .map(RuntimeSource::external_activity);
         tokio::spawn(async move {
+            let _activity = activity;
             if let Some(pending) = pending {
                 let _ = pending.await;
             }
