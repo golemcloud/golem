@@ -695,11 +695,13 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
   `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
   `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
-  any other entry. The cursor resolves the nearest active body that encloses the head, and the
-  one that encloses the claim's parent, from state it already holds (`nearest_active_body`): the
-  active-body set, the retained `Start`s and `CursorState::body_members`, which maps each
-  `Start` claimed inside a body (its scopes, calls and nested entities) to that body and drops
-  it when the terminal drains. The missing-claim path reads no oplog entry. The pure rule
+  any other entry. `nearest_active_body` (a pure function) resolves the nearest active body that
+  encloses the head, and the one that encloses the claim's parent: it walks parents and stops at
+  the first active body, so a scope of a nested entity resolves to that entity even after the
+  outer body settled. The parents come from state the cursor already holds: each resolver
+  awaiter records the `parent_start_index` of its claimed `Start` at registration, and retained
+  `Start`s keep their entries. The missing-claim path reads no oplog entry; a custom invocation
+  claim takes the head from its own exact-id scan. The pure rule
   `missing_start_waits_for` then decides: the claim waits for the head's body, unless that body
   issued the claim or the claim's parent was appended live. A call of an entity nested inside
   the head's body still waits, because that entity is another Store.
