@@ -49,7 +49,6 @@ import {
   type BoundSnapshot,
   type CompiledSnapshot,
   type SnapshotDef,
-  type SnapshotRestorationContext,
   type Strategy as SnapshotStrategy,
 } from "../Snapshot.js"
 import {
@@ -980,13 +979,6 @@ interface ActiveAgent {
   /** Principal supplied to `initialize` / embedded in the loaded snapshot. */
   readonly principal: AgentCommon.Principal
   /**
-   * Structured `AgentId` for this running instance. Captured once via
-   * `getSelfMetadata` during initialize/load and reused for the
-   * lifetime of the agent. Exposed to user code as the
-   * {@link SelfAgentId} Context service.
-   */
-  readonly selfAgentId: CoreTypes.AgentId
-  /**
    * Captured per-instance snapshot binding when the agent declared a
    * `snapshot` field; `null` otherwise. Read by `dispatchSaveSnapshot`
    * and written-through by `dispatchLoadSnapshot`.
@@ -1051,31 +1043,10 @@ const initAgentInstance = async (
   scope: Scope.Closeable
   handlers: Record<string, Handler<AnyMethodSpec>>
   snapshot: BoundSnapshot | null
-  selfAgentId: CoreTypes.AgentId
   configShape: unknown
   state: unknown
 }> => {
   let snapshot: BoundSnapshot | null = null
-
-  // Capture the structured AgentId once at agent-init time. Subsequent
-  // user-side reads via the `SelfAgentId` Context service are free.
-  // Read via the `AgentHostClient` host service so tests can substitute
-  // a fake without monkey-patching the real specifier.
-  let selfAgentId: CoreTypes.AgentId
-  try {
-    selfAgentId = await runUserPromise(
-      Effect.gen(function* () {
-        const c = yield* AgentHostClient
-        return c.getSelfMetadata().agentId
-      }),
-    )
-  } catch (e) {
-    throw new Error(
-      `failed to fetch self metadata while initializing agent '${agentTypeName}': ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    )
-  }
 
   const scope = await Effect.runPromise(Scope.make())
   let handlers: Record<string, Handler<AnyMethodSpec>>
@@ -1085,21 +1056,17 @@ const initAgentInstance = async (
     if (compiled.compiledConfig !== null) {
       configShape = await runUserPromise(compiled.compiledConfig.buildShape())
     }
-    const context = {
-      id: constructorInput,
-      principal,
-      phantomId: restoration?.phantomId,
-      agentId: selfAgentId,
-      parsedAgentId: restoration?.parsedAgentId ?? "",
-      config: configShape,
-    } satisfies SnapshotRestorationContext
     const stateProgram =
       restoration === undefined
         ? compiled.impl.init(constructorInput)
         : compiled.impl.snapshot === undefined
           ? Effect.succeed(restoration.saved)
           : compiled.impl.snapshot.restore(restoration.saved as never, {
-              ...context,
+              id: constructorInput,
+              principal,
+              phantomId: restoration.phantomId,
+              agentId: await runUserPromise(SelfAgentId),
+              parsedAgentId: restoration.parsedAgentId,
               config: configShape as never,
             })
     let program = Effect.gen(function* () {
@@ -1117,10 +1084,7 @@ const initAgentInstance = async (
       const produced = compiled.impl.methods(state)
       const handlers = Effect.isEffect(produced) ? yield* produced : produced
       return { state, handlers }
-    }).pipe(
-      Effect.provideService(Principal, principal),
-      Effect.provideService(SelfAgentId, selfAgentId),
-    )
+    }).pipe(Effect.provideService(Principal, principal))
     if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
       program = (program as Effect.Effect<unknown, unknown, never>).pipe(
         // The config class is a Context.Service tag (Self/Identifier
@@ -1144,7 +1108,7 @@ const initAgentInstance = async (
     throw e
   }
 
-  return { scope, handlers, snapshot, selfAgentId, configShape, state: state! }
+  return { scope, handlers, snapshot, configShape, state: state! }
 }
 
 /**
@@ -1169,14 +1133,14 @@ export const dispatchInitialize = async (
   }
 
   const constructorInput = await decodeConstructorInput(compiled, input)
-  const { scope, handlers, snapshot, selfAgentId, state } = await initAgentInstance(
+  const { scope, handlers, snapshot, state } = await initAgentInstance(
     agentTypeName,
     compiled,
     constructorInput,
     principal,
   )
 
-  activeAgent = { name: agentTypeName, scope, handlers, principal, selfAgentId, snapshot, state }
+  activeAgent = { name: agentTypeName, scope, handlers, principal, snapshot, state }
 }
 
 /**
@@ -1218,11 +1182,7 @@ export const dispatchInvoke = async (
     { errorWrapped: mc.errorWrapped, successVoid: mc.successVoid },
     handler,
     input,
-  ).pipe(Effect.provideService(SelfAgentId, activeAgent.selfAgentId)) as Effect.Effect<
-    CoreTypes.SchemaValueTree | undefined,
-    unknown,
-    never
-  >
+  ) as Effect.Effect<CoreTypes.SchemaValueTree | undefined, unknown, never>
   if (mc.readOnly === undefined || mc.readOnly.usesPrincipal) {
     program = program.pipe(Effect.provideService(Principal, principal)) as typeof program
   }
@@ -1452,7 +1412,6 @@ export const dispatchSaveSnapshot = async (): Promise<ApiHost.Snapshot> => {
 const saveSnapshotState = async (agent: ActiveAgent, compiled: CompiledAgent): Promise<unknown> => {
   let saveProgram = Effect.suspend(() => compiled.impl.snapshot!.save(agent.state)).pipe(
     Effect.provideService(Principal, agent.principal),
-    Effect.provideService(SelfAgentId, agent.selfAgentId),
     Effect.scoped,
   ) as Effect.Effect<unknown, unknown, never>
   if (compiled.compiledConfig !== null && compiled.metadata.config !== undefined) {
@@ -1649,7 +1608,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     scope,
     handlers,
     snapshot: bound,
-    selfAgentId,
     state,
   } = await initAgentInstance(agentTypeName, compiled, constructorInput, principal, {
     phantomId,
@@ -1662,7 +1620,6 @@ export const dispatchLoadSnapshot = async (snapshot: ApiHost.Snapshot): Promise<
     scope,
     handlers,
     principal,
-    selfAgentId,
     snapshot: bound,
     state,
   }

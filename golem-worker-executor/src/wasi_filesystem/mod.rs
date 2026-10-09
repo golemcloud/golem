@@ -171,7 +171,28 @@ pub(crate) struct AgentOpenRequest {
     pub(crate) follow: bool,
     pub(crate) read: bool,
     pub(crate) write: bool,
+    pub(crate) mutate_directory: bool,
     pub(crate) unsupported_sync: bool,
+}
+
+impl AgentOpenRequest {
+    fn access(self, kind: ObjectKind) -> AccessMode {
+        let write = if kind == ObjectKind::Directory {
+            self.mutate_directory
+        } else {
+            self.write
+        };
+        match (self.read, write) {
+            (false, false) => AccessMode::None,
+            (true, false) => AccessMode::Read,
+            (false, true) => AccessMode::Write,
+            (true, true) => AccessMode::ReadWrite,
+        }
+    }
+
+    fn follow(self) -> Follow {
+        if self.follow { Follow::Yes } else { Follow::No }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -183,7 +204,7 @@ pub(crate) enum AgentOpenPolicyError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AgentOpenDecision {
-    ObserveAttributes { access: AccessMode, follow: Follow },
+    ObserveAttributes,
     Open(OpenOptions),
 }
 
@@ -216,16 +237,7 @@ pub(crate) fn decide_agent_open(
         return Err(AgentOpenPolicyError::Invalid);
     }
 
-    let access = match (request.read, request.write) {
-        (true, true) => AccessMode::ReadWrite,
-        (false, true) => AccessMode::Write,
-        (true, false) | (false, false) => AccessMode::Read,
-    };
-    let follow = if request.follow {
-        Follow::Yes
-    } else {
-        Follow::No
-    };
+    let follow = request.follow();
     if request.create || request.truncate {
         let disposition = match (request.create, request.exclusive, request.truncate) {
             (true, true, _) => FileDisposition::CreateExclusive,
@@ -235,26 +247,25 @@ pub(crate) fn decide_agent_open(
             (false, _, false) => unreachable!("non-mutating open handled below"),
         };
         Ok(AgentOpenDecision::Open(OpenOptions::File {
-            access,
+            access: request.access(ObjectKind::File),
             disposition,
             follow,
         }))
     } else if request.directory {
         Ok(AgentOpenDecision::Open(OpenOptions::Existing {
             expected: ObjectKind::Directory,
-            access,
+            access: request.access(ObjectKind::Directory),
             follow,
         }))
     } else {
-        Ok(AgentOpenDecision::ObserveAttributes { access, follow })
+        Ok(AgentOpenDecision::ObserveAttributes)
     }
 }
 
 /// Completes policy for a non-mutating P2/P3 open after agent-filesystem attributes reveal the node kind.
 /// Opening an observed symlink without a concrete target kind returns `SymlinkLoop`.
 pub(crate) fn decide_agent_existing_open(
-    access: AccessMode,
-    follow: Follow,
+    request: AgentOpenRequest,
     observed: ObjectKind,
 ) -> Result<OpenOptions, AgentOpenPolicyError> {
     if observed == ObjectKind::Symlink {
@@ -262,8 +273,8 @@ pub(crate) fn decide_agent_existing_open(
     } else {
         Ok(OpenOptions::Existing {
             expected: observed,
-            access,
-            follow,
+            access: request.access(observed),
+            follow: request.follow(),
         })
     }
 }
@@ -392,19 +403,21 @@ pub(crate) async fn route_agent_open(
     target: PathTarget,
     request: AgentOpenRequest,
 ) -> Result<Opened, AgentOpenRouteError> {
+    if request.write || request.mutate_directory || request.create || request.truncate {
+        target.require_mutable().map_err(|error| {
+            AgentOpenRouteError::Filesystem(AgentFilesystemError::Access(error))
+        })?;
+    }
     let options = match decide_agent_open(request)? {
         AgentOpenDecision::Open(options) => options,
-        AgentOpenDecision::ObserveAttributes {
-            access: mode,
-            follow,
-        } => {
+        AgentOpenDecision::ObserveAttributes => {
             let attributes = run_agent_filesystem_call(agent_filesystem::attributes(
                 generation_handle,
-                Target::Path(&target, follow),
+                Target::Path(&target, request.follow()),
             ))
             .await
             .map_err(AgentOpenRouteError::Filesystem)?;
-            decide_agent_existing_open(mode, follow, attributes.kind)?
+            decide_agent_existing_open(request, attributes.kind)?
         }
     };
 

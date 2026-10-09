@@ -1,7 +1,11 @@
 import { describe, expect, it, beforeEach } from "@effect/vitest"
 import { vi } from "vitest"
 import { Effect, Fiber, Redacted, Ref, Schema } from "effect"
-import { defineAgent, __resetAgents } from "../src/Agent.js"
+import { defineAgent, __resetAgents, dispatchSaveSnapshot } from "../src/Agent.js"
+import { SelfAgentId } from "../src/SelfAgentId.js"
+import * as Snapshot from "../src/Snapshot.js"
+import { decodeEnvelope } from "../src/internal/snapshotEnvelope.js"
+import * as ApiHostMock from "./mocks/golem-api-host.js"
 import { method } from "../src/Method.js"
 import { guest } from "../src/internal/guest.js"
 import { Principal, PrincipalSchema, type PrincipalValue } from "../src/Principal.js"
@@ -531,4 +535,63 @@ describe("agent-guest exports", () => {
         expect(revealCount).toBe(1)
       }),
   )
+
+  it("reads self identity afresh within a method and snapshot, without rewriting saved state", async () => {
+    const metadata = ApiHostMock.getSelfMetadata()
+    const parent = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(parent)" } }
+    const child = { ...metadata, agentId: { ...metadata.agentId, agentId: "Identity(child)" } }
+    const host = vi.spyOn(ApiHostMock, "getSelfMetadata").mockReturnValue(parent)
+    try {
+      defineAgent({
+        name: "FreshSelfIdentity",
+        id: {},
+        snapshotting: Snapshot.custom({ policy: Snapshot.policy.manual }),
+        methods: { read: method({ input: {}, success: Schema.String }) },
+      }).implement({
+        init: () => SelfAgentId.pipe(Effect.map((id) => ({ saved: id.agentId }))),
+        methods: (state) => ({
+          read: () =>
+            Effect.gen(function* () {
+              const before = yield* SelfAgentId
+              const after = yield* SelfAgentId
+              return JSON.stringify({
+                saved: state.saved,
+                before: before.agentId,
+                after: after.agentId,
+              })
+            }),
+        }),
+        snapshot: {
+          save: (state) =>
+            SelfAgentId.pipe(
+              Effect.map((id) =>
+                new TextEncoder().encode(
+                  JSON.stringify({ saved: state.saved, current: id.agentId }),
+                ),
+              ),
+            ),
+          restore: (bytes) =>
+            Effect.sync(() => JSON.parse(new TextDecoder().decode(bytes)) as { saved: string }),
+        },
+      })
+      await guest.initialize("FreshSelfIdentity", wire(), anonymousPrincipal)
+      host.mockReturnValueOnce(parent).mockReturnValue(child)
+      const result = await guest.invoke("read", wire(), anonymousPrincipal)
+      expect(JSON.parse(read<string>(result!))).toEqual({
+        saved: "Identity(parent)",
+        before: "Identity(parent)",
+        after: "Identity(child)",
+      })
+      const snapshot = await dispatchSaveSnapshot()
+      const envelope = decodeEnvelope(snapshot, anonymousPrincipal)
+      expect(envelope.kind).toBe("binary")
+      if (envelope.kind !== "binary") throw new Error("expected binary snapshot")
+      expect(JSON.parse(new TextDecoder().decode(envelope.userPayload))).toEqual({
+        saved: "Identity(parent)",
+        current: "Identity(child)",
+      })
+    } finally {
+      host.mockRestore()
+    }
+  })
 })
