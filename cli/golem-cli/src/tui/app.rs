@@ -55,6 +55,7 @@ use crate::tui::ops::activity::{
     self, ActivityAgent, ActivityAgentRequest, ActivityLoadPosition, ActivityOrder,
     ActivityRefreshPayload, ActivityRepresentation, ActivityState,
 };
+use crate::tui::ops::deployments::{self, DeploymentChangeKind, DeploymentsState, RECENT_LIMIT};
 use crate::tui::ops::metrics::{
     self, MAX_EXPLORE_SERIES, MetricsFocus, MetricsLoad, MetricsMode, MetricsQuery,
     MetricsRefreshPayload, MetricsState,
@@ -62,7 +63,8 @@ use crate::tui::ops::metrics::{
 use crate::tui::ops::resources::{self, ResourceScope, ResourcesRefreshPayload, ResourcesState};
 use crate::tui::ops::stream::{self, StreamState, StreamStatus};
 use crate::tui::ops::{
-    AgentIdentity, OplogEntryIdentity, OplogRoute, OpsApp, OpsDestination, OpsRoute,
+    AgentIdentity, DeploymentCompareFocus, OplogEntryIdentity, OplogRoute, OpsApp, OpsDestination,
+    OpsRoute,
 };
 use crate::tui::terminal::TerminalGuard;
 use crate::tui::terminal_screen::TerminalScreen;
@@ -440,6 +442,7 @@ struct TuiApp {
     pending_repl_restart: Option<ReplFormValues>,
     agents: AgentsState,
     ops_environment: OpsEnvironmentState,
+    deployments: DeploymentsState,
     metrics: MetricsState,
     activity: ActivityState,
     resources: ResourcesState,
@@ -507,6 +510,7 @@ impl TuiApp {
             pending_repl_restart: None,
             agents,
             ops_environment: OpsEnvironmentState::default(),
+            deployments: DeploymentsState::default(),
             metrics: MetricsState::default(),
             activity: ActivityState::default(),
             resources: ResourcesState::default(),
@@ -553,6 +557,14 @@ impl TuiApp {
             } => self.finish_agent_refresh(generation, append, result),
             TuiEvent::OpsEnvironmentRefreshFinished { generation, result } => {
                 self.finish_ops_environment_refresh(generation, result)
+            }
+            TuiEvent::DeploymentsRefreshFinished { generation, result } => {
+                let (context_id, result, logs) = result.into_parts();
+                self.deployments.finish(
+                    generation,
+                    context_id,
+                    result.map_err(|error| agent_refresh_error(error, logs)),
+                );
             }
             TuiEvent::MetricsRefreshTick => {
                 if self.active_workspace == Workspace::Ops
@@ -686,6 +698,120 @@ impl TuiApp {
         match key.code {
             KeyCode::Up
                 if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(
+                        self.ops.current_route(),
+                        OpsRoute::Root | OpsRoute::DeploymentHistory
+                    ) =>
+            {
+                self.move_deployment_selection(false)
+            }
+            KeyCode::Down
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(
+                        self.ops.current_route(),
+                        OpsRoute::Root | OpsRoute::DeploymentHistory
+                    ) =>
+            {
+                self.move_deployment_selection(true)
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(
+                        self.ops.current_route(),
+                        OpsRoute::Root | OpsRoute::DeploymentHistory
+                    ) =>
+            {
+                self.open_selected_deployment(event_tx)
+            }
+            KeyCode::Enter
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.compare_deployment_with_predecessor(event_tx)
+            }
+            KeyCode::Up
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                self.move_deployment_change_selection(false)
+            }
+            KeyCode::Down
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                self.move_deployment_change_selection(true)
+            }
+            KeyCode::Left
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                self.move_deployment_compare_revision(false, event_tx)
+            }
+            KeyCode::Right
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                self.move_deployment_compare_revision(true, event_tx)
+            }
+            KeyCode::Tab | KeyCode::BackTab
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) =>
+            {
+                self.toggle_deployment_compare_focus()
+            }
+            KeyCode::Up
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll_up(1)
+            }
+            KeyCode::Down
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll_down(1)
+            }
+            KeyCode::PageUp
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll_up(10)
+            }
+            KeyCode::PageDown
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll_down(10)
+            }
+            KeyCode::Home
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll = 0
+            }
+            KeyCode::End
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_)) =>
+            {
+                self.deployments.scroll_to_end()
+            }
+            KeyCode::Up
+                if self.active_workspace == Workspace::Ops
                     && self.ops.active() == OpsDestination::Stream =>
             {
                 self.stream.scroll_up(1)
@@ -815,9 +941,21 @@ impl TuiApp {
                 self.activity.query = self.activity.applied_query.text.clone();
             }
             KeyCode::Esc if self.active_workspace == Workspace::Ops => {
-                if self.ops.pop_route() && self.ops.active() == OpsDestination::Oplog {
-                    self.invalidate_activity();
-                    self.refresh_activity(event_tx);
+                if self.ops.pop_route() {
+                    match self.ops.active() {
+                        OpsDestination::Oplog => {
+                            self.invalidate_activity();
+                            self.refresh_activity(event_tx);
+                        }
+                        OpsDestination::Deployments => {
+                            let visible = self.deployment_history_visible_len();
+                            self.deployments.selected =
+                                self.deployments.selected.min(visible.saturating_sub(1));
+                            self.deployments.table_first_visible.set(0);
+                            self.deployments.scroll = 0;
+                        }
+                        _ => {}
+                    }
                 }
             }
             KeyCode::Enter
@@ -940,9 +1078,8 @@ impl TuiApp {
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 match self.ops.active() {
-                    OpsDestination::Overview | OpsDestination::Deployments => {
-                        self.refresh_ops_environment(event_tx)
-                    }
+                    OpsDestination::Overview => self.refresh_ops_environment(event_tx),
+                    OpsDestination::Deployments => self.refresh_deployments(event_tx),
                     OpsDestination::Agents => self.refresh_agents(event_tx),
                     OpsDestination::Oplog => self.refresh_activity(event_tx),
                     OpsDestination::Metrics => self.refresh_metrics(event_tx),
@@ -955,6 +1092,14 @@ impl TuiApp {
                     && key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
                 self.toggle_stream_session(event_tx)
+            }
+            KeyCode::Char('a')
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.ops.open_deployment_history();
+                self.deployments.table_first_visible.set(0);
             }
             KeyCode::Char('n')
                 if self.active_workspace == Workspace::Ops
@@ -1540,6 +1685,29 @@ impl TuiApp {
                 }
             }
             ScrollbarTarget::OpsList => {
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                {
+                    let count = match self.ops.current_route() {
+                        OpsRoute::Root => self.deployments.history.len().min(RECENT_LIMIT),
+                        OpsRoute::DeploymentHistory => self.deployments.history.len(),
+                        OpsRoute::DeploymentCompare(route) => self
+                            .deployments
+                            .changes(route.base_revision, route.target_revision)
+                            .map_or(0, |changes| changes.len()),
+                        _ => 0,
+                    };
+                    if count > 0 {
+                        let selected =
+                            scrollbar_value_from_pointer(area, y, count.saturating_sub(1));
+                        if matches!(self.ops.current_route(), OpsRoute::DeploymentCompare(_)) {
+                            self.deployments.selected_change = selected;
+                        } else {
+                            self.deployments.selected = selected;
+                        }
+                    }
+                    return;
+                }
                 let count = self.filtered_agents().len();
                 if count == 0 {
                     return;
@@ -1552,6 +1720,19 @@ impl TuiApp {
                 self.agents.reveal_selection(count);
             }
             ScrollbarTarget::OpsDetails | ScrollbarTarget::OpsDocument => {
+                if target == ScrollbarTarget::OpsDocument
+                    && self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments
+                    && matches!(self.ops.current_route(), OpsRoute::DeploymentRevision(_))
+                {
+                    let max = self
+                        .deployments
+                        .content_height
+                        .get()
+                        .saturating_sub(self.deployments.viewport_height.get());
+                    self.deployments.scroll = scrollbar_value_from_pointer(area, y, max);
+                    return;
+                }
                 if target == ScrollbarTarget::OpsDetails {
                     self.agents.focus = AgentOverviewFocus::Details;
                 }
@@ -1630,6 +1811,31 @@ impl TuiApp {
                     self.scroll_agent_details_up(amount);
                 } else {
                     self.scroll_agent_details_down(amount);
+                }
+            }
+            Some(RegionKind::OpsList)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments =>
+            {
+                match self.ops.current_route() {
+                    OpsRoute::DeploymentRevision(_) => {
+                        if up {
+                            self.deployments.scroll_up(amount);
+                        } else {
+                            self.deployments.scroll_down(amount);
+                        }
+                    }
+                    OpsRoute::DeploymentCompare(_) => {
+                        for _ in 0..amount {
+                            self.move_deployment_change_selection(!up);
+                        }
+                    }
+                    OpsRoute::Root | OpsRoute::DeploymentHistory => {
+                        for _ in 0..amount {
+                            self.move_deployment_selection(!up);
+                        }
+                    }
+                    _ => {}
                 }
             }
             Some(RegionKind::OpsStream)
@@ -1766,6 +1972,12 @@ impl TuiApp {
             Some(RegionKind::OpsList) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::List;
                 self.select_agent_at_row(y);
+            }
+            Some(RegionKind::OpsList)
+                if self.active_workspace == Workspace::Ops
+                    && self.ops.active() == OpsDestination::Deployments =>
+            {
+                self.select_deployment_at_row(y)
             }
             Some(RegionKind::OpsDetails) if self.ops_agents_focused() => {
                 self.agents.focus = AgentOverviewFocus::Details
@@ -1913,6 +2125,43 @@ impl TuiApp {
         self.agents.selected = selected;
         self.agents.table.selected = self.agents.selected;
         self.agents.details_scroll = 0;
+    }
+
+    fn select_deployment_at_row(&mut self, y: u16) {
+        let Some(area) = self.geometry.region(RegionKind::OpsList) else {
+            return;
+        };
+        let data_y = area.y.saturating_add(1);
+        if y < data_y {
+            return;
+        }
+        let index = self
+            .deployments
+            .table_first_visible
+            .get()
+            .saturating_add(y.saturating_sub(data_y) as usize);
+        match self.ops.current_route() {
+            OpsRoute::Root => {
+                if index < self.deployments.history.len().min(RECENT_LIMIT) {
+                    self.deployments.selected = index;
+                }
+            }
+            OpsRoute::DeploymentHistory => {
+                if index < self.deployments.history.len() {
+                    self.deployments.selected = index;
+                }
+            }
+            OpsRoute::DeploymentCompare(route) => {
+                let count = self
+                    .deployments
+                    .changes(route.base_revision, route.target_revision)
+                    .map_or(0, |changes| changes.len());
+                if index < count {
+                    self.deployments.selected_change = index;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn execute_action(&mut self, action: ActionId, event_tx: Option<&TuiEventSender>) {
@@ -2602,9 +2851,17 @@ impl TuiApp {
 
     fn refresh_active_ops_destination(&mut self, event_tx: Option<&TuiEventSender>) {
         match self.ops.active() {
-            OpsDestination::Overview | OpsDestination::Deployments => {
+            OpsDestination::Overview => {
                 if self.ops_environment.snapshot.is_none() && !self.ops_environment.loading {
                     self.refresh_ops_environment(event_tx);
+                }
+            }
+            OpsDestination::Deployments => {
+                if self.ops_environment.snapshot.is_none() && !self.ops_environment.loading {
+                    self.refresh_ops_environment(event_tx);
+                }
+                if self.deployments.history.is_empty() && !self.deployments.loading {
+                    self.refresh_deployment_history(event_tx);
                 }
             }
             OpsDestination::Agents => {
@@ -4119,6 +4376,7 @@ impl TuiApp {
                 self.invalidate_metrics();
                 self.invalidate_activity();
                 self.invalidate_resources();
+                self.deployments.reset();
                 self.stream.reset();
                 self.ops.reset_routes();
                 self.context_switcher.last_error = None;
@@ -4581,6 +4839,209 @@ impl TuiApp {
             },
             move |result| TuiEvent::OpsEnvironmentRefreshFinished { generation, result },
         );
+    }
+
+    fn refresh_deployment_history(&mut self, event_tx: Option<&TuiEventSender>) {
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.deployments.error = Some("TUI context executor is not available".to_string());
+            return;
+        };
+        let context_id = context_executor.current_context_id();
+        let generation = self.deployments.begin(context_id);
+        let environment_reference = self.selected_target.environment_reference.clone();
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        let task = context_executor.spawn(
+            event_tx.control(),
+            auth_presenter,
+            move |launch_context| async move {
+                deployments::load_history(launch_context.into_context(), environment_reference)
+                    .await
+            },
+            move |result| TuiEvent::DeploymentsRefreshFinished { generation, result },
+        );
+        self.deployments.attach_task(task);
+    }
+
+    fn refresh_deployments(&mut self, event_tx: Option<&TuiEventSender>) {
+        self.refresh_ops_environment(event_tx);
+        match self.ops.current_route().clone() {
+            OpsRoute::DeploymentRevision(revision) => {
+                self.deployments.details.remove(&revision);
+                self.load_deployment_revisions(vec![revision], event_tx);
+            }
+            OpsRoute::DeploymentCompare(route) => {
+                self.deployments.details.remove(&route.base_revision);
+                self.deployments.details.remove(&route.target_revision);
+                self.load_deployment_revisions(
+                    vec![route.base_revision, route.target_revision],
+                    event_tx,
+                );
+            }
+            _ => self.refresh_deployment_history(event_tx),
+        }
+    }
+
+    fn load_deployment_revisions(
+        &mut self,
+        revisions: Vec<u64>,
+        event_tx: Option<&TuiEventSender>,
+    ) {
+        let revisions = revisions
+            .into_iter()
+            .filter(|revision| !self.deployments.details.contains_key(revision))
+            .collect::<Vec<_>>();
+        if revisions.is_empty() {
+            return;
+        }
+        let Some(event_tx) = event_tx.cloned() else {
+            return;
+        };
+        let Some(context_executor) = self.context_executor.clone() else {
+            self.deployments.error = Some("TUI context executor is not available".to_string());
+            return;
+        };
+        let context_id = context_executor.current_context_id();
+        let generation = self.deployments.begin(context_id);
+        let environment_reference = self.selected_target.environment_reference.clone();
+        let auth_presenter = Some(tui_auth_presenter(&event_tx));
+        let task = context_executor.spawn(
+            event_tx.control(),
+            auth_presenter,
+            move |launch_context| async move {
+                deployments::load_revisions(
+                    launch_context.into_context(),
+                    environment_reference,
+                    revisions,
+                )
+                .await
+            },
+            move |result| TuiEvent::DeploymentsRefreshFinished { generation, result },
+        );
+        self.deployments.attach_task(task);
+    }
+
+    fn deployment_history_visible_len(&self) -> usize {
+        match self.ops.current_route() {
+            OpsRoute::Root => self.deployments.history.len().min(RECENT_LIMIT),
+            OpsRoute::DeploymentHistory => self.deployments.history.len(),
+            _ => 0,
+        }
+    }
+
+    fn move_deployment_selection(&mut self, forward: bool) {
+        let visible = self.deployment_history_visible_len();
+        self.deployments.selected = self.deployments.selected.min(visible.saturating_sub(1));
+        if forward {
+            self.deployments.select_next(visible);
+        } else {
+            self.deployments.select_previous(visible);
+        }
+    }
+
+    fn open_selected_deployment(&mut self, event_tx: Option<&TuiEventSender>) {
+        let visible = self.deployment_history_visible_len();
+        self.deployments.selected = self.deployments.selected.min(visible.saturating_sub(1));
+        let Some(revision) = self
+            .deployments
+            .history
+            .get(self.deployments.selected)
+            .map(|record| record.revision)
+        else {
+            return;
+        };
+        self.ops.open_deployment_revision(revision);
+        self.deployments.scroll = 0;
+        self.load_deployment_revisions(vec![revision], event_tx);
+    }
+
+    fn compare_deployment_with_predecessor(&mut self, event_tx: Option<&TuiEventSender>) {
+        let OpsRoute::DeploymentRevision(target) = self.ops.current_route() else {
+            return;
+        };
+        let target = *target;
+        let Some(base) = self.deployments.predecessor(target) else {
+            return;
+        };
+        self.ops.open_deployment_compare(base, target);
+        self.deployments.selected_change = 0;
+        self.deployments.table_first_visible.set(0);
+        self.load_deployment_revisions(vec![base, target], event_tx);
+    }
+
+    fn move_deployment_change_selection(&mut self, forward: bool) {
+        let OpsRoute::DeploymentCompare(route) = self.ops.current_route() else {
+            return;
+        };
+        let count = self
+            .deployments
+            .changes(route.base_revision, route.target_revision)
+            .map_or(0, |changes| changes.len());
+        if forward {
+            self.deployments.selected_change = self
+                .deployments
+                .selected_change
+                .saturating_add(1)
+                .min(count.saturating_sub(1));
+        } else {
+            self.deployments.selected_change = self.deployments.selected_change.saturating_sub(1);
+        }
+    }
+
+    fn toggle_deployment_compare_focus(&mut self) {
+        let Some(route) = self.ops.deployment_compare_mut() else {
+            return;
+        };
+        route.focus = match route.focus {
+            DeploymentCompareFocus::Base => DeploymentCompareFocus::Target,
+            DeploymentCompareFocus::Target => DeploymentCompareFocus::Base,
+        };
+    }
+
+    fn move_deployment_compare_revision(&mut self, newer: bool, event_tx: Option<&TuiEventSender>) {
+        let OpsRoute::DeploymentCompare(current) = self.ops.current_route().clone() else {
+            return;
+        };
+        let revision = match current.focus {
+            DeploymentCompareFocus::Base => current.base_revision,
+            DeploymentCompareFocus::Target => current.target_revision,
+        };
+        let Some(index) = self
+            .deployments
+            .history
+            .iter()
+            .position(|record| record.revision == revision)
+        else {
+            return;
+        };
+        let next_index = if newer {
+            index.saturating_sub(1)
+        } else {
+            index
+                .saturating_add(1)
+                .min(self.deployments.history.len().saturating_sub(1))
+        };
+        let Some(next_revision) = self
+            .deployments
+            .history
+            .get(next_index)
+            .map(|record| record.revision)
+        else {
+            return;
+        };
+        let Some(route) = self.ops.deployment_compare_mut() else {
+            return;
+        };
+        match route.focus {
+            DeploymentCompareFocus::Base => route.base_revision = next_revision,
+            DeploymentCompareFocus::Target => route.target_revision = next_revision,
+        }
+        let revisions = vec![route.base_revision, route.target_revision];
+        self.deployments.selected_change = 0;
+        self.deployments.table_first_visible.set(0);
+        self.load_deployment_revisions(revisions, event_tx);
     }
 
     fn finish_ops_environment_refresh(
@@ -6651,6 +7112,92 @@ const AGENT_COLUMNS: [PaneTableColumn<'static>; 7] = [
     },
 ];
 
+const DEPLOYMENT_COLUMNS: [PaneTableColumn<'static>; 3] = [
+    PaneTableColumn {
+        id: "revision",
+        title: "Revision",
+        minimum_width: 8,
+        width: 10,
+        alignment: Alignment::Right,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "version",
+        title: "Version",
+        minimum_width: 12,
+        width: 28,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "hash",
+        title: "Deployment hash",
+        minimum_width: 16,
+        width: 44,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+];
+
+const DEPLOYMENT_CHANGE_COLUMNS: [PaneTableColumn<'static>; 5] = [
+    PaneTableColumn {
+        id: "change",
+        title: "Change",
+        minimum_width: 8,
+        width: 10,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "kind",
+        title: "Kind",
+        minimum_width: 12,
+        width: 26,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "name",
+        title: "Name",
+        minimum_width: 14,
+        width: 30,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "before",
+        title: "Before",
+        minimum_width: 12,
+        width: 34,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+    PaneTableColumn {
+        id: "after",
+        title: "After",
+        minimum_width: 12,
+        width: 34,
+        alignment: Alignment::Left,
+        required: true,
+        default_visible: true,
+        policy: CellPolicy::Ellipsis,
+    },
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentModeFilter {
     Durable,
@@ -6801,7 +7348,6 @@ pub(super) struct OpsEnvironmentSnapshot {
 
 #[derive(Clone, Debug)]
 struct OpsDeploymentSnapshot {
-    current_revision: String,
     deployment_revision: String,
     version: String,
     hash: String,
@@ -6824,7 +7370,6 @@ fn ops_environment_snapshot(
         server_environment
             .current_deployment
             .map(|deployment| OpsDeploymentSnapshot {
-                current_revision: deployment.revision.to_string(),
                 deployment_revision: deployment.deployment_revision.to_string(),
                 version: deployment.deployment_version.0,
                 hash: deployment.deployment_hash.to_string(),
@@ -8444,7 +8989,7 @@ fn render_ops_workspace(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
             }
             _ => render_ops_metrics(frame, content, app),
         },
-        OpsDestination::Deployments => render_ops_deployment_overview(frame, content, app),
+        OpsDestination::Deployments => render_ops_deployments(frame, content, app),
         OpsDestination::Configuration => render_ops_resources(frame, content, app),
     }
 }
@@ -10348,36 +10893,46 @@ fn render_ops_agent_overview(
     render_ops_document(frame, area, app, &title, lines);
 }
 
-fn render_ops_deployment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+fn render_ops_deployments(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
+    match app.ops.current_route() {
+        OpsRoute::DeploymentHistory => render_ops_deployment_history(frame, area, app, false),
+        OpsRoute::DeploymentRevision(revision) => {
+            render_ops_deployment_revision(frame, area, app, *revision)
+        }
+        OpsRoute::DeploymentCompare(route) => render_ops_deployment_compare(
+            frame,
+            area,
+            app,
+            route.base_revision,
+            route.target_revision,
+            route.focus,
+        ),
+        _ => render_ops_deployment_history(frame, area, app, true),
+    }
+}
+
+fn render_ops_deployment_history(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    recent_only: bool,
+) {
     let mut lines = ops_environment_status_lines(app);
-    if let Some(snapshot) = &app.ops_environment.snapshot {
-        lines.push(
-            SectionHeading {
-                title: "Current deployment",
-                detail: None,
-            }
-            .line(&theme()),
-        );
+    if recent_only && let Some(snapshot) = &app.ops_environment.snapshot {
         match &snapshot.deployment {
-            Some(deployment) => {
-                for (label, value) in [
-                    ("Application", snapshot.application_name.as_str()),
-                    ("Environment", snapshot.environment_name.as_str()),
-                    ("Revision", deployment.deployment_revision.as_str()),
-                    ("Version", deployment.version.as_str()),
-                    ("Hash", deployment.hash.as_str()),
-                    ("Environment rev", deployment.current_revision.as_str()),
-                ] {
-                    lines.push(
-                        FieldRow {
-                            label,
-                            value,
-                            label_width: 16,
-                        }
-                        .line(&theme()),
-                    );
-                }
-            }
+            Some(deployment) => lines.push(Line::from(vec![
+                Span::styled("Current  ", Style::default().fg(theme().text_muted)),
+                Span::styled(
+                    format!("revision {}", deployment.deployment_revision),
+                    Style::default()
+                        .fg(theme().text)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  ·  {}  ·  {}", deployment.version, deployment.hash),
+                    Style::default().fg(theme().text_secondary),
+                ),
+            ])),
             None => lines.push(
                 Notice {
                     kind: NoticeKind::Empty,
@@ -10387,7 +10942,395 @@ fn render_ops_deployment_overview(frame: &mut Frame<'_>, area: Rect, app: &TuiAp
             ),
         }
     }
-    render_ops_document(frame, area, app, "Deployment · Overview", lines);
+    if let Some(error) = &app.deployments.error {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Error,
+                message: error,
+            }
+            .line(&theme()),
+        );
+    } else if app.deployments.loading && app.deployments.history.is_empty() {
+        lines.push(Notice::animated_loading(
+            "Loading deployment history",
+            spinner_symbol(0),
+            &theme(),
+        ));
+    }
+
+    let [header, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    let title = if recent_only {
+        "Deployments · Current & Recent"
+    } else {
+        "Deployments / All History"
+    };
+    PaneHeader {
+        title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    let status_height = lines.len().min(body.height as usize) as u16;
+    let [status_area, table_body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(status_height), Constraint::Min(1)])
+        .areas(body);
+    if status_height > 0 {
+        frame.render_widget(Paragraph::new(lines).style(surface_style()), status_area);
+    }
+
+    let count = if recent_only {
+        app.deployments.history.len().min(RECENT_LIMIT)
+    } else {
+        app.deployments.history.len()
+    };
+    let history = &app.deployments.history[..count];
+    if history.is_empty() {
+        if !app.deployments.loading && app.deployments.error.is_none() {
+            frame.render_widget(
+                Paragraph::new(
+                    Notice {
+                        kind: NoticeKind::Empty,
+                        message: "No deployments are available for this environment",
+                    }
+                    .line(&theme()),
+                )
+                .style(surface_style()),
+                table_body,
+            );
+        }
+        return;
+    }
+    let owned_rows = history
+        .iter()
+        .map(|record| {
+            vec![
+                record.revision.to_string(),
+                record.version.clone(),
+                record.hash.clone(),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let row_cells = owned_rows
+        .iter()
+        .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let rows = row_cells.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    render_deployment_table(
+        frame,
+        table_body,
+        app,
+        &DEPLOYMENT_COLUMNS,
+        &rows,
+        None,
+        app.deployments.selected.min(count.saturating_sub(1)),
+    );
+}
+
+fn render_ops_deployment_revision(frame: &mut Frame<'_>, area: Rect, app: &TuiApp, revision: u64) {
+    let title = format!("Deployments / Revision {revision}");
+    let mut lines = Vec::new();
+    if let Some(error) = &app.deployments.error {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Error,
+                message: error,
+            }
+            .line(&theme()),
+        );
+    }
+    let Some(details) = app.deployments.details.get(&revision) else {
+        if app.deployments.loading {
+            lines.push(Notice::animated_loading(
+                "Loading revision details",
+                spinner_symbol(0),
+                &theme(),
+            ));
+        } else if lines.is_empty() {
+            lines.push(
+                Notice {
+                    kind: NoticeKind::Empty,
+                    message: "Revision details are not loaded",
+                }
+                .line(&theme()),
+            );
+        }
+        render_deployment_document(frame, area, app, &title, lines);
+        return;
+    };
+    lines.push(
+        FieldRow {
+            label: "Hash",
+            value: &details.hash,
+            label_width: 8,
+        }
+        .line(&theme()),
+    );
+    let mut previous_kind = None;
+    for entity in &details.entities {
+        if previous_kind != Some(entity.kind) {
+            lines.push(Line::default());
+            lines.push(
+                SectionHeading {
+                    title: entity.kind.label(),
+                    detail: None,
+                }
+                .line(&theme()),
+            );
+            previous_kind = Some(entity.kind);
+        }
+        lines.push(
+            FieldRow {
+                label: &entity.name,
+                value: &entity.detail,
+                label_width: 28,
+            }
+            .line(&theme()),
+        );
+    }
+    if details.entities.is_empty() {
+        lines.push(
+            Notice {
+                kind: NoticeKind::Empty,
+                message: "This revision contains no deployable entities",
+            }
+            .line(&theme()),
+        );
+    }
+    render_deployment_document(frame, area, app, &title, lines);
+}
+
+fn render_deployment_document(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    title: &str,
+    lines: Vec<Line<'static>>,
+) {
+    let [header, body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .areas(area);
+    PaneHeader {
+        title,
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    app.geometry.add_region(RegionKind::OpsList, body);
+    let pane_layout = PaneLayout::horizontal(body, &[1]);
+    let Some(region) = pane_layout.regions(&[lines.len()]).into_iter().next() else {
+        return;
+    };
+    app.deployments.content_height.set(lines.len());
+    app.deployments
+        .viewport_height
+        .set(region.content_area.height as usize);
+    ScrollableDocument {
+        lines: &lines,
+        offset: app.deployments.scroll,
+    }
+    .render(frame, region, &theme());
+    if let Some(slot) = region.scrollbar {
+        app.geometry.add_region(
+            RegionKind::Scrollbar(ScrollbarTarget::OpsDocument),
+            slot.area,
+        );
+    }
+    pane_layout.render_body_boundaries(frame, &[region], &theme());
+}
+
+fn render_ops_deployment_compare(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    base: u64,
+    target: u64,
+    focus: DeploymentCompareFocus,
+) {
+    let [header, selectors, table_body] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .areas(area);
+    PaneHeader {
+        title: "Deployments / Compare",
+        focus: PaneFocus::Active,
+        left_connector: Some("├"),
+        ending: PaneEnding::Top,
+    }
+    .render(frame, header, &theme());
+    let selector = |label: &'static str, revision: u64, active: bool| {
+        Span::styled(
+            format!(" {label} {revision} "),
+            if active {
+                Style::default()
+                    .fg(theme().selection_text)
+                    .bg(theme().selection_background)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme().text_secondary)
+            },
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            selector("Base", base, focus == DeploymentCompareFocus::Base),
+            Span::styled("  →  ", Style::default().fg(theme().border_subtle)),
+            selector("Target", target, focus == DeploymentCompareFocus::Target),
+            Span::styled(
+                "  tab field · ←/→ revision",
+                Style::default().fg(theme().text_muted),
+            ),
+        ]))
+        .style(surface_style()),
+        selectors,
+    );
+    if let Some(error) = &app.deployments.error {
+        frame.render_widget(
+            Paragraph::new(
+                Notice {
+                    kind: NoticeKind::Error,
+                    message: error,
+                }
+                .line(&theme()),
+            )
+            .style(surface_style()),
+            table_body,
+        );
+        return;
+    }
+    let Some(changes) = app.deployments.changes(base, target) else {
+        frame.render_widget(
+            Paragraph::new(Notice::animated_loading(
+                "Loading both revisions",
+                spinner_symbol(0),
+                &theme(),
+            ))
+            .style(surface_style()),
+            table_body,
+        );
+        return;
+    };
+    if changes.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                Notice {
+                    kind: NoticeKind::Empty,
+                    message: "No deployable entities changed between these revisions",
+                }
+                .line(&theme()),
+            )
+            .style(surface_style()),
+            table_body,
+        );
+        return;
+    }
+    let owned_rows = changes
+        .iter()
+        .map(|change| {
+            vec![
+                change.change.label().to_string(),
+                change.kind.item_label().to_string(),
+                change.name.clone(),
+                change.before.clone().unwrap_or_else(|| "—".to_string()),
+                change.after.clone().unwrap_or_else(|| "—".to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+    let row_cells = owned_rows
+        .iter()
+        .map(|row| row.iter().map(String::as_str).collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let rows = row_cells.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let owned_tones = changes
+        .iter()
+        .map(|change| {
+            vec![
+                Some(match change.change {
+                    DeploymentChangeKind::Added => CellTone::Success,
+                    DeploymentChangeKind::Changed => CellTone::Warning,
+                    DeploymentChangeKind::Removed => CellTone::Error,
+                }),
+                None,
+                None,
+                None,
+                None,
+            ]
+        })
+        .collect::<Vec<_>>();
+    let tones = owned_tones.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    render_deployment_table(
+        frame,
+        table_body,
+        app,
+        &DEPLOYMENT_CHANGE_COLUMNS,
+        &rows,
+        Some(&tones),
+        app.deployments
+            .selected_change
+            .min(changes.len().saturating_sub(1)),
+    );
+}
+
+fn render_deployment_table(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &TuiApp,
+    columns: &[PaneTableColumn<'_>],
+    rows: &[&[&str]],
+    tones: Option<&[&[Option<CellTone>]]>,
+    selected: usize,
+) {
+    app.geometry.add_region(RegionKind::OpsList, area);
+    let mut state = PaneTableState::new(columns, selected);
+    let resolved = responsive_table_columns(columns, rows, &state, area.width.saturating_sub(2));
+    state = PaneTableState::new(&resolved, selected);
+    let table = PaneTable {
+        columns: &resolved,
+        rows,
+        state: &state,
+        cell_tones: tones,
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: 0,
+    };
+    let table_height = table.height();
+    let chrome = PaneChrome { area };
+    let region = chrome.region(area, table_height);
+    let window = table.window_from(
+        region.content_area.height,
+        app.deployments.table_first_visible.get(),
+    );
+    app.deployments.table_first_visible.set(window.start_row);
+    state.selected = window.selected_row;
+    PaneTable {
+        columns: &resolved,
+        rows: &rows[window.start_row..],
+        state: &state,
+        cell_tones: tones.map(|tones| &tones[window.start_row..]),
+        rich_cells: None,
+        row_markers: None,
+        first_row_index: window.start_row,
+    }
+    .render(frame, region.content_area, &theme());
+    if let Some(slot) = region.scrollbar {
+        let mut scrollbar = ScrollbarState::new(table_height)
+            .position(window.selected_line_offset)
+            .viewport_content_length(region.content_area.height as usize);
+        render_scrollbar(frame, slot, &mut scrollbar, &theme());
+        app.geometry
+            .add_region(RegionKind::Scrollbar(ScrollbarTarget::OpsList), slot.area);
+    }
+    chrome.render_body_boundary(frame, area, &theme());
 }
 
 fn ops_environment_status_lines(app: &TuiApp) -> Vec<Line<'static>> {
@@ -11124,6 +12067,60 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 label: "Commands",
             },
         ];
+        let deployment_history = [
+            KeyHint {
+                key: "↑/↓",
+                label: "Select revision",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Open revision",
+            },
+            KeyHint {
+                key: "ctrl+a",
+                label: "All history",
+            },
+            KeyHint {
+                key: "ctrl+r",
+                label: "Refresh",
+            },
+        ];
+        let deployment_revision = [
+            KeyHint {
+                key: "↑/↓ / pgup/pgdn",
+                label: "Scroll",
+            },
+            KeyHint {
+                key: "enter",
+                label: "Compare predecessor",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Back",
+            },
+            KeyHint {
+                key: "ctrl+r",
+                label: "Refresh",
+            },
+        ];
+        let deployment_compare = [
+            KeyHint {
+                key: "tab",
+                label: "Base / target",
+            },
+            KeyHint {
+                key: "←/→",
+                label: "Choose revision",
+            },
+            KeyHint {
+                key: "↑/↓",
+                label: "Select change",
+            },
+            KeyHint {
+                key: "esc",
+                label: "Back",
+            },
+        ];
         let dev_layout_mode = [
             KeyHint {
                 key: "tab / shift+tab",
@@ -11198,6 +12195,12 @@ fn render_shell_footer(frame: &mut Frame<'_>, area: Rect, app: &TuiApp) {
                 dev_terminal.as_slice()
             } else {
                 dev.as_slice()
+            }
+        } else if app.ops.active() == OpsDestination::Deployments {
+            match app.ops.current_route() {
+                OpsRoute::DeploymentRevision(_) => deployment_revision.as_slice(),
+                OpsRoute::DeploymentCompare(_) => deployment_compare.as_slice(),
+                _ => deployment_history.as_slice(),
             }
         } else {
             ops.as_slice()
@@ -19499,6 +20502,40 @@ mod tests {
     }
 
     #[test]
+    fn deployment_history_navigation_and_responsive_rendering_are_stable() {
+        let mut app = test_app();
+        app.active_workspace = Workspace::Ops;
+        app.ops.select(OpsDestination::Deployments);
+        app.deployments.history = (1..=15)
+            .rev()
+            .map(|revision| crate::tui::ops::deployments::DeploymentRecord {
+                revision,
+                version: format!("version-{revision}"),
+                hash: format!("hash-{revision}"),
+            })
+            .collect();
+
+        for (width, height) in [(120, 32), (80, 12), (42, 24), (1, 1)] {
+            let frame = render_app_text_at(&app, width, height);
+            if width > 40 && height > 4 {
+                assert!(frame.contains("Current & Recent"), "{frame}");
+            }
+        }
+
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.deployments.selected, 1);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.ops.current_route(), &OpsRoute::DeploymentRevision(14));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.ops.current_route(), &OpsRoute::Root);
+
+        app.handle_key(modified_key(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(app.ops.current_route(), &OpsRoute::DeploymentHistory);
+        let frame = render_app_text_at(&app, 100, 24);
+        assert!(frame.contains("All History"), "{frame}");
+    }
+
+    #[test]
     fn bare_repl_key_starts_agent_find_in_ops_first_shell() {
         let mut app = test_app();
 
@@ -19598,6 +20635,7 @@ mod tests {
             pending_repl_restart: None,
             agents: AgentsState::default(),
             ops_environment: OpsEnvironmentState::default(),
+            deployments: DeploymentsState::default(),
             metrics: MetricsState::default(),
             activity: ActivityState::default(),
             resources: ResourcesState::default(),

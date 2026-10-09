@@ -66,7 +66,9 @@ use crate::model::deploy::{
 };
 use crate::model::deploy::{DeployPlanView, log_unified_diff, log_unified_diff_for_path};
 use crate::model::deploy::{DeploymentListView, DeploymentNewView};
-use crate::model::environment::{EnvironmentResolveMode, ResolvedEnvironmentIdentity};
+use crate::model::environment::{
+    EnvironmentReference, EnvironmentResolveMode, ResolvedEnvironmentIdentity,
+};
 use crate::model::help::AvailableComponentNamesHelp;
 use crate::model::language::GuestLanguage;
 use crate::model::text_format::{log_fuzzy_matches, log_text_view};
@@ -87,8 +89,8 @@ use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPat
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::deployment::{
-    CurrentDeployment, DeploymentAgentSecretDefault, DeploymentPlanComponentEntry,
-    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision, DeploymentVersion,
+    CurrentDeployment, Deployment, DeploymentAgentSecretDefault, DeploymentPlanComponentEntry,
+    DeploymentPlanHttpApiDeploymentEntry, DeploymentRevision, DeploymentSummary, DeploymentVersion,
 };
 use golem_common::model::diff;
 use golem_common::model::diff::{Diffable, Hashable};
@@ -702,6 +704,60 @@ impl AppCommandHandler {
                 },
             )
             .await
+    }
+
+    pub async fn list_deployment_history(
+        &self,
+        environment_reference: Option<&EnvironmentReference>,
+    ) -> anyhow::Result<Vec<Deployment>> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_opt_environment_reference_read_only(
+                EnvironmentResolveMode::Any,
+                environment_reference,
+            )
+            .await?;
+        Ok(self
+            .ctx
+            .golem_clients()
+            .await?
+            .environment
+            .list_deployments(&environment.environment_id.0, None)
+            .await
+            .map_service_error()?
+            .values)
+    }
+
+    pub async fn get_deployment_revision(
+        &self,
+        environment_reference: Option<&EnvironmentReference>,
+        revision: DeploymentRevision,
+    ) -> anyhow::Result<Option<(DeploymentSummary, Vec<DeployedRegisteredAgentType>)>> {
+        let environment = self
+            .ctx
+            .environment_handler()
+            .resolve_opt_environment_reference_read_only(
+                EnvironmentResolveMode::Any,
+                environment_reference,
+            )
+            .await?;
+        let clients = self.ctx.golem_clients().await?;
+        let Some(summary) = clients
+            .environment
+            .get_deployment_summary(&environment.environment_id.0, revision.get())
+            .await
+            .map_service_error_not_found_as_opt()?
+        else {
+            return Ok(None);
+        };
+        let agent_types = clients
+            .environment
+            .list_deployment_agent_types(&environment.environment_id.0, revision.get())
+            .await
+            .map_service_error()?
+            .values;
+        Ok(Some((summary, agent_types)))
     }
 
     pub async fn get_agent_type_by_name(

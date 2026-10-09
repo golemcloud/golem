@@ -85,6 +85,7 @@ fn preview_app() -> TuiApp {
         pending_repl_restart: None,
         agents: AgentsState::default(),
         ops_environment: OpsEnvironmentState::default(),
+        deployments: DeploymentsState::default(),
         metrics: MetricsState::default(),
         activity: ActivityState::default(),
         resources: ResourcesState::default(),

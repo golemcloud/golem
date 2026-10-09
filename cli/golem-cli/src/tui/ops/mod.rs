@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub(super) mod activity;
+pub(super) mod deployments;
 pub(super) mod metrics;
 pub(super) mod resources;
 pub(super) mod stream;
@@ -87,6 +88,19 @@ pub(super) struct OplogEntryIdentity {
     pub(super) index: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DeploymentCompareFocus {
+    Base,
+    Target,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DeploymentCompareRoute {
+    pub(super) base_revision: u64,
+    pub(super) target_revision: u64,
+    pub(super) focus: DeploymentCompareFocus,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum OpsRoute {
     Root,
@@ -94,6 +108,9 @@ pub(super) enum OpsRoute {
     Oplog(OplogRoute),
     Stream(AgentIdentity),
     MetricsPanel(String),
+    DeploymentHistory,
+    DeploymentRevision(u64),
+    DeploymentCompare(DeploymentCompareRoute),
 }
 
 #[derive(Debug)]
@@ -202,6 +219,38 @@ impl OpsApp {
         }
     }
 
+    pub(super) fn open_deployment_history(&mut self) {
+        self.active = OpsDestination::Deployments;
+        let routes = &mut self.routes[OpsDestination::Deployments.index()];
+        if !matches!(routes.last(), Some(OpsRoute::DeploymentHistory)) {
+            routes.push(OpsRoute::DeploymentHistory);
+        }
+    }
+
+    pub(super) fn open_deployment_revision(&mut self, revision: u64) {
+        self.active = OpsDestination::Deployments;
+        self.routes[OpsDestination::Deployments.index()]
+            .push(OpsRoute::DeploymentRevision(revision));
+    }
+
+    pub(super) fn open_deployment_compare(&mut self, base_revision: u64, target_revision: u64) {
+        self.active = OpsDestination::Deployments;
+        self.routes[OpsDestination::Deployments.index()].push(OpsRoute::DeploymentCompare(
+            DeploymentCompareRoute {
+                base_revision,
+                target_revision,
+                focus: DeploymentCompareFocus::Target,
+            },
+        ));
+    }
+
+    pub(super) fn deployment_compare_mut(&mut self) -> Option<&mut DeploymentCompareRoute> {
+        match self.routes[OpsDestination::Deployments.index()].last_mut() {
+            Some(OpsRoute::DeploymentCompare(route)) => Some(route),
+            _ => None,
+        }
+    }
+
     pub(super) fn pop_route(&mut self) -> bool {
         let route = &mut self.routes[self.active.index()];
         if route.len() <= 1 {
@@ -281,5 +330,37 @@ mod tests {
         );
         app.reset_routes();
         assert_eq!(app.current_route(), &super::OpsRoute::Root);
+    }
+
+    #[test]
+    fn deployment_routes_preserve_history_revision_and_directional_compare() {
+        let mut app = super::OpsApp::default();
+        app.open_deployment_history();
+        assert_eq!(app.current_route(), &super::OpsRoute::DeploymentHistory);
+
+        app.open_deployment_revision(8);
+        assert_eq!(app.current_route(), &super::OpsRoute::DeploymentRevision(8));
+
+        app.open_deployment_compare(7, 8);
+        assert_eq!(
+            app.current_route(),
+            &super::OpsRoute::DeploymentCompare(super::DeploymentCompareRoute {
+                base_revision: 7,
+                target_revision: 8,
+                focus: super::DeploymentCompareFocus::Target,
+            })
+        );
+        app.deployment_compare_mut().expect("compare route").focus =
+            super::DeploymentCompareFocus::Base;
+        assert!(matches!(
+            app.current_route(),
+            super::OpsRoute::DeploymentCompare(route)
+                if route.focus == super::DeploymentCompareFocus::Base
+        ));
+
+        assert!(app.pop_route());
+        assert_eq!(app.current_route(), &super::OpsRoute::DeploymentRevision(8));
+        assert!(app.pop_route());
+        assert_eq!(app.current_route(), &super::OpsRoute::DeploymentHistory);
     }
 }

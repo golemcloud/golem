@@ -33,6 +33,7 @@ use crossterm::event::Event;
 use golem_client::model::EnvironmentWithDetails;
 use nested_cli::{NestedCliEvent, NestedCliTarget};
 use ops::activity::ActivityRefreshPayload;
+use ops::deployments::DeploymentsPayload;
 use ops::metrics::MetricsRefreshPayload;
 use ops::resources::ResourcesRefreshPayload;
 use ops::stream::StreamMessage;
@@ -64,6 +65,10 @@ enum TuiEvent {
     OpsEnvironmentRefreshFinished {
         generation: u64,
         result: TuiContextTaskResult<OpsEnvironmentSnapshot>,
+    },
+    DeploymentsRefreshFinished {
+        generation: u64,
+        result: TuiContextTaskResult<DeploymentsPayload>,
     },
     MetricsRefreshTick,
     MetricsRefreshFinished {

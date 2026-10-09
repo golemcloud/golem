@@ -1,5 +1,30 @@
 # Progress
 
+## 2026-10-09: Typed Deployment History And Compare
+
+- Added a Current & Recent deployment landing backed by the existing typed,
+  read-only environment handler path, plus an explicit retained All History
+  route. The service exposes revision, version, and deployment hash but no
+  creation timestamp, so the TUI does not invent one.
+- Added retained revision details covering components, Agent Types, HTTP and
+  MCP deployments, remote and published tools, middleware, and environment or
+  Agent Type middleware bindings.
+- Added directional typed compare with explicit Base and Target selectors.
+  Compare defaults to the selected revision and its predecessor, distinguishes
+  added/changed/removed entities, and lets either side move independently
+  through known revisions.
+- Reused the shared table, alternating row, selection, trailing scrollbar,
+  document, notice, and pane chrome primitives. Revision columns are
+  right-aligned; history, detail, and compare have route-specific keyboard and
+  footer guidance and support mouse selection/scrolling.
+- Kept public CLI structured deployment output unchanged. Context switches
+  cancel in-flight history/detail reads and clear retained deployment routes
+  and cached projections.
+
+Still open in this slice: Environment/Account/Server Configuration depth,
+Overview cards, aggregate metric bucket-to-Oplog range handoff, custom absolute
+metric ranges, complete preview fixtures, and final terminal visual acceptance.
+
 ## 2026-10-09: Typed Persistent Agent Stream
 
 - Split Agent websocket decoding from presentation through a typed consumer
