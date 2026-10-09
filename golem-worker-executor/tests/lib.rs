@@ -34,6 +34,7 @@ pub mod concurrent_runtime_events;
 pub mod durability;
 pub mod external_durable_stream;
 pub mod filesystem_inspection;
+pub mod filesystem_snapshots;
 pub mod fork;
 pub mod fuel;
 pub mod hot_update;
@@ -63,6 +64,7 @@ pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;
 pub mod scope_cards;
+pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
 pub mod tool_streaming;
@@ -121,6 +123,7 @@ tag_suite!(rpc, group3);
 tag_suite!(wasi, group3);
 tag_suite!(filesystem_inspection, group3);
 tag_suite!(revert, group3);
+tag_suite!(filesystem_snapshots, group3);
 
 tag_suite!(websocket, group4);
 tag_suite!(agent, group4);
@@ -136,6 +139,7 @@ tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
+tag_suite!(suspension_races, group1);
 tag_suite!(tool_runtime_bypass, group1);
 tag_suite!(tool_streaming, tool_streaming);
 
@@ -339,6 +343,12 @@ test_component!(
     "tool_streaming_effect_caller",
     "golem_it_tool_streaming_effect_caller",
     "golem-it:tool-streaming-effect-caller"
+);
+test_component!(
+    snapshot_sqlite_effect,
+    "snapshot_sqlite_effect",
+    "golem_it_snapshot_sqlite_effect",
+    "golem-it:snapshot-sqlite-effect"
 );
 test_component!(
     agent_counters,

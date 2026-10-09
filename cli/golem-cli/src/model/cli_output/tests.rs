@@ -2296,6 +2296,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
                 payload: vec![7, 8, 9],
                 mime_type: "application/octet-stream".to_string(),
+                filesystem_snapshot: Some("u-8e1a7f2c-4d3b-4e5f-9a6b-7c8d9e0f1a2b".to_string()),
             }),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
@@ -2330,6 +2331,20 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             details: None,
             update_attempt_index: Some(OplogIndex::from_u64(20)),
             snapshot_assisted_details: None,
+        }),
+        PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            details: Some("load failed".to_string()),
+            update_attempt_index: Some(OplogIndex::from_u64(21)),
+            snapshot_assisted_details: Some(
+                golem_common::model::oplog::PublicFailedSnapshotAssistedUpdateDetails {
+                    pending_update_index: OplogIndex::from_u64(21),
+                    source_component_revision: ComponentRevision::new(2).unwrap(),
+                    source_revision_start_index: OplogIndex::INITIAL,
+                    snapshot_index: OplogIndex::from_u64(19),
+                },
+            ),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
             timestamp: timestamp(),
@@ -2405,14 +2420,21 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: raw_snapshot(),
+            filesystem_snapshot: Some("p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string()),
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: json_snapshot(),
+            filesystem_snapshot: None,
         }),
         PublicOplogEntry::Snapshot(SnapshotParams {
             timestamp: timestamp(),
             data: multipart_snapshot(),
+            filesystem_snapshot: None,
+        }),
+        PublicOplogEntry::SnapshotConfirmed(SnapshotConfirmedParams {
+            timestamp: timestamp(),
+            filesystem_snapshot: "p-3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9".to_string(),
         }),
         PublicOplogEntry::OplogProcessorCheckpoint(OplogProcessorCheckpointParams {
             timestamp: timestamp(),
@@ -2876,6 +2898,17 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 .prop_map(|required| golem_common::model::agent::AgentHttpAuthDetails { required }),
         ),
         any::<bool>(),
+        proptest::option::of((any::<bool>(), arb_small_string(), any::<bool>()).prop_map(
+            |(path, name, optional)| {
+                let details =
+                    golem_common::model::agent::PhantomIdBindingDetails { name, optional };
+                if path {
+                    golem_common::model::agent::PhantomIdBinding::Path(details)
+                } else {
+                    golem_common::model::agent::PhantomIdBinding::Query(details)
+                }
+            },
+        )),
         proptest::collection::vec(arb_small_string(), 0..2),
         proptest::collection::vec(arb_path_segment(), 0..2),
         proptest::collection::vec(arb_file_mapping(), 1..3),
@@ -2888,6 +2921,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                 path_prefix,
                 auth_details,
                 phantom_agent,
+                phantom_id_binding,
                 allowed_patterns,
                 webhook_suffix,
                 static_bindings,
@@ -2899,6 +2933,7 @@ fn arb_http_mount_details() -> BoxedStrategy<golem_common::model::agent::HttpMou
                     path_prefix,
                     auth_details,
                     phantom_agent,
+                    phantom_id_binding,
                     cors_options: golem_common::model::agent::CorsOptions { allowed_patterns },
                     webhook_suffix,
                     static_bindings,
@@ -3733,22 +3768,53 @@ fn arb_agent_config_entry_dto() -> BoxedStrategy<golem_common::model::worker::Ag
         .boxed()
 }
 
+fn arb_snapshot_assisted_update_metadata()
+-> BoxedStrategy<golem_common::model::worker::SnapshotAssistedUpdateMetadata> {
+    (
+        arb_small_u64(),
+        arb_small_u64(),
+        arb_small_u64(),
+        proptest::option::of(arb_small_string()),
+    )
+        .prop_map(
+            |(revision, start_index, snapshot_index, filesystem_snapshot)| {
+                let revision = golem_common::model::component::ComponentRevision::new(revision)
+                    .expect("generated revision should be valid");
+                golem_common::model::worker::SnapshotAssistedUpdateMetadata {
+                    source_component_revision: revision,
+                    source_revision_start_index: golem_common::model::OplogIndex::from_u64(
+                        start_index,
+                    ),
+                    snapshot_index: golem_common::model::OplogIndex::from_u64(snapshot_index),
+                    snapshot_revision: revision,
+                    filesystem_snapshot,
+                }
+            },
+        )
+        .boxed()
+}
+
 fn arb_update_record() -> BoxedStrategy<golem_common::model::worker::UpdateRecord> {
     prop_oneof![
-        (arb_timestamp(), arb_small_u64()).prop_map(|(timestamp, target_revision)| {
-            golem_common::model::worker::UpdateRecord::PendingUpdate(
-                golem_common::model::worker::PendingUpdate {
-                    timestamp,
-                    target_revision: golem_common::model::component::ComponentRevision::new(
-                        target_revision,
-                    )
-                    .expect("generated revision should be valid"),
-                    pending_update_index: None,
-                    mode: golem_common::model::worker::AgentUpdateMode::Automatic,
-                    snapshot_assisted_details: None,
-                },
-            )
-        }),
+        (
+            arb_timestamp(),
+            arb_small_u64(),
+            proptest::option::of(arb_snapshot_assisted_update_metadata()),
+        )
+            .prop_map(|(timestamp, target_revision, assisted)| {
+                golem_common::model::worker::UpdateRecord::PendingUpdate(
+                    golem_common::model::worker::PendingUpdate {
+                        timestamp,
+                        target_revision: golem_common::model::component::ComponentRevision::new(
+                            target_revision,
+                        )
+                        .expect("generated revision should be valid"),
+                        pending_update_index: None,
+                        mode: golem_common::model::worker::AgentUpdateMode::Automatic,
+                        snapshot_assisted_details: assisted,
+                    },
+                )
+            }),
         (arb_timestamp(), arb_small_u64()).prop_map(|(timestamp, target_revision)| {
             golem_common::model::worker::UpdateRecord::SuccessfulUpdate(
                 golem_common::model::worker::SuccessfulUpdate {

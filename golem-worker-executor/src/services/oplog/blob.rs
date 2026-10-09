@@ -31,7 +31,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, join_blob_key,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, agent_path_segment, join_blob_key,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -141,7 +141,7 @@ impl OplogArchiveService for BlobOplogArchiveService {
             .with("blob_oplog", "delete")
             .delete_dir(
                 BlobOplogArchive::blob_namespace(owned_agent_id, agent_mode, self.level),
-                Path::new(&owned_agent_id.agent_name()),
+                Path::new(&agent_path_segment(&owned_agent_id.agent_id)),
             )
             .await
             .map(|_| ())
@@ -321,9 +321,13 @@ impl BlobOplogArchive {
     }
 
     /// A name no other write uses, so no writer can overwrite an object the manifest refers to.
+    ///
+    /// The objects of an agent are in the directory of its path segment, not of its name: an
+    /// agent name can hold `/`, `\` and `.` segments and be longer than a file name, while the
+    /// path segment holds none of them and its hash gives each agent its own directory.
     fn new_object(&self, last_idx: OplogIndex) -> String {
         join_blob_key(
-            &self.owned_agent_id.agent_name(),
+            &agent_path_segment(&self.owned_agent_id.agent_id),
             &format!("{last_idx}-{}", Uuid::new_v4()),
         )
     }
@@ -723,3 +727,6 @@ impl OplogArchive for BlobOplogArchive {
         self.manifest.fence()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -40,8 +40,8 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentWebhooksServiceConfig, EnvironmentStateServiceConfig,
-    FilesystemStorageConfig, GolemConfig as WorkerExecutorConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
+    FilesystemStorageConfig, FilesystemStorageMode, GolemConfig as WorkerExecutorConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreMultiSqliteConfig, KeyValueStorageConfig,
     KeyValueStorageMultiSqliteConfig, ResourceLimitsConfig, ResourceUsageMeteringConfig,
     SchedulerStorageConfig, WorkerServiceGrpcConfig,
 };
@@ -448,7 +448,12 @@ fn worker_executor_config(
             ..Default::default()
         },
         filesystem_storage: FilesystemStorageConfig {
-            deterministic_root_dir: args.agent_filesystem_root.clone(),
+            mode: args
+                .agent_filesystem_root
+                .clone()
+                .map_or(FilesystemStorageMode::Temporary, |root| {
+                    FilesystemStorageMode::Directory { root: root.into() }
+                }),
             ..Default::default()
         },
         ..Default::default()

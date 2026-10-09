@@ -21,10 +21,12 @@
 //! Outcomes beyond the cut do not constrain these calls. Atomic regions and remote transactions
 //! still require a cut that preserves their committed/rolled-back outcome.
 
+use crate::worker::status::update_queue::UpdateQueue;
 use golem_common::base_model::OplogIndex;
-use golem_common::model::oplog::{OplogEntry, OplogIndexRange, UpdateDescription};
+use golem_common::model::PendingUpdateKind;
+use golem_common::model::oplog::{OplogEntry, OplogIndexRange};
 use golem_common::model::regions::DeletedRegions;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
 
@@ -50,73 +52,39 @@ impl Display for RevertUpdateBoundaryError {
     }
 }
 
-/// Validates snapshot-update boundaries. Update outcomes are paired with pending updates in oplog
-/// order, matching the status reducer. A cut may remove an update entirely or retain it entirely,
-/// including a pending update that does not have an outcome yet.
+/// Validates snapshot-update boundaries. Update outcomes are paired with pending updates by the
+/// update queue of the status fold. A cut may remove a snapshot-based update entirely or retain
+/// it entirely, including a pending update that does not have an outcome yet. A cut may split a
+/// snapshot-assisted automatic update, or a manual update invocation from its outcome when no
+/// `PendingUpdate` paired them, because no snapshot baseline exists before its outcome.
 pub fn validate_snapshot_update_boundaries(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
     cut_point: OplogIndex,
     deleted_regions: &DeletedRegions,
 ) -> Result<(), RevertUpdateBoundaryError> {
-    let mut pending_updates = VecDeque::new();
-
-    for (idx, entry) in entries {
-        if deleted_regions.is_in_deleted_region(*idx) {
-            continue;
-        }
-
-        match entry {
-            OplogEntry::PendingUpdate {
-                description,
-                update_attempt_index,
-                ..
-            } => {
-                let target_revision = *description.target_revision();
-                let admission_index = update_attempt_index.unwrap_or(*idx);
-                let refines_automatic_admission = update_attempt_index.is_some()
-                    && !matches!(description, UpdateDescription::SnapshotBased { .. })
-                    && pending_updates.front().is_some_and(
-                        |(pending_target, pending_admission, _, _)| {
-                            *pending_target == target_revision
-                                && *pending_admission == admission_index
-                        },
-                    );
-                if !refines_automatic_admission {
-                    pending_updates.push_back((
-                        target_revision,
-                        admission_index,
-                        *idx,
-                        matches!(description, UpdateDescription::SnapshotBased { .. }),
-                    ));
-                }
-            }
-            OplogEntry::SuccessfulUpdate { .. } => {
-                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
-                    && pending_index <= cut_point
-                    && cut_point < *idx
+    // A manual update invocation changes only the manual admissions, and no queue element ends
+    // through one, so the check does not decode the invocation payloads.
+    entries
+        .iter()
+        .filter(|(_, entry)| !matches!(entry, OplogEntry::PendingAgentInvocation { .. }))
+        .try_fold(UpdateQueue::default(), |queue, (idx, entry)| {
+            let (queue, step) =
+                queue.after(*idx, entry, deleted_regions.is_in_deleted_region(*idx));
+            match step.ended() {
+                Some(paired)
+                    if matches!(paired.kind, PendingUpdateKind::SnapshotBased { .. })
+                        && paired.oplog_index <= cut_point
+                        && cut_point < *idx =>
                 {
-                    return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
-                        pending_index,
+                    Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
+                        pending_index: paired.oplog_index,
                         outcome_index: *idx,
-                    });
+                    })
                 }
+                _ => Ok(queue),
             }
-            OplogEntry::FailedUpdate { .. } => {
-                if let Some((_, _, pending_index, true)) = pending_updates.pop_front()
-                    && pending_index <= cut_point
-                    && cut_point < *idx
-                {
-                    return Err(RevertUpdateBoundaryError::SplitSnapshotUpdate {
-                        pending_index,
-                        outcome_index: *idx,
-                    });
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
+        })
+        .map(|_| ())
 }
 
 /// A paired durable construct whose two halves lie on opposite sides of a cut point.
@@ -243,6 +211,7 @@ where
                 ..
             }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -382,6 +351,7 @@ mod tests {
     };
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::oplog::UpdateDescription;
     use golem_common::model::regions::{DeletedRegionsBuilder, OplogRegion};
     use golem_common::model::{AgentFingerprint, AgentId, TransactionId};
     use std::collections::HashMap;
@@ -464,6 +434,7 @@ mod tests {
             target_revision: ComponentRevision::new(revision).unwrap(),
             payload: OplogPayload::Inline(Box::new(vec![])),
             mime_type: "application/octet-stream".to_string(),
+            filesystem_snapshot: None,
         }
     }
 
@@ -474,6 +445,7 @@ mod tests {
             source_revision_start_index: OplogIndex::INITIAL,
             snapshot_index: idx(2),
             snapshot_revision: ComponentRevision::new(revision - 1).unwrap(),
+            filesystem_snapshot: None,
         }
     }
 
@@ -530,6 +502,7 @@ mod tests {
                     Some("failed".to_string()),
                     None,
                     None,
+                    None,
                 ),
             ),
         ]);
@@ -556,6 +529,7 @@ mod tests {
             OplogEntry::failed_update(
                 ComponentRevision::new(2).unwrap(),
                 Some("failed".to_string()),
+                None,
                 None,
                 None,
             ),
@@ -622,6 +596,120 @@ mod tests {
 
         assert_eq!(
             validate_snapshot_update_boundaries(&entries, idx(1), &deleted(vec![(2, 3)])),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_cut_between_a_manual_admission_and_its_failure_without_a_pending_update_is_accepted() {
+        let target_revision = ComponentRevision::new(2).unwrap();
+        let entries = BTreeMap::from([
+            (
+                idx(2),
+                OplogEntry::PendingAgentInvocation {
+                    timestamp: Timestamp::now_utc(),
+                    idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::AgentInvocationPayload::ManualUpdate {
+                            target_revision,
+                        },
+                    )),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: Vec::new(),
+                    invocation_context: Vec::new(),
+                },
+            ),
+            (
+                idx(3),
+                OplogEntry::failed_update(target_revision, None, None, Some(idx(2)), None),
+            ),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(2), &DeletedRegions::new()),
+            Ok(())
+        );
+    }
+
+    /// A snapshot-based update that pairs a manual update invocation gives the same boundaries
+    /// as one without that invocation, at each cut and with the invocation in a deleted region.
+    #[test]
+    fn a_manual_admission_does_not_change_the_boundaries_of_a_snapshot_based_update() {
+        let update = snapshot_update(2);
+        let admission = OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::now_utc(),
+            idempotency_key: golem_common::model::IdempotencyKey::fresh(),
+            payload: OplogPayload::Inline(Box::new(
+                golem_common::model::AgentInvocationPayload::ManualUpdate {
+                    target_revision: *update.target_revision(),
+                },
+            )),
+            trace_id: golem_common::model::invocation_context::TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        };
+        let without = BTreeMap::from([
+            (
+                idx(3),
+                OplogEntry::pending_update(update.clone(), Some(idx(2))),
+            ),
+            (
+                idx(5),
+                OplogEntry::successful_update(
+                    *update.target_revision(),
+                    100,
+                    None,
+                    Default::default(),
+                    None,
+                ),
+            ),
+        ]);
+        let with = without
+            .clone()
+            .into_iter()
+            .chain([(idx(2), admission)])
+            .collect::<BTreeMap<_, _>>();
+
+        (1..=6).for_each(|cut| {
+            [DeletedRegions::new(), deleted(vec![(2, 2)])]
+                .iter()
+                .for_each(|deleted| {
+                    assert_eq!(
+                        validate_snapshot_update_boundaries(&with, idx(cut), deleted),
+                        validate_snapshot_update_boundaries(&without, idx(cut), deleted),
+                        "cut {cut}"
+                    )
+                })
+        });
+        assert!(
+            validate_snapshot_update_boundaries(&with, idx(4), &DeletedRegions::new()).is_err()
+        );
+    }
+
+    #[test]
+    fn a_failure_whose_attempt_index_names_an_update_behind_the_head_ends_nothing() {
+        let manual = snapshot_update(3);
+        let automatic = UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        };
+        let failure = |target: u64, attempt: u64| {
+            OplogEntry::failed_update(
+                ComponentRevision::new(target).unwrap(),
+                None,
+                None,
+                Some(idx(attempt)),
+                None,
+            )
+        };
+        let entries = BTreeMap::from([
+            (idx(2), OplogEntry::pending_update(automatic, None)),
+            (idx(3), OplogEntry::pending_update(manual, None)),
+            (idx(4), failure(3, 3)),
+            (idx(5), failure(2, 2)),
+        ]);
+
+        assert_eq!(
+            validate_snapshot_update_boundaries(&entries, idx(3), &DeletedRegions::new()),
             Ok(())
         );
     }

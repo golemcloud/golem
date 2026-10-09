@@ -47,6 +47,8 @@ The policy controls **when** a snapshot is taken. It can be given directly (`sna
 | `{ everyNInvocations: number }` | `{ everyNInvocations: 1 }` | Snapshot every N successful invocations (use `1` for every invocation) |
 | `{ periodicSeconds: number }` | `{ periodicSeconds: 30 }` | Snapshot at most once per N-second interval |
 
+An ephemeral agent takes no snapshots, whatever its `snapshotting` value. Snapshots are for durable agents only.
+
 ## Typed State Snapshotting (recommended)
 
 Give `snapshotting` a `state` schema that describes every ordinary field needed to restore the complete state. Saving rejects undeclared ordinary fields rather than silently dropping them; SDK helpers and configuration are attached separately and are not part of the snapshot. On recovery the executor restores the validated state from the last snapshot and replays the oplog tail. This is the declarative replacement for a custom `snapshot.save`/`snapshot.load` pair.
@@ -65,6 +67,72 @@ export const CounterAgentImpl = CounterAgent.implement({
 ```
 
 A bare enabled policy without a `state` schema (e.g. `snapshotting: 'default'` or `snapshotting: { everyNInvocations: 5 }`) requires a custom `snapshot: { save, load }` implementation. Automatic loading is generated only when a `state` schema provides a JSON-deserializable state contract.
+
+### Evolving the State Schema
+
+During a manual update, the source revision saves a snapshot, and the target revision validates the saved JSON against its own `state` schema. The SDK uses the schema's decoded value as the restored state. It does not call `init`, so a default supplied only by `init` does not fill a missing snapshot field.
+
+With Zod, give new fields a `.default(...)` value or make them `.optional()`:
+
+```typescript
+snapshotting: {
+    state: z.object({
+        count: z.number(),
+        label: z.string().default(''),
+        lastUpdated: z.number().optional(),
+    }),
+    policy: { everyNInvocations: 1 },
+}
+```
+
+This schema can load an earlier snapshot containing only `count`. The restored `label` is `''`; `lastUpdated` may be absent, so methods must handle that case. A new required field without a decoding default makes loading fail when the saved JSON does not contain it.
+
+For a rename or type change, accept the earlier representation and convert it to the complete target state. Use custom `save` and `load` functions when the schema cannot do this. A version marker can help `load` select the conversion, but it does not convert the state by itself. Test loading a snapshot saved by the source revision, not just a save/load round-trip in the target revision.
+
+If schema validation fails during a manual update, the update fails and the agent stays on its source revision. Run `golem agent get <AGENT_ID>` and inspect the update history. It shows `Failed update to ...` with details containing `Manual update failed to load snapshot: ...` and the loader error. A typed schema mismatch includes `snapshot state does not match its declared schema`. Fix the schema or loader in a new revision, deploy it, and request the update again.
+
+The same decoding rule applies when an automatic update uses a snapshot from the source revision. A decoding failure during a snapshot-assisted automatic update has `UPDATE_SNAPSHOT_INCOMPATIBLE`.
+
+### SQLite Databases
+
+Typed state snapshotting handles each top-level `DatabaseSync` field of the agent (from `node:sqlite`). Do not declare these fields in the `state` schema.
+
+- **In-memory database** (`new DatabaseSync(':memory:')`) or **temporary database** (`new DatabaseSync('')`): the snapshot holds the contents of the database. The snapshot then uses the `multipart/mixed` format.
+- **File-backed database** (`new DatabaseSync('/app.db')`): the snapshot holds only the location of the file. The executor's filesystem snapshot restores the file before the load. The load then opens the database again at that location.
+- A database with an open transaction makes the save fail. This also applies to a file-backed database. Commit or roll back before the invocation ends.
+- A closed `DatabaseSync` in a field makes the save fail. Remove the field, or set it to an open database, before the invocation ends.
+- A save that fails has these effects. For an automatic snapshot, Golem writes no snapshot record and restarts the agent, which replays its oplog. Each failed save costs a restart and a replay. For a manual update, the update fails, and the agent stays on its current revision.
+
+The load reads each file-backed database to fill SQLite's page cache:
+
+- The load always reads the schema of the database.
+- When all pages of the database fit in the page cache, the load also reads every page. With the default cache size, the limit is 488 pages of 4 KiB, just under 2 MB. This read costs time and memory up to that size.
+- When the database is larger or empty, the load reads only the schema.
+
+```typescript
+import { DatabaseSync } from 'node:sqlite';
+
+export const NotesAgentImpl = NotesAgent.implement({
+    init: () => {
+        const cache = new DatabaseSync(':memory:'); // contents go into the snapshot
+        const notes = new DatabaseSync('/notes.db'); // restored by the filesystem snapshot
+        notes.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text TEXT)');
+        return { count: 0, cache, notes };
+    },
+    methods: { /* ... */ },
+});
+```
+
+> **Filesystem snapshots restore the file.** A typed snapshot with a file-backed database relies on the executor's filesystem snapshots to restore the database file. Filesystem snapshots are off by default, for example on OSS and self-hosted executors and on the local development server. On an executor without them, the database file makes the agent's files differ from its initial files. The executor then takes no automatic snapshot of the agent, so the agent recovers by a replay without data loss, and a snapshot-based manual update of the agent fails. The load fails when the database file is missing at its recorded location.
+
+Limits:
+
+- The snapshot holds only the main database of a connection. It does not hold databases added with `ATTACH`, or tables in the `temp` schema.
+- The load opens a database again with the default options of `node:sqlite`, for example `readOnly: false` and `timeout: 0`. To use other options, open the database in a custom `load`. When `load` returns a `DatabaseSync` in a field, the SDK keeps that database. It does not open another database for that field.
+- A `DatabaseSync` inside a nested object makes the save fail. A `StatementSync`, `Session` or `SQLTagStore` field also makes the save fail. Keep them out of the state, or use custom `save` and `load` functions.
+- The field name of an in-memory database must not contain a double quote, a carriage return, a line feed or a lone UTF-16 surrogate. Such a name makes the save fail. The field name of a file-backed database has no such limit.
+- A start from an automatic snapshot can fall back to the previous usable automatic snapshot or a full replay. This can occur when the restored connection and the live connection hold different pages in their page caches. A database that is larger than the page cache can cause this. A database whose pages the agent did not all read can also cause it.
+- A reopened connection does not keep connection state. This state includes functions from `db.function()` and `db.aggregate()`, an authorizer, and per-connection PRAGMAs. An agent that needs this state sets it again in a custom `load`.
 
 ## Custom Snapshotting
 
@@ -126,13 +194,13 @@ save(): Uint8Array | Promise<Uint8Array>
 load(bytes: Uint8Array, context: SnapshotRestoreContext): State | Promise<State>
 ```
 
-A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view.
+A custom `snapshot` block overrides the default serialization entirely. The restore context provides the parsed identity, full agent ID, restored principal, phantom ID, and fresh config view. After a custom `load`, the SDK reads the schema of each open database in a `DatabaseSync` field. For a file-backed database, it also reads every page when all pages fit in the page cache.
 
 ## Restoration Is Read-Only
 
 Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. Golem runs `load` in read-only mode and does not write anything it does to the oplog. Decoding, local computation, fresh randomness, config reads, and other permitted reads can be used to build the returned state. Mutating host operations and outgoing HTTP or agent RPC calls are rejected before they take effect.
 
-The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does not try an older automatic snapshot.
+The SDK installs the returned state only after `load` succeeds. If it throws or rejects, partial state is discarded. A manual update remains on the previous component version. During automatic recovery, Golem recreates the component without the failed automatic snapshot. It then tries the previous usable automatic snapshot. After that, it uses the authoritative baseline of the last successful update or a full replay. During an automatic update, the update fails, and the agent stays on its source revision: with `UPDATE_SNAPSHOT_INCOMPATIBLE` when the update selected an automatic snapshot, else with `UPDATE_REPLAY_FAILED`. Without a pending update, when the snapshot of the last successful update does not load, the start of the agent fails.
 
 ## Best Practices
 

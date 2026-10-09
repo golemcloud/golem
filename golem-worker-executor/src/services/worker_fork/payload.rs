@@ -109,7 +109,8 @@ where
         | OplogEntry::CardRevokedCascade { .. }
         | OplogEntry::CardTransferConfirmed { .. }
         | OplogEntry::CompletionDiscarded { .. }
-        | OplogEntry::CompletionDelivered { .. } => {}
+        | OplogEntry::CompletionDelivered { .. }
+        | OplogEntry::SnapshotConfirmed { .. } => {}
     }
     Ok(())
 }
@@ -142,6 +143,72 @@ mod tests {
     use golem_common::model::OplogIndex;
     use std::sync::Arc;
     use test_r::test;
+
+    #[test]
+    async fn shared_pending_and_started_payloads_rehome_independently() {
+        use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+        use golem_common::model::invocation_context::InvocationContextStack;
+        use golem_common::model::{AgentInvocationPayload, IdempotencyKey, Timestamp};
+
+        let source_id = PayloadId::new();
+        let source_hash = vec![7; 16];
+        let payload: OplogPayload<AgentInvocationPayload> = OplogPayload::External {
+            payload_id: source_id.clone(),
+            md5_hash: source_hash.clone(),
+            cached: None,
+        };
+        let context = InvocationContextStack::fresh_rounded();
+        let mut entries = [
+            OplogEntry::pending_agent_invocation(
+                IdempotencyKey::new("shared".to_string()),
+                payload.clone(),
+                context.trace_id.clone(),
+                context.trace_states.clone(),
+                context.to_oplog_data(),
+            ),
+            OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::now_utc(),
+                idempotency_key: IdempotencyKey::new("shared".to_string()),
+                payload,
+                trace_id: context.trace_id,
+                trace_states: context.trace_states,
+                invocation_context: Vec::new(),
+                wallet_pin: Box::new(InvocationWalletPin {
+                    wallet_token: WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 9,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            },
+        ];
+        let mut targets = Vec::new();
+        for entry in &mut entries {
+            let target_id = PayloadId::new();
+            copy_entry_payloads(entry, |id, hash| {
+                assert_eq!(id, source_id);
+                assert_eq!(hash, source_hash);
+                std::future::ready(Ok(RawOplogPayload::External {
+                    payload_id: target_id.clone(),
+                    md5_hash: source_hash.clone(),
+                }))
+            })
+            .await
+            .unwrap();
+            let payload = match entry {
+                OplogEntry::PendingAgentInvocation { payload, .. }
+                | OplogEntry::AgentInvocationStarted { payload, .. } => payload,
+                _ => unreachable!(),
+            };
+            assert!(
+                matches!(payload, OplogPayload::External { payload_id, cached: None, .. }
+                if *payload_id == target_id && *payload_id != source_id)
+            );
+            targets.push(target_id);
+        }
+        assert_ne!(targets[0], targets[1]);
+    }
 
     #[test]
     async fn copies_external_payload_even_when_cached_and_preserves_bytes() {
@@ -208,6 +275,7 @@ mod tests {
                 mime_type: "application/octet-stream".to_string(),
                 active_cards: Vec::new(),
                 wallet_generation: 0,
+                filesystem_snapshot: None,
             },
             OplogEntry::stream_registered(None, external(), None),
             OplogEntry::stream_items(None, external(), None),
@@ -219,6 +287,7 @@ mod tests {
                     target_revision: golem_common::model::component::ComponentRevision::INITIAL,
                     payload: external(),
                     mime_type: "application/octet-stream".to_string(),
+                    filesystem_snapshot: None,
                 },
                 None,
             ),

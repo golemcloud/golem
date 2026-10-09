@@ -189,6 +189,7 @@ impl OplogEntry {
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::HostStreamFrame { .. } => EntityAttribution::Unattributed,
         }
@@ -329,6 +330,7 @@ impl OplogEntry {
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -413,6 +415,7 @@ impl OplogEntry {
             | OplogEntry::CommittedRemoteTransaction { .. }
             | OplogEntry::RolledBackRemoteTransaction { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. }
             | OplogEntry::SetRetryPolicy { .. }
             | OplogEntry::RemoveRetryPolicy { .. }
@@ -570,6 +573,7 @@ impl OplogScopeProjection {
             | OplogEntry::Revert { .. }
             | OplogEntry::CancelPendingInvocation { .. }
             | OplogEntry::Snapshot { .. }
+            | OplogEntry::SnapshotConfirmed { .. }
             | OplogEntry::OplogProcessorCheckpoint { .. } => false,
         };
         self.previous_index = Some(index);

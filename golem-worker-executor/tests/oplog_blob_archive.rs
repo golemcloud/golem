@@ -26,8 +26,11 @@ use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardE
 use golem_common::redis::RedisPool;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, s3};
-use golem_test_framework::components::s3_mock::{DockerS3Mock, S3Mock};
+use golem_service_base::storage::blob::{
+    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageBackend, BlobStorageNamespace,
+    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, s3,
+};
+use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
@@ -70,11 +73,11 @@ fn in_memory() -> Arc<dyn GetBlobStorage + Send + Sync> {
     Arc::new(InMemoryTest)
 }
 
-/// Spins up a fresh S3Mock container per `get_blob_storage` call and keeps it
+/// Spins up a fresh RustFS container per `get_blob_storage` call and keeps it
 /// alive for the lifetime of this per-worker dependency, so the returned S3
 /// blob storage remains usable for the whole test.
-struct S3Test {
-    s3_mock_instances: Mutex<Vec<DockerS3Mock>>,
+pub(crate) struct S3Test {
+    s3_servers: Mutex<Vec<DockerRustFs>>,
 }
 
 impl Debug for S3Test {
@@ -86,41 +89,49 @@ impl Debug for S3Test {
 #[async_trait]
 impl GetBlobStorage for S3Test {
     async fn get_blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync> {
-        let s3_mock = DockerS3Mock::new().await;
+        Arc::new(self.s3_storage().await)
+    }
+}
+
+impl S3Test {
+    /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive. The
+    /// container has the buckets of the compressed oplog and of the custom data of a guest.
+    pub(crate) async fn s3_storage(&self) -> s3::S3BlobStorage {
+        let s3_server = DockerRustFs::new().await;
 
         let config = S3BlobStorageConfig {
             retries: Default::default(),
             region: "us-east-1".to_string(),
             object_prefix: String::new(),
-            aws_endpoint_url: Some(s3_mock.endpoint()),
+            aws_endpoint_url: Some(s3_server.endpoint()),
             aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                s3_mock.access_key_id(),
-                s3_mock.secret_access_key(),
+                s3_server.access_key_id(),
+                s3_server.secret_access_key(),
                 "test",
             )),
             aws_path_style: Some(true),
             ..std::default::Default::default()
         };
-        create_buckets(&s3_mock, &config).await;
+        create_buckets(&s3_server, &config).await;
         let storage = s3::S3BlobStorage::new(config).await;
 
-        self.s3_mock_instances.lock().await.push(s3_mock);
-        Arc::new(storage)
+        self.s3_servers.lock().await.push(s3_server);
+        storage
     }
 }
 
-async fn create_buckets(s3_mock: &dyn S3Mock, config: &S3BlobStorageConfig) {
+async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) {
     let region_provider = RegionProviderChain::default_provider().or_else("us-east-1");
     let creds = Credentials::new(
-        s3_mock.access_key_id(),
-        s3_mock.secret_access_key(),
+        s3_server.access_key_id(),
+        s3_server.secret_access_key(),
         None,
         None,
         "test",
     );
     let sdk_config = aws_config::defaults(BehaviorVersion::latest())
         .region(region_provider)
-        .endpoint_url(s3_mock.endpoint())
+        .endpoint_url(s3_server.endpoint())
         .credentials_provider(creds)
         .load()
         .await;
@@ -130,16 +141,24 @@ async fn create_buckets(s3_mock: &dyn S3Mock, config: &S3BlobStorageConfig) {
             .force_path_style(true)
             .build(),
     );
-    for bucket in &config.compressed_oplog_buckets {
+    for bucket in config
+        .compressed_oplog_buckets
+        .iter()
+        .chain([&config.custom_data_bucket])
+    {
         client.create_bucket().bucket(bucket).send().await.unwrap();
+    }
+}
+
+pub(crate) fn new_s3_test() -> S3Test {
+    S3Test {
+        s3_servers: Mutex::new(Vec::new()),
     }
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "s3")]
 fn s3() -> Arc<dyn GetBlobStorage + Send + Sync> {
-    Arc::new(S3Test {
-        s3_mock_instances: Mutex::new(Vec::new()),
-    })
+    Arc::new(new_s3_test())
 }
 
 define_matrix_dimension!(storage: Arc<dyn GetBlobStorage + Send + Sync> -> "in_memory", "s3");
@@ -194,7 +213,7 @@ async fn drain(
 /// archived durable) workers. This test verifies that `scan_for_component`
 /// against the blob archive lists workers correctly and filters by agent mode,
 /// running the same checks against both an in-memory backend and a real
-/// S3-compatible (Adobe S3Mock) backend.
+/// S3-compatible (RustFS) backend.
 #[test]
 async fn blob_archive_scan_for_component_filters_by_mode(
     #[dimension(storage)] storage: &Arc<dyn GetBlobStorage + Send + Sync>,
@@ -475,4 +494,299 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         "the entry was stored, so the append must reconcile as stored: {appended:?}"
     );
     relay.server.abort();
+}
+
+/// A blob storage that counts the calls that read `inner`: reads of a blob or of its metadata,
+/// `exists`, and listings.
+#[derive(Debug)]
+struct ReadCounting<B> {
+    inner: B,
+    reads: AtomicUsize,
+}
+
+impl<B> ReadCounting<B> {
+    fn read(&self) -> &B {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        &self.inner
+    }
+}
+
+#[async_trait]
+impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
+    async fn get_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.read()
+            .get_raw_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<futures::stream::BoxStream<'static, anyhow::Result<bytes::Bytes>>>>
+    {
+        self.read()
+            .get_stream_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn get_range_stream_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        offset: u64,
+        length: u64,
+    ) -> anyhow::Result<Option<BlobRangeStream>> {
+        self.read()
+            .get_range_stream_at(target_label, op_label, namespace, path, offset, length)
+            .await
+    }
+
+    async fn get_raw_slice_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        start: u64,
+        end: u64,
+    ) -> anyhow::Result<Option<Vec<u8>>> {
+        self.read()
+            .get_raw_slice_at(target_label, op_label, namespace, path, start, end)
+            .await
+    }
+
+    async fn get_metadata_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Option<BlobMetadata>> {
+        self.read()
+            .get_metadata_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn put_raw_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> anyhow::Result<()> {
+        self.inner
+            .put_raw_at(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn put_raw_if_absent_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
+            .await
+    }
+
+    async fn delete_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .delete_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_many_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        paths: &[NormalizedBlobPath<'_>],
+    ) -> anyhow::Result<()> {
+        self.inner
+            .delete_many_at(target_label, op_label, namespace, paths)
+            .await
+    }
+
+    async fn create_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .create_dir_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Vec<std::path::PathBuf>> {
+        self.read()
+            .list_dir_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn list_blobs_below_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<Box<[ListedBlob]>> {
+        self.read()
+            .list_blobs_below_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .delete_dir_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn exists_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<ExistsResult> {
+        self.read()
+            .exists_at(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> anyhow::Result<bool> {
+        self.inner
+            .copy_between_at(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+    }
+}
+
+/// The blob oplog archive finds its chunks through the manifest in the indexed storage and never
+/// lists a directory, so on S3 too an object in the segment of the agent that the manifest does
+/// not name is never read. The same rule holds on the local backends in the unit tests of the
+/// archive.
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_s3() {
+    // The test keeps the RustFS container of the storage until it ends.
+    let s3 = new_s3_test();
+    let storage = Arc::new(ReadCounting {
+        inner: s3.s3_storage().await,
+        reads: AtomicUsize::new(0),
+    });
+    let agent_id = AgentId {
+        component_id: ComponentId::new(),
+        agent_id: "unlisted-blob-object".to_string(),
+    };
+    let environment_id = EnvironmentId::new();
+    let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+    storage
+        .put_raw(
+            "blob_oplog",
+            "test",
+            BlobStorageNamespace::CompressedOplog {
+                environment_id,
+                component_id: agent_id.component_id,
+                agent_mode: AgentMode::Durable,
+                level: 0,
+            },
+            &std::path::Path::new(&agent_path_segment(&agent_id)).join("2"),
+            b"not-an-oplog-chunk",
+        )
+        .await
+        .unwrap();
+    let service = BlobOplogArchiveService::new(
+        storage.clone(),
+        Arc::new(InMemoryIndexedStorage::new()),
+        0,
+        RetryConfig::default(),
+    );
+
+    let exists = service
+        .try_exists(&owned_agent_id, AgentMode::Durable)
+        .await
+        .unwrap();
+    let archive = service
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await;
+    let length = archive.length().await.unwrap();
+    let read = archive.read_source(OplogIndex::INITIAL, 2).await.unwrap();
+    let reads_before_a_chunk = storage.reads.load(Ordering::SeqCst);
+
+    let log = || OplogEntry::log(None, LogLevel::Debug, "test".into(), "test".into(), None);
+    archive
+        .append(&[
+            (OplogIndex::INITIAL, log()),
+            (OplogIndex::from_u64(2), log()),
+        ])
+        .await
+        .unwrap();
+    let appended = service
+        .open(&owned_agent_id, AgentMode::Durable, None)
+        .await
+        .read_source(OplogIndex::INITIAL, 2)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            exists,
+            length,
+            read.len(),
+            reads_before_a_chunk,
+            appended.len()
+        ),
+        (false, 0, 0, 0, 2)
+    );
+    // The chunk that the manifest names is read through the same storage, so the count of zero
+    // above is a count of the reads of the archive.
+    assert!(storage.reads.load(Ordering::SeqCst) > 0);
 }

@@ -41,6 +41,7 @@ pub mod streaming;
 pub mod streaming_history;
 pub mod streaming_recovery;
 pub mod throughput;
+pub mod throughput_effect;
 
 // Re-export cleanup helpers so callers can use the flat `benchmarks::*` path.
 pub use cleanup::{cleanup_account, cleanup_env_and_app, cleanup_user_state};

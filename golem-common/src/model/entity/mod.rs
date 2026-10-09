@@ -838,7 +838,6 @@ pub struct NamedToolErrorSchema {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EntityInvocationRequestIdentity {
     pub entity: AgentEntity,
-    pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
     pub operation: EntityInvocationDescriptorIdentity,
     pub plan_position: Option<EntityInvocationPlanPositionIdentity>,
@@ -904,7 +903,6 @@ pub struct ToolInvocationRejectedIdentity {
 impl EntityInvocationRequestIdentity {
     pub fn matches(&self, request: &EntityInvocationRequest, input: &TypedSchemaValue) -> bool {
         self.entity == request.entity
-            && self.calling_principal == request.calling_principal
             && self.call_mode == request.call_mode
             && self.operation == (&request.operation).into()
             && self.plan_position
@@ -944,11 +942,11 @@ impl From<&ToolInvocationDescriptor> for ToolInvocationDescriptorIdentity {
 
 /// Binary owner-oplog request metadata for one entity invocation. The host payload wraps this as
 /// opaque bytes because it is an executor control record rather than a guest-facing schema value.
+/// The calling principal is the owner agent and is derived from the execution context.
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub struct EntityInvocationRequest {
     pub entity: AgentEntity,
-    pub calling_principal: CallingAgentPrincipal,
     pub call_mode: EntityCallMode,
     pub operation: EntityInvocationDescriptor,
     pub principal: Principal,

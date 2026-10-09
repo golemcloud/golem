@@ -67,11 +67,24 @@ The file `/bar.txt` on the other hand is only available for reading. Trying to o
 
 Updating an agent that uses IFS requires some special consideration depending on the update mode you choose:
 
-* **Automatic updates**: When using automatic updates the old agent invocations are replayed on top of the new IFS. This means that the agent
-should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
-a file that gets read by the agent and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
-* **Manual updates**: When using manual updates, you are responsible for saving and restoring the content of files in the agent filesystem. You can
-use the `golem:api/save-snapshot` function to persist the files and later restore / migrate them using `golem:api/load-snapshot`.
+* **Automatic updates**: The new code replays the old agent invocations on the files of the old revision. The replay starts from the files of
+its baseline, for example the initial files of the old revision, or the files that a snapshot-assisted update restores from the selected snapshot. The replay must produce _exactly_ the same results and side effects as before. After the
+replay, at the update point, Golem applies the initial files of the new revision. The update fails when the new revision changes the declaration of an
+initial file at a path where the agent wrote, changed or deleted a file. See [Automatic update](/next/develop/updating#how-the-update-restores-the-agents-files).
+* **Manual updates**: On an executor with [filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem saves the agent's files
+with the update snapshot and restores them in the target revision before `golem:api/load-snapshot` runs. The update fails when the target revision
+changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file. See [Manual updates](/next/develop/snapshotting#manual-updates). On other executors, a snapshot-based
+update works only while the agent's files are its initial files. Otherwise the update fails, and the agent stays on its current revision.
+See [Availability](/next/develop/snapshotting#availability).
+
+## Files after a restart
+
+Golem rebuilds the agent filesystem at each start. A full replay of the oplog runs the agent's code again, and the code writes its files again.
+A start from a snapshot record replays only the entries after the record. On an executor with
+[filesystem snapshots](/next/develop/snapshotting#agent-files-and-snapshots), Golem restores the files of the record before the replay. On other
+executors, Golem writes a snapshot record only while the agent's files are its initial files, and a start from the record puts the initial files
+in place. An agent whose files changed takes no snapshot, so its start uses an older snapshot record or replays the full oplog, and the code writes
+its files again.
 
 ## Externally accessing agent files
 

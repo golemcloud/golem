@@ -196,7 +196,7 @@ run_task = [{ name = ["build-bins-all"] }]
 
 [tasks.build-cli-test-bins]
 dependencies = ["wit"]
-description = "Builds the golem and golem-cli binaries used by CLI integration tests"
+description = "Builds the golem binary used by CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
@@ -211,18 +211,14 @@ dev_release_profile = eq ${profile} dev-release
 dev_release_ci_profile = eq ${profile} dev-release-ci
 
 if ${debug_profile}
-    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build -p golem --bin golem
 elseif ${dev_ci_profile}
-    exec --fail-on-error cargo build --profile dev-ci -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
 elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
 elseif ${dev_release_ci_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release-ci -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
 else
     echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
@@ -635,6 +631,7 @@ script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:" -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:rdbms_service" -- --flaky-run=5 --report-time --nocapture %{JUNIT_OPTS}
@@ -857,7 +854,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- 
 '''
 
 [tasks.cli-integration-tests-dev-release]
-description = "Runs all CLI integration tests with dev-release golem and golem-cli binaries"
+description = "Runs all CLI integration tests with the dev-release golem binary"
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
@@ -875,11 +872,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-agents-guest-bridge]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_guest_bridge' shard (app::agents::*_guest_bridge_e2e)"
+description = "Runs the it-cli 'agents_guest_bridge' shard (Rust and TypeScript agent bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --skip ":tag:agents_guest_bridge_sources" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-agents-guest-bridge-sources]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'agents_guest_bridge_sources' shard (MCP, Effect, Scala, and MoonBit)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge_sources" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-streaming]
@@ -911,11 +917,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'deploy' shard (deploy-tagged app modules without prebuilt test components)"
+description = "Runs the it-cli 'deploy' shard (component and conformance tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --skip ":tag:deploy_runtime" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-deploy-runtime]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]
@@ -2046,7 +2061,7 @@ if equals ${component} otlp-exporter
     build_task = set build-otlp-exporter
     wasm = set plugins/otlp-exporter.wasm
     artifact_id = set otlp_exporter
-    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.4\"}"
+    exports_json = set "{\"plugin\":\"golem-otlp-exporter\",\"version\":\"1.5.5\"}"
     licenses = set LICENSE
     sbom = set ""
 elif equals ${component} filesystem-tools
@@ -2060,7 +2075,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.1\",\"npm@10.9.9+golem.1\",\"npx@10.9.9+golem.1\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.2\",\"npm@10.9.9+golem.2\",\"npx@10.9.9+golem.2\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2068,7 +2083,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.1\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.2\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2084,7 +2099,7 @@ elif equals ${component} git-tool
     build_task = set build-git-tool
     wasm = set builtin-tools/git-tool.wasm
     artifact_id = set git_tool
-    exports_json = set "{\"tools\":[\"git@0.1.8\"]}"
+    exports_json = set "{\"tools\":[\"git@0.1.9\"]}"
     licenses = set builtin-tools/git/licenses/git
     source_notice = set builtin-tools/git/licenses/SOURCE.md
     sbom = set builtin-tools/git/licenses/git/sbom.spdx.json

@@ -16,6 +16,8 @@ import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:agent/host@2.0.0';
 import { AgentError, Principal } from 'golem:agent/common@2.0.0';
 import type { SchemaValueTree } from 'golem:core/types@2.0.0';
+import type { SnapshotPart } from '../snapshot';
+import type { SnapshotDatabases } from './databaseSnapshot';
 
 /**
  * Any agent creation in SDK across any boundaries goes through `AgentInitiator`
@@ -46,6 +48,7 @@ export type AgentInitiator = {
     principal: Principal,
     bytes: Uint8Array,
     mimeType: string | undefined,
-    databases: Array<{ name: string; bytes: Uint8Array }>,
+    databases: SnapshotDatabases | undefined,
+    parts?: ReadonlyMap<string, SnapshotPart>,
   ): Result<ResolvedAgent, AgentError> | Promise<Result<ResolvedAgent, AgentError>>;
 };

@@ -1,0 +1,22 @@
+manifestVersion: 1.6.0
+
+app: snapshot-sqlite-effect
+
+includes:
+  - ../golem-test-components-common.yaml
+
+componentTemplates:
+  effect-test-component:
+    guestLanguage: effect
+    customCommands:
+      copy:
+        - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+
+components:
+  golem-it:snapshot-sqlite-effect:
+    dir: .
+    templates: effect, effect-test-component
+
+environments:
+  local:
+    server: local

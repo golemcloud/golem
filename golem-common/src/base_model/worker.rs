@@ -113,9 +113,11 @@ declare_structs! {
     pub struct SnapshotAssistedUpdateMetadata {
         pub source_component_revision: ComponentRevision,
         pub source_revision_start_index: OplogIndex,
-        pub snapshot_index: Option<OplogIndex>,
-        pub snapshot_revision: Option<ComponentRevision>,
-        pub ineligibility_reason: Option<String>,
+        pub snapshot_index: OplogIndex,
+        pub snapshot_revision: ComponentRevision,
+        /// The filesystem snapshot of the selected record. Absent when the record has no
+        /// filesystem snapshot.
+        pub filesystem_snapshot: Option<String>,
     }
 
     pub struct ExportedResourceMetadata {

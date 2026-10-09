@@ -177,6 +177,32 @@ The macro detects these convention methods and wires them into the snapshot expo
 
 ---
 
+## Multipart Snapshots
+
+To project JSON-backed state separately from arbitrary named bytes, use these paired convention methods:
+
+- Instance `def saveSnapshotParts(): Future[MultipartSnapshot]`
+- Companion `def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[Impl]`
+
+`MultipartSnapshot` holds a JSON AST and `Map[String, SnapshotPart]`, where each part has `bytes: Array[Byte]`
+and `contentType: String`. `MultipartSnapshot.fromState[S: Schema](state, parts)` and `snapshot.decodeState[S]`
+use the existing schema codecs and return `Either[SnapshotError, ...]`.
+`snapshot.requirePart("index", "application/octet-stream")` returns checked bytes in the same error style.
+Use `Future.fromTry(result.toTry)` to lift a complete decode/check/construct operation into the loader.
+The live instance does not need a schema, and no new mixin is required.
+
+Keep normal policy annotations and registration. Incomplete or conflicting hook pairs, including multipart
+combined with explicit byte hooks or `Snapshotted[S]`, fail compilation. Existing simpler modes remain unchanged.
+Binary-only applications use JSON null state; zero-part bundles still emit multipart. Part names are case-sensitive
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and content types are bare ASCII MIME types without parameters, normalized lowercase.
+Parts are application-owned bytes, not automatically managed resources. The SDK owns principal-envelope encoding.
+
+Hooks run unpersisted and may be retried. Whole-buffer copies amplify peak memory usage; the host's 64 KiB
+inline/blob-spill threshold is not a snapshot size cap. See the
+[cross-SDK multipart examples](https://learn.golem.cloud/next/develop/snapshotting).
+
+---
+
 ## Restoration Semantics
 
 `loadSnapshot` is a specially supported SDK lifecycle operation, not an agent method. It is an alternative to normal
@@ -189,8 +215,9 @@ local computation, read configuration, and use other permitted reads. Mutating h
 agent RPC calls are rejected before they take effect.
 
 If loading fails, the partial instance is discarded. A manual update remains on the previous component version.
-During automatic recovery, Golem recreates the component and replays without the failed automatic snapshot; it does
-not try an older automatic snapshot.
+During automatic recovery, Golem rejects the automatic snapshot that failed and starts the agent again. It then tries
+the previous usable automatic snapshot. After that, it uses the snapshot of the last successful manual update or
+snapshot-assisted automatic update. Without one, it replays the full history.
 
 ---
 

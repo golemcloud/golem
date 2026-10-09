@@ -6260,6 +6260,7 @@ components:
       - pendingUpdateIndex
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
       properties:
         pendingUpdateIndex:
           type: integer
@@ -6273,8 +6274,6 @@ components:
         snapshotIndex:
           type: integer
           format: uint64
-        ineligibilityReason:
-          type: string
     PublicInvocationWalletPin:
       type: object
       title: PublicInvocationWalletPin
@@ -6397,6 +6396,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
       discriminator:
         propertyName: type
         mapping:
@@ -6456,6 +6456,7 @@ components:
           StreamSession: '#/components/schemas/PublicOplogEntry_r#StreamSessionParams'
           CompletionDiscarded: '#/components/schemas/PublicOplogEntry_r#CompletionDiscardedParams'
           CompletionDelivered: '#/components/schemas/PublicOplogEntry_r#CompletionDeliveredParams'
+          SnapshotConfirmed: '#/components/schemas/PublicOplogEntry_r#SnapshotConfirmedParams'
     PublicOplogEntryAttribution:
       type: object
       oneOf:
@@ -7069,6 +7070,18 @@ components:
             - SetRetryPolicy
             example: SetRetryPolicy
       - $ref: '#/components/schemas/r#SetRetryPolicyParams'
+    PublicOplogEntry_r#SnapshotConfirmedParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SnapshotConfirmed
+            example: SnapshotConfirmed
+      - $ref: '#/components/schemas/r#SnapshotConfirmedParams'
     PublicOplogEntry_r#SnapshotParams:
       allOf:
       - type: object
@@ -9468,6 +9481,8 @@ components:
       required:
       - sourceComponentRevision
       - sourceRevisionStartIndex
+      - snapshotIndex
+      - snapshotRevision
       properties:
         sourceComponentRevision:
           type: integer
@@ -9481,8 +9496,11 @@ components:
         snapshotRevision:
           type: integer
           format: uint64
-        ineligibilityReason:
+        filesystemSnapshot:
           type: string
+          description: |-
+            The filesystem snapshot of the selected record. Absent when the record has no
+            filesystem snapshot.
     SnapshotBasedUpdateParameters:
       type: object
       title: SnapshotBasedUpdateParameters
@@ -9496,6 +9514,8 @@ components:
             type: integer
             format: uint8
         mimeType:
+          type: string
+        filesystemSnapshot:
           type: string
     StoredCard:
       type: object
@@ -10743,6 +10763,18 @@ components:
           format: date-time
         policy:
           $ref: '#/components/schemas/PublicNamedRetryPolicy'
+    r#SnapshotConfirmedParams:
+      type: object
+      title: r#SnapshotConfirmedParams
+      required:
+      - timestamp
+      - filesystemSnapshot
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        filesystemSnapshot:
+          type: string
     r#SnapshotParams:
       type: object
       title: r#SnapshotParams
@@ -10755,6 +10787,8 @@ components:
           format: date-time
         data:
           $ref: '#/components/schemas/PublicSnapshotData'
+        filesystemSnapshot:
+          type: string
     r#StartParams:
       type: object
       title: r#StartParams

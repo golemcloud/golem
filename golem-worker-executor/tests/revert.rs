@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
+use crate::hot_update::{FlakyComponentService, Outage};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ResolveRevertLastInvocationsRequest, RevertWorkerRequest,
     resolve_revert_last_invocations_response, revert_worker_response,
@@ -24,10 +25,12 @@ use golem_common::model::{AgentStatus, OplogIndex};
 use golem_common::{agent_id, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, WorkerExecutorTestDependencies, start,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, start, start_with_overrides,
 };
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
+use std::sync::Arc;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -44,7 +47,81 @@ inherit_test_dep!(
     #[tagged_as("agent_update_v1")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("host_api_tests")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn self_revert_is_rejected_without_stopping_the_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let agent = agent_id!("GolemHostApi", "self-revert");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+
+    for (method, target) in [
+        ("revert_agent_result", 1u64),
+        ("revert_last_invocations_result", 1u64),
+        ("revert_last_invocations_result", u64::MAX),
+    ] {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            executor.invoke_and_await_agent(
+                &component,
+                &agent,
+                method,
+                data_value!(worker.clone(), target),
+            ),
+        )
+        .await??
+        .into_typed::<Result<(), String>>()?;
+        assert!(
+            result.unwrap_err().contains("Self-revert is not supported"),
+            "self rejection must precede count resolution"
+        );
+        let metadata = executor
+            .invoke_and_await_agent(
+                &component,
+                &agent,
+                "get_self_metadata_result",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<Result<String, String>>()?;
+        assert_eq!(metadata, Ok(agent.to_string()));
+    }
+
+    executor.simulated_crash(&worker).await?;
+    let metadata = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "get_self_metadata_result",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Result<String, String>>()?;
+    assert_eq!(metadata, Ok(agent.to_string()));
+    let oplog = executor.get_oplog(&worker, OplogIndex::INITIAL).await?;
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Revert { .. }))
+    );
+    Ok(())
+}
 
 #[test]
 #[tracing::instrument]
@@ -679,5 +756,110 @@ async fn revert_across_two_successful_manual_updates(
     assert_eq!(update_counts(&metadata), (0, 0, 0));
     executor.check_oplog_is_queryable(&worker_id).await?;
 
+    Ok(())
+}
+
+/// A revert does not check the target of an automatic update whose strategy is not chosen, so a
+/// component service that cannot give the target does not refuse the revert. The start after the
+/// revert chooses the strategy and applies the update once the service gives the target.
+#[test]
+#[tracing::instrument]
+#[timeout("120s")]
+async fn revert_to_an_automatic_update_without_a_strategy_ignores_its_unavailable_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("UpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .wait_for_status(
+            &worker_id,
+            AgentStatus::Idle,
+            std::time::Duration::from_secs(10),
+        )
+        .await?;
+    let before_update = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .unwrap()
+        .oplog_index;
+
+    let updated_component = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    outage.begin(updated_component.revision);
+    executor
+        .auto_update_worker(&worker_id, updated_component.revision, false)
+        .await?;
+
+    // The start writes the strategy entry after the admission entry, then fails to get the
+    // target.
+    let pending_updates = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let pending_updates = executor
+                .get_oplog(&worker_id, before_update.next())
+                .await?
+                .into_iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingUpdate(_)))
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>();
+            if pending_updates.len() >= 2 && outage.refused() > 0 {
+                break anyhow::Ok(pending_updates);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await??;
+    let admission = pending_updates[0];
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: admission,
+            }),
+        )
+        .await?;
+
+    outage.end();
+    executor.resume(&worker_id, true).await?;
+    executor
+        .wait_for_component_revision(
+            &worker_id,
+            updated_component.revision,
+            std::time::Duration::from_secs(30),
+        )
+        .await?;
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+
+    assert_eq!(metadata.component_revision, updated_component.revision);
+    assert_eq!(update_counts(&metadata), (0, 1, 0));
     Ok(())
 }

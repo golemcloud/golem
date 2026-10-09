@@ -185,6 +185,17 @@ pub fn error_to_status(error: AgentError) -> Status {
                     "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
                 ),
+                worker_execution_error::Error::ComponentServiceUnavailable(err) => format!(
+                    "Component Service Unavailable: Component ID = {:?}, Version: {:?}, Reason: {}",
+                    err.component_id, err.component_revision, err.reason
+                ),
+                worker_execution_error::Error::ComponentServiceRefused(err) => format!(
+                    "Component Service Refused: Component ID = {:?}, Version: {:?}, Kind: {:?}, Reason: {}",
+                    err.component_id,
+                    err.component_revision,
+                    err.kind(),
+                    err.reason
+                ),
                 worker_execution_error::Error::ComponentParseFailed(err) => format!(
                     "Component Parsing Failed: Component ID = {:?}, Version: {}, Reason: {}",
                     err.component_id, err.component_revision, err.reason
@@ -242,9 +253,6 @@ pub fn error_to_status(error: AgentError) -> Status {
                 }
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
-                }
-                worker_execution_error::Error::InitialAgentFileDownloadFailed(_) => {
-                    "Initial File Download Failed".to_string()
                 }
                 worker_execution_error::Error::FileSystemError(_) => {
                     "Failed accessing worker filesystem".to_string()

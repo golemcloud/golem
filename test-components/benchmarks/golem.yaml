@@ -38,6 +38,12 @@ componentTemplates:
         componentWasm: "{{ cargoTarget }}/wasm32-wasip2/release/{{ component_name | to_snake_case }}.wasm"
         outputWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}_release.wasm"
 
+  effect-test-component:
+    guestLanguage: effect
+    customCommands:
+      copy:
+      - command: cp "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm" "{{ appRootDir }}/../{{ component_name | to_snake_case }}.wasm"
+
 components:
   benchmark:agent-rust:
     dir: "benchmark-agent-rust"
@@ -45,6 +51,9 @@ components:
   benchmark:agent-ts:
     dir: "benchmark-agent-ts"
     templates: ts, ts-test-component
+  benchmark:agent-effect:
+    dir: "benchmark-agent-effect"
+    templates: effect, effect-test-component
 
 environments:
   local:

@@ -40,6 +40,8 @@ env:
 
 jobs:
   build-and-store:
+    outputs:
+      native-binaries-disk-key: ${{ steps.native-binaries-key.outputs.key }}
     env:
       CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -62,22 +64,37 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 30
+      - name: Identify native binary disk
+        id: native-binaries-key
+        run: echo "key=${GITHUB_REPOSITORY}-native-binaries-${GITHUB_RUN_ID}-producer-attempt${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+      # Preserve snapshots for partial consumer reruns; inactive disks expire after seven days.
+      - name: Mount native binary producer disk
+        uses: useblacksmith/stickydisk@v1
+        with:
+          key: ${{ steps.native-binaries-key.outputs.key }}
+          path: tmp/native-binaries
+          commit: 'true'
+      - name: Validate native binary producer mount
+        run: |
+          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+          rm -f tmp/native-binaries/PUBLICATION
       - name: Packaging all binaries with cargo-nextest
         run: |
-          mkdir -pv tmp
-          cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+          cargo nextest -v archive --archive-file tmp/native-binaries/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
-      - name: Extract archive
+      - name: Publish packaged binaries
+        env:
+          DISK_KEY: ${{ steps.native-binaries-key.outputs.key }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          mkdir tmp/golem-binaries
-          tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
-        timeout-minutes: 5
-      - name: Save packaged binaries to cache
-        uses: actions/cache/save@v5
-        with:
-          path: tmp/golem-binaries
-          key: golem-binaries-${{ github.run_id }}
+          set -euo pipefail
+          mountpoint -q tmp/native-binaries || { echo 'Native binary sticky disk is not mounted' >&2; exit 1; }
+          cd tmp/native-binaries
+          test -s golem-binaries.tar.zst
+          sha256sum golem-binaries.tar.zst > SHA256SUMS
+          sha256sum --check --strict SHA256SUMS
+          printf 'run-id=%s\nsource-sha=%s\ndisk-key=%s\n' "$GITHUB_RUN_ID" "$SOURCE_SHA" "$DISK_KEY" > PUBLICATION
 
   check-clippy-and-format:
     env:
@@ -99,7 +116,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
         with:
@@ -118,6 +135,7 @@ jobs:
         uses: sbt/setup-sbt@v1
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       # Bun is needed by check-openapi (which depends on check-docs-openapi)
@@ -140,24 +158,59 @@ jobs:
         run: cargo make --profile ci check-docs-skills
       - name: Check reflection conformance corpus embeds
         run: cargo make --profile ci check-reflection-conformance
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
       - name: Check built-in artifact pins
         run: cargo make --profile ci check-builtin-artifacts
       - name: Check WIT deps are synced
         run: cargo make --profile ci check-wit
       - name: Unit tests
-        run: cargo make --profile ci unit-tests
+        run: cargo make --profile ci --skip-tasks test-component-middleware-unit-tests unit-tests
       - uses: ./.github/actions/publish-test-report
         if: always()
         with:
           artifact-name: unit-tests-report
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  config-checks:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+          install-cargo-binstall: 'true'
+          install-protoc: 'true'
+      - uses: ./.github/actions/restore-binaries
+        with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
+          run-id: ${{ github.run_id }}
+          copy-to-target: 'true'
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
+
+  middleware-unit-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+      CARGO_TARGET_DIR: ${{ github.workspace }}/tmp/middleware-unit-target
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - uses: ./.github/actions/setup-rust
+        with:
+          use-cache: 'false'
+      - name: Test middleware components
+        run: cargo make --profile ci test-component-middleware-unit-tests
+
   builtin-artifacts:
     runs-on: blacksmith
-    outputs:
-      cache-key: ${{ steps.cache-key.outputs.value }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -192,6 +245,17 @@ jobs:
           cp builtin-tools/typescript-tools.wasm tmp/builtin-artifacts/
           cp builtin-tools/web-fetch.wasm tmp/builtin-artifacts/
           cp plugins/otlp-exporter.wasm tmp/builtin-artifacts/
+      - name: Package built-in artifacts
+        run: tar --zstd -cf tmp/builtin-artifacts.tar.zst -C tmp/builtin-artifacts .
+      - name: Upload built-in artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: builtin-artifacts
+          path: tmp/builtin-artifacts.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   worker-tests:
     env:
@@ -227,13 +291,12 @@ jobs:
           auto-start: false
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
@@ -262,14 +325,12 @@ jobs:
           install-cargo-binstall: 'true'
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
-          fail-on-cache-miss: 'true'
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
       - name: Set up Lima
         id: lima
         env:
@@ -325,14 +386,19 @@ jobs:
       - name: Package CLI test binaries
         run: |
           mkdir -pv tmp/golem-cli-test-binaries
-          cp target/dev-release-ci/golem target/dev-release-ci/golem-cli tmp/golem-cli-test-binaries/
+          cp target/dev-release-ci/golem tmp/golem-cli-test-binaries/
           find tmp/golem-cli-test-binaries -type f | sort
+          tar --zstd -cf tmp/golem-cli-test-binaries.tar.zst -C tmp/golem-cli-test-binaries .
         timeout-minutes: 2
-      - name: Save CLI test binaries to cache
-        uses: actions/cache/save@v5
+      - name: Upload CLI test binaries
+        uses: actions/upload-artifact@v6
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
+          name: golem-cli-test-binaries
+          path: tmp/golem-cli-test-binaries.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   it:
     env:
@@ -397,14 +463,13 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-test-components
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: ${{ matrix.group.description }}
         env:
@@ -419,7 +484,7 @@ jobs:
 
   it-cli:
     name: it-cli (${{ matrix.group.shard }})
-    env:
+    env: &cli-test-env
       CARGO_BUILD_JOBS: 10
       GOLEM_CLI_TEST_BIN_PROFILE: dev-release-ci
     runs-on: blacksmith-32vcpu-ubuntu-2204
@@ -430,7 +495,6 @@ jobs:
       - build-cli-test-bins
       - build-golem-scala
       - builtin-artifacts
-      - merge-test-components
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -438,12 +502,13 @@ jobs:
         group:
           - { name: cli-integration-tests-agents, shard: agents }
           - { name: cli-integration-tests-agents-guest-bridge, shard: agents_guest_bridge }
-          - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
+          - { name: cli-integration-tests-agents-guest-bridge-sources, shard: agents_guest_bridge_sources }
           - { name: cli-integration-tests-bridge, shard: bridge_gen }
           - { name: cli-integration-tests-bridge-rust, shard: bridge_gen_rust }
           - { name: cli-integration-tests-deploy, shard: deploy }
+          - { name: cli-integration-tests-deploy-runtime, shard: deploy_runtime }
           - { name: cli-integration-tests-core, shard: core }
-    steps:
+    steps: &cli-test-steps
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
@@ -551,19 +616,19 @@ jobs:
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
 
       - name: Restore CLI test binaries
-        uses: actions/cache/restore@v5
+        uses: actions/download-artifact@v8
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
+          name: golem-cli-test-binaries
+          path: tmp
       - name: Install CLI test binaries
         run: |
           mkdir -pv target/dev-release-ci
-          cp tmp/golem-cli-test-binaries/* target/dev-release-ci/
+          tar --zstd -xf tmp/golem-cli-test-binaries.tar.zst -C target/dev-release-ci
           chmod +x target/dev-release-ci/*
 
       - name: Restore streaming test components
@@ -572,8 +637,6 @@ jobs:
         with:
           run-id: ${{ github.run_id }}
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: it-cli ${{ matrix.group.shard }}
         env:
@@ -595,6 +658,26 @@ jobs:
           artifact-name: '${{ matrix.group.name }}-report'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+  it-cli-streaming:
+    name: it-cli (${{ matrix.group.shard }})
+    env: *cli-test-env
+    runs-on: blacksmith-32vcpu-ubuntu-2204
+    needs:
+      - build-and-store
+      - build-golem-effect
+      - build-golem-ts
+      - build-cli-test-bins
+      - build-golem-scala
+      - builtin-artifacts
+      - merge-test-components
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - { name: cli-integration-tests-agents-streaming, shard: agents_streaming }
+    steps: *cli-test-steps
+
   consolidate-test-reports:
     name: consolidate-test-reports
     if: ${{ always() }}
@@ -604,7 +687,11 @@ jobs:
       - worker-tests
       - it
       - it-cli
+      - it-cli-streaming
     steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
       - name: Download test reports for this attempt
         uses: actions/download-artifact@v8
         with:
@@ -628,6 +715,7 @@ jobs:
             mv tmp/test-reports/ctrf-report.json "tmp/test-reports/${artifact_names[0]}/"
           fi
       - name: Upload consolidated test reports
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: ci-test-reports-attempt${{ github.run_attempt }}
@@ -640,6 +728,7 @@ jobs:
     needs:
       - build-and-store
       - build-golem-ts
+      - build-golem-scala
       - builtin-artifacts
     timeout-minutes: 30
     steps:
@@ -673,17 +762,20 @@ jobs:
       - name: Sync WIT dependencies
         run: cargo make wit
 
-      - name: Build Scala guest runtime WASMs
-        working-directory: sdks/scala
-        run: ./scripts/generate-agent-guest-wasm.sh
+      - name: Restore Scala guest runtime WASMs
+        uses: actions/download-artifact@v8
+        with:
+          name: agent-guest-wasm
+          path: tmp/sdk-artifacts
+      - name: Extract Scala guest runtime WASMs
+        run: tar -xzf tmp/sdk-artifacts/agent-guest-wasm.tar.gz
 
       - uses: ./.github/actions/restore-binaries
         with:
+          disk-key: ${{ needs.build-and-store.outputs.native-binaries-disk-key }}
           run-id: ${{ github.run_id }}
           copy-to-target: 'true'
       - uses: ./.github/actions/restore-builtin-artifacts
-        with:
-          cache-key: ${{ needs.builtin-artifacts.outputs.cache-key }}
 
       - name: Restore built TS SDK
         uses: actions/download-artifact@v8
@@ -700,10 +792,15 @@ jobs:
       - name: Add golem to PATH
         run: echo "${{ github.workspace }}/target/debug" >> $GITHUB_PATH
 
-      - name: Publish Scala SDK locally
-        working-directory: sdks/scala
+      - name: Restore Scala SDK ivy local repo
+        uses: actions/download-artifact@v8
+        with:
+          name: scala-sdk-ivy-local
+          path: tmp/sdk-artifacts
+      - name: Extract Scala SDK ivy local repo
         run: |
-          sbt -batch '++3.8.2; set ThisBuild / version := "0.0.0-SNAPSHOT"; set ThisBuild / packageDoc / publishArtifact := false; set every (publish / skip) := false; modelJVM/publishLocal; modelJS/publishLocal; macros/publishLocal; core/publishLocal; codegen/publishLocal; ++2.12.21; codegen/publishLocal; sbtPlugin/publishLocal'
+          mkdir -p ~/.ivy2
+          tar -xzf tmp/sdk-artifacts/scala-sdk-ivy-local.tar.gz -C ~/.ivy2
 
       - name: Run Scala SDK integration tests
         working-directory: sdks/scala
@@ -1100,7 +1197,7 @@ jobs:
 
   build-test-components:
     runs-on: blacksmith-8vcpu-ubuntu-2204
-    # Test components only need a `golem-cli` binary, so they are built from the optimized CLI
+    # Test components only need a `golem` binary, so they are built from the optimized CLI
     # produced by build-cli-test-bins rather than waiting for the full build-and-store job. This
     # lets the component builds finish while build-and-store is still compiling test binaries.
     needs:
@@ -1123,14 +1220,28 @@ jobs:
           rust-targets: 'wasm32-wasip1 wasm32-wasip2'
           install-cargo-make: 'false'
           install-cargo-binstall: 'true'
-      - name: Restore CLI test binaries
-        uses: actions/cache/restore@v5
+      - name: Identify fixture compiler
+        if: startsWith(matrix.chunk.name, 'rust-')
+        id: fixture-compiler
+        run: echo "hash=$(rustc -Vv | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Cache Rust fixture compilation
+        if: startsWith(matrix.chunk.name, 'rust-')
+        uses: actions/cache@v5
         with:
-          path: tmp/golem-cli-test-binaries
-          key: golem-cli-test-binaries-${{ github.run_id }}
-          fail-on-cache-miss: true
-      - name: Install golem-cli
-        run: chmod +x tmp/golem-cli-test-binaries/golem-cli
+          path: tmp/rust-fixture-target
+          key: rust-fixtures-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture-compiler.outputs.hash }}-${{ matrix.chunk.name }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'test-components/**/Cargo.toml', 'test-components/**/Cargo.lock', 'test-components/**/.cargo/**', 'sdks/rust/**/Cargo.toml', 'sdks/rust/Cargo.lock', 'sdks/rust/.cargo/**') }}-${{ github.sha }}
+          restore-keys: |
+            rust-fixtures-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.fixture-compiler.outputs.hash }}-${{ matrix.chunk.name }}-${{ hashFiles('Cargo.toml', '.cargo/**', 'test-components/**/Cargo.toml', 'test-components/**/Cargo.lock', 'test-components/**/.cargo/**', 'sdks/rust/**/Cargo.toml', 'sdks/rust/Cargo.lock', 'sdks/rust/.cargo/**') }}-
+      - name: Restore CLI test binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: golem-cli-test-binaries
+          path: tmp
+      - name: Install golem
+        run: |
+          mkdir -pv tmp/golem-cli-test-binaries
+          tar --zstd -xf tmp/golem-cli-test-binaries.tar.zst -C tmp/golem-cli-test-binaries
+          chmod +x tmp/golem-cli-test-binaries/golem
 
       - name: Setup MoonBit
         if: matrix.chunk.needs-moonbit
@@ -1179,6 +1290,11 @@ jobs:
       - name: Extract built Effect SDK
         if: matrix.chunk.needs-effect
         run: tar -xzf tmp/effect-sdk-artifacts/golem-effect-sdk.tar.gz
+
+      - name: Install Effect SDK dependencies
+        if: matrix.chunk.needs-effect
+        working-directory: sdks/effect
+        run: npm ci
 
       - name: Setup JS and WASM build tools
         if: matrix.chunk.needs-node
@@ -1240,8 +1356,12 @@ jobs:
         working-directory: test-components
         env:
           GOLEM_TS_PRESET: quick
-          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem-cli
-        run: ./build-components.sh ${{ matrix.chunk.name }}
+          GOLEM_CLI: ${{ github.workspace }}/tmp/golem-cli-test-binaries/golem
+        run: |
+          if [[ '${{ matrix.chunk.name }}' == rust-* ]]; then
+            export CARGO_TARGET_DIR="${{ github.workspace }}/tmp/rust-fixture-target"
+          fi
+          ./build-components.sh ${{ matrix.chunk.name }}
 
       - name: Collect built WASMs
         env:
@@ -1282,12 +1402,18 @@ jobs:
           ls -1 tmp/test-components-wasm/*.wasm | sort
           count=$(find tmp/test-components-wasm -maxdepth 1 -name '*.wasm' | wc -l)
           echo "Total: $count WASM files"
+          unique_update_hashes=$(sha256sum tmp/test-components-wasm/it_agent_update_v{3,4}_release.wasm | cut -d' ' -f1 | sort -u | wc -l)
+          echo "Distinct v3/v4 update fixture hashes: $unique_update_hashes"
+          test "$unique_update_hashes" -eq 2
 
-      - name: Save merged WASMs to cache
-        uses: actions/cache/save@v5
+      - name: Upload merged WASMs
+        uses: actions/upload-artifact@v6
         with:
-          path: tmp/test-components-wasm
-          key: golem-test-components-${{ github.run_id }}
+          name: golem-test-components
+          path: tmp/test-components-wasm/*.wasm
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
 
   detect-skill-changes:
     name: Detect golem-skills changes
@@ -1452,11 +1578,15 @@ jobs:
     needs:
       - check-clippy-and-format
       - unit-tests-and-checks
+      - config-checks
+      - middleware-unit-tests
       - golem-schema-guest
       - worker-tests
       - managed-xfs-tests
       - it
       - it-cli
+      - it-cli-streaming
+      - consolidate-test-reports
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
       CARGO_BUILD_JOBS: 20

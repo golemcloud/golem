@@ -4,38 +4,38 @@
   "artifacts": {
     "bash": {
       "component": "bash",
-      "version": "0.0.3",
-      "sha256": "33f8e6983319d75c0613cd01876427885216d3688337cc4b93e3af0479fea891"
+      "version": "0.0.4",
+      "sha256": "1590016a37cc0ea143cbf39705aa3754b4e47a467a60073b70c0fbe48d5e8e8c"
     },
     "filesystem_tools": {
       "component": "filesystem-tools",
-      "version": "0.0.3",
-      "sha256": "2a98b0082655f82ec411df96db9b5d50012ab7a0788e22a097f631f0e72be60d"
+      "version": "0.0.4",
+      "sha256": "2c93d6afa352d5dc59be6f397acd4e150a173909578e4764f08311640379b4e7"
     },
     "git_tool": {
       "component": "git-tool",
-      "version": "0.0.10",
-      "sha256": "b104c2fa2aeb6e219615f3e236181baa6b8ce198fb87beb4e61479e2f5b97f3a"
+      "version": "0.0.12",
+      "sha256": "1a4bbff74c7a0135f9887fa2f3e8c553a0afa4cc9835bbd76e8274c3aeecabe6"
     },
     "javascript_tools": {
       "component": "javascript-tools",
-      "version": "0.0.8",
-      "sha256": "3b6d238facd43c447c9fdaae328371e580fea5fe068d74457feaa01d19703c76"
+      "version": "0.0.10",
+      "sha256": "0675268a49a089ee8bdf06a9fd04db22ddf4e408b68011f15234dead342ecc42"
     },
     "otlp_exporter": {
       "component": "otlp-exporter",
-      "version": "0.0.3",
-      "sha256": "251a787e4d6f54814781181a3879c9187663ff91fbf1e3e4b724e89103fb0bf0"
+      "version": "0.0.4",
+      "sha256": "24cab53bdf7bb6080de6dc03778e4c14b44279c93b82642adf6248dd1fa24d68"
     },
     "typescript_tools": {
       "component": "typescript-tools",
-      "version": "0.0.7",
-      "sha256": "480ace9e8d4937f4055e9ad2e47a4ef714cabbee73e59e1a4cf0f2d2db03d440"
+      "version": "0.0.9",
+      "sha256": "1374e48c6f9c1be139bea2693ddc806858eaa6df594a6f6276ad76690ddcd365"
     },
     "web_fetch": {
       "component": "web-fetch",
-      "version": "0.0.3",
-      "sha256": "f602d3e8f242ce01d7705b105e6140e815a1da8ee00d69d7dfea2a180df590a3"
+      "version": "0.0.4",
+      "sha256": "6cc194ca81822c0b7d4045ec61b2f36017123932ea3cbb3c94dee954c7e19f71"
     }
   }
 }

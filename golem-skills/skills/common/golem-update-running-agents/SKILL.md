@@ -15,12 +15,12 @@ Golem supports two update modes:
 
 | Mode | CLI Value | Description |
 |------|-----------|-------------|
-| **Automatic** | `auto` (default) | When the request reaches the queue head, uses the newest eligible periodic snapshot from the active source revision and replays its surviving suffix; otherwise replays retained history from the authoritative recovery baseline. Fails if the selected replay diverges. |
+| **Automatic** | `auto` (default) | When the request reaches the queue head, selects a usable automatic snapshot of the source revision, restores the agent's files and the state from it, and replays the history after it; otherwise replays retained history from the authoritative recovery baseline. Fails if the replay diverges. |
 | **Manual** | `manual` | Uses user-defined `save-snapshot` and `load-snapshot` functions to serialize the agent's state from the old version and restore it in the new version. Required when the new component is incompatible with the old one (changed function signatures, removed functions, restructured state). |
 
 ### When to Use Each Mode
 
-- **Use `auto`** when the target can replay the relevant retained history. For periodically snapshotted agents, Golem automatically starts from the latest eligible snapshot and validates only the recent suffix; without an eligible snapshot it validates the complete retained history from the authoritative baseline.
+- **Use `auto`** when the target can replay the relevant retained history. For periodically snapshotted agents, Golem starts from a usable snapshot and validates only the history after it; without a usable snapshot it validates the complete retained history from the authoritative baseline.
 - **Use `manual`** when the change is breaking â€” renamed or removed functions, changed parameter types, restructured internal state. The agent's state must be explicitly migrated via snapshot functions.
 
 ## Method 1: Update During Deploy
@@ -154,19 +154,38 @@ This is exposed in each SDK's host bindings. The function returns immediately â€
 ## How Automatic Update Works
 
 1. Admission records the target and an exact attempt identity.
-2. When that request reaches the queue head, Golem selects the newest eligible periodic snapshot in the then-active source revision. A snapshot committed after admission but before activation is eligible. Golem durably records either that exact snapshot provenance or full replay from the authoritative recovery baseline before executing the strategy, so restart reconstruction does not recompute the choice.
-3. The worker is restarted promptly, including when an invocation is in flight.
-4. The target loads the selected snapshot, if any, and replays the surviving committed history. The replay can extend beyond the request entry because source work may finish while execution is stopping.
-5. Success is recorded only after replay validation and before target live effects continue. An assisted snapshot then becomes the authoritative recovery baseline.
-6. If replay fails, one failed outcome is recorded and the healthy source revision is reconstructed. Once a snapshot has been selected, Golem does not try an older snapshot or switch to full replay after a load or suffix failure.
+2. When that request reaches the queue head, Golem selects an automatic snapshot record of the source revision: the last record, else the usable record before it. The record must be usable (confirmed, or without a filesystem snapshot name), not rejected, before any queued manual update, and without a filesystem snapshot name on an executor without filesystem snapshots. The target revision must be newer than the source revision. A record committed after admission is eligible. Golem durably records either that record, with its filesystem snapshot name, or full replay from the authoritative recovery baseline before executing the strategy, so restart reconstruction does not recompute the choice.
+3. The worker is restarted promptly, including when an invocation is in flight. When the agent is loaded and the upload of its newest periodic snapshot is in progress, the agent first waits for that upload, so the update can use that snapshot. The wait ends at the operator's confirmation wait (60 seconds by default), at a terminal interrupt, at a stop of the agent, or when the executor retires the agent, for example when the agent moves to another executor. The wait does not shorten the time that the agent has to stop.
+4. Golem restores the agent's files from the filesystem snapshot of the selected record (a record without a name gives the initial files of the source revision). The target loads the application snapshot of the same record and replays the committed history after it with the source revision's configuration and initial files. The replay can extend beyond the request entry because source work may finish while execution is stopping.
+5. At the update point, Golem applies the initial files of the target revision, as a full replay does. A changed declaration of an initial file at a path that the agent wrote, changed or deleted fails the update.
+6. Success is recorded only after replay validation and before target live effects continue. The selected record then becomes the authoritative recovery baseline. Every later start from it restores the same filesystem snapshot, and retention keeps that snapshot.
+7. If the attempt fails, one failed outcome is recorded and the healthy source revision is reconstructed. In that attempt, Golem does not try an older snapshot or switch to full replay. A component service that does not answer, a temporary storage error, or no free memory on the executor writes no failed outcome: the start retries with the same record. A target revision that does not exist or that the component service refuses fails the update with a code (see below). While the start replays the history, the agent keeps the status that it had before the restart. An idle agent stays `Idle`, so an interrupt during that replay is ignored: no `Interrupted` entry and no failed outcome are written, and the update completes without a resume. When the agent moves to another executor during the replay, that executor runs the attempt again. One case fails the start instead of the update: a full replay whose authoritative baseline cannot be restored fails the start of the agent with a visible cause.
 
 `--await` waits for that terminal success or failure, including a repeated request for the same target. Reverting away an outcome while retaining the request makes the request pending and retryable again. Snapshot assistance bounds historical replay to the suffix after the selected snapshot; it does not guarantee a wall-clock update bound.
+
+## Failure Codes
+
+The details of a failed update start with a code for these causes. `golem agent get <AGENT_ID>` shows the details in the update history, and `golem agent oplog <AGENT_ID>` shows them on the `FAILED UPDATE` entry. The agent stays on its source revision.
+
+| Code | Mode | Cause | What to do |
+|------|------|-------|------------|
+| `UPDATE_SNAPSHOT_UNAVAILABLE` | auto | The store lost the snapshot of the selected record; Golem rejects the record | Request the update again; Golem uses an earlier snapshot or a full replay |
+| `UPDATE_SNAPSHOT_INCOMPATIBLE` | auto | The target could not load the selected snapshot, or the replay after it diverged | Request the update again; the same target from the same source then replays the full history; if that fails too, use `manual` |
+| `UPDATE_REPLAY_FAILED` | auto | The full replay (from the authoritative baseline or from the start) failed on the target, also a divergence at a host call or a missing snapshot of the baseline; the agent runs on its source revision | Use `manual` |
+| `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` | manual | The executor has no filesystem snapshots, and the agent's files differ from its initial files | Run the update on an executor with filesystem snapshots |
+| `UPDATE_SNAPSHOT_UNAVAILABLE` | manual | The store lost the filesystem snapshot of the manual update | Request the manual update again; it takes a new snapshot |
+| `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS` | auto, manual | The update needs a filesystem snapshot, and the executor has no filesystem snapshots | Run the update on an executor with filesystem snapshots |
+| `UPDATE_SNAPSHOT_RESTORE_FAILED` | auto, manual | The filesystem snapshot did not restore on this executor, or its local disk is full | Request the update again (after the disk has space) |
+| `UPDATE_TARGET_NOT_FOUND` | auto, manual | The target revision does not exist | Request an update to an existing revision |
+| `UPDATE_TARGET_REFUSED` | auto, manual | The component service refused the target revision; the text names the kind | Check the executor's access to the component service and the target revision, then request the update again |
+
+Other failures, such as a change of the agent mode, a conflict of the initial files, or a failed check of the agent's files for a manual update on an executor without filesystem snapshots, have no code; the details give the cause.
 
 ## How Manual (Snapshot-Based) Update Works
 
 1. The update is queued behind the current and any earlier invocations.
-2. At that idle invocation boundary, the **old** component version's `save-snapshot` export is called, which serializes the agent's current state into a fresh byte payload with a MIME type.
-3. The agent is restarted with the **new** component version.
+2. At that idle invocation boundary, the **old** component version's `save-snapshot` export is called, which serializes the agent's current state into a fresh byte payload with a MIME type. Golem also takes a filesystem snapshot of the agent's files and waits for its upload. On an executor without filesystem snapshots, the update works only while the agent's files are its initial files; otherwise it fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`.
+3. The agent is restarted with the **new** component version. Golem restores the agent's files from that filesystem snapshot and applies the initial files of the new version. A changed declaration of an initial file at a path that the agent wrote, changed or deleted fails the update.
 4. The new version's `load-snapshot` export is called with the fresh snapshot payload.
 5. If `load-snapshot` returns `Ok`, the agent continues with the new version.
 6. If `load-snapshot` returns `Err`, the update fails and the agent reverts to the old version.

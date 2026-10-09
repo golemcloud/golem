@@ -7,7 +7,7 @@ Golem recovers agent state by **replaying the oplog** — the log of all operati
 Snapshotting also enables **manual agent updates** between incompatible versions — see [Updating Agents](/next/develop/updating) for details.
 
 <Callout type="info">
-    Automatic snapshotting is optional. Without it, recovery replays from the last successful manual-update snapshot, if one exists; otherwise it replays the full oplog.
+    Automatic snapshotting is optional. Without it, recovery starts from the authoritative recovery baseline, if one exists: the snapshot of the last successful manual update or snapshot-assisted automatic update. Otherwise it replays the full oplog.
 </Callout>
 
 ## Default snapshotting implementation
@@ -50,6 +50,57 @@ Each language SDK can generate JSON saving and loading when the complete agent s
         If your agent struct derives `ToJson` and `@json.FromJson`, the SDK auto-generates JSON saving and a restoration factory.
     </Tabs.Tab>
 </Tabs>
+
+### Evolving the state schema
+
+During a manual update, the source revision saves a snapshot, and the target revision loads it. With the default implementation, the target revision decodes the saved JSON using its own state schema or deserializer. It does not run normal initialization first, so values supplied only by `init` or a constructor do not fill missing snapshot fields.
+
+The target revision must be able to decode the snapshots of the agents you update:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        With Zod, give a new field a `.default(...)` value or make it `.optional()`. A new required field without a decoding default makes loading fail when the saved JSON does not contain it:
+
+        ```typescript
+        snapshotting: {
+            state: z.object({
+                value: z.number(),
+                label: z.string().default(''),
+                lastUpdated: z.number().optional(),
+            }),
+            policy: { everyNInvocations: 1 },
+        }
+        ```
+
+        This schema can load an earlier snapshot containing only `value`. The restored `label` is `''`; `lastUpdated` may be absent, so agent methods must handle that case.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The schema passed to `Snapshot.define(...)` decodes the saved state before the restoration strategy runs. Make new fields optional in that schema, or give them a decoding default. A default supplied only by `init` does not apply.
+
+        To convert an existing JSON snapshot, keep `Snapshot.define(...)` and use a schema that accepts the earlier representation. The restoration strategy can then construct the target state from the decoded value. Switching to `Snapshot.custom(...)` does not bypass JSON decoding: that mode accepts only binary snapshot envelopes.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The default loader uses `serde_json::from_slice::<Self>`. Give a new field `#[serde(default)]`, use an `Option<T>` field, or provide a custom deserializer that accepts the earlier JSON. A constructor default alone does not affect Serde decoding.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The JSON codec derived from the target revision's `Schema[S]` decodes the saved state before calling `loadSnapshot(state, context)`. The codec must accept missing new fields or supply decoding defaults. A default in the implementation constructor does not repair a codec error; use custom byte-based snapshot loading when you need to convert an earlier state format.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        The generated loader uses `@json.from_json` to decode the saved JSON into the target revision's agent type. Its `FromJson` implementation must accept missing new fields. When the derived implementation cannot decode the earlier JSON, use a custom `load_snapshot` factory to convert it.
+    </Tabs.Tab>
+</Tabs>
+
+For a rename or type change, the loader must accept the earlier representation and convert it to the complete target state. Use [custom snapshotting](#custom-snapshotting) when the default decoder cannot do this, subject to the SDK's format restrictions described above. A version marker can help a custom loader select the conversion, but the marker alone does not make an earlier snapshot loadable. Test loading a snapshot saved by the source revision, not just a save/load round-trip in the target revision.
+
+If decoding fails during a manual update, the update fails and the agent stays on its source revision. Inspect the update history:
+
+```shell copy
+golem agent get <AGENT_ID>
+```
+
+The history shows `Failed update to ...` with details such as `Manual update failed to load snapshot: ...` followed by the loader error. A typed TypeScript schema mismatch includes `snapshot state does not match its declared schema`. Fix the loader or schema in a new revision, deploy it, and request the update again. See [Updating agents](/next/develop/updating#manual-snapshot-based-update).
+
+The same decoding rule applies when an automatic update uses a snapshot from the source revision. A decoding failure during a snapshot-assisted automatic update has `UPDATE_SNAPSHOT_INCOMPATIBLE`; see [Failure codes](/next/develop/updating#failure-codes).
 
 ## Custom snapshotting
 
@@ -208,6 +259,178 @@ You can implement custom saving and restoration to control exactly how agent sta
     </Tabs.Tab>
 </Tabs>
 
+## Multipart snapshots: JSON state and named bytes
+
+Use explicit multipart snapshots when the live instance contains binary resources that should not be serialized into JSON. Save a small schema-backed state projection separately from a dynamic map of named `{bytes, contentType}` parts. This is an additional mode: the simpler JSON, byte-only, and existing SQLite snapshot modes remain available.
+
+These examples save a revision counter and an in-memory binary index. The loaders construct fresh live state; ordinary initialization is skipped.
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+    <Tabs.Tab>
+        Select `multipart.state` in the definition. Both `save` and `load` are required, and may be async. The live state returned by `init` is independent of the saved schema.
+
+        ```typescript
+        import { Snapshot } from '@golemcloud/golem-ts-sdk';
+
+        // In defineAgent({ ... }):
+        snapshotting: {
+          multipart: { state: z.object({ revision: z.number() }) },
+          policy: { everyNInvocations: 10 },
+        }
+
+        // In .implement({ ... }), with live { revision, index }:
+        snapshot: {
+          async save() {
+            return {
+              state: { revision: this.revision },
+              parts: new Map([
+                ['index', { bytes: this.index, contentType: 'application/octet-stream' }],
+              ]),
+            };
+          },
+          async load(saved, _context) {
+            return {
+              revision: saved.state.revision,
+              index: Snapshot.requirePart(saved.parts, 'index', 'application/octet-stream'),
+            };
+          },
+        }
+        ```
+
+        Standard Schema validates the input on save, but the SDK persists that input JSON, not a transformed validation result. On load, the schema validates stored JSON and the loader receives its output type. There is no reverse encoding. Do not combine `state` and `multipart` configuration. Explicit multipart does not automatically discover SQLite databases and rejects managed `db:` parts.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        `Snapshot.multipart` requires an explicit strategy. Effect Schema encodes the saved state and decodes it before restoration.
+
+        ```typescript
+        // In defineAgent({ ... }):
+        snapshotting: Snapshot.multipart({
+          schema: Schema.Struct({ revision: Schema.Number }),
+          policy: Snapshot.policy.everyN(10),
+        })
+
+        // In .implement({ ... }), with a Ref of { revision, index }:
+        snapshot: {
+          save: (ref) => Ref.get(ref).pipe(Effect.map((live) => ({
+            state: { revision: live.revision },
+            parts: new Map([
+              ['index', { bytes: live.index, contentType: 'application/octet-stream' }],
+            ]),
+          }))),
+          restore: (saved, _context) => Effect.gen(function* () {
+            const index = yield* Snapshot.requirePart(saved.parts, 'index', 'application/octet-stream')
+            return yield* Ref.make({ revision: saved.state.revision, index })
+          }),
+        }
+        ```
+
+        To compose managed SQLite databases, add `databases: ["main"] as const` to `Snapshot.multipart` or `Snapshot.define` and expose `databases: live => ({ main: live.database })` on the strategy. The SDK checks `DatabaseSync.location()`: memory/temp databases carry `db:` images, while file-backed databases carry only logical-name-to-location `fileDatabases` metadata. **Host filesystem snapshots exclusively own file-backed contents.** Arbitrary user `part:` bytes remain application-owned.
+
+        Before user restoration, the SDK validates the complete, disjoint image/location inventory and checks that recorded database files exist. Your restore strategy must reopen those locations. The SDK validates all returned handles, hydrates only memory/temp images, and warms connection caches **before** constructing method handlers. Defer database-dependent reconstruction until the methods factory. Small nonempty file-backed databases may be read in full for cache warming; those bytes are discarded, not stored in the application snapshot. Autocommit and attached-schema restrictions apply during save and restoration.
+
+        Use scoped acquisitions for cleanup if restoration fails. Raw handles and `SqliteClient.fromDatabase` wrappers are externally owned unless you register a finalizer or set `closeOnScopeClose: true`. Filesystem snapshot availability is host-controlled: there is no fallback application capture of file contents when it is disabled. Without filesystem snapshots, changed files prevent periodic snapshots and snapshot-based manual updates.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Define both async hooks inside the `#[agent_implementation]` block. The live implementation does not need Serde; only the saved projection does.
+
+        ```rust
+        use golem_rust::agentic::{MultipartSnapshot, SnapshotPart, SnapshotRestoreContext};
+
+        #[derive(golem_rust::serde::Serialize, golem_rust::serde::Deserialize)]
+        struct SavedState { revision: u32 }
+
+        async fn save_snapshot_parts(&self) -> Result<MultipartSnapshot, String> {
+            MultipartSnapshot::from_state(
+                &SavedState { revision: self.revision },
+                std::collections::BTreeMap::from([(
+                    "index".into(),
+                    SnapshotPart { bytes: self.index.clone(), content_type: "application/octet-stream".into() },
+                )]),
+            )
+        }
+
+        async fn load_snapshot_parts(
+            snapshot: MultipartSnapshot,
+            _context: SnapshotRestoreContext,
+        ) -> Result<Self, String> {
+            let saved: SavedState = snapshot.decode_state()?;
+            let index = snapshot.require_part("index", "application/octet-stream")?.to_vec();
+            Ok(Self { revision: saved.revision, index })
+        }
+        ```
+
+        Keep the normal snapshot policy annotation. An incomplete hook pair, or combining explicit byte-only and multipart hooks, is a compile error.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Add the instance saver and companion loader without a new mixin. `Schema` is needed for the saved projection, not the live instance.
+
+        ```scala
+        import golem.runtime.{MultipartSnapshot, SnapshotPart, SnapshotRestoreContext}
+        import zio.blocks.schema.Schema
+        import scala.concurrent.Future
+
+        final case class SavedState(revision: Int) derives Schema
+
+        // On IndexImpl:
+        def saveSnapshotParts(): Future[MultipartSnapshot] = Future.fromTry(
+          MultipartSnapshot.fromState(SavedState(revision), Map(
+            "index" -> SnapshotPart(index.clone(), "application/octet-stream")
+          )).toTry
+        )
+
+        // On companion object IndexImpl, with a constructor accepting saved fields:
+        def loadSnapshotParts(snapshot: MultipartSnapshot, context: SnapshotRestoreContext): Future[IndexImpl] =
+          Future.fromTry((for {
+            saved <- snapshot.decodeState[SavedState]
+            bytes <- snapshot.requirePart("index", "application/octet-stream")
+          } yield new IndexImpl(context.identity[String](0), saved.revision, bytes)).toTry)
+        ```
+
+        Keep the normal policy annotation and registration. Incomplete or conflicting explicit hooks, including multipart combined with `Snapshotted[S]`, are compile errors.
+    </Tabs.Tab>
+    <Tabs.Tab>
+        Implement the async saving trait and a separate static async loader. The generator suppresses automatic JSON hooks for this explicit pair; the existing synchronous `Snapshottable` trait is unchanged.
+
+        ```moonbit
+        priv struct SavedState { revision : Int } derive(ToJson, FromJson)
+
+        impl @agents.MultipartSnapshottable for Index with fn save_snapshot_parts(self) {
+          Ok(@agents.MultipartSnapshot::from_state(SavedState::{revision: self.revision}, {
+            "index": { bytes: self.index, content_type: "application/octet-stream" },
+          }))
+        }
+
+        pub async fn Index::load_snapshot_parts(
+          snapshot : @agents.MultipartSnapshot,
+          context : @agents.SnapshotRestoreContext,
+        ) -> Result[Index, String] {
+          let saved : SavedState = match snapshot.decode_state() {
+            Ok(saved) => saved
+            Err(error) => return Err(error)
+          }
+          let index = match snapshot.require_part("index", "application/octet-stream") {
+            Ok(index) => index
+            Err(error) => return Err(error)
+          }
+          let name : String = context.identity(0)
+          Ok({ name, revision: saved.revision, index })
+        }
+        ```
+
+        Keep `#derive.agent` and the normal snapshot policy. Merely deriving JSON traits on the live instance does not conflict with the explicit multipart pair.
+    </Tabs.Tab>
+</Tabs>
+
+### Part and envelope rules
+
+- Names are case-sensitive and match `[A-Za-z0-9_][A-Za-z0-9_.-]*`. Logical names `state` and `__proto__` are valid. Parts have no automatic resource semantics; applications decide what they mean and whether to accept extra parts.
+- Content types must be bare ASCII MIME type/subtype strings, such as `application/octet-stream`. They are normalized to lowercase; parameters such as `; charset=utf-8` are rejected. `requirePart` checks both presence and content type, returning the SDK's normal snapshot error on failure.
+- Multipart is emitted even when there are no binary parts. Binary-only applications use JSON `null` state. Empty bytes and trailing CR, LF, or CRLF are preserved exactly.
+- The SDK owns the principal envelope. On the wire, one `state` part contains UTF-8 JSON `{version:1, principal, state}`, user names become `part:<name>`, and managed SQLite images use `db:<name>`. Do not construct these prefixes or envelope metadata yourself.
+- The SDK validates framing, metadata, names, duplicate structural fields, and supported namespaces before invoking user restoration. Changing snapshot modes does not enable fallback parsing or historical-format migration.
+
+Snapshots are whole-buffer operations. Copies of state, part bytes, encoded payloads, and restored resources can amplify peak memory usage. The host's 64 KiB inline/blob-spill setting is a storage threshold, **not** a maximum snapshot size. Save and load hooks are unpersisted lifecycle operations and may be retried; async hooks do not make external effects exactly-once.
+
 ## How snapshot restoration runs
 
 Snapshot loading is a specially supported SDK lifecycle operation, not an agent method. The SDKs keep it separate from normal initialization and install the returned state or instance only after restoration succeeds. Restore context exposes the agent identity and restored principal, plus the phantom ID and fresh configuration where applicable.
@@ -217,8 +440,9 @@ Golem runs snapshot loading in read-only mode and writes nothing from it to the 
 If loading fails, partial state is discarded:
 
 - A manual update fails and the agent remains on its previous component version.
-- If an automatic snapshot is rejected by its loader, or loading or subsequent replay fails deterministically, Golem recreates the component and replays from the last successful manual-update snapshot—or from the beginning if none exists. It does not try an older automatic snapshot. Transient failures and resource-limit failures can instead propagate or cause recovery to retry.
-- Failure to load the baseline snapshot from an already completed manual update cannot fall back to pre-update history.
+- A snapshot-assisted automatic update fails with `UPDATE_SNAPSHOT_INCOMPATIBLE`, and the agent remains on its previous component version. Golem does not reject the snapshot record. See [Updating agents](/next/develop/updating#failure-codes).
+- If an automatic snapshot is rejected by its loader, or loading or subsequent replay fails deterministically, Golem rejects only that snapshot record and recreates the component. The next start uses the previous usable automatic snapshot, if Golem keeps one and it is not the rejected record. When no usable automatic snapshot is left, Golem starts from the authoritative recovery baseline, or from the beginning if none exists. Transient failures and resource-limit failures can instead propagate or cause recovery to retry.
+- Failure to load the authoritative recovery baseline of an already completed manual update or snapshot-assisted update cannot fall back to pre-update history.
 
 ## Configuring snapshot-based recovery
 
@@ -273,10 +497,136 @@ The available policy forms are listed below. Exact spelling and policy support v
 
 | Option | Description |
 |---|---|
-| `disabled` | Automatic snapshot creation is disabled. Recovery still uses the last successful manual-update snapshot, if one exists. |
+| `disabled` | Automatic snapshot creation is disabled. Recovery still uses the authoritative recovery baseline of the last successful update, if one exists. |
 | `enabled` | Uses the server-side default snapshotting configuration, which may be disabled. |
 | `every(N)` | Takes a snapshot every **N** successful invocations. |
 | `periodic(duration)` | Schedules snapshots at safe invocation boundaries after each **duration** interval (e.g. `5s`, `1m`). |
+
+## Agent files and snapshots
+
+An application snapshot holds only the bytes that your snapshot code returns. Golem does not write file changes to the oplog, and a replay that starts after a snapshot record does not run the code that wrote the files before it. So Golem uses a snapshot record only when the agent's files can come back with it. The same holds for the files of an agent after a manual update or a snapshot-assisted automatic update.
+
+A **filesystem snapshot** gives the files back. It is a copy of the agent's [filesystem](/next/develop/agent-filesystem) that Golem keeps in blob storage. The snapshot record in the oplog names it. Golem makes filesystem snapshots only on executors whose operator enabled them. An executor without them writes a snapshot record only while the agent's files are its initial files, which a start puts back. See [Availability](#availability).
+
+Your snapshot code must not write the agent's files, because Golem does not run the snapshot code again in a replay.
+
+### Restore points
+
+The application snapshot and the filesystem snapshot of one snapshot record form one restore point. Golem uses a restore point only when both parts are there:
+
+- For an automatic snapshot: when the filesystem snapshot is missing, is not confirmed yet, or does not restore, or when the application snapshot does not load, Golem uses an older restore point: the previous usable automatic snapshot, then the authoritative recovery baseline, then a full replay of the oplog. See [How snapshot restoration runs](#how-snapshot-restoration-runs).
+- For a manual update: when Golem cannot take both parts, the update fails, and the agent stays on its current revision. When the filesystem snapshot does not restore at the start in the target revision, the update fails with a [failure code](/next/develop/updating#failure-codes), and the agent stays on its current revision. After a temporary storage error, the start tries again.
+- For a snapshot-assisted automatic update: the update restores the filesystem snapshot of the selected record before it loads the application snapshot of the same record. When the filesystem snapshot does not restore, the update fails with a [failure code](/next/develop/updating#failure-codes), and the agent stays on its current revision. After a temporary storage error, the start tries again with the same record.
+- After a successful manual update or snapshot-assisted update, its snapshot is the authoritative recovery baseline, and Golem cannot go back to the history before it. When its filesystem snapshot does not restore at a later start, the start tries again after a temporary storage error. After an error that a new try cannot fix, such as a missing snapshot, the start of the agent fails with a visible cause.
+
+A snapshot record without a filesystem snapshot name is also a valid restore point. It means that the agent's files were exactly the initial files of the component revision. A start from it puts the initial files in place. An executor writes such a record only while the agent's files are its initial files, also when it has no filesystem snapshots.
+
+### When Golem captures the files
+
+Golem captures the files at the same boundary where it takes the application snapshot. No invocation runs at that moment. The order is:
+
+1. Your snapshot code runs and returns the application snapshot.
+2. Golem stops new file calls of the agent, waits for the calls in progress, and copies the agent's files on the executor's disk. The copy shares the data blocks of the files, so it is fast and the agent waits only for it.
+3. Golem writes the snapshot record into the oplog. The record holds the name of the filesystem snapshot.
+4. The agent continues with its next invocation. Golem uploads the copy to blob storage in the background.
+5. When the upload is complete, Golem writes a second oplog entry that confirms the name.
+
+The capture keeps the agent's files, directories, symbolic links, hard links and modification times, except the times of the untouched read-only initial files that Golem leaves out. Golem leaves out an untouched read-only initial file, because the component revision already has its content. Golem uploads nothing when each initial file of the component revision is read-only and untouched, the agent has no other files or directories and no files that Golem provisions for it in addition to the initial files, the agent did not rename or hard link any file, and did not set a given modification time on a file or directory, or when nothing changed the files since the last confirmed filesystem snapshot. In the second case the new record uses the name of that snapshot and is confirmed at once.
+
+Ephemeral agents take no snapshots, whatever their snapshotting policy is. A retry of an ephemeral agent replays only its initialization.
+
+`golem agent oplog <agent_id>` shows the name as `filesystem:` on each `SNAPSHOT` entry that has a name, and a `SNAPSHOT CONFIRMED` entry with the same name when the snapshot is usable.
+
+### When a snapshot becomes usable
+
+A snapshot record with a filesystem snapshot name becomes usable only when its confirmation record follows it in the oplog. A record without a name is usable at once.
+
+At most one upload runs for each agent. While it runs, Golem skips the next automatic snapshot of the agent: your snapshot code does not run, and Golem writes no record. There is one exception. When an upload failed and waits to try again, the next automatic snapshot replaces it. The replaced upload never confirms its record. A later start can still confirm that record while it is the newest snapshot record of the agent, when blob storage holds its whole filesystem snapshot. Golem also skips an automatic snapshot when the free space of the executor's volume is low, or while a delete of all filesystem snapshots of the agent waits or runs.
+
+If the agent stops while its upload runs, the stop does not wait for the upload. A later start of the agent on the same executor waits for the upload, for at most a limit that the operator sets, and then checks blob storage. A start on any executor confirms the snapshot itself when blob storage holds the whole snapshot. An upload that still runs when the agent moves to another executor is lost for that start.
+
+### What the agent sees after a restart
+
+At a start, Golem selects the newest usable automatic snapshot record of the current component revision. Before your snapshot loading code runs, Golem downloads the filesystem snapshot of that record and puts the files in place. Your loading code can therefore read the files. Then Golem replays the oplog entries after the record.
+
+When the newest record is not confirmed yet, Golem uses the usable record before it. Golem restores the files of that older record, loads its application snapshot, and replays all the oplog entries after it. The replay includes the invocations after the unconfirmed record, so the agent gets the same state and the same files as before the restart. The only cost is a longer replay. Golem also uses the older record when the newest confirmed filesystem snapshot does not restore. A start uses at most these two automatic snapshot records. When neither is usable, Golem uses the authoritative recovery baseline, or replays the full oplog.
+
+After a restore, the files are the files that the agent had at the capture. This is also what a full replay of the oplog rebuilds. Hard links come back as hard links.
+
+### Manual updates
+
+A manual update also captures the files. The update waits until the upload of the filesystem snapshot is complete, and only then writes its update record. If an automatic snapshot upload of the agent runs at that moment, the update waits for that upload. It does not wait for later retries of that upload. The waits of the update for that upload and for a free upload slot end after a limit that the operator sets, 60 seconds by default. Then the update fails. The update also fails at once when the free space of the executor's volume is low, or while Golem deletes all the filesystem snapshots of the agent.
+
+At the start in the target revision, Golem restores the files and then applies the initial files of the target revision. The files that the agent wrote in the old revision are kept. If the target revision changes the declaration of an initial file at a path where the agent wrote, changed or deleted a file, the update fails. The only exception is an initial file that the agent deleted and that the target revision no longer declares. The update also fails when a file of the agent is in the place of a directory that the new initial file needs. The error names the path, and the agent stays on its current revision with its files.
+
+### Automatic updates
+
+A snapshot-assisted automatic update uses an automatic snapshot record of the agent. It takes no new snapshot. The update restores the filesystem snapshot of the selected record, or the initial files of the source revision for a record without a name. Then the target revision loads the application snapshot of the same record and replays the history after it. Golem applies the initial files of the target revision at the update point, after that replay, as a full replay does. The rule is the same as for a manual update: a changed declaration of an initial file at a path where the agent wrote, changed or deleted a file fails the update. See [Updating agents](/next/develop/updating#how-the-update-restores-the-agents-files).
+
+After a successful update, every start from the selected record restores the same filesystem snapshot. Retention does not delete it while the successful update stays in the oplog.
+
+### When a snapshot fails
+
+| Failure                                          | Automatic snapshot                                                                                                                               | Manual update                                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Your snapshot code fails                         | Golem writes no snapshot record and restarts the agent. The agent replays its oplog from its last restore point, so each failed save costs a restart and a replay. | The update fails, and the agent stays on its current revision.   |
+| The capture of the files fails or waits too long | Golem writes no snapshot record. The agent continues, and the next snapshot that the policy schedules tries again.                               | The update fails, and the agent stays on its current revision.   |
+| The upload fails after its retries               | The snapshot record stays without a confirmation. A start uses an older restore point.                                                          | The update fails, and the agent stays on its current revision.   |
+| The filesystem snapshot does not restore         | The start uses an older restore point.                                                                                                          | The start tries again after a temporary error. Otherwise the update fails, and the agent stays on its current revision. After a successful update, the start fails with a visible cause. |
+| The executor has no filesystem snapshots, and the agent's files are not its initial files | Golem writes no snapshot record. The agent continues, and a start uses an older restore point. | The update fails, and the agent stays on its current revision. |
+
+### Code that leaves a stream write unflushed
+
+Golem can capture the files only when no file call of the agent is in progress. A write to a WASI output stream of a file stays in progress until the code flushes or polls the stream. If an invocation returns while such a write is still in progress, the capture waits for at most a limit that the operator sets, 5 seconds by default. On an executor without filesystem snapshots, the check of the files waits a fixed 5 seconds, which no setting changes. Then it gives up:
+
+- For an automatic snapshot, Golem writes no snapshot record, and the agent continues. The next snapshot that the policy schedules tries again.
+- For a manual update, the update fails.
+
+To keep your agent snapshottable, flush each output stream before the invocation returns.
+
+### Cold-start cost
+
+A restore downloads the whole filesystem snapshot before the agent's code runs. A large tree of files makes the start of the agent slower, in proportion to the size of the tree. The executor also limits how many restores run at the same time. A start that has no free restore slot waits for one.
+
+### Delete, revert and fork
+
+- **Delete.** When you delete an agent, Golem deletes all its filesystem snapshots from blob storage in the background. An agent that you create again with the same id starts with no filesystem snapshots.
+- **Revert.** When you revert an agent, Golem deletes the filesystem snapshots of the snapshot records in the reverted part of the oplog. It keeps a filesystem snapshot that a remaining record uses. A start after the revert uses the remaining snapshot records. Retention can have deleted the filesystem snapshots of the older remaining records already. After a revert far back, the start then uses an older restore point or a full replay.
+- **Fork.** When you fork an agent, Golem copies the filesystem snapshots of the source agent to the new agent before the new agent exists. Golem checks the last successful snapshot-based manual update or snapshot-assisted automatic update in the part of the oplog that the fork copies. The record of that update is the baseline of the new agent. When the record names a filesystem snapshot that is not in blob storage, Golem refuses the fork. The error names the oplog index of the fork. This also happens on an executor without filesystem snapshots. Golem cancels each update that the copied part leaves pending, also a manual update whose snapshot Golem did not take before the fork point. The new agent gets one failed update with the details `cancelled by fork` for each of them, and does not run them.
+
+### Availability
+
+Filesystem snapshots are disabled by default. Only an executor whose agent filesystems are on XFS storage with reflink (the `ManagedXfs` or `ReflinkXfs` storage mode) can enable them. See [Filesystem Snapshots](/next/operate/filesystem_snapshots) for the operator setup.
+
+On an executor without filesystem snapshots, Golem writes a snapshot record only when the agent's files can come back with it:
+
+- While the agent's files are exactly the initial files of its component revision, Golem takes automatic snapshots, and snapshot-based manual updates work. The snapshot records have no filesystem snapshot name. A start from such a record puts the initial files in place.
+- When the agent's files are not its initial files, Golem takes no automatic snapshot. A start uses an older restore point or replays the full oplog. The replay writes the files again, so the agent loses no data, but the start takes longer. The next automatic snapshot follows the policy as after a snapshot that Golem took.
+- A snapshot-based manual update of such an agent fails with `UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS`, and the agent stays on its current revision. The error says that the files of the agent differ from its initial files, and that filesystem snapshots are disabled on the executor.
+- A pending update whose snapshot names a filesystem snapshot fails with `UPDATE_RESTORE_NEEDS_FILESYSTEM_SNAPSHOTS`, and the agent stays on its current revision. A snapshot-assisted automatic update selects only a record without a name on such an executor.
+
+The files are the initial files only when each initial file of the component revision is read-only, the agent did not change or delete it, the agent has no other files or directories, the agent did not rename or hard link any file, also a file that it removed later, and did not set a given modification time on a file or directory. A time that the agent sets to the current time does not count. A read-write initial file counts as a change, also when the agent did not write to it. A file that Golem provisions for the agent in addition to the initial files also counts as a change. When Golem cannot check the files, for example because a file call stays open, an automatic snapshot writes no record, and a manual update fails with an error that says that the check of the files failed.
+
+### SQLite databases in TypeScript agents
+
+Typed state snapshotting in the TypeScript SDK handles each top-level `DatabaseSync` field (from `node:sqlite`) of the agent:
+
+- An **in-memory** or **temporary** database is saved in the application snapshot with its contents.
+- A **file-backed** database is not saved in the application snapshot. The snapshot holds only the location of the file. The filesystem snapshot restores the file, and the load opens the database again at that location.
+
+A typed snapshot with a file-backed database relies on filesystem snapshots to restore the file. On an executor without filesystem snapshots, the database file makes the agent's files differ from its initial files. Golem then takes no automatic snapshot of the agent, and the agent recovers by a replay without data loss. A snapshot-based manual update of the agent fails there. See [Availability](#availability).
+
+These cases, among others, make the save fail. The guide linked below lists all of them:
+
+- A database with an open transaction, also a file-backed one. Commit or roll back before the invocation ends.
+- A field that holds a closed `DatabaseSync`. Remove the field, or set it to an open database, before the invocation ends.
+- A field that holds a `StatementSync`, a `Session` or a `SQLTagStore`.
+
+A failed save has the effect in [When a snapshot fails](#when-a-snapshot-fails): for an automatic snapshot, Golem restarts the agent, which replays its oplog; for a manual update, the update fails.
+
+After a load from an automatic snapshot, the replay of the later oplog entries must read the database as the live agent did. This holds only while the database fits in SQLite's page cache and the live agent had read every page of it. When it does not hold, the start from that snapshot can fail, and Golem uses an older restore point. The state of the agent stays correct, but the start takes longer.
+
+The [TypeScript custom snapshot guide](/next/how-to-guides/ts/golem-custom-snapshot-ts#sqlite-databases) gives the full rules and limits.
 
 ## Observability
 

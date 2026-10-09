@@ -16,11 +16,9 @@ use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use anyhow::Error;
 use assert2::{assert, check, let_assert};
 use async_trait::async_trait;
-use bytes::Bytes;
 use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
-use futures::stream::BoxStream;
 use golem_common::base_model::Empty;
 use golem_common::base_model::agent::{
     AgentMode, AgentTypeName, CorsOptions, CustomHttpMethod, FileMapping, HttpEndpointDetails,
@@ -164,17 +162,17 @@ use golem_service_base::clients::registry::ResourceUsageMetering;
 use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::db::{postgres::PostgresPool, sqlite::SqlitePool};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::repo::Blob;
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace, ExistsResult,
+    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
+    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use heck::ToKebabCase;
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use strum::IntoEnumIterator;
@@ -197,38 +195,28 @@ impl FailOnceListBlobStorage {
     }
 }
 
+/// Delegates each operation to the blob storage it holds, and fails the first listing of the
+/// blobs below a path, which is the call of the blob storage sweep of the account usage.
 #[async_trait]
-impl BlobStorage for FailOnceListBlobStorage {
-    async fn get_raw(
+impl BlobStorageBackend for FailOnceListBlobStorage {
+    async fn get_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<Vec<u8>>, Error> {
         self.inner
             .get_raw(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn get_stream(
+    async fn get_range_stream_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         offset: u64,
         length: u64,
     ) -> Result<Option<BlobRangeStream>, Error> {
@@ -237,24 +225,24 @@ impl BlobStorage for FailOnceListBlobStorage {
             .await
     }
 
-    async fn get_metadata(
+    async fn get_metadata_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Option<BlobMetadata>, Error> {
         self.inner
             .get_metadata(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn put_raw(
+    async fn put_raw_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> Result<(), Error> {
         self.inner
@@ -262,81 +250,120 @@ impl BlobStorage for FailOnceListBlobStorage {
             .await
     }
 
-    async fn put_stream(
+    async fn put_raw_if_absent_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
-        stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
-    ) -> Result<(), Error> {
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+    ) -> Result<PutIfAbsent, Error> {
         self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
+            .put_raw_if_absent(target_label, op_label, namespace, path, data)
             .await
     }
 
-    async fn delete(
+    async fn delete_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
         self.inner
             .delete(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn create_dir(
+    async fn create_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<(), Error> {
         self.inner
             .create_dir(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn list_dir(
+    async fn list_dir_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<Vec<PathBuf>, Error> {
-        self.list_attempts.fetch_add(1, Ordering::AcqRel);
-        if self.fail_next_list.swap(false, Ordering::AcqRel) {
-            return Err(anyhow::anyhow!("injected reconciliation list failure"));
-        }
         self.inner
             .list_dir(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn delete_dir(
+    async fn list_blobs_below_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
+    ) -> Result<Box<[ListedBlob]>, Error> {
+        self.list_attempts.fetch_add(1, Ordering::AcqRel);
+        if self.fail_next_list.swap(false, Ordering::AcqRel) {
+            return Err(anyhow::anyhow!("injected reconciliation list failure"));
+        }
+        self.inner
+            .list_blobs_below(target_label, op_label, namespace, path)
+            .await
+    }
+
+    async fn delete_dir_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<bool, Error> {
         self.inner
             .delete_dir(target_label, op_label, namespace, path)
             .await
     }
 
-    async fn exists(
+    async fn exists_at(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
-        path: &Path,
+        path: &NormalizedBlobPath<'_>,
     ) -> Result<ExistsResult, Error> {
         self.inner
             .exists(target_label, op_label, namespace, path)
             .await
+    }
+
+    async fn copy_between_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from_namespace: BlobStorageNamespace,
+        from: &NormalizedBlobPath<'_>,
+        to_namespace: BlobStorageNamespace,
+        to: &NormalizedBlobPath<'_>,
+    ) -> Result<bool, Error> {
+        match self
+            .inner
+            .copy_between(
+                target_label,
+                op_label,
+                from_namespace,
+                from,
+                to_namespace,
+                to,
+            )
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error) if error.downcast_ref::<BlobMissingError>().is_some() => Ok(false),
+            Err(error) => Err(error),
+        }
     }
 }
 // Common test cases -------------------------------------------------------------------------------
@@ -5256,6 +5283,7 @@ fn make_http_persistence_agent_types() -> Vec<AgentTypeSchema> {
         })],
         auth_details: None,
         phantom_agent: false,
+        phantom_id_binding: None,
         cors_options: CorsOptions {
             allowed_patterns: vec![],
         },

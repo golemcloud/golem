@@ -570,27 +570,17 @@ impl MessageWithFields for AgentGetView {
                 .unwrap_or_default();
             let assisted = assisted
                 .map(|details| {
-                    let snapshot = details
-                        .snapshot_index
-                        .map(|index| {
-                            format!(
-                                ", snapshot {index} (revision {})",
-                                details
-                                    .snapshot_revision
-                                    .map(|revision| revision.to_string())
-                                    .unwrap_or_else(|| "unknown".to_string())
-                            )
-                        })
-                        .or_else(|| {
-                            details
-                                .ineligibility_reason
-                                .as_ref()
-                                .map(|reason| format!(", snapshot ineligible: {reason}"))
-                        })
+                    let filesystem_snapshot = details
+                        .filesystem_snapshot
+                        .as_ref()
+                        .map(|name| format!(", filesystem snapshot {name}"))
                         .unwrap_or_default();
                     format!(
-                        ", source revision {}, source revision start index {}{snapshot}",
-                        details.source_component_revision, details.source_revision_start_index
+                        ", source revision {}, source revision start index {}, snapshot {} (revision {}){filesystem_snapshot}",
+                        details.source_component_revision,
+                        details.source_revision_start_index,
+                        details.snapshot_index,
+                        details.snapshot_revision,
                     )
                 })
                 .unwrap_or_default();

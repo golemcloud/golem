@@ -105,9 +105,6 @@ fn context_for(
         parent: parent(),
         call_mode,
         activation: activation(filesystem),
-        calling_principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
-            agent_id: owner.agent_id.clone(),
-        }),
         principal: Principal::Agent(golem_common::model::agent::AgentPrincipal {
             agent_id: owner.agent_id.clone(),
         }),
@@ -198,6 +195,7 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
+            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),

@@ -119,6 +119,7 @@ impl DurableStreamsHandler {
                         .rsplit_once("/streams/")
                         .map(|(session_path, _)| session_path)
                         .unwrap_or_default();
+                    let path = super::resource_url(request, route, behaviour, path)?;
                     return Ok(problem(
                         StatusCode::NOT_FOUND,
                         "$",

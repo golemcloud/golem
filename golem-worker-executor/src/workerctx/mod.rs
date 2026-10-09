@@ -16,7 +16,7 @@ pub mod default;
 
 use crate::durable_host::websocket::WebSocketConnectionPool;
 use crate::durable_host::{DurableWorkerCtxView, SnapshotBoundaryBlocker};
-use crate::model::{AgentConfig, ExecutionStatus, LastError, TrapType};
+use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_filesystem::{FilesystemGenerationHandle, OpenNode};
 use crate::services::agent_types::AgentTypesService;
@@ -55,12 +55,10 @@ use golem_common::model::entity::{
 };
 use golem_common::model::invocation_context::{InvocationContextStack, SpanId};
 use golem_common::model::oplog::{
-    AgentError, FailedSnapshotAssistedUpdateDetails, HostResponseEntityInvocation,
-    SnapshotAssistedUpdateDetails, TimestampedUpdateDescription,
+    AgentError, HostResponseEntityInvocation, OplogEntry, SnapshotAssistedUpdateDetails,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex,
-    OwnedAgentId,
+    AgentId, AgentInvocationOutput, AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -130,6 +128,11 @@ pub trait EntityInvocationBodyHook: Send + Sync {
 #[async_trait]
 pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
+
+    /// Runs first in the spawned supervisor of a completed historical reconstruction, before the
+    /// supervisor polls the body or the recorded terminal.
+    #[cfg(feature = "test-utils")]
+    async fn before_completed_supervisor(&self, _start_index: OplogIndex) {}
 }
 
 /// Where a replaying accessor durable call is paused relative to its scope admission.
@@ -289,7 +292,7 @@ pub trait WorkerCtx:
         shard_service: Arc<dyn ShardService>,
         http_connection_pool: Option<wasmtime_wasi_http::HttpConnectionPool>,
         websocket_connection_pool: WebSocketConnectionPool,
-        pending_update: Option<TimestampedUpdateDescription>,
+        pending_update: Option<HydratedUpdate>,
         original_phantom_id: Option<Uuid>,
         runtime: OwnerRuntime,
         entity_execution_mode: Option<InvocationExecutionMode>,
@@ -486,7 +489,7 @@ pub trait InvocationHooks {
     /// Called when a worker is about to be invoked
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: crate::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
@@ -556,14 +559,12 @@ pub trait UpdateManagement {
     /// Marks the end of a snapshot function call. This can be used to re-enable persistence
     fn end_call_snapshotting_function(&mut self);
 
-    /// Called when an update attempt has failed. Fails when the oplog refused to record the
-    /// failure: the agent has been given up, and must not be rebuilt on its old revision here.
+    /// Called when an update attempt has failed, with its `FailedUpdate` entry. Fails when the
+    /// oplog refused to record the failure: the agent has been given up, and must not be rebuilt
+    /// on its old revision here.
     async fn on_worker_update_failed(
         &self,
-        target_revision: ComponentRevision,
-        details: Option<String>,
-        snapshot_assisted_details: Option<FailedSnapshotAssistedUpdateDetails>,
-        update_attempt_index: Option<OplogIndex>,
+        failed_update: OplogEntry,
     ) -> Result<(), WorkerExecutorError>;
 
     /// Called when an update attempt succeeded. Fails when the oplog refused to record the

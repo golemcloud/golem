@@ -19,7 +19,7 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::HostFailureKind;
 use crate::durable_host::suspendable_wait::{
-    ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
+    ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
 use crate::durable_host::{
     ActiveAtomicRegion, BeginReplayToLive, DurabilityHost, DurableWorkerCtx, InternalRetryResult,
@@ -45,7 +45,7 @@ use crate::worker::status::calculate_last_known_status_with_checkpoint;
 use crate::workerctx::{StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::agent::ParsedAgentId;
+use golem_common::model::agent::{AgentMode, ParsedAgentId};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{AgentResourcePattern, AgentVerb};
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -1298,9 +1298,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         revert_target: golem_api_1_x::host::RevertAgentTarget,
     ) -> anyhow::Result<Result<(), golem_api_1_x::host::AgentOperationError>> {
         let agent_id: AgentId = agent_id.into();
+        let is_self = agent_id == self.owned_agent_id.agent_id;
         let target: golem_common::model::worker::RevertWorkerTarget = revert_target.into();
 
-        let mut resolved_revert = if self.state.is_live() {
+        let mut resolved_revert = if self.state.is_live() && !is_self {
             match &target {
                 golem_common::model::worker::RevertWorkerTarget::RevertToOplogIndex(_) => None,
                 golem_common::model::worker::RevertWorkerTarget::RevertLastInvocations(target) => {
@@ -1339,6 +1340,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         };
         let denied = self.state.is_live()
+            && !is_self
             && agent_operation_denied(self, &agent_id, AgentVerb::Revert, resource).await?;
 
         let mut handle =
@@ -1365,12 +1367,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
-            if denied {
+            if is_self || denied {
                 break 'result handle
                     .complete(
                         self,
                         HostResponseGolemApiUnit {
-                            result: Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+                            result: Err(if is_self {
+                                "Self-revert is not supported; revert this agent through the external API or CLI"
+                                    .to_string()
+                            } else {
+                                AGENT_OPERATION_PERMISSION_DENIED.to_string()
+                            }),
                         },
                     )
                     .await?;
@@ -1866,27 +1873,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
     async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
-        let resource_rep = resource.rep();
         let _ = self.table().delete(resource)?;
-
-        // This is optional because the entry is only created if we actually turn the GetPromiseResultEntry into a Pollable
-        let dyn_pollable_reps = self
-            .state
-            .promise_dyn_pollables
-            .write()
-            .await
-            .remove(&resource_rep);
-
-        if let Some(set) = dyn_pollable_reps {
-            for dyn_pollable_rep in set {
-                let _ = self
-                    .state
-                    .promise_backed_pollables
-                    .write()
-                    .await
-                    .remove(&dyn_pollable_rep);
-            }
-        };
 
         self.state.promise_service.cleanup().await;
 
@@ -1952,48 +1939,61 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostGetPromiseResultWithStore<U>
                 return Err(handle.trap(err.clone()));
             }
         };
-        let (wait_context, interrupt) = accessor.with(|mut access| {
-            let ctx = access.get();
-            let interrupt = ctx.create_interrupt_signal();
-            (
-                SuspendableWaitContext {
-                    wait_id: ctx.state.next_suspendable_wait_id(),
-                    agent_mode: ctx.agent_mode(),
-                    suspend: ctx.state.config.suspend.clone(),
-                    wait_deadline: None,
-                    suspendable_waits: ctx.state.suspendable_waits(),
-                    wakeup_scheduler: ctx.state.wakeup_scheduler(),
-                },
+        let (coordinated_wait, mode, max_sleep, interrupt) = accessor
+            .with(|mut access| {
+                let ctx = access.get();
+                let interrupt = ctx.create_interrupt_signal();
+                let coordinated_wait = if ctx.agent_mode() == AgentMode::Durable
+                    && !ctx.state.durability_is_suppressed()
+                {
+                    Some(
+                        accessor
+                            .runtime_activity()
+                            .and_then(|activity| {
+                                ctx.runtime_suspension
+                                    .as_ref()
+                                    .and_then(|runtime| runtime.promise(activity))
+                            })
+                            .ok_or_else(|| anyhow!("promise runtime activity is not registered"))?,
+                    )
+                } else {
+                    None
+                };
+                Ok::<_, anyhow::Error>((
+                    coordinated_wait,
+                    ctx.agent_mode(),
+                    ctx.state.config.suspend.ephemeral_max_sleep,
+                    interrupt,
+                ))
+            })
+            .map_err(|err| handle.trap(err))?;
+        let outcome = if let Some(wait) = coordinated_wait {
+            match wait
+                .wait(
+                    {
+                        let promise_handle = promise_handle.clone();
+                        async move { promise_handle.await_ready().await }
+                    },
+                    interrupt,
+                )
+                .await
+            {
+                Ok(()) => ParkOutcome::Ready,
+                Err(kind) => ParkOutcome::Interrupted(kind),
+            }
+        } else {
+            wait_for_ready(
+                mode,
+                max_sleep,
+                None,
                 interrupt,
+                promise_handle.await_ready(),
             )
-        });
-        let outcome = park_suspendable_wait(
-            wait_context,
-            interrupt,
-            || {
-                let promise_handle = promise_handle.clone();
-                async move {
-                    promise_handle.await_ready().await;
-                }
-            },
-            || promise_handle.is_ready_now(),
-            || {
-                accessor.with(|mut access| {
-                    let ctx = access.get();
-                    ctx.state.safe_to_suspend()
-                })
-            },
-            || None,
-        )
-        .await
-        .map_err(|err| handle.trap(err))?;
+            .await
+        };
 
         match outcome {
             ParkOutcome::Ready => {}
-            ParkOutcome::SuspendWorker(suspend_at) => {
-                handle.abandon_for_trap();
-                return Err(InterruptKind::Suspend(suspend_at).into());
-            }
             ParkOutcome::Interrupted(kind) => {
                 // An interrupt is non-error control flow: abandon the durable call without a
                 // trap context so the error classifies as `TrapType::Interrupt`.

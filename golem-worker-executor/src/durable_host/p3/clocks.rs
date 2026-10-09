@@ -16,11 +16,11 @@ use crate::durable_host::DurabilityHost;
 use crate::durable_host::concurrent::{Cancellable, DurableCallSession, NotCancellable};
 use crate::durable_host::p3::{DurableP3, DurableP3View, run_read_access};
 use crate::durable_host::suspendable_wait::{
-    ParkOutcome, SuspendableWaitContext, ephemeral_sleep_too_long_error, park_suspendable_wait,
+    ParkOutcome, ephemeral_sleep_too_long_error, wait_for_ready,
 };
 use crate::workerctx::WorkerCtx;
-use chrono::Utc;
 use futures::executor::block_on;
+use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{
     P3MonotonicClockGetResolution, P3MonotonicClockNow, P3MonotonicClockWaitFor,
     P3MonotonicClockWaitUntil, P3SystemClockGetResolution, P3SystemClockNow,
@@ -31,7 +31,6 @@ use golem_common::model::oplog::{
     HostRequestNoInput, HostResponseMonotonicClockTimestamp, HostResponseP3MonotonicClockUnit,
     HostResponseWallClock,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::time::Duration;
 use wasmtime::component::Accessor;
 use wasmtime_wasi::clocks::WasiClocksView;
@@ -186,56 +185,53 @@ async fn wait_until_live<U: Send + 'static, Ctx: WorkerCtx>(
     store: &Accessor<U, DurableP3<Ctx>>,
     when: monotonic_clock::Mark,
 ) -> wasmtime::Result<()> {
-    let (context, interrupt) = store.with(|mut access| {
+    let runtime = store.with(|mut access| {
+        let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
+        (ctx.agent_mode() == AgentMode::Durable && !ctx.state.durability_is_suppressed())
+            .then(|| ctx.runtime_suspension.clone())
+            .flatten()
+    });
+    if let Some(runtime) = runtime {
+        let remaining = remaining_duration(current_monotonic_now::<U, Ctx>(store)?, when);
+        let deadline = std::time::Instant::now() + remaining;
+        let activity = store
+            .runtime_activity()
+            .and_then(|id| runtime.timer(id, deadline))
+            .ok_or_else(|| wasmtime::Error::msg("timer runtime activity is not registered"))?;
+        let interrupt = store.with(|mut access| {
+            super::expect_ctx::<Ctx, U>(access.data_mut())
+                .durable_ctx_mut()
+                .create_interrupt_signal()
+        });
+        return activity
+            .wait(tokio::time::sleep_until(deadline.into()), interrupt)
+            .await
+            .map_err(|kind| wasmtime::Error::from_anyhow(kind.into()));
+    }
+    let (mode, max_sleep, remaining, interrupt) = store.with(|mut access| {
         let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
         let now = block_on(monotonic_clock::Host::now(&mut ctx.as_wasi_view().clocks()))?;
         let remaining = remaining_duration(now, when);
         let interrupt = ctx.create_interrupt_signal();
         Ok::<_, wasmtime::Error>((
-            SuspendableWaitContext {
-                wait_id: ctx.state.next_suspendable_wait_id(),
-                agent_mode: ctx.agent_mode(),
-                suspend: ctx.state.config.suspend.clone(),
-                wait_deadline: Some(Utc::now() + chrono::Duration::from_std(remaining).unwrap()),
-                suspendable_waits: ctx.state.suspendable_waits(),
-                wakeup_scheduler: ctx.state.wakeup_scheduler(),
-            },
+            ctx.agent_mode(),
+            ctx.state.config.suspend.ephemeral_max_sleep,
+            remaining,
             interrupt,
         ))
     })?;
 
-    let outcome = park_suspendable_wait(
-        context,
+    let outcome = wait_for_ready(
+        mode,
+        max_sleep,
+        Some(remaining),
         interrupt,
-        || async move {
-            if let Ok(now) = current_monotonic_now::<U, Ctx>(store) {
-                tokio::time::sleep(remaining_duration(now, when)).await;
-            }
-        },
-        || {
-            current_monotonic_now::<U, Ctx>(store)
-                .map(|now| now >= when)
-                .unwrap_or(false)
-        },
-        || {
-            store.with(|mut access| {
-                let ctx = super::expect_ctx::<Ctx, U>(access.data_mut()).durable_ctx_mut();
-                ctx.state.safe_to_suspend()
-            })
-        },
-        || {
-            current_monotonic_now::<U, Ctx>(store)
-                .ok()
-                .map(|now| remaining_duration(now, when))
-        },
+        tokio::time::sleep(remaining),
     )
-    .await?;
+    .await;
 
     match outcome {
         ParkOutcome::Ready => Ok(()),
-        ParkOutcome::SuspendWorker(suspend_at) => Err(wasmtime::Error::from_anyhow(
-            InterruptKind::Suspend(suspend_at).into(),
-        )),
         ParkOutcome::Interrupted(kind) => Err(wasmtime::Error::from_anyhow(kind.into())),
         ParkOutcome::EphemeralTooLong {
             requested_nanos,
