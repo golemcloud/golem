@@ -23,6 +23,7 @@ components:
       - golem-it:tool-streaming-rust-provider/capable-streaming
       - golem-it:tool-streaming-rust-provider/typed-output-stream
       - golem-it:tool-streaming-rust-provider/secret-policy-probe
+      - golem-it:tool-streaming-rust-provider/clock-race
       - golem-it:tool-streaming-rust-provider/environment-probe
       - golem-it:tool-streaming-rust-provider/matrix-core
       - golem-it:tool-streaming-rust-provider/matrix-resource
@@ -39,6 +40,7 @@ tools:
   capable-streaming: {}
   typed-output-stream: {}
   secret-policy-probe: {}
+  clock-race: {}
   environment-probe: {}
   matrix-core:
     component: golem-it:tool-streaming-rust-provider
@@ -53,6 +55,7 @@ agents:
       streaming: {}
       capable-streaming: {}
       typed-output-stream: {}
+      clock-race: {}
       matrix-core: {}
   RustResourceToolStreamingCaller:
     tools:
@@ -73,6 +76,7 @@ bridge:
       - capable-streaming
       - typed-output-stream
       - secret-policy-probe
+      - clock-race
       - environment-probe
       - matrix-core
       - matrix-resource

@@ -2002,6 +2002,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
         path: "/api/{city}/weather",
         auth: Some(false),
         phantom: false,
+        phantom_id_binding: None,
         cors: ["https://app.acme.com"],
         webhook_suffix: None,
         router: false,
@@ -2039,6 +2040,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   )
   assert_true(output.contains("auth_details: Some({ required: false"))
   assert_true(output.contains("phantom_agent: false"))
+  assert_true(output.contains("phantom_id_binding: None"))
   assert_true(output.contains("allowed_patterns: [\"https://app.acme.com\"]"))
   assert_true(output.contains("static_bindings: []"))
   assert_true(output.contains("filesystem_bindings: []"))
@@ -2083,6 +2085,7 @@ test "generate_agent_registration emits remaining/system path vars, required aut
         path: "/files",
         auth: Some(true),
         phantom: true,
+        phantom_id_binding: None,
         cors: [],
         webhook_suffix: Some("/events/{id}"),
         router: false,
@@ -2255,6 +2258,76 @@ test "durable stream attributes reject conflicts, duplicates, and malformed prop
     assert_true(
       capture_agent_parse_error(() => parse_agents([("streams.mbt", source)]))
       is Err(_),
+    )
+  }
+}
+
+///|
+test "phantom selector annotations preserve source requiredness and constructor coverage" {
+  for
+    item in [
+      ("path", "/c/{customer}/{instance}", "Path"),
+      ("query", "/c/{customer}", "Query"),
+    ] {
+    let (source, path, variant) = item
+    for optional in [false, true] {
+      let text = "#derive.agent\n#derive.mount(\"\{path}\")\n#derive.mount_phantom_id(\{source}=\"instance\",optional=\{optional})\nstruct Selected { customer: String }\nfn Selected::new(customer: String) -> Selected { { customer } }\n#derive.endpoint(get=\"/read\")\npub fn Selected::read(self: Self) -> String { self.customer }"
+      let agents = parse_agents([("selected.mbt", text)])
+      let binding = agents[0].http_mount.unwrap().phantom_id_binding
+      assert_eq(
+        binding,
+        if source == "path" {
+          Some(Path("instance", optional))
+        } else {
+          Some(Query("instance", optional))
+        },
+      )
+      let output = strip_whitespace(
+        @formatter.impls_to_string(generate_agent_registration(agents)),
+      )
+      assert_true(
+        output.contains(
+          "phantom_id_binding:Some(@common.PhantomIdBinding::\{variant}({name:\"instance\",optional:\{optional}})",
+        ),
+        msg=output,
+      )
+    }
+  }
+}
+
+///|
+test "phantom selectors reject malformed declarations and invalid ownership" {
+  for
+    item in [
+      ("#derive.mount_phantom_id()", "/c", ""),
+      ("#derive.mount_phantom_id(query=\"\")", "/c", ""),
+      (
+        "#derive.mount_phantom_id(path=\"instance\",query=\"instance\")", "/c", "",
+      ),
+      (
+        "#derive.mount_phantom_id(query=\"instance\",optional=\"true\")", "/c", "",
+      ),
+      (
+        "#derive.mount_phantom_id(query=\"instance\")\n#derive.mount_phantom_id(query=\"instance\")",
+        "/c", "",
+      ),
+      ("#derive.mount_phantom_id(path=\"instance\")", "/c", ""),
+      (
+        "#derive.mount_phantom_id(path=\"instance\")", "/c/{instance}/{other}", "",
+      ),
+      ("#derive.mount_phantom_id(query=\"instance\")", "/c/{instance}", ""),
+      ("#derive.mount_phantom_id(query=\"instance\")", "/c", "\"ephemeral\""),
+      (
+        "#derive.mount_phantom_id(query=\"instance\")\n#derive.expose_files(\"/*\",\"/public/$1\")",
+        "/c", "",
+      ),
+    ] {
+    let (annotation, mount, mode) = item
+    let text = "#derive.agent(\{mode})\n#derive.mount(\"\{mount}\")\n\{annotation}\nstruct Selected {}\nfn Selected::new() -> Selected { {} }\n#derive.endpoint(get=\"/read\")\npub fn Selected::read(self: Self) -> String { \"ok\" }"
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("selected.mbt", text)]))
+      is Err(_),
+      msg=text,
     )
   }
 }

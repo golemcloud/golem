@@ -157,6 +157,7 @@ export function compileRouterMount(options: RouterMountOptions): {
       authDetails: { required: options.auth ?? false },
       corsOptions: { allowedPatterns: [...(options.cors ?? [])] },
       phantomAgent: false,
+      phantomIdBinding: undefined,
       webhookSuffix: [],
       staticBindings: [...(options.staticBindings ?? [])],
       filesystemBindings: [],

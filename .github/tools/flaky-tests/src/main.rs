@@ -1,6 +1,6 @@
 use flaky_tests::{
-    ArtifactContext, ISSUE_MARKER, ISSUE_TITLE, Observation, aggregate, consolidated_artifact_name,
-    observations_from_archive, render_report, select_job_url,
+    ArtifactContext, ISSUE_MARKER, ISSUE_TITLE, Observation, TestStats, aggregate,
+    consolidated_artifact_name, observations_from_archive, render_report, select_job_url,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -440,39 +440,88 @@ fn download_reports<G: GitHubApi>(github: &G, work: Vec<ArtifactWork>) -> Result
     })
 }
 
-fn add_job_links<G: GitHubApi>(
-    github: &G,
-    observations: &mut [Observation],
-    candidates: &HashSet<String>,
-) -> Result<()> {
+fn add_job_links<G: GitHubApi>(github: &G, candidates: &mut [TestStats]) -> Result<()> {
     let mut jobs_by_attempt = HashMap::<(u64, u32), Vec<Job>>::new();
-    for observation in observations.iter_mut().filter(|observation| {
-        observation.status == "failed" && candidates.contains(&observation.name)
-    }) {
-        let key = (observation.run_id, observation.attempt);
-        if let std::collections::hash_map::Entry::Vacant(entry) = jobs_by_attempt.entry(key) {
-            let endpoint = format!(
-                "/repos/{}/actions/runs/{}/attempts/{}/jobs",
-                github.repo(),
-                observation.run_id,
-                observation.attempt
-            );
-            let jobs = github.paginated(
-                &endpoint,
-                |value| Ok(serde_json::from_value::<Jobs>(value)?.jobs),
-                &[],
-            )?;
-            entry.insert(jobs);
+    let mut cursors = vec![0; candidates.len()];
+    loop {
+        let mut pending = HashSet::new();
+        let mut remaining = false;
+        for (test, cursor) in candidates.iter().zip(&cursors) {
+            if test.links.len() < 3
+                && let Some(job) = test.failure_jobs.get(*cursor)
+            {
+                remaining = true;
+                let key = (job.run_id, job.attempt);
+                if !jobs_by_attempt.contains_key(&key) {
+                    pending.insert(key);
+                }
+            }
         }
-        let fallback = format!("{}/attempts/{}", observation.run_url, observation.attempt);
-        observation.job_url = Some(select_job_url(
-            jobs_by_attempt[&key]
-                .iter()
-                .map(|job| (job.name.as_str(), job.html_url.as_str())),
-            &observation.artifact_name,
-            &fallback,
-        ));
+        if !remaining {
+            break;
+        }
+        let queue = Mutex::new(VecDeque::from_iter(pending));
+        let (sender, receiver) = mpsc::channel();
+        thread::scope(|scope| -> Result<()> {
+            for _ in 0..4 {
+                let queue = &queue;
+                let sender = sender.clone();
+                scope.spawn(move || {
+                    loop {
+                        let Some((run_id, attempt)) =
+                            queue.lock().expect("work queue is poisoned").pop_front()
+                        else {
+                            break;
+                        };
+                        let endpoint = format!(
+                            "/repos/{}/actions/runs/{run_id}/attempts/{attempt}/jobs",
+                            github.repo(),
+                        );
+                        let result = github.paginated(
+                            &endpoint,
+                            |value| Ok(serde_json::from_value::<Jobs>(value)?.jobs),
+                            &[],
+                        );
+                        if sender.send(((run_id, attempt), result)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            drop(sender);
+            for (key, result) in receiver {
+                jobs_by_attempt.insert(key, result?);
+            }
+            Ok(())
+        })?;
+        for (test, cursor) in candidates.iter_mut().zip(&mut cursors) {
+            if test.links.len() >= 3 {
+                continue;
+            }
+            let Some(job) = test.failure_jobs.get(*cursor) else {
+                continue;
+            };
+            *cursor += 1;
+            let fallback = format!("{}/attempts/{}", job.run_url, job.attempt);
+            let link = select_job_url(
+                jobs_by_attempt[&(job.run_id, job.attempt)]
+                    .iter()
+                    .map(|job| (job.name.as_str(), job.html_url.as_str())),
+                &job.artifact_name,
+                &fallback,
+            );
+            if !test.links.contains(&link) {
+                test.links.push(link);
+            }
+        }
     }
+    for test in candidates {
+        test.links.reverse();
+    }
+    eprintln!(
+        "Resolved failing job links (run_attempts={})",
+        jobs_by_attempt.len()
+    );
     Ok(())
 }
 
@@ -623,25 +672,19 @@ fn generate_report<G: GitHubApi>(
         .len();
     eprintln!("Discovered test-report artifacts (reports={artifact_count})");
     eprintln!("Downloading and parsing test reports (workers=8)");
-    let mut observations = download_reports(github, work)?;
+    let observations = download_reports(github, work)?;
     eprintln!("Parsed test reports (observations={})", observations.len());
-    let candidate_names = aggregate(observations.clone())
-        .into_iter()
-        .map(|test| test.name)
-        .collect::<HashSet<_>>();
-    eprintln!(
-        "Resolving failing job links (candidate_tests={})",
-        candidate_names.len()
-    );
-    add_job_links(github, &mut observations, &candidate_names)?;
     eprintln!("Aggregating flaky-test signals");
-    let candidates = aggregate(observations);
+    let mut candidates = aggregate(observations);
     let active_count = candidates.iter().filter(|test| test.is_active()).count();
     eprintln!(
         "Aggregated flaky-test signals (active={}, recently_resolved={})",
         active_count,
         candidates.len() - active_count
     );
+    let displayed_count = candidates.len().min(args.limit);
+    eprintln!("Resolving failing job links (displayed_tests={displayed_count}, workers=4)");
+    add_job_links(github, &mut candidates[..displayed_count])?;
     let existing = if args.update_issue {
         eprintln!("Looking up the known-flaky-tests issue");
         find_issue(github)?
@@ -702,6 +745,7 @@ mod tests {
         existing_issue: bool,
         label_exists: bool,
         pinned: bool,
+        job_responses: HashMap<String, Vec<Value>>,
     }
 
     impl FakeGitHub {
@@ -727,6 +771,7 @@ mod tests {
                 existing_issue,
                 label_exists,
                 pinned,
+                job_responses: HashMap::new(),
             }
         }
 
@@ -749,6 +794,19 @@ mod tests {
 
         fn read(&self, endpoint: &str, fields: &[(&str, String)]) -> Result<Vec<u8>> {
             self.reads.lock().unwrap().push(endpoint.to_string());
+            if let Some(pages) = self.job_responses.get(endpoint) {
+                let page: usize = fields
+                    .iter()
+                    .find(|(key, _)| *key == "page")
+                    .unwrap()
+                    .1
+                    .parse()?;
+                let value = &pages[page - 1];
+                if value.is_null() {
+                    return Err(other_error("job metadata unavailable".into()));
+                }
+                return Ok(serde_json::to_vec(value)?);
+            }
             let value = match endpoint {
                 "/repos/test/repo/actions/runs/1" => json!({
                     "id": 1,
@@ -851,6 +909,121 @@ mod tests {
             summary: None,
             update_issue,
         }
+    }
+
+    fn failed_observation(name: &str, run_id: u64, artifact_name: &str) -> Observation {
+        Observation {
+            name: name.into(),
+            status: "failed".into(),
+            duration: 10.0,
+            retries: 0,
+            run_id,
+            attempt: 1,
+            branch: "main".into(),
+            seen_at: format!("2026-09-03T10:{run_id:02}:00Z"),
+            artifact_name: artifact_name.into(),
+            run_url: format!("https://example.test/runs/{run_id}"),
+        }
+    }
+
+    #[test]
+    fn resolves_latest_unique_urls_with_backfill_and_shared_attempt_cache() {
+        let mut github = FakeGitHub::new(false, false, false);
+        for run_id in 2..=5 {
+            let jobs = if run_id == 5 {
+                vec![]
+            } else {
+                vec![json!({
+                    "name": "unit-tests-and-checks",
+                    "html_url": if run_id == 2 { "https://example.test/jobs/older" } else { "https://example.test/jobs/shared" }
+                })]
+            };
+            github.job_responses.insert(
+                format!("/repos/test/repo/actions/runs/{run_id}/attempts/1/jobs"),
+                vec![json!({"jobs": jobs})],
+            );
+        }
+        let mut observations = (1..=4)
+            .map(|id| failed_observation("suite", id, "unit-tests-report-attempt1"))
+            .collect::<Vec<_>>();
+        observations.extend([
+            failed_observation("suite", 5, "missing-a-report-attempt1"),
+            failed_observation("suite", 5, "missing-b-report-attempt1"),
+            failed_observation("other", 4, "unit-tests-report-attempt1"),
+        ]);
+        let mut candidates = aggregate(observations);
+        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(candidates[0].name, "suite");
+        assert_eq!(
+            candidates[0].links,
+            [
+                "https://example.test/jobs/older",
+                "https://example.test/jobs/shared",
+                "https://example.test/runs/5/attempts/1",
+            ]
+        );
+        assert_eq!(candidates[1].links, ["https://example.test/jobs/shared"]);
+        let reads = github.reads.lock().unwrap();
+        assert_eq!(reads.len(), 4);
+        for run_id in 2..=5 {
+            assert_eq!(
+                reads
+                    .iter()
+                    .filter(|endpoint| **endpoint
+                        == format!("/repos/test/repo/actions/runs/{run_id}/attempts/1/jobs"))
+                    .count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn job_link_lookup_paginates_and_propagates_errors() {
+        let mut github = FakeGitHub::new(false, false, false);
+        github.job_responses.insert(
+            "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
+            vec![
+                json!({"jobs": (0..100).map(|id| json!({"name": format!("unrelated-{id}"), "html_url": "unused"})).collect::<Vec<_>>()}),
+                json!({"jobs": [{"name": "unit-tests-and-checks", "html_url": "https://example.test/jobs/page2"}]}),
+            ],
+        );
+        let mut candidates = aggregate(vec![failed_observation(
+            "suite",
+            1,
+            "unit-tests-report-attempt1",
+        )]);
+        add_job_links(&github, &mut candidates).unwrap();
+        assert_eq!(candidates[0].links, ["https://example.test/jobs/page2"]);
+        assert_eq!(github.reads.lock().unwrap().len(), 2);
+        github.job_responses.insert(
+            "/repos/test/repo/actions/runs/1/attempts/1/jobs".into(),
+            vec![Value::Null],
+        );
+        candidates[0].links.clear();
+        assert!(
+            add_job_links(&github, &mut candidates)
+                .unwrap_err()
+                .to_string()
+                .contains("job metadata unavailable")
+        );
+        assert!(candidates[0].links.is_empty());
+    }
+
+    #[test]
+    fn report_limit_skips_job_requests_for_hidden_candidates() {
+        let github = FakeGitHub::new(false, false, false);
+        let mut args = test_args(false);
+        args.limit = 0;
+        let (body, _) = generate_report(&github, &args, 1_788_480_000).unwrap();
+        assert!(body.contains("Showing the top 0 of 2"));
+        assert!(
+            !github
+                .reads
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|endpoint| endpoint.ends_with("/jobs"))
+        );
     }
 
     #[test]

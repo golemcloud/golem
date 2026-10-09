@@ -461,10 +461,7 @@ impl SandboxFilesystemAllocationObserver {
             })
         }
         #[cfg(not(target_os = "linux"))]
-        {
-            let _ = project_id;
-            unreachable!("managed XFS is unavailable on this platform")
-        }
+        unreachable!("managed XFS is unavailable on this platform");
     }
 }
 

@@ -64,6 +64,7 @@ pub mod rpc;
 pub mod scalability;
 pub mod scheduler_storage;
 pub mod scope_cards;
+pub mod suspension_races;
 pub mod tool_discovery;
 pub mod tool_runtime_bypass;
 pub mod tool_streaming;
@@ -138,6 +139,7 @@ tag_suite!(resource_limits, group1);
 tag_suite!(oplog_metrics, group1);
 tag_suite!(tool_discovery, group1);
 tag_suite!(mcp_stdout, group1);
+tag_suite!(suspension_races, group1);
 tag_suite!(tool_runtime_bypass, group1);
 tag_suite!(tool_streaming, tool_streaming);
 

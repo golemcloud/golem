@@ -1710,6 +1710,7 @@ fn http_router_bridge_rejection_uses_kind_not_name() {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },

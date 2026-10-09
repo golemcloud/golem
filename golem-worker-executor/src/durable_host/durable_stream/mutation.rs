@@ -18,6 +18,12 @@ use futures::future::BoxFuture;
 use futures::stream::FuturesUnordered;
 use tokio::sync::mpsc;
 
+use crate::worker::suspension::{ExternalActivity, RuntimeSource};
+
+tokio::task_local! {
+    static OUTPUT_MUTATION_SOURCE: Option<RuntimeSource>;
+}
+
 type Mutation = BoxFuture<'static, MutationCompletion>;
 
 struct MutationCompletion {
@@ -91,11 +97,21 @@ pub struct StreamWriteAdmission {
     producer: Arc<DurableStreamStore>,
     status_receipts: std::sync::Mutex<Vec<oneshot::Receiver<Result<(), StreamStoreError>>>>,
     publications: std::sync::Mutex<Vec<PublicationReceipt>>,
+    _external_activity: Option<Arc<ExternalActivity>>,
     _operation: OwnedSemaphorePermit,
     _memory: OwnedSemaphorePermit,
 }
 
 impl StreamWriteAdmission {
+    /// Gives output mutations their own suspension charge before admission waits. The scoped
+    /// source is not inherited by spawned tasks; each output drain installs its own source.
+    pub(crate) async fn account_output_mutations<T>(
+        source: Option<RuntimeSource>,
+        operation: impl Future<Output = T>,
+    ) -> T {
+        OUTPUT_MUTATION_SOURCE.scope(source, operation).await
+    }
+
     /// Queues a local write and waits for durability; the admitted operation joins status callbacks.
     pub(crate) async fn submit<T, E, F, Fut>(self: &Arc<Self>, operation: F) -> Result<T, E>
     where
@@ -434,6 +450,28 @@ impl DurableStreamStore {
         F: FnOnce(Arc<Self>, Arc<StreamWriteAdmission>) -> Fut + Send + 'static,
         Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
+        let activity = OUTPUT_MUTATION_SOURCE
+            .try_with(|source| source.as_ref().map(RuntimeSource::external_activity))
+            .ok()
+            .flatten();
+        self.run_admitted_accounted(admission, retained_bytes, lifecycle, activity, operation)
+            .await
+    }
+
+    pub(crate) async fn run_admitted_accounted<T, E, F, Fut>(
+        &self,
+        admission: Option<&Arc<StreamWriteAdmission>>,
+        retained_bytes: usize,
+        lifecycle: bool,
+        activity: Option<ExternalActivity>,
+        operation: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'static,
+        E: From<StreamStoreError> + Send + 'static,
+        F: FnOnce(Arc<Self>, Arc<StreamWriteAdmission>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
+    {
         self.ensure_healthy()?;
         if let Some(admission) = admission {
             assert!(std::ptr::eq(admission.producer.as_ref(), self));
@@ -470,6 +508,7 @@ impl DurableStreamStore {
             producer: producer.clone(),
             status_receipts: std::sync::Mutex::new(Vec::new()),
             publications: std::sync::Mutex::new(Vec::new()),
+            _external_activity: activity.map(Arc::new),
             _operation: permit,
             _memory: memory,
         });
@@ -512,9 +551,28 @@ impl DurableStreamStore {
                         }
                     }
                 }
+                let external_activity = admission._external_activity.clone();
+                let mut accounting_publications = Vec::new();
+                if lifecycle && external_activity.is_some() {
+                    publications = publications
+                        .into_iter()
+                        .map(|publication| {
+                            let publication = publication.shared();
+                            accounting_publications.push(publication.clone());
+                            Box::pin(publication) as PublicationReceipt
+                        })
+                        .collect();
+                }
                 // Lifecycle admission must not be held by an abandoned or backpressured reader.
                 drop(admission);
                 let _ = reply.send((outcome, publications));
+                drop(producer);
+                // Deferred terminals do not retain admission in the bus. Keep only the external
+                // charge through their publication handoff, independently of the abandoned caller.
+                for publication in accounting_publications {
+                    let _ = publication.await;
+                }
+                drop(external_activity);
             })))?;
         let (mut outcome, publications) = result
             .await
@@ -694,7 +752,170 @@ impl DurableStreamStore {
 mod tests {
     use super::*;
     use crate::durable_host::durable_stream::tests::{TestOplog, identity};
+    use crate::worker::suspension::OwnerSuspension;
+    use crate::worker::suspension::tests::{blocked_timer, eligible_now};
     use test_r::{test, timeout};
+
+    #[test]
+    #[timeout("30s")]
+    async fn abandoned_output_mutation_retains_external_charge_through_commit_tail() {
+        for lifecycle in [false, true] {
+            for fail in [false, true] {
+                let owner = OwnerSuspension::new();
+                let (runtime, _, _timer) = blocked_timer(
+                    &owner,
+                    std::time::Instant::now() + std::time::Duration::from_secs(60),
+                );
+                assert!(eligible_now(&owner));
+                let (entered, body_entered) = oneshot::channel();
+                let (release, released) = oneshot::channel();
+                let (body_completed, body_finished) = oneshot::channel();
+                let (tail_entered, tail_started) = oneshot::channel();
+                let (tail_release, tail_released) = oneshot::channel();
+                let callback = std::sync::Mutex::new(Some((tail_entered, tail_released)));
+                let identity = identity();
+                let producer = DurableStreamStore::load_with_commit(
+                    Arc::new(TestOplog::default()),
+                    identity.environment_id,
+                    identity.agent_id,
+                    identity.fingerprint,
+                    None,
+                    Arc::new(move |committed| {
+                        let (entered, released) = callback.lock().unwrap().take().unwrap();
+                        Box::pin(async move {
+                            committed.unwrap().send(Ok(())).unwrap();
+                            entered.send(()).unwrap();
+                            released.await.unwrap();
+                        })
+                    }),
+                )
+                .await
+                .unwrap();
+                let mut waiter = Box::pin(StreamWriteAdmission::account_output_mutations(
+                    Some(runtime.source()),
+                    producer.run_admitted(None, 0, lifecycle, move |_, admission| async move {
+                        admission
+                            .submit(move |producer, context| async move {
+                                entered.send(()).unwrap();
+                                released.await.unwrap();
+                                producer.commit(&context).await?;
+                                context.finish_durable_effect();
+                                body_completed.send(()).unwrap();
+                                if fail {
+                                    Err(StreamStoreError::Oplog("output preparation failed".into()))
+                                } else {
+                                    Ok(())
+                                }
+                            })
+                            .await
+                    }),
+                ));
+                assert!(futures::poll!(waiter.as_mut()).is_pending());
+                body_entered.await.unwrap();
+                drop(waiter);
+                assert!(!eligible_now(&owner));
+                release.send(()).unwrap();
+                tail_started.await.unwrap();
+                body_finished.await.unwrap();
+                assert!(!eligible_now(&owner));
+                tail_release.send(()).unwrap();
+                while !eligible_now(&owner) {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn abandoned_output_mutation_retains_external_charge_through_live_publication() {
+        use crate::durable_host::stream_bus::DurableLiveStreamEvent;
+
+        for (lifecycle, deferred_terminal) in [(false, false), (true, false), (true, true)] {
+            let owner = OwnerSuspension::new();
+            let (runtime, _, _timer) = blocked_timer(
+                &owner,
+                std::time::Instant::now() + std::time::Duration::from_secs(60),
+            );
+            assert!(eligible_now(&owner));
+            let identity = identity();
+            let producer = DurableStreamStore::load(
+                Arc::new(TestOplog::default()),
+                identity.environment_id,
+                identity.agent_id,
+                identity.fingerprint,
+                None,
+            )
+            .await
+            .unwrap();
+            let bus = Arc::new(DurableLiveStreamBus::<u8>::new(1).unwrap());
+            let reader = bus.subscribe().await.unwrap();
+            bus.publish_committed(DurableLiveStreamEvent {
+                offset: StreamOffset::new(OplogIndex::from_u64(1), 0),
+                payload: 1,
+            })
+            .await
+            .unwrap();
+            let (entered, body_entered) = oneshot::channel();
+            let (release, released) = oneshot::channel();
+            let publication_bus = bus.clone();
+            let mut waiter = Box::pin(StreamWriteAdmission::account_output_mutations(
+                Some(runtime.source()),
+                producer.run_admitted(None, 0, lifecycle, move |_, admission| async move {
+                    let publication = if deferred_terminal {
+                        publication_bus
+                            .defer_terminal(
+                                StreamOffset::new(OplogIndex::from_u64(2), 0),
+                                false,
+                                Arc::new(tokio::sync::Notify::new()),
+                            )
+                            .unwrap()
+                    } else {
+                        publication_bus.enqueue_batch(
+                            vec![DurableLiveStreamEvent {
+                                offset: StreamOffset::new(OplogIndex::from_u64(2), 0),
+                                payload: 2,
+                            }],
+                            false,
+                            admission.clone(),
+                        )
+                    };
+                    admission.defer_publication(publication);
+                    entered.send(()).unwrap();
+                    released.await.unwrap();
+                    Ok::<(), StreamStoreError>(())
+                }),
+            ));
+            assert!(futures::poll!(waiter.as_mut()).is_pending());
+            body_entered.await.unwrap();
+            drop(waiter);
+            release.send(()).unwrap();
+            // Lifecycle orchestration hands receipts back without awaiting them. Accounting must
+            // survive a reply without a receiver, including terminals with no bus keepalive.
+            producer
+                .run_admitted(None, 0, true, |_, _| async {
+                    Ok::<(), StreamStoreError>(())
+                })
+                .await
+                .unwrap();
+            assert!(!eligible_now(&owner));
+            let weak_producer = Arc::downgrade(&producer);
+            drop(producer);
+            if deferred_terminal {
+                while weak_producer.upgrade().is_some() {
+                    tokio::task::yield_now().await;
+                }
+                assert!(!eligible_now(&owner));
+            }
+            drop(reader);
+            if deferred_terminal {
+                bus.retire();
+            }
+            while !eligible_now(&owner) {
+                tokio::task::yield_now().await;
+            }
+        }
+    }
 
     #[test]
     #[timeout("30s")]

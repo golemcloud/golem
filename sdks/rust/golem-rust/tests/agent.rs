@@ -1364,6 +1364,92 @@ mod tests {
     }
 
     #[agent_definition(
+        mount = "/c/{customer}/{instance}",
+        phantom_id(path = "instance", optional = true)
+    )]
+    trait SelectedPathAgent {
+        fn new(customer: String) -> Self;
+        #[endpoint(get = "/read")]
+        fn read(&self) -> String;
+    }
+    struct SelectedPathAgentImpl(String);
+    #[agent_implementation]
+    impl SelectedPathAgent for SelectedPathAgentImpl {
+        fn new(customer: String) -> Self {
+            Self(customer)
+        }
+        fn read(&self) -> String {
+            self.0.clone()
+        }
+    }
+
+    #[agent_definition(mount = "/c/{customer}", phantom_id(query = "instance"))]
+    trait SelectedQueryAgent {
+        fn new(customer: String) -> Self;
+        #[endpoint(get = "/read")]
+        fn read(&self) -> String;
+    }
+    struct SelectedQueryAgentImpl(String);
+    #[agent_implementation]
+    impl SelectedQueryAgent for SelectedQueryAgentImpl {
+        fn new(customer: String) -> Self {
+            Self(customer)
+        }
+        fn read(&self) -> String {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn phantom_http_metadata_from_public_macros() {
+        use golem_rust::golem_agentic::golem::agent::common::{
+            PhantomIdBinding, PhantomIdBindingDetails,
+        };
+        SelectedPathAgentImpl::__register_agent_type();
+        SelectedQueryAgentImpl::__register_agent_type();
+        let agents = golem_rust::agentic::get_all_agent_types();
+        for (name, expected) in [
+            (
+                "SelectedPathAgent",
+                PhantomIdBinding::Path(PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional: true,
+                }),
+            ),
+            (
+                "SelectedQueryAgent",
+                PhantomIdBinding::Query(PhantomIdBindingDetails {
+                    name: "instance".into(),
+                    optional: false,
+                }),
+            ),
+        ] {
+            let agent = agents.iter().find(|a| a.type_name == name).unwrap();
+            let actual = agent
+                .http_mount
+                .as_ref()
+                .unwrap()
+                .phantom_id_binding
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                std::mem::discriminant(actual),
+                std::mem::discriminant(&expected)
+            );
+            let (PhantomIdBinding::Path(actual) | PhantomIdBinding::Query(actual)) = actual;
+            let (PhantomIdBinding::Path(expected) | PhantomIdBinding::Query(expected)) = expected;
+            assert_eq!(actual.name, expected.name);
+            assert_eq!(actual.optional, expected.optional);
+            let golem_rust::golem_agentic::golem::agent::common::InputSchema::Parameters(fields) =
+                &agent.constructor.input_schema;
+            assert_eq!(
+                fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+                vec!["customer"]
+            );
+        }
+    }
+
+    #[agent_definition(
         mount = "/chats/{agent-type}/{foo}/{bar}",
         webhook_suffix = "/{agent-type}/events/{foo}/{bar}",
         auth = true,
