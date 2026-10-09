@@ -937,6 +937,14 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         self.instantiate_entity_with_scope(None).await
     }
 
+    #[cfg(feature = "test-utils")]
+    pub async fn instantiate_entity_scoped_for_test(
+        &self,
+        scope: &EntityInvocationScope,
+    ) -> Result<HostedInstance<Ctx>, WorkerExecutorError> {
+        self.instantiate_entity_scoped(scope).await
+    }
+
     pub(crate) async fn instantiate_entity_scoped(
         &self,
         scope: &EntityInvocationScope,

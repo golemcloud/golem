@@ -81,7 +81,8 @@ pub use websocket_handshake_test::{
 };
 #[cfg(feature = "test-utils")]
 pub use websocket_reader_lock_test::{
-    WebSocketReaderLockPendingForTest, WebSocketReaderLockStateForTest,
+    WebSocketReaderBoundaryForTest, WebSocketReaderLockPendingForTest,
+    WebSocketReaderLockStateForTest,
 };
 #[cfg(feature = "test-utils")]
 pub use websocket_reconnect_pool_test::{
@@ -894,19 +895,71 @@ struct SelectedInvocationOutcome {
     key: Option<IdempotencyKey>,
     failure: Option<TrapType>,
     writer_claimed: bool,
-    writer_completion: Option<StopCompletion>,
+    writer_completion: Option<InvocationOutcomeCompletion>,
 }
+
+impl SelectedInvocationOutcome {
+    #[cfg(feature = "test-utils")]
+    fn committed_success_writer(
+        &self,
+        generation: u64,
+        key: &IdempotencyKey,
+    ) -> Option<InvocationOutcomeCompletion> {
+        if self.generation != generation
+            || self.key.as_ref() != Some(key)
+            || self.failure.is_some()
+            || !self.writer_claimed
+        {
+            return None;
+        }
+        self.writer_completion.clone().filter(|writer| {
+            matches!(
+                writer.clone().now_or_never(),
+                Some(Ok(InvocationOutcomeVerdict::Committed))
+            )
+        })
+    }
+
+    fn matches_terminal_writer(
+        &self,
+        generation: u64,
+        key: &Option<IdempotencyKey>,
+        kind: InterruptKind,
+        writer: &InvocationOutcomeCompletion,
+    ) -> bool {
+        matches!(
+            kind,
+            InterruptKind::Interrupt(_) | InterruptKind::Suspend(_)
+        ) && self.generation == generation
+            && &self.key == key
+            && self.writer_claimed
+            && matches!(&self.failure, Some(TrapType::Interrupt(selected)) if *selected == kind)
+            && self
+                .writer_completion
+                .as_ref()
+                .is_some_and(|completion| completion.ptr_eq(writer))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InvocationOutcomeVerdict {
+    Committed,
+    Refused(OplogFence),
+}
+
+type InvocationOutcomeCompletion =
+    Shared<BoxFuture<'static, Result<InvocationOutcomeVerdict, WorkerExecutorError>>>;
 
 pub(crate) struct InvocationOutcomeWrite(Option<oneshot::Sender<Result<(), OplogFence>>>);
 
 impl InvocationOutcomeWrite {
-    fn new() -> (Self, StopCompletion) {
+    fn new() -> (Self, InvocationOutcomeCompletion) {
         let (sender, receiver) = oneshot::channel();
         let completion = async move {
             match receiver.await {
-                // Either receipt joins the writer. A refused write publishes no result;
-                // ShardLost retirement still has to join physical cleanup.
-                Ok(Ok(())) | Ok(Err(_)) => Ok(()),
+                // Either verdict joins the writer; only a committed write can settle its terminal.
+                Ok(Ok(())) => Ok(InvocationOutcomeVerdict::Committed),
+                Ok(Err(fence)) => Ok(InvocationOutcomeVerdict::Refused(fence)),
                 Err(_) => Err(WorkerExecutorError::runtime(
                     "Invocation outcome writer was lost",
                 )),
@@ -985,6 +1038,8 @@ struct StopProgressState {
     websocket_reader_lock_observer:
         Option<tokio::sync::mpsc::UnboundedSender<WebSocketReaderLockPendingForTest>>,
     #[cfg(feature = "test-utils")]
+    websocket_reader_order: Option<websocket_reader_lock_test::WebSocketReaderOrderForTest>,
+    #[cfg(feature = "test-utils")]
     websocket_reconnect_pool_observer:
         Option<tokio::sync::mpsc::UnboundedSender<WebSocketReconnectPoolPendingForTest>>,
     #[cfg(feature = "test-utils")]
@@ -1000,6 +1055,11 @@ struct StopProgressState {
     lose_settlement_observer: bool,
     #[cfg(feature = "test-utils")]
     idle_close_gate: Option<StopTestGate>,
+    #[cfg(feature = "test-utils")]
+    idle_wait_observer: Option<(
+        IdempotencyKey,
+        tokio::sync::oneshot::Sender<monthly_limits::IdleAfterSuccessForTest>,
+    )>,
     #[cfg(feature = "test-utils")]
     unload_succeeded: bool,
     #[cfg(feature = "test-utils")]
@@ -4630,6 +4690,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let was_waiting = waiting.is_some();
         let before_owner_generation = matches!(lifecycle.deletion_runtime(),
             WorkerInstance::Running(running) if !running.owner_generation_started);
+        let started_resident_attempt = match lifecycle.deletion_runtime() {
+            WorkerInstance::Running(running) if running.owner_generation_started => {
+                Some(running.start_attempt)
+            }
+            _ => None,
+        };
         let resident_generation = self.resident_generation.load(Ordering::Acquire);
         let predecessor = admission.release.clone();
         let (publication, leader) = match &admission.publication {
@@ -4714,16 +4780,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .unwrap()
                         .as_ref()
                         .filter(|selected| selected.generation == resident_generation)
-                        .and_then(|selected| selected.writer_completion.clone());
+                        .and_then(|selected| {
+                            selected
+                                .writer_completion
+                                .clone()
+                                .map(|writer| (selected.key.clone(), writer))
+                        });
                     (pending, writer)
                 };
                 #[cfg(feature = "test-utils")]
                 worker.wait_stop_freeze_for_test().await;
                 // Result selection precedes its writer receipt and notification.
                 // Neither the queue lock nor the instance lock is held here.
-                if let Some(writer) = writer {
-                    writer.await?;
-                }
+                let committed_writer = match writer {
+                    Some((key, writer)) => match writer.clone().await? {
+                        InvocationOutcomeVerdict::Committed => Some((key, writer)),
+                        InvocationOutcomeVerdict::Refused(_) => None,
+                    },
+                    None => None,
+                };
                 if let Some(active) = worker
                     .active_agents()
                     .try_get_active_agent(&worker.owned_agent_id)
@@ -4760,6 +4835,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             publication.receipt.clone(),
                             publication.signal.as_ref(),
                         );
+                        // A new startup can still report the previous resident generation.
+                        // Only the started resident fenced above can settle its own writer.
+                        if let Some(start_attempt) = started_resident_attempt
+                            && matches!(lifecycle.deletion_runtime(),
+                                WorkerInstance::Running(running)
+                                    if running.owner_generation_started
+                                        && running.start_attempt == start_attempt)
+                            && let Some((key, writer)) = &committed_writer
+                            && worker
+                                .invocation_outcome
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .is_some_and(|selected| {
+                                    selected.matches_terminal_writer(
+                                        resident_generation,
+                                        key,
+                                        pending.kind,
+                                        writer,
+                                    )
+                                })
+                        {
+                            interrupts.claim_written_terminal(pending.kind);
+                        }
                         interrupts.publish();
                         publication.published.notify_waiters();
                         if let WorkerInstance::Running(running) = lifecycle.deletion_runtime() {
@@ -12249,6 +12348,21 @@ impl WorkerInterruptState {
         }
     }
 
+    fn claim_written_terminal(&mut self, kind: InterruptKind) -> bool {
+        match self {
+            Self::Freezing(interrupt) | Self::Pending(interrupt)
+                if matches!(
+                    kind,
+                    InterruptKind::Interrupt(_) | InterruptKind::Suspend(_)
+                ) && interrupt.kind == kind =>
+            {
+                *self = Self::TerminalClaimed(*interrupt);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn reset_terminal_for_new_generation(&mut self) {
         if matches!(self, Self::TerminalClaimed(_)) {
             *self = Self::Idle;
@@ -14537,18 +14651,22 @@ mod tests {
     async fn invocation_outcome_writer_requires_an_explicit_receipt() {
         let (writer, completion) = InvocationOutcomeWrite::new();
         writer.complete();
-        assert_eq!(completion.await, Ok(()));
+        assert_eq!(completion.await, Ok(InvocationOutcomeVerdict::Committed));
 
         let (writer, completion) = InvocationOutcomeWrite::new();
-        writer.refused(OplogFence {
+        let fence = OplogFence {
             agent_id: AgentId {
                 component_id: ComponentId::new(),
                 agent_id: "fenced-outcome".to_string(),
             },
             expected_epoch: ShardEpoch(0),
             actual_epoch: Some(ShardEpoch(1)),
-        });
-        assert_eq!(completion.await, Ok(()));
+        };
+        writer.refused(fence.clone());
+        assert_eq!(
+            completion.await,
+            Ok(InvocationOutcomeVerdict::Refused(fence))
+        );
 
         let (writer, completion) = InvocationOutcomeWrite::new();
         drop(writer);
@@ -15654,6 +15772,151 @@ mod tests {
             reacquire_permits: false,
             unload_request: UnloadRequest::ordinary(UnloadReason::Restart),
         }));
+    }
+
+    #[test]
+    async fn selected_terminal_writer_requires_exact_outcome_identity() {
+        for key in [Some(IdempotencyKey::fresh()), None] {
+            let kind = InterruptKind::Suspend(Timestamp::now_utc());
+            let (writer, completion) = InvocationOutcomeWrite::new();
+            let mut selected = SelectedInvocationOutcome {
+                generation: 7,
+                key: key.clone(),
+                failure: Some(TrapType::Interrupt(kind)),
+                writer_claimed: true,
+                writer_completion: Some(completion.clone()),
+            };
+            assert!(selected.matches_terminal_writer(7, &key, kind, &completion));
+            assert!(!selected.matches_terminal_writer(8, &key, kind, &completion));
+            assert!(!selected.matches_terminal_writer(
+                7,
+                &Some(IdempotencyKey::fresh()),
+                kind,
+                &completion
+            ));
+            assert!(!selected.matches_terminal_writer(
+                7,
+                &key,
+                InterruptKind::Restart,
+                &completion
+            ));
+            let (other_writer, another) = InvocationOutcomeWrite::new();
+            other_writer.complete();
+            writer.complete();
+            assert_eq!(
+                completion.clone().await,
+                Ok(InvocationOutcomeVerdict::Committed)
+            );
+            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
+            selected.writer_completion = Some(another.clone());
+            assert!(!selected.matches_terminal_writer(7, &key, kind, &completion));
+            assert!(selected.matches_terminal_writer(7, &key, kind, &another));
+            selected.failure = None;
+            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
+            selected.failure = Some(TrapType::Exit);
+            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
+            selected.failure = Some(TrapType::Interrupt(kind));
+            selected.writer_claimed = false;
+            assert!(!selected.matches_terminal_writer(7, &key, kind, &another));
+        }
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[test]
+    async fn idle_success_requires_exact_committed_writer() {
+        let key = IdempotencyKey::fresh();
+        let (writer, completion) = InvocationOutcomeWrite::new();
+        let mut selected = SelectedInvocationOutcome {
+            generation: 7,
+            key: Some(key.clone()),
+            failure: None,
+            writer_claimed: true,
+            writer_completion: Some(completion.clone()),
+        };
+        assert!(selected.committed_success_writer(7, &key).is_none());
+        writer.complete();
+        assert!(
+            selected
+                .committed_success_writer(7, &key)
+                .unwrap()
+                .ptr_eq(&completion)
+        );
+        assert!(selected.committed_success_writer(8, &key).is_none());
+        assert!(
+            selected
+                .committed_success_writer(7, &IdempotencyKey::fresh())
+                .is_none()
+        );
+        selected.failure = Some(TrapType::Interrupt(InterruptKind::Suspend(
+            Timestamp::now_utc(),
+        )));
+        assert!(selected.committed_success_writer(7, &key).is_none());
+        selected.failure = None;
+        let (writer, completion) = InvocationOutcomeWrite::new();
+        selected.writer_completion = Some(completion);
+        writer.refused(OplogFence {
+            agent_id: AgentId {
+                component_id: ComponentId::new(),
+                agent_id: "idle-refusal".to_string(),
+            },
+            expected_epoch: ShardEpoch(0),
+            actual_epoch: Some(ShardEpoch(1)),
+        });
+        assert!(selected.committed_success_writer(7, &key).is_none());
+        let (writer, completion) = InvocationOutcomeWrite::new();
+        selected.writer_completion = Some(completion);
+        drop(writer);
+        assert!(selected.committed_success_writer(7, &key).is_none());
+    }
+
+    #[test]
+    fn written_terminal_claim_preserves_distinct_later_demand() {
+        let kind = InterruptKind::Suspend(Timestamp::from(100_u64));
+        let pending = PendingWorkerInterrupt {
+            kind,
+            reacquire_permits: false,
+            unload_request: UnloadRequest::ordinary(UnloadReason::Suspend),
+        };
+        for mut state in [
+            WorkerInterruptState::Freezing(pending),
+            WorkerInterruptState::Pending(pending),
+        ] {
+            assert!(
+                !state.claim_written_terminal(InterruptKind::Suspend(Timestamp::from(101_u64)))
+            );
+            assert!(
+                !state.claim_written_terminal(InterruptKind::Interrupt(Timestamp::from(100_u64)))
+            );
+            assert!(state.claim_written_terminal(kind));
+            state.publish();
+            assert!(state.take().is_none());
+            assert!(!state.queue(pending));
+            let later = PendingWorkerInterrupt {
+                kind: InterruptKind::Suspend(Timestamp::from(101_u64)),
+                ..pending
+            };
+            assert!(state.queue(later));
+            state.freeze();
+            state.publish();
+            assert!(!state.claim_written_terminal(kind));
+            assert_eq!(state.take().unwrap().kind, later.kind);
+        }
+        let mut state = WorkerInterruptState::Unpublished(pending);
+        assert!(!state.claim_written_terminal(kind));
+        state.freeze();
+        assert!(state.claim_written_terminal(kind));
+        assert!(!state.claim_written_terminal(kind));
+        for kind in [
+            InterruptKind::Restart,
+            InterruptKind::Jump,
+            InterruptKind::ShardLost,
+        ] {
+            let non_recorded = PendingWorkerInterrupt { kind, ..pending };
+            let mut state = WorkerInterruptState::Freezing(non_recorded);
+            assert!(!state.claim_written_terminal(kind));
+            state.publish();
+            assert_eq!(state.take().unwrap().kind, kind);
+        }
     }
 
     #[test]

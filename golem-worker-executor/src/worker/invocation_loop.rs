@@ -2334,7 +2334,21 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
         match self.deferred_wakeups.pop_front() {
             Some(command) => ResidentWakeup::Command(command),
-            None => self.next_wakeup().await,
+            None => {
+                #[cfg(feature = "test-utils")]
+                {
+                    let parent = self.parent.clone();
+                    let released = self.permit_state.is_none();
+                    super::monthly_limits::observe_native_idle(self.next_wakeup(), || {
+                        if released {
+                            parent.native_idle_pending_for_test();
+                        }
+                    })
+                    .await
+                }
+                #[cfg(not(feature = "test-utils"))]
+                self.next_wakeup().await
+            }
         }
     }
 

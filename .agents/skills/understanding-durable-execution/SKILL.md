@@ -665,8 +665,11 @@ Worker orchestration, not native managed-XFS measurement.
 
 A second timed receive on the **same** guest WebSocket can reach the reader mutex while an
 untimed receive holds it in its native frame read. `tests/api/interruption/host/websocket/reader_lock.rs`
-observes the timed `reader.lock()` future's first Pending after both distinct Starts; six
-resource/mode cells prove **stop-only** physical cleanup with both frames withheld. The first
+first parks the timed call at a keyed test-only pre-lock gate and observes the untimed
+native frame future's actual Pending while it holds that socket's guard. Matching invocation,
+socket, Start and runtime receipts precede gate release and the timed `reader.lock()` Pending.
+Guest import or Start order alone does not establish lock ownership. Six resource/mode cells
+exercise **stop-only** physical cleanup with both frames withheld. The first
 interruptible read releases its guard on an owner monthly stop, so the missing select around
 the second lock await has no demonstrated normal-Worker RED. A separate control shows the timed
 deadline begins only after lock acquisition. An earlier durable two-read continuation failed
@@ -710,7 +713,14 @@ has already unloaded (for example during OOM backoff), the retiring owner must c
 terminal interrupt and notify invocation waiters before removal; no Store remains to do it. A
 terminal interrupt already claimed by the invocation loop is not recorded again, and a completed
 or failed invocation is not overwritten. A claim retains its exact request, so teardown cannot
-requeue that same cause. A distinct terminal following a completed Restart keeps its own queue
+requeue that same cause. An automatic terminal may be selected and committed before teardown
+registers its retained stop. After fencing and typed publication, the driver claims only that exact
+terminal using the successful writer receipt and matching generation, key, failure and writer.
+Acceptance captures the started resident's real start-attempt identity; publication revalidates it
+under the lifecycle lock. Permit-wait and pre-owner-generation stops cannot use an old resident's
+writer, even while the resident-generation number still matches. They retain ordinary startup
+finalization and acknowledgement. A refused write joins cleanup but cannot acknowledge a persisted
+terminal. A distinct terminal following a completed Restart keeps its own queue
 demand while the original publication stays Restart. Normal loop stop or joined owner retirement
 commits the unclaimed status marker once, including an outer-loop concurrent-permit wait with no
 new Store or permit. A Suspend already committed by admission is not appended again. Loop stop

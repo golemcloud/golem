@@ -68,6 +68,43 @@ pub struct MonthlyAcceptanceForTest {
     pub completed: tokio::sync::oneshot::Receiver<bool>,
 }
 
+#[cfg(feature = "test-utils")]
+pub struct IdleAfterSuccessForTest {
+    pub invocation_key: golem_common::model::IdempotencyKey,
+    pub runtime: MonthlyProposalForTest,
+    pub permit_acquisitions: usize,
+    writer: super::InvocationOutcomeCompletion,
+    release: super::StopCompletion,
+}
+
+#[cfg(feature = "test-utils")]
+impl IdleAfterSuccessForTest {
+    pub async fn join(&self) -> Result<(), WorkerExecutorError> {
+        match self.writer.clone().await? {
+            super::InvocationOutcomeVerdict::Committed => self.release.clone().await,
+            super::InvocationOutcomeVerdict::Refused(_) => Err(WorkerExecutorError::runtime(
+                "Idle invocation writer was refused",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "test-utils")]
+pub(super) async fn observe_native_idle<F: std::future::Future>(
+    future: F,
+    mut pending: impl FnMut(),
+) -> F::Output {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        let polled = future.as_mut().poll(cx);
+        if polled.is_pending() {
+            pending();
+        }
+        polled
+    })
+    .await
+}
+
 pub(super) struct ExecutionWindow {
     window: Option<ResourceUsageMeteringWindow>,
     monitor: Option<MonthlyMonitor>,
@@ -514,6 +551,56 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .0
             .receipt
             .subscribe()
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn observe_idle_after_success_for_test(
+        &self,
+        key: golem_common::model::IdempotencyKey,
+    ) -> tokio::sync::oneshot::Receiver<IdleAfterSuccessForTest> {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        assert!(
+            self.stop_progress
+                .lock()
+                .unwrap()
+                .idle_wait_observer
+                .replace((key, send))
+                .is_none()
+        );
+        receive
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub(super) fn native_idle_pending_for_test(&self) {
+        let generation = self
+            .resident_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        let selected = self.invocation_outcome.lock().unwrap();
+        let mut progress = self.stop_progress.lock().unwrap();
+        let Some((key, _)) = &progress.idle_wait_observer else {
+            return;
+        };
+        let Some(writer) = selected
+            .as_ref()
+            .and_then(|selected| selected.committed_success_writer(generation, key))
+        else {
+            return;
+        };
+        let release = progress
+            .release
+            .clone()
+            .expect("idle window installed its close seal");
+        let (key, send) = progress.idle_wait_observer.take().unwrap();
+        let permit_acquisitions = progress.permit_acquisitions;
+        drop(progress);
+        drop(selected);
+        let _ = send.send(IdleAfterSuccessForTest {
+            invocation_key: key,
+            runtime: self.current_monthly_proposal_for_test(),
+            permit_acquisitions,
+            writer,
+            release,
+        });
     }
 
     #[cfg(feature = "test-utils")]
@@ -1004,6 +1091,73 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             | super::WorkerInterruptState::Pending(pending) => Some(pending.kind),
             _ => None,
         }
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn pending_terminal_for_test(
+        &self,
+    ) -> Option<(
+        u64,
+        Option<golem_common::model::IdempotencyKey>,
+        InterruptKind,
+    )> {
+        let selected = self.invocation_outcome.lock().unwrap();
+        let selected = selected.as_ref()?;
+        let Some(crate::model::TrapType::Interrupt(kind)) = selected.failure.as_ref() else {
+            return None;
+        };
+        if !selected.writer_claimed
+            || selected
+                .writer_completion
+                .as_ref()?
+                .clone()
+                .now_or_never()
+                .is_some()
+        {
+            return None;
+        }
+        Some((selected.generation, selected.key.clone(), *kind))
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub async fn claim_lifecycle_outcome_for_test(
+        &self,
+        key: &golem_common::model::IdempotencyKey,
+        kind: InterruptKind,
+    ) -> Option<impl Send> {
+        self.claim_invocation_failure(
+            Some(key.clone()),
+            &crate::model::TrapType::Interrupt(kind),
+            super::InvocationFailureOrigin::Lifecycle,
+        )
+        .await
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn committed_terminal_for_test(
+        &self,
+    ) -> Option<(
+        u64,
+        Option<golem_common::model::IdempotencyKey>,
+        InterruptKind,
+    )> {
+        let selected = self.invocation_outcome.lock().unwrap();
+        let selected = selected.as_ref()?;
+        let Some(crate::model::TrapType::Interrupt(kind)) = selected.failure.as_ref() else {
+            return None;
+        };
+        if !selected.writer_claimed
+            || selected.writer_completion.as_ref()?.clone().now_or_never()
+                != Some(Ok(super::InvocationOutcomeVerdict::Committed))
+        {
+            return None;
+        }
+        Some((selected.generation, selected.key.clone(), *kind))
+    }
+
+    #[cfg(feature = "test-utils")]
+    pub fn terminal_interrupt_pending_for_test(&self) -> bool {
+        *self.terminal_interrupt().borrow()
     }
 
     #[cfg(feature = "test-utils")]

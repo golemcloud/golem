@@ -118,6 +118,7 @@ pub(crate) async fn without_entity_cancellation<F: Future>(future: F) -> F::Outp
 ///
 /// A `Jump` the fence refuses returns before the cursor registers anything: the abandoned attempt
 /// is left for the shard's new owner to replay, and the caller must not re-execute it.
+#[cfg(feature = "test-utils")]
 pub(crate) async fn commit_replay_jumps<Ctx: WorkerCtx>(
     worker: &Worker<Ctx>,
     replay_state: &ReplayState,
@@ -255,6 +256,7 @@ use golem_common::model::oplog::{
     OplogErrorKind, OplogIndex, RawSnapshotData, ScopeScanState, SnapshotAssistedUpdateDetails,
     UpdateDescription,
 };
+#[cfg(feature = "test-utils")]
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::worker::TypedAgentConfigEntry;

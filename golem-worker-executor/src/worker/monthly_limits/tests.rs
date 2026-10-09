@@ -11,6 +11,27 @@ use golem_common::model::component::ComponentId;
 use std::sync::atomic::{AtomicBool, Ordering};
 use test_r::{test, timeout};
 
+#[cfg(feature = "test-utils")]
+#[test]
+async fn native_idle_observation_requires_pending_not_ready() {
+    let observed = std::sync::atomic::AtomicUsize::new(0);
+    observe_native_idle(std::future::ready(()), || {
+        observed.fetch_add(1, Ordering::Relaxed);
+    })
+    .await;
+    assert_eq!(observed.load(Ordering::Relaxed), 0);
+    let (send, receive) = tokio::sync::oneshot::channel::<()>();
+    let future = observe_native_idle(receive, || {
+        observed.fetch_add(1, Ordering::Relaxed);
+    });
+    tokio::pin!(future);
+    assert!(futures::poll!(&mut future).is_pending());
+    assert_eq!(observed.load(Ordering::Relaxed), 1);
+    send.send(()).unwrap();
+    future.await.unwrap();
+    assert_eq!(observed.load(Ordering::Relaxed), 1);
+}
+
 async fn unmetered_window() -> (
     ExecutionWindow,
     Arc<AtomicBool>,

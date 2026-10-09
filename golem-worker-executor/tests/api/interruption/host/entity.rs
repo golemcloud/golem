@@ -32,6 +32,7 @@ use golem_worker_executor::workerctx::default::Context;
 use golem_worker_executor::workerctx::{
     EntityInvocationManagement, InvocationManagement, WorkerCtx,
 };
+use golem_worker_executor_test_utils::{TestCardService, start_with_resource_limits_and_overrides};
 use pretty_assertions::assert_eq;
 use test_r::test;
 use tokio::io::AsyncReadExt;
@@ -71,11 +72,17 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         shutdown,
     );
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_resource_limits_and_configure(
+    let executor = start_with_resource_limits_and_overrides(
         deps,
         &context,
         limits.clone(),
-        Arc::new(move |config| config.resource_usage_metering = metering),
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.resource_usage_metering = metering
+            })),
+            create_card_service: Some(Arc::new(|| Arc::new(TestCardService))),
+            ..Default::default()
+        },
     )
     .await?;
     let component = executor
@@ -85,6 +92,10 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     let name = agent_id!("Networking", "monthly-active-scoped-entity");
     let id = executor.start_agent(&component.id, name.clone()).await?;
     wait_for_invocation_pair(&executor, &id, OplogIndex::INITIAL).await?;
+    let owned = OwnedAgentId::new(context.default_environment_id, &id);
+    let active = executor.production_active_agent(&owned).await.unwrap();
+    let worker = active.primary();
+    let authority_wallet = worker.get_wallet_cards().await?;
     let key = IdempotencyKey::fresh();
     let primary_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let entity_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -102,9 +113,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         tokio::time::timeout(Duration::from_secs(10), primary_listener.accept())
             .await
             .context("primary TCP connection")??;
-    let owned = OwnedAgentId::new(context.default_environment_id, &id);
-    let active = executor.production_active_agent(&owned).await.unwrap();
-    let worker = active.primary();
     let primary_calls = pending_receive(&worker, OplogIndex::INITIAL, None).await?;
     let resources = active.resources();
     let account = limits.initialize_account(context.account_id).await?;
@@ -160,10 +168,6 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
     let host = active.entity_instance_host(&activation, metadata)?;
     assert!(Arc::ptr_eq(&host.owner_execution(), &active.execution()));
     assert!(Arc::ptr_eq(&host.owner_resources(), &resources));
-    let hosted = tokio::time::timeout(Duration::from_secs(10), host.instantiate_entity())
-        .await
-        .context("entity Store instantiation")??;
-    assert_eq!(resources.live_usage_flusher_count_for_test(), 2);
     let before_entity = worker.oplog().current_oplog_index().await;
     let scope_index = before_entity.next();
     let principal = Principal::Agent(AgentPrincipal {
@@ -189,9 +193,17 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
         false,
         IdempotencyKey::fresh(),
     )
-    .unwrap();
+    .unwrap()
+    .with_authority_wallet(authority_wallet);
+    let hosted = tokio::time::timeout(
+        Duration::from_secs(10),
+        host.instantiate_entity_scoped_for_test(&scope),
+    )
+    .await
+    .context("entity Store instantiation")??;
+    assert_eq!(resources.live_usage_flusher_count_for_test(), 2);
     let expected_scope = scope.clone();
-    let entity = tokio::spawn(hosted.invoke_scoped(scope, move |instance, store| {
+    let mut entity = tokio::spawn(hosted.invoke_scoped(scope, move |instance, store| {
         Box::pin(async move {
             assert_eq!(
                 store.data().entity_invocation_scope(),
@@ -222,8 +234,12 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
                 InvocationMode::Replay,
             )
             .await?;
-            assert!(matches!(result, InvokeResult::Succeeded { result, .. }
-                if matches!(*result, AgentInvocationResult::AgentInitialization)));
+            assert!(
+                matches!(&result, InvokeResult::Succeeded { result, .. }
+                    if matches!(**result, AgentInvocationResult::AgentInitialization)),
+                "scoped entity initialization returned {result:?}"
+            );
+            drop(result);
             assert!(store.data().durable_ctx().total_linear_memory_size() > 0);
             let method_key = IdempotencyKey::fresh();
             store
@@ -247,10 +263,16 @@ async fn memory_quota_stop_retires_active_scoped_entity_and_primary_tcp(
             .await
         })
     }));
-    let (mut entity_socket, _) =
-        tokio::time::timeout(Duration::from_secs(10), entity_listener.accept())
-            .await
-            .context("scoped entity guest TCP connection")??;
+    let (mut entity_socket, _) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::select! {
+            accepted = entity_listener.accept() => accepted.map_err(anyhow::Error::from),
+            result = &mut entity => Err(anyhow::anyhow!(
+                "scoped entity finished before TCP admission: {result:?}"
+            )),
+        }
+    })
+    .await
+    .context("scoped entity guest TCP connection")??;
     let entity_calls = pending_receive(&worker, before_entity, Some(scope_index)).await?;
     let registered = slot.active_invocations();
     assert_eq!(registered.len(), 1);

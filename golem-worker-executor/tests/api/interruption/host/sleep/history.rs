@@ -211,16 +211,8 @@ pub(super) fn sleep_record(
             }
         }
         let delivered = deliveries(entries, wait);
-        let observation = if abi == Abi::P3 {
-            ensure!(delivered.len() == 1 && delivered[0] > end_index);
-            delivered[0]
-        } else {
-            ensure!(
-                delivered.is_empty(),
-                "serialized P2 poll has no accessor delivery"
-            );
-            end_index
-        };
+        ensure!(delivered.len() == 1 && delivered[0] > end_index);
+        let observation = delivered[0];
         let finish = entries
             .iter()
             .find(|entry| {

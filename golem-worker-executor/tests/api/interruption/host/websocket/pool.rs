@@ -55,6 +55,7 @@ pub(super) fn connect_start(
     terminals: usize,
     receive_terminals: usize,
 ) -> anyhow::Result<OplogIndex> {
+    ensure!(terminals <= 1, "one connect outcome at most");
     let starts = starts_named(entries, CONNECT);
     ensure!(starts.len() == 1, "one initial connect Start: {entries:#?}");
     ensure!(
@@ -95,7 +96,29 @@ pub(super) fn connect_start(
         }
     }
     ensure!(terminal_count(entries, starts[0]) == terminals);
-    ensure!(!entries.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(delivery) if delivery.start_index == starts[0])), "direct connect has no accessor delivery marker");
+    let ends: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) if end.start_index == starts[0] => Some(entry.oplog_index),
+            _ => None,
+        })
+        .collect();
+    let delivered: Vec<_> = entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::CompletionDelivered(delivery)
+                if delivery.start_index == starts[0] =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect();
+    ensure!(ends.len() == terminals && delivered.len() == terminals);
+    if terminals == 1 {
+        let receive = starts_named(entries, RECEIVE)[0];
+        ensure!(starts[0] < ends[0] && ends[0] < delivered[0] && delivered[0] < receive);
+    }
     Ok(starts[0])
 }
 

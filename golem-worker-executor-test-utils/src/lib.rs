@@ -3906,6 +3906,8 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
 struct ProductionContextTestServerBootstrap {
     component_service_directory: PathBuf,
     resource_limits: Arc<dyn ResourceLimits>,
+    create_card_service: Option<Arc<CreateCardServiceFn>>,
+    wrap_shard_service: Option<Arc<WrapShardServiceFn>>,
     wrap_component_service: Option<Arc<WrapComponentServiceFn>>,
     wrap_rpc: Option<Arc<WrapRpcFn>>,
     wrap_blob_store_service: Option<Arc<WrapBlobStoreServiceFn>>,
@@ -3964,6 +3966,16 @@ async fn in_process_active_agents<Ctx: WorkerCtx>(
 impl Bootstrap<golem_worker_executor::workerctx::default::Context>
     for ProductionContextTestServerBootstrap
 {
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+
+        if let Some(wrap) = &self.wrap_shard_service {
+            wrap(shard_service)
+        } else {
+            shard_service
+        }
+    }
+
     fn create_key_value_service(
         &self,
         storage: &Arc<dyn KeyValueStorage + Send + Sync>,
@@ -4087,7 +4099,11 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         &self,
         _registry_service: Arc<dyn RegistryService>,
     ) -> Arc<dyn CardService> {
-        Arc::new(NoopCardService)
+        if let Some(create) = &self.create_card_service {
+            create()
+        } else {
+            Arc::new(NoopCardService)
+        }
     }
 
     fn create_resource_limits(
@@ -4280,6 +4296,8 @@ async fn run_production_context_bootstrap(
         &ProductionContextTestServerBootstrap {
             component_service_directory: deps.component_service_directory.clone(),
             resource_limits,
+            create_card_service: overrides.create_card_service,
+            wrap_shard_service: overrides.wrap_shard_service,
             wrap_component_service: overrides.wrap_component_service,
             wrap_rpc: overrides.wrap_rpc,
             wrap_blob_store_service: overrides.wrap_blob_store_service,

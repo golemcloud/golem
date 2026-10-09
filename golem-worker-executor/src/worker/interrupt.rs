@@ -192,6 +192,38 @@ mod tests {
     }
 
     #[test]
+    async fn written_terminal_claim_updates_watch_without_republishing_the_request() {
+        let interrupts = Interrupts::default();
+        let kind = InterruptKind::Suspend(Timestamp::from(100_u64));
+        assert!(interrupts.lock().await.queue(interrupt(kind)));
+        interrupts.lock().await.freeze();
+        assert!(interrupts.terminal_pending());
+        let terminal = interrupts.terminal();
+        {
+            let mut state = interrupts.lock().await;
+            assert!(
+                !state.claim_written_terminal(InterruptKind::Suspend(Timestamp::from(101_u64)))
+            );
+            assert!(state.claim_written_terminal(kind));
+            state.publish();
+            assert!(*terminal.borrow(), "projection changes on guard release");
+        }
+        assert!(!*terminal.borrow());
+        assert!(interrupts.has_interrupt().await);
+        assert!(interrupts.take().await.is_none());
+        assert!(!interrupts.lock().await.queue(interrupt(kind)));
+        let later = InterruptKind::Suspend(Timestamp::from(101_u64));
+        assert!(interrupts.lock().await.queue(interrupt(later)));
+        assert!(*terminal.borrow());
+        {
+            let mut state = interrupts.lock().await;
+            state.freeze();
+            state.publish();
+        }
+        assert_eq!(interrupts.take().await.unwrap().kind, later);
+    }
+
+    #[test]
     async fn a_receiver_wakes_only_when_whether_a_terminal_request_waits_changes() {
         let interrupts = Interrupts::default();
         let terminal = interrupts.terminal();

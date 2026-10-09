@@ -6,6 +6,8 @@ use golem_worker_executor::services::HasOplog;
 use pretty_assertions::assert_eq;
 use test_r::test;
 
+mod retained_terminal;
+
 #[test]
 #[timeout("60s")]
 async fn queued_quota_proposal_is_rejected_after_worker_window_replacement(

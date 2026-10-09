@@ -639,6 +639,24 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
             Ok(Ok(live)) => {
                 let mut reader = live.reader.lock().await;
                 let recv_fut = read_next_user_or_close(&mut reader);
+                #[cfg(feature = "test-utils")]
+                let observer = accessor.with(|mut access| {
+                    let ctx = access.get();
+                    ctx.public_state
+                        .worker()
+                        .websocket_reader_guard_observer_for_test(
+                            ctx.state.get_current_idempotency_key(),
+                            call.start_index(),
+                            self_.rep(),
+                        )
+                });
+                #[cfg(feature = "test-utils")]
+                let recv_fut = async {
+                    match observer {
+                        Some(observer) => observer.observe(recv_fut).await,
+                        None => recv_fut.await,
+                    }
+                };
                 pin_mut!(recv_fut);
                 match futures::future::select(recv_fut, interrupt_signal).await {
                     Either::Left((result, _)) => result,
@@ -681,6 +699,22 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 .get()
                 .observe_function_call("golem:websocket/client", "receive-with-timeout")
         });
+
+        #[cfg(feature = "test-utils")]
+        let start_gate = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.public_state
+                .worker()
+                .websocket_timed_reader_start_gate_for_test(
+                    ctx.state.durable_call_is_live(),
+                    ctx.state.get_current_idempotency_key(),
+                    self_.rep(),
+                )
+        });
+        #[cfg(feature = "test-utils")]
+        if let Some(gate) = start_gate {
+            gate.wait().await?;
+        }
 
         let mut call = DurableCallSession::<
             host_functions::WebsocketClientReceiveWithTimeout,
@@ -779,11 +813,27 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostWebsocketConnectionWithStore<U>
                 .websocket_reader_lock_observer_for_test(
                     ctx.state.get_current_idempotency_key(),
                     call.start_index(),
+                    self_.rep(),
+                )
+        });
+        #[cfg(feature = "test-utils")]
+        let reader_gate = accessor.with(|mut access| {
+            let ctx = access.get();
+            ctx.public_state
+                .worker()
+                .websocket_timed_reader_gate_for_test(
+                    ctx.state.get_current_idempotency_key(),
+                    call.start_index(),
+                    self_.rep(),
                 )
         });
 
         let live_result: Result<Option<Message>, Error> = match live_lookup {
             Ok(Ok(live)) => {
+                #[cfg(feature = "test-utils")]
+                if let Some(gate) = reader_gate {
+                    gate.wait().await;
+                }
                 let reader_lock = live.reader.lock();
                 #[cfg(feature = "test-utils")]
                 let reader_lock = async {
