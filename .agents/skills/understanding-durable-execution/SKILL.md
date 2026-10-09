@@ -1000,6 +1000,39 @@ retaining the underlying cause.
 
 ### Filesystem snapshots
 
+`AgentFilesystemSnapshots::bind` requires a volume that makes copy-on-write copies. Production
+uses Linux 5.8 or later with XFS and reflink, through `ManagedXfs` or `ReflinkXfs`. Local development
+and tests on macOS use `Apfs`. Project quotas are not required for snapshots. `Temporary` and
+`Directory` make byte copies, so binding `Managed` on them fails at startup. The sandbox reports
+`copies_on_write`; the snapshot service owns this rule.
+
+`seed` and `copy_contents` make copy-on-write copies on XFS or `Apfs`, and byte copies on other
+storage. `Apfs` makes the root as `Directory` does, then probes a file clone with `fclonefileat`
+under it. A failed clone prevents startup. There is no filesystem type check, exclusive root lock
+or volume identity check. Startup reads `pathconf(_PC_CASE_SENSITIVE)` on the root. A case-sensitive
+volume uses `Exact` name comparison. A case-insensitive volume uses `Conservative`, which permits
+less concurrency within one directory. No special volume, disk image or privilege is required.
+The mode logs that it is for local development and tests only.
+
+`Apfs` states `AgentAccounting::Unaccounted`, as `ReflinkXfs` does. All disk limits resolve to
+`Unlimited`; the mode has no project quotas or per-agent usage reports, and filesystem metering
+is refused at startup. It reads volume space with `fstatvfs`, so startup capacity checks, capture
+admission and write pressure recovery apply. APFS volumes in one container share free bytes,
+so byte targets are approximate. Object counts are synthetic and very large, so object targets
+always pass. `Temporary` and `Directory` do not use this pressure recovery.
+
+The local `golem server run` command reads filesystem settings from
+`config/worker-executor.toml` in the working directory, then applies `GOLEM__` environment variables.
+Set `filesystem_storage.mode.type = "Apfs"`, `filesystem_storage.mode.config.root` and
+`filesystem_snapshots.type = "Managed"`. Snapshots are disabled by default; there is no second local
+switch. Without a configured `repository_key`, the local server generates a 64-byte key and keeps
+its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions `0600`
+on Unix. Later starts use the same key. A configured key takes precedence. Without one, a corrupt
+kept key prevents startup and is not replaced. The snapshot store uses the executor's blob storage,
+which the local server keeps at `<data_dir>/blobs`. There is no separate snapshot destination.
+See `docs/src/content/next/operate/filesystem_snapshots.mdx` for the local setup and
+`reference/testing-patterns.md` for the native APFS checks.
+
 With `filesystem_snapshots` set to `Managed`, a snapshot record also names a filesystem snapshot
 (`services/agent_filesystem_snapshots`). The snapshots belong to one agent incarnation: they are
 keyed by `AgentSnapshots::agent(agent, fingerprint)`, and a fork target uses its stage id as its

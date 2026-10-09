@@ -222,6 +222,39 @@ the lifecycle propagation and stale-generation cases in `tests/active_agents.rs`
 entity shutdown cases in `src/services/active_agents/tests.rs` and
 `src/worker/entity_invocation.rs`.
 
+## Filesystem snapshots on APFS
+
+The `apfs-tests` CI job builds the executor test binaries on a macOS runner and runs them on the
+runner's existing volume. It restores portable test-component and built-in artifact WASMs, not
+Linux binaries. It needs no Lima VM, disk image or special volume. The tests use normal registration, not
+`#[ignore]`. The framework supplies the Redis process for the restart test.
+
+The focused commands are:
+
+```shell
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- apfs_ --test-threads 1 --report-time
+cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup --exact --test-threads 1 --report-time
+```
+
+The library filter covers the clone test in `sandbox_filesystem::apfs::tests`, the startup probe,
+the case-mode decision, the configuration round trip and the capture pressure check.
+`apfs_copy_contents_and_seed_share_extents_and_preserve_unflushed_writes` checks copy-on-write
+copies, unflushed writes, exclusions and hard-link groups through the sandbox operations.
+`apfs_a_volume_below_the_pressure_target_admits_no_periodic_upload` checks capture admission.
+The integration filters also check that `Managed` refuses storage without copy-on-write at startup.
+
+The restart test needs the `test-components/it_initial_file_system_release.wasm` fixture.
+It takes a periodic snapshot, drops the executor, starts a new one over the same storage and
+compares the files with a full replay. It includes hard links. Build the fixture before a local run with the
+`modifying-test-components` skill. The CI job restores it from `merge-test-components` and compiles
+it to native code on macOS. A Linux precompiled component cannot replace that step.
+
+The same job builds `golem` and `golem-cli`, then runs
+`local_server_apfs_configuration_keeps_the_key_across_starts` in the CLI integration suite with
+`GOLEM_CLI_TEST_BIN_PROFILE=dev-ci`. This test loads normal TOML, applies an environment root
+override, starts the local server twice and checks that it keeps the repository key. Its test
+context needs the checksum-pinned built-in artifacts, including `git_tool`, in the server cache.
+
 ## Anti-patterns
 
 - A "restart" that only calls `resume` on a still-resident worker, or resets a cursor.
