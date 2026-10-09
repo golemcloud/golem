@@ -47,6 +47,7 @@ use golem_common::model::tool_middleware::{
     CompiledToolMiddlewareChain, CompiledToolMiddlewareOccurrence, RegisteredToolMiddleware,
     ToolMiddlewareInstallation, ToolMiddlewareName, ToolMiddlewareSource,
 };
+use golem_common::schema::tool::argv::{self, ParsedToolArguments};
 use golem_common::schema::tool::{OptionShape, ToolMiddleware, ToolMiddlewareScope};
 use golem_common::schema::{
     BinaryRestrictions, BinaryValuePayload, FromSchema, SchemaGraph, SchemaType, SchemaValue,
@@ -1279,6 +1280,60 @@ async fn invoke_git_tool_success_with_key(
                 .ok_or_else(|| anyhow::anyhow!("missing canonical git field '{}'", field.name))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        idempotency_key,
+        principal,
+        command_path,
+        TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+    )
+    .await
+}
+
+/// Runs git from a command line, parsed the way the CLI and the bash tool parse it.
+async fn invoke_git_tool_argv_success(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    principal: Principal,
+    definition: &golem_common::schema::tool::Tool,
+    args: &[&str],
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command_line = args.join(" ");
+    let argv = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+    let parsed = argv::parse(definition, &argv)
+        .map_err(|error| anyhow::anyhow!("git {command_line} was rejected: {error}"))?;
+    let ParsedToolArguments::Invoke {
+        command_path,
+        input,
+    } = parsed
+    else {
+        anyhow::bail!("git {command_line} printed help instead of running");
+    };
+    invoke_git_tool_input(
+        executor,
+        worker_id,
+        fingerprint,
+        IdempotencyKey::fresh(),
+        principal,
+        command_path,
+        *input,
+    )
+    .await
+}
+
+async fn invoke_git_tool_input(
+    executor: &TestWorkerExecutor,
+    worker_id: &golem_common::model::AgentId,
+    fingerprint: golem_common::model::AgentFingerprint,
+    idempotency_key: IdempotencyKey,
+    principal: Principal,
+    command_path: Vec<String>,
+    input: TypedSchemaValue,
+) -> anyhow::Result<Option<SchemaValue>> {
+    let command = command_path.join(" ");
     let output = executor
         .invoke_external_tool(
             worker_id,
@@ -1286,7 +1341,7 @@ async fn invoke_git_tool_success_with_key(
             idempotency_key,
             ToolName::try_from("git").unwrap(),
             command_path,
-            TypedSchemaValue::new(schema, SchemaValue::Record { fields: values }),
+            input,
             InvocationContextStack::fresh(),
             principal,
             None,
@@ -13876,18 +13931,14 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
     });
     let cwd = string_list(&["/workspace/repo"]);
 
-    invoke_git_tool_success(
+    // Optional arguments reach git from a command line both when given and when left out.
+    invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "init",
-        BTreeMap::from([
-            ("working-directory", string_list(&[])),
-            ("directory", optional_string(Some("workspace/repo"))),
-            ("initial-branch", optional_string(Some("main"))),
-        ]),
+        &["init", "-b", "main", "workspace/repo"],
     )
     .await?;
     for (key, value) in [
@@ -14147,19 +14198,13 @@ async fn builtin_git_tool_persists_local_workflow_across_invocations_and_restart
         .into_typed()?;
     assert_eq!(branch_tip.trim(), commit_oid);
 
-    let log = invoke_git_tool_success(
+    let log = invoke_git_tool_argv_success(
         &executor,
         &worker_id,
         fingerprint,
         principal.clone(),
         &git_definition,
-        "log",
-        BTreeMap::from([
-            ("working-directory", cwd.clone()),
-            ("ref", optional_string(None)),
-            ("max-count", SchemaValue::F64(1.0)),
-            ("oneline", SchemaValue::Bool(true)),
-        ]),
+        &["-C", "/workspace/repo", "log", "-n", "1", "--oneline"],
     )
     .await?;
     let Some(SchemaValue::Record { fields: log_fields }) = log else {

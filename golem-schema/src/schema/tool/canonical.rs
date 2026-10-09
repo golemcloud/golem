@@ -598,7 +598,11 @@ pub fn option_collected_type(shape: &OptionShape) -> SchemaType {
     }
 }
 
-fn canonical_option_type(option: &OptionSpec) -> SchemaType {
+/// The input-record field type of an option. A scalar or optional-scalar
+/// option that may be left out and has no default is carried as `option<T>`,
+/// unless its declared type is already an option; every other option keeps
+/// its collected type.
+pub(super) fn canonical_option_type(option: &OptionSpec) -> SchemaType {
     let collected = option_collected_type(&option.shape);
     if !option.required
         && option.default.is_none()
@@ -614,7 +618,10 @@ fn canonical_option_type(option: &OptionSpec) -> SchemaType {
     }
 }
 
-fn canonical_positional_type(positional: &Positional) -> SchemaType {
+/// The input-record field type of a fixed positional. One that may be left
+/// out and has no default is carried as `option<T>`, unless its declared type
+/// is already an option; every other positional keeps its declared type.
+pub(super) fn canonical_positional_type(positional: &Positional) -> SchemaType {
     if !positional.required
         && positional.default.is_none()
         && !matches!(&positional.type_, SchemaType::Option { .. })

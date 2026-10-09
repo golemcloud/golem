@@ -15,12 +15,16 @@
 //! Shared command-line parsing and help for schema-described tools.
 //!
 //! Arguments are decoded into the canonical input record and checked against tool constraints.
-//! Metadata never reads the caller's environment; callers supply explicit argument values.
+//! Metadata never reads the process environment. A caller supplies explicit argument values,
+//! and can supply variables for the options and flags that declare one.
 
-use crate::schema::tool::canonical::CanonicalSurfaceRef;
+use crate::schema::tool::canonical::{
+    CanonicalSurfaceRef, canonical_option_type, canonical_positional_type,
+};
 use crate::schema::tool::constraints::validate_tool_constraints;
 use crate::schema::tool::{
-    DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Repetition, Tool,
+    DuplicateKeyPolicy, FlagShape, FlagSpec, OptionShape, OptionSpec, Positional, Repetition,
+    TailPositional, Tool,
 };
 use crate::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
 use std::collections::HashMap;
@@ -177,11 +181,29 @@ impl ParseCursor {
 ///
 /// `args` excludes the tool name. Options, subcommands, aliases, positionals, defaults,
 /// help, and constraints follow the same rules for native CLI and guest callers.
-/// Environment-variable metadata is descriptive and never reads process environment values.
+/// Environment-variable metadata never reads process environment values, and this function
+/// gives it no variables: see [`parse_with_variables`].
 ///
 /// # Errors
 /// Returns a diagnostic for an invalid command line or a value that fails canonical validation.
 pub fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String> {
+    parse_with_variables(tool, args, &HashMap::new())
+}
+
+/// Parses arguments like [`parse`], with the caller's variables.
+///
+/// An option or flag that is not on the command line and declares an environment variable takes
+/// the value of that variable from `variables`, as if the caller had written it once. The
+/// command line wins over a variable, and a variable wins over a default. Only `variables` is
+/// read, never the process environment, so the caller decides which values a tool can see.
+///
+/// # Errors
+/// Returns a diagnostic for an invalid command line or a value that fails canonical validation.
+pub fn parse_with_variables(
+    tool: &Tool,
+    args: &[String],
+    variables: &HashMap<String, String>,
+) -> Result<ParsedToolArguments, String> {
     if tool.commands.nodes.is_empty() {
         return Err("tool metadata has no root command".into());
     }
@@ -288,10 +310,31 @@ pub fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String
         .as_ref()
         .ok_or_else(|| "a subcommand is required".to_string())?;
     let surfaces = tool.canonical_input_surfaces(node_index);
+    // An option or flag the command line left out takes its declared variable, as if it had
+    // been written once. `from_variable` remembers the variable for the error text.
+    let mut from_variable: HashMap<&str, &str> = HashMap::new();
+    for surface_ref in surfaces.iter().copied() {
+        match resolve_surface(tool, node_index, surface_ref)? {
+            Surface::Option(option) if !supplied.contains_key(&option.long) => {
+                if let Some((name, value)) = declared_variable(&option.env_var, variables) {
+                    supplied.insert(option.long.clone(), vec![value.to_owned()]);
+                    from_variable.insert(&option.long, name);
+                }
+            }
+            Surface::Flag(flag) if !flags.contains_key(&flag.long) => {
+                if let Some((name, value)) = declared_variable(&flag.env_var, variables) {
+                    let state = flag_from_variable(flag, value)
+                        .map_err(|e| format!("--{} from variable {name}: {e}", flag.long))?;
+                    flags.insert(flag.long.clone(), state);
+                }
+            }
+            _ => {}
+        }
+    }
     let mut values = Vec::with_capacity(surfaces.len());
     for surface_ref in surfaces.iter().copied() {
         let surface = resolve_surface(tool, node_index, surface_ref)?;
-        values.push(collect_value(
+        let value = collect_value(
             tool,
             node_index,
             surface,
@@ -299,7 +342,15 @@ pub fn parse(tool: &Tool, args: &[String]) -> Result<ParsedToolArguments, String
             &flags,
             &positionals,
             &tail,
-        )?);
+        )
+        .map_err(|e| match surface {
+            Surface::Option(option) => match from_variable.get(option.long.as_str()) {
+                Some(name) => format!("--{} from variable {name}: {e}", option.long),
+                None => e,
+            },
+            _ => e,
+        })?;
+        values.push(value);
     }
     let model = tool
         .canonical_input_model(node_index)
@@ -418,10 +469,11 @@ fn collect_value(
                 .unwrap()
                 .positionals
                 .fixed[index];
+            let type_ = canonical_positional_type(p);
             match positionals.get(index) {
-                Some(v) => decode(graph, &p.type_, v),
+                Some(v) => decode(graph, &type_, v),
                 None if p.default.is_some() => Ok(p.default.clone().unwrap()),
-                None if !p.required => omitted(resolve(graph, &p.type_)?),
+                None if !p.required => omitted(resolve(graph, &type_)?),
                 None => Err(format!("missing required positional {}", p.name)),
             }
         }
@@ -480,18 +532,23 @@ fn collect_option(
         return Err(format!("--{} cannot be repeated", option.long));
     }
     match &option.shape {
-        OptionShape::Scalar(ty) => raw
-            .last()
-            .map(|v| decode(graph, ty, v))
-            .unwrap_or_else(|| omitted(resolve(graph, ty)?)),
-        OptionShape::OptionalScalar(ty) => match raw.last() {
-            Some(value) if value == "\0" => option
-                .default
-                .clone()
-                .ok_or_else(|| format!("--{} has no bare-value default", option.long)),
-            Some(value) => decode(graph, ty, value),
-            None => omitted(resolve(graph, ty)?),
-        },
+        OptionShape::Scalar(_) => {
+            let ty = canonical_option_type(option);
+            raw.last()
+                .map(|v| decode(graph, &ty, v))
+                .unwrap_or_else(|| omitted(resolve(graph, &ty)?))
+        }
+        OptionShape::OptionalScalar(_) => {
+            let ty = canonical_option_type(option);
+            match raw.last() {
+                Some(value) if value == "\0" => option
+                    .default
+                    .clone()
+                    .ok_or_else(|| format!("--{} has no bare-value default", option.long)),
+                Some(value) => decode(graph, &ty, value),
+                None => omitted(resolve(graph, &ty)?),
+            }
+        }
         OptionShape::RepeatableList(shape) => {
             let parts = expand(&raw, shape.repetition);
             Ok(SchemaValue::List {
@@ -543,6 +600,48 @@ fn option_value(
     args.get(*i)
         .cloned()
         .ok_or_else(|| format!("--{} requires a value", option.long))
+}
+
+fn declared_variable<'a>(
+    declared: &'a Option<String>,
+    variables: &'a HashMap<String, String>,
+) -> Option<(&'a str, &'a str)> {
+    let name = declared.as_deref()?;
+    Some((name, variables.get(name)?))
+}
+
+fn flag_from_variable(flag: &FlagSpec, value: &str) -> Result<(u32, Option<bool>), String> {
+    match flag.shape {
+        FlagShape::BoolFlag(_) => match bool_word(value) {
+            Some(state) => Ok((0, Some(state))),
+            None => Err(format!(
+                "invalid value {value:?}: expected true, yes, on, y, t or 1, or false, no, off, n, f or 0"
+            )),
+        },
+        FlagShape::CountFlag(max) => {
+            let count: u32 = value
+                .parse()
+                .map_err(|_| format!("invalid value {value:?}: expected a count"))?;
+            if max.is_some_and(|max| count > max) {
+                return Err(format!("invalid value {value:?}: exceeds maximum count"));
+            }
+            Ok((count, None))
+        }
+    }
+}
+
+/// The state that a variable gives to a bool flag. Only the usual words have a meaning; other
+/// text is refused and not guessed.
+fn bool_word(value: &str) -> Option<bool> {
+    const TRUE: [&str; 6] = ["1", "true", "yes", "on", "y", "t"];
+    const FALSE: [&str; 6] = ["0", "false", "no", "off", "n", "f"];
+    if TRUE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(true)
+    } else if FALSE.iter().any(|word| value.eq_ignore_ascii_case(word)) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn apply_flag(
@@ -606,22 +705,40 @@ fn decode(graph: &SchemaGraph, ty: &SchemaType, raw: &str) -> Result<SchemaValue
     let json = match resolved {
         SchemaType::String { .. }
         | SchemaType::Char { .. }
-        | SchemaType::Enum { .. }
         | SchemaType::Path { .. }
         | SchemaType::Url { .. }
         | SchemaType::Uuid { .. }
         | SchemaType::Datetime { .. }
         | SchemaType::Duration { .. } => serde_json::Value::String(raw.into()),
+        SchemaType::Enum { cases, .. } => serde_json::Value::String(enum_case(cases, raw).into()),
         SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("true") => {
             serde_json::Value::Bool(true)
         }
         SchemaType::Bool { .. } if raw.eq_ignore_ascii_case("false") => {
             serde_json::Value::Bool(false)
         }
+        // The canonical JSON form of a 64-bit integer is a string, so a plain number goes in as
+        // its digits. The quoted form still parses below.
+        SchemaType::U64 { .. } | SchemaType::S64 { .. } if !raw.starts_with('"') => {
+            serde_json::Value::String(raw.into())
+        }
         _ => serde_json::from_str(raw).map_err(|e| format!("invalid value {raw:?}: {e}"))?,
     };
     crate::schema::render::from_untrusted_json_value(graph, ty, &json)
         .map_err(|e| format!("invalid value {raw:?}: {e}"))
+}
+
+/// The case that `raw` names: the exact one, or the only one that is equal without regard to
+/// letter case. Other text goes on unchanged, and the reader refuses it.
+fn enum_case<'a>(cases: &'a [String], raw: &'a str) -> &'a str {
+    if cases.iter().any(|case| case == raw) {
+        return raw;
+    }
+    let mut equal = cases.iter().filter(|case| case.eq_ignore_ascii_case(raw));
+    match (equal.next(), equal.next()) {
+        (Some(case), None) => case,
+        _ => raw,
+    }
 }
 
 fn resolve<'a>(graph: &'a SchemaGraph, ty: &'a SchemaType) -> Result<&'a SchemaType, String> {
@@ -701,21 +818,14 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
     if let Some(body) = &command.body {
         for p in &body.positionals.fixed {
             out.push(' ');
-            let name = p.value_name.as_deref().unwrap_or(&p.name);
-            if p.required && p.default.is_none() {
-                out.push_str(&format!("<{name}>"));
-            } else {
-                out.push_str(&format!("[{name}]"));
-            }
+            out.push_str(&positional_label(p));
         }
         if let Some(tail) = &body.positionals.tail {
             if let Some(separator) = &tail.separator {
                 out.push_str(&format!(" {separator}"));
             }
-            out.push_str(&format!(
-                " [{}]...",
-                tail.value_name.as_deref().unwrap_or(&tail.name)
-            ));
+            out.push(' ');
+            out.push_str(&tail_label(tail));
         }
     }
     out.push('\n');
@@ -734,6 +844,26 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
             if let Some(c) = child.as_usize().and_then(|i| tool.commands.nodes.get(i)) {
                 out.push_str(&format!("  {:16} {}\n", c.name, c.doc.summary));
             }
+        }
+    }
+    if let Some(body) = &command.body {
+        let mut arguments: Vec<_> = body
+            .positionals
+            .fixed
+            .iter()
+            .map(|p| (positional_label(p), &p.doc, &p.type_))
+            .collect();
+        if let Some(tail) = &body.positionals.tail {
+            arguments.push((tail_label(tail), &tail.doc, &tail.item_type));
+        }
+        if !arguments.is_empty() {
+            out.push_str("\nArguments:\n");
+        }
+        for (label, doc, type_) in arguments {
+            let text = format!("{}{}", doc.summary, possible_values(&tool.schema, type_));
+            let line = format!("  {label:16} {}", text.trim_start());
+            out.push_str(line.trim_end());
+            out.push('\n');
         }
     }
     out.push_str("\nOptions:\n");
@@ -757,6 +887,15 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
                 if !o.aliases.is_empty() {
                     out.push_str(&format!(" [aliases: {}]", o.aliases.join(", ")));
                 }
+                match &o.shape {
+                    OptionShape::Scalar(type_) | OptionShape::OptionalScalar(type_) => {
+                        out.push_str(&possible_values(&tool.schema, type_));
+                    }
+                    OptionShape::RepeatableList(shape) => {
+                        out.push_str(&possible_values(&tool.schema, &shape.item_type));
+                    }
+                    OptionShape::RepeatableMap(_) => {}
+                }
                 out.push('\n');
             }
             Surface::Flag(f) => {
@@ -779,6 +918,43 @@ fn render_help(tool: &Tool, node: usize, path: &[String]) -> String {
         out.push_str("  -h, --help      Print help (reserved only when undeclared)\n");
     }
     out
+}
+
+/// A fixed positional as the usage line and the argument list show it.
+fn positional_label(positional: &Positional) -> String {
+    let name = positional.value_name.as_deref().unwrap_or(&positional.name);
+    if positional.required && positional.default.is_none() {
+        format!("<{name}>")
+    } else {
+        format!("[{name}]")
+    }
+}
+
+/// The tail positional as the usage line and the argument list show it.
+fn tail_label(tail: &TailPositional) -> String {
+    format!("[{}]...", tail.value_name.as_deref().unwrap_or(&tail.name))
+}
+
+/// The help marker that lists the cases of an enum value, or nothing for another type.
+fn possible_values(graph: &SchemaGraph, type_: &SchemaType) -> String {
+    match enum_cases(graph, type_) {
+        Some(cases) => format!(" [possible values: {}]", cases.join(", ")),
+        None => String::new(),
+    }
+}
+
+/// The cases of the enum that a value of `type_` is, through named references and options.
+fn enum_cases<'a>(graph: &'a SchemaGraph, type_: &'a SchemaType) -> Option<&'a [String]> {
+    let mut current = type_;
+    // Bounded, because a recursive type can contain itself through an option.
+    for _ in 0..8 {
+        current = match graph.resolve_ref(current).ok()? {
+            SchemaType::Enum { cases, .. } => return Some(cases),
+            SchemaType::Option { inner, .. } => inner,
+            _ => return None,
+        };
+    }
+    None
 }
 
 #[cfg(test)]

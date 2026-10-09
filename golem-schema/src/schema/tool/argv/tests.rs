@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{ParsedToolArguments, parse};
+use super::{ParsedToolArguments, parse, parse_with_variables};
 use crate::schema::tool::*;
-use crate::schema::{SchemaGraph, SchemaType, SchemaValue};
+use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+use std::collections::HashMap;
 use test_r::test;
 
 fn body() -> CommandBody {
@@ -102,6 +103,49 @@ fn values(tool: &Tool, argv: &[&str]) -> Vec<SchemaValue> {
         panic!("not a record")
     };
     fields
+}
+
+fn optional_string(value: Option<&str>) -> SchemaValue {
+    SchemaValue::Option {
+        inner: value.map(|value| Box::new(SchemaValue::String(value.into()))),
+    }
+}
+
+fn parsed_with(
+    tool: &Tool,
+    argv: &[&str],
+    variables: &[(&str, &str)],
+) -> Result<ParsedToolArguments, String> {
+    let variables: HashMap<String, String> = variables
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+    parse_with_variables(
+        tool,
+        &argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        &variables,
+    )
+}
+
+fn values_with(tool: &Tool, argv: &[&str], variables: &[(&str, &str)]) -> Vec<SchemaValue> {
+    let ParsedToolArguments::Invoke { input, .. } = parsed_with(tool, argv, variables).unwrap()
+    else {
+        panic!("unexpected help")
+    };
+    let (_, SchemaValue::Record { fields }) = input.into_parts() else {
+        panic!("not a record")
+    };
+    fields
+}
+
+fn env_option(name: &str, shape: OptionShape, variable: &str) -> OptionSpec {
+    let mut option = option(name, shape);
+    option.env_var = Some(variable.into());
+    option
+}
+
+fn string(value: &str) -> SchemaValue {
+    SchemaValue::String(value.into())
 }
 
 #[test]
@@ -639,4 +683,570 @@ fn tool_metadata_cannot_read_the_callers_environment() {
         panic!()
     };
     assert!(!help.contains("PATH"));
+}
+
+#[test]
+fn optional_arguments_declared_with_a_plain_type_can_be_omitted_or_supplied() {
+    let mut b = body();
+    let mut directory = positional("directory", SchemaType::string());
+    directory.required = false;
+    b.positionals.fixed = vec![directory];
+    b.options.push(option(
+        "initial-branch",
+        OptionShape::Scalar(SchemaType::string()),
+    ));
+    let t = tool(b);
+    for (args, directory, initial_branch) in [
+        (vec![], None, None),
+        (vec!["repo"], Some("repo"), None),
+        (vec!["--initial-branch", "main"], None, Some("main")),
+        (
+            vec!["--initial-branch", "main", "repo"],
+            Some("repo"),
+            Some("main"),
+        ),
+    ] {
+        assert_eq!(
+            values(&t, &args),
+            vec![optional_string(directory), optional_string(initial_branch)],
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn inherited_global_and_optional_scalar_options_with_a_plain_type_are_optional() {
+    let mut t = tool(body());
+    t.commands.nodes[0].body = None;
+    t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    t.commands.nodes[0]
+        .globals
+        .options
+        .push(option("profile", OptionShape::Scalar(SchemaType::string())));
+    let mut child = tool(body()).commands.nodes.remove(0);
+    child.name = "show".into();
+    child.body.as_mut().unwrap().options.push(option(
+        "color",
+        OptionShape::OptionalScalar(SchemaType::string()),
+    ));
+    t.commands.nodes.push(child);
+    for (args, profile, color) in [
+        (vec!["show"], None, None),
+        (vec!["--profile", "dev", "show"], Some("dev"), None),
+        (vec!["show", "--profile", "dev"], Some("dev"), None),
+        (vec!["show", "--color=always"], None, Some("always")),
+    ] {
+        assert_eq!(
+            values(&t, &args),
+            vec![optional_string(profile), optional_string(color)],
+            "{args:?}"
+        );
+    }
+    // A bare optional-scalar option still needs a declared bare-value default.
+    let bare = parsed(&t, &["show", "--color"]).err();
+    assert!(
+        bare.as_deref()
+            .is_some_and(|e| e.contains("bare-value default")),
+        "{bare:?}"
+    );
+}
+
+#[test]
+fn constraints_see_an_omitted_optional_argument_with_a_plain_type_as_absent() {
+    let mut b = body();
+    let mut from = positional("from", SchemaType::string());
+    from.required = false;
+    b.positionals.fixed = vec![from];
+    b.options
+        .push(option("author", OptionShape::Scalar(SchemaType::string())));
+    b.constraints.push(Constraint::Forbids(ForbidsC {
+        lhs_quant: Quantifier::All,
+        lhs: vec![Ref::Present("author".into())],
+        rhs: vec![Ref::Present("from".into())],
+    }));
+    let t = tool(b);
+    for args in [vec![], vec!["HEAD"], vec!["--author", "Ada"]] {
+        assert_eq!(parsed(&t, &args).err(), None, "{args:?}");
+    }
+    let both = parsed(&t, &["--author", "Ada", "HEAD"]).err();
+    assert!(
+        both.as_deref().is_some_and(|e| e.contains("constraint")),
+        "{both:?}"
+    );
+}
+
+#[test]
+fn an_option_left_out_takes_the_value_of_its_declared_variable() {
+    let mut b = body();
+    b.options.push(env_option(
+        "cwd",
+        OptionShape::Scalar(SchemaType::string()),
+        "PWD",
+    ));
+    b.options.push(env_option(
+        "color",
+        OptionShape::OptionalScalar(SchemaType::string()),
+        "COLOR",
+    ));
+    let t = tool(b);
+    for (variables, cwd, color) in [
+        (vec![], None, None),
+        (vec![("OTHER", "/elsewhere")], None, None),
+        (vec![("PWD", "/work/repo")], Some("/work/repo"), None),
+        (
+            vec![("PWD", "/work/repo"), ("COLOR", "always")],
+            Some("/work/repo"),
+            Some("always"),
+        ),
+    ] {
+        assert_eq!(
+            values_with(&t, &[], &variables),
+            vec![optional_string(cwd), optional_string(color)],
+            "{variables:?}"
+        );
+    }
+}
+
+#[test]
+fn the_command_line_wins_over_a_variable_and_a_variable_over_the_default() {
+    let mut b = body();
+    let mut cwd = env_option("cwd", OptionShape::Scalar(SchemaType::string()), "PWD");
+    cwd.default = Some(string("/"));
+    b.options.push(cwd);
+    let t = tool(b);
+    for (args, variables, expected) in [
+        (vec![], vec![], "/"),
+        (vec![], vec![("PWD", "/work")], "/work"),
+        (vec!["--cwd", "/x"], vec![("PWD", "/work")], "/x"),
+        (vec!["--cwd=/x"], vec![], "/x"),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![string(expected)],
+            "{args:?} {variables:?}"
+        );
+    }
+}
+
+#[test]
+fn a_variable_satisfies_a_required_option() {
+    let mut b = body();
+    let mut region = env_option(
+        "region",
+        OptionShape::Scalar(SchemaType::string()),
+        "REGION",
+    );
+    region.required = true;
+    b.options.push(region);
+    let t = tool(b);
+    let missing = parsed_with(&t, &[], &[]).err();
+    assert!(
+        missing
+            .as_deref()
+            .is_some_and(|e| e.contains("missing required option --region")),
+        "{missing:?}"
+    );
+    assert_eq!(
+        values_with(&t, &[], &[("REGION", "eu")]),
+        vec![string("eu")]
+    );
+}
+
+#[test]
+fn a_repeatable_option_splits_the_value_of_a_variable_by_its_delimiter() {
+    let mut b = body();
+    b.options.push(env_option(
+        "tags",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: SchemaType::string(),
+        }),
+        "TAGS",
+    ));
+    let t = tool(b);
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    assert_eq!(values_with(&t, &[], &[]), vec![list(&[])]);
+    assert_eq!(
+        values_with(&t, &[], &[("TAGS", "a,b")]),
+        vec![list(&["a", "b"])]
+    );
+    assert_eq!(
+        values_with(&t, &["--tags", "x"], &[("TAGS", "a,b")]),
+        vec![list(&["x"])]
+    );
+}
+
+#[test]
+fn an_inherited_global_option_takes_a_variable_below_a_subcommand() {
+    let mut t = tool(body());
+    t.commands.nodes[0].body = None;
+    t.commands.nodes[0].subcommands = vec![CommandIndex(1)];
+    let mut directories = option(
+        "working-directory",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Repeated,
+            item_type: SchemaType::string(),
+        }),
+    );
+    directories.short = Some('C');
+    let mut cwd = env_option("cwd", OptionShape::Scalar(SchemaType::string()), "PWD");
+    cwd.default = Some(string("/"));
+    t.commands.nodes[0].globals.options = vec![directories, cwd];
+    let mut child = tool(body()).commands.nodes.remove(0);
+    child.name = "status".into();
+    t.commands.nodes.push(child);
+    let list = |items: &[&str]| SchemaValue::List {
+        elements: items.iter().map(|item| string(item)).collect(),
+    };
+    for (args, variables, directories, cwd) in [
+        (vec!["status"], vec![], vec![], "/"),
+        (
+            vec!["status"],
+            vec![("PWD", "/work/repo")],
+            vec![],
+            "/work/repo",
+        ),
+        (
+            vec!["-C", "repo", "status"],
+            vec![("PWD", "/work")],
+            vec!["repo"],
+            "/work",
+        ),
+        (
+            vec!["status", "--cwd", "/x"],
+            vec![("PWD", "/work")],
+            vec![],
+            "/x",
+        ),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![list(&directories), string(cwd)],
+            "{args:?} {variables:?}"
+        );
+    }
+}
+
+#[test]
+fn flags_take_the_usual_words_and_counts_from_variables() {
+    let mut b = body();
+    let mut verbose = flag(
+        "verbose",
+        'v',
+        FlagShape::BoolFlag(BoolFlagShape {
+            default: false,
+            negatable: false,
+        }),
+    );
+    verbose.env_var = Some("VERBOSE".into());
+    let mut level = flag("level", 'l', FlagShape::CountFlag(Some(3)));
+    level.env_var = Some("LEVEL".into());
+    b.flags = vec![verbose, level];
+    let t = tool(b);
+    for (args, variables, verbose, level) in [
+        (vec![], vec![], false, 0),
+        (vec![], vec![("VERBOSE", "true"), ("LEVEL", "2")], true, 2),
+        (vec![], vec![("VERBOSE", "FALSE")], false, 0),
+        (vec!["--verbose"], vec![("VERBOSE", "false")], true, 0),
+        (vec!["-l"], vec![("LEVEL", "3")], false, 1),
+    ] {
+        assert_eq!(
+            values_with(&t, &args, &variables),
+            vec![SchemaValue::Bool(verbose), SchemaValue::U32(level)],
+            "{args:?} {variables:?}"
+        );
+    }
+    for (words, verbose) in [
+        (["1", "true", "yes", "on", "y", "t", "YES", "On"], true),
+        (["0", "false", "no", "off", "n", "f", "NO", "Off"], false),
+    ] {
+        for word in words {
+            assert_eq!(
+                values_with(&t, &[], &[("VERBOSE", word)])[0],
+                SchemaValue::Bool(verbose),
+                "VERBOSE={word}"
+            );
+        }
+    }
+    for (variable, value, flag) in [
+        ("VERBOSE", "maybe", "--verbose"),
+        ("VERBOSE", "2", "--verbose"),
+        ("VERBOSE", "", "--verbose"),
+        ("VERBOSE", " yes", "--verbose"),
+        ("LEVEL", "4", "--level"),
+        ("LEVEL", "many", "--level"),
+    ] {
+        let error = parsed_with(&t, &[], &[(variable, value)]).err();
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.contains(flag) && e.contains(variable)),
+            "{variable}={value:?}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_value_from_a_variable_that_does_not_decode_names_the_option_and_the_variable() {
+    let mut b = body();
+    b.options.push(env_option(
+        "count",
+        OptionShape::Scalar(SchemaType::s32()),
+        "COUNT",
+    ));
+    let t = tool(b);
+    assert_eq!(
+        values_with(&t, &[], &[("COUNT", "7")]),
+        vec![SchemaValue::Option {
+            inner: Some(Box::new(SchemaValue::S32(7)))
+        }]
+    );
+    let error = parsed_with(&t, &[], &[("COUNT", "seven")]).err();
+    assert!(
+        error
+            .as_deref()
+            .is_some_and(|e| e.contains("--count") && e.contains("COUNT")),
+        "{error:?}"
+    );
+    // The same bad value on the command line is not blamed on a variable.
+    let error = parsed_with(&t, &["--count", "seven"], &[("COUNT", "7")]).err();
+    assert!(
+        error.as_deref().is_some_and(|e| !e.contains("COUNT")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_variable_that_is_set_to_the_empty_text_is_used() {
+    let mut b = body();
+    let mut label = env_option("label", OptionShape::Scalar(SchemaType::string()), "LABEL");
+    label.default = Some(string("unnamed"));
+    b.options.push(label);
+    let t = tool(b);
+    assert_eq!(values_with(&t, &[], &[]), vec![string("unnamed")]);
+    assert_eq!(values_with(&t, &[], &[("LABEL", "")]), vec![string("")]);
+}
+
+#[test]
+fn a_value_from_a_variable_counts_as_given_for_constraints() {
+    let mut b = body();
+    b.options.push(env_option(
+        "token",
+        OptionShape::Scalar(SchemaType::string()),
+        "TOKEN",
+    ));
+    b.options.push(option(
+        "token-file",
+        OptionShape::Scalar(SchemaType::string()),
+    ));
+    b.constraints.push(Constraint::Forbids(ForbidsC {
+        lhs_quant: Quantifier::All,
+        lhs: vec![Ref::Present("token".into())],
+        rhs: vec![Ref::Present("token-file".into())],
+    }));
+    let t = tool(b);
+    assert_eq!(
+        parsed_with(&t, &["--token-file", "f"], &[]).err(),
+        None,
+        "no variable"
+    );
+    assert_eq!(
+        parsed_with(&t, &[], &[("TOKEN", "t")]).err(),
+        None,
+        "only the variable"
+    );
+    let both = parsed_with(&t, &["--token-file", "f"], &[("TOKEN", "t")]).err();
+    assert!(
+        both.as_deref().is_some_and(|e| e.contains("constraint")),
+        "{both:?}"
+    );
+}
+
+#[test]
+fn sixty_four_bit_integers_are_written_as_plain_numbers() {
+    let mut b = body();
+    b.positionals.fixed = vec![
+        positional("offset", SchemaType::u64()),
+        positional("delta", SchemaType::s64()),
+    ];
+    b.options
+        .push(option("limit", OptionShape::Scalar(SchemaType::u64())));
+    let t = tool(b);
+    assert_eq!(
+        values(&t, &["201", "-5", "--limit", "18446744073709551615"]),
+        vec![
+            SchemaValue::U64(201),
+            SchemaValue::S64(-5),
+            SchemaValue::Option {
+                inner: Some(Box::new(SchemaValue::U64(u64::MAX)))
+            },
+        ]
+    );
+    // The quoted form, a 64-bit integer's canonical JSON, still parses.
+    assert_eq!(
+        values(&t, &["\"201\"", "\"-5\""])[..2],
+        [SchemaValue::U64(201), SchemaValue::S64(-5)]
+    );
+    for args in [
+        vec!["18446744073709551616", "0"],
+        vec!["0", "9223372036854775808"],
+        vec!["-1", "0"],
+        vec!["1.5", "0"],
+        vec!["many", "0"],
+        vec!["007", "0"],
+    ] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+}
+
+#[test]
+fn an_enum_value_is_accepted_in_any_letter_case() {
+    let mode = || SchemaType::r#enum(vec!["Literal".into(), "Regex".into()]);
+    let mut b = body();
+    b.positionals.fixed = vec![positional("mode", mode())];
+    b.options
+        .push(option("fallback", OptionShape::Scalar(mode())));
+    b.options.push(option(
+        "also",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: mode(),
+        }),
+    ));
+    let t = tool(b);
+    let exact = values(
+        &t,
+        &["Regex", "--fallback", "Literal", "--also", "Literal,Regex"],
+    );
+    for args in [
+        vec!["regex", "--fallback", "literal", "--also", "literal,regex"],
+        vec!["REGEX", "--fallback", "LITERAL", "--also", "LiTeRaL,rEgEx"],
+    ] {
+        assert_eq!(values(&t, &args), exact, "{args:?}");
+    }
+    for args in [
+        vec!["rege"],
+        vec!["regexp"],
+        vec!["Regex", "--fallback", "lit"],
+    ] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+
+    // The exact spelling wins, and text that is equal to two cases names neither.
+    let mut b = body();
+    b.positionals.fixed = vec![positional(
+        "unit",
+        SchemaType::r#enum(vec!["m".into(), "M".into(), "Kb".into(), "kB".into()]),
+    )];
+    let t = tool(b);
+    assert_eq!(values(&t, &["m"]), vec![SchemaValue::Enum { case: 0 }]);
+    assert_eq!(values(&t, &["M"]), vec![SchemaValue::Enum { case: 1 }]);
+    assert_eq!(values(&t, &["kB"]), vec![SchemaValue::Enum { case: 3 }]);
+    for args in [vec!["kb"], vec!["KB"]] {
+        assert!(parsed(&t, &args).is_err(), "accepted {args:?}");
+    }
+}
+
+#[test]
+fn help_lists_the_arguments_and_the_values_of_an_enum() {
+    let mode = || SchemaType::r#enum(vec!["Literal".into(), "Regex".into()]);
+    let mut b = body();
+    let mut path = positional("path", SchemaType::string());
+    path.doc.summary = "Root file or directory".into();
+    path.value_name = Some("FILE".into());
+    let mut depth = positional("depth", SchemaType::u32());
+    depth.default = Some(SchemaValue::U32(3));
+    let mut search_mode = positional("mode", SchemaType::ref_to(TypeId::from("search-mode")));
+    search_mode.required = false;
+    search_mode.doc.summary = "How the pattern is read".into();
+    b.positionals.fixed = vec![path, search_mode, depth];
+    b.positionals.tail = Some(TailPositional {
+        name: "globs".into(),
+        doc: Doc::default(),
+        value_name: None,
+        item_type: SchemaType::string(),
+        min: 0,
+        max: None,
+        separator: None,
+        verbatim: false,
+        accepts_stdio: false,
+    });
+    let mut on_error = option("on-error", OptionShape::Scalar(SchemaType::option(mode())));
+    on_error.doc.summary = "Mode after a bad pattern".into();
+    b.options.push(on_error);
+    b.options.push(option(
+        "also",
+        OptionShape::RepeatableList(RepeatableListShape {
+            repetition: Repetition::Delimited(','),
+            item_type: mode(),
+        }),
+    ));
+    b.options
+        .push(option("label", OptionShape::Scalar(SchemaType::string())));
+    let mut t = tool(b);
+    t.schema.defs.push(SchemaTypeDef {
+        id: TypeId::from("search-mode"),
+        name: None,
+        body: mode(),
+    });
+    let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+        panic!()
+    };
+    // One space between words, so that the column widths are not a part of the test.
+    let lines: Vec<String> = help
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect();
+    let position = |line: &str| {
+        lines
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("no line {line:?} in:\n{help}"))
+    };
+    let arguments = position("Arguments:");
+    assert!(arguments < position("Options:"), "{help}");
+    // The names have the form of the usage line: a value name, an optional argument, a default.
+    assert!(
+        lines[0].ends_with("<FILE> [mode] [depth] [globs]..."),
+        "{help}"
+    );
+    assert_eq!(position("<FILE> Root file or directory"), arguments + 1);
+    assert_eq!(
+        position("[mode] How the pattern is read [possible values: Literal, Regex]"),
+        arguments + 2
+    );
+    assert_eq!(position("[depth]"), arguments + 3);
+    assert_eq!(position("[globs]..."), arguments + 4);
+    position("--on-error <VALUE> Mode after a bad pattern [possible values: Literal, Regex]");
+    position("--also <VALUE> [possible values: Literal, Regex]");
+    position("--label <VALUE>");
+    // An argument with no text has no spaces after its name.
+    assert!(help.lines().any(|line| line == "  [globs]..."), "{help}");
+
+    let mut b = body();
+    b.options
+        .push(option("label", OptionShape::Scalar(SchemaType::string())));
+    let ParsedToolArguments::Help(help) = parsed(&tool(b), &["--help"]).unwrap() else {
+        panic!()
+    };
+    assert!(!help.contains("Arguments:"), "{help}");
+
+    // A type that contains itself through an option has no values to list.
+    let mut b = body();
+    b.positionals.fixed = vec![positional(
+        "chain",
+        SchemaType::ref_to(TypeId::from("chain")),
+    )];
+    let mut t = tool(b);
+    t.schema.defs.push(SchemaTypeDef {
+        id: TypeId::from("chain"),
+        name: None,
+        body: SchemaType::option(SchemaType::ref_to(TypeId::from("chain"))),
+    });
+    let ParsedToolArguments::Help(help) = parsed(&t, &["--help"]).unwrap() else {
+        panic!()
+    };
+    assert!(help.lines().any(|line| line == "  <chain>"), "{help}");
 }

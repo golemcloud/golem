@@ -55,21 +55,35 @@ const branchResult = z.array(
 );
 
 const definition = toolDefinition("git", { requiresFilesystem: true })
-  .version("0.1.9")
+  .version("0.1.10")
   .doc({
     summary: "Run local Git workflows.",
     description:
-      "A local-only Git command subset backed by isomorphic-git. Supports repository inspection, staging, commits, branches, checkout, and local identity configuration. It never fetches, pulls, pushes, or opens a remote. The shared tool interface requires long names for short-only Git options and accepts inherited -C after a subcommand.",
+      "A local-only Git command subset backed by isomorphic-git. Supports repository inspection, staging, commits, branches, checkout, and local identity configuration. It never fetches, pulls, pushes, or opens a remote. The shared tool interface requires long names for short-only Git options and accepts inherited -C after a subcommand. Called from a shell it starts in the shell's current directory; any other caller starts at / unless it passes --cwd.",
     examples: [
       {
         title: "Inspect a repository",
         body: "git -C workspace status --short",
       },
       {
+        title: "Work in the shell's directory",
+        body: "cd workspace\ngit status --short",
+      },
+      {
         title: "Stage and commit a path",
         body: "git -C workspace add -- src/main.ts\ngit -C workspace commit -m \"Update main\"",
       },
     ],
+  })
+  .global("cwd", z.string(), {
+    default: "/",
+    env: "PWD",
+    valueName: "PATH",
+    doc: {
+      summary: "Directory the caller is in.",
+      description:
+        "Where Git starts before any -C is applied. A shell supplies its current directory; other callers start at /.",
+    },
   })
   .global("working-directory", z.string(), {
     short: "C",
@@ -78,7 +92,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
     doc: {
       summary: "Run as if Git started in PATH.",
       description:
-        "May be repeated. Each relative PATH is resolved from the result of the previous -C, matching Git.",
+        "May be repeated. Each relative PATH is resolved from the result of the previous -C, matching Git; the first one from the directory the caller is in.",
     },
   })
   .command("init", (command) =>
@@ -440,10 +454,10 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
       ),
   )
   .implement({
-    init: async ({ workingDirectory, directory, initialBranch }) =>
+    init: async ({ cwd, workingDirectory, directory, initialBranch }) =>
       guard(async () => {
         const dir = path.resolve(
-          await validatedCwd(workingDirectory ?? []),
+          await validatedCwd(workingDirectory ?? [], cwd),
           directory ?? ".",
         );
         await git.init({ fs, dir, defaultBranch: initialBranch ?? "main" });
@@ -452,15 +466,16 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           paths: [],
         };
       }),
-    status: async ({ workingDirectory, paths, null: zero }) =>
+    status: async ({ cwd, workingDirectory, paths, null: zero }) =>
       guard(async () => {
         const entries = await statusEntries(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           paths,
         );
         return { entries, stdout: formatStatus(entries, zero) };
       }),
     diff: async ({
+      cwd,
       workingDirectory,
       from,
       to,
@@ -475,7 +490,7 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           (value): value is string => value !== undefined,
         );
         const result = await diff(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           refs,
           paths,
           cached,
@@ -485,9 +500,9 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         );
         return result;
       }),
-    log: async ({ workingDirectory, ref, maxCount, oneline }) =>
+    log: async ({ cwd, workingDirectory, ref, maxCount, oneline }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const resolved = ref ? await resolveDocumentedRef(repo, ref) : "HEAD";
         const commits = await git.log({
           fs,
@@ -506,20 +521,21 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
         return { commits: entries, stdout: formatLog(entries, oneline) };
       }),
     branch: async ({
+      cwd,
       workingDirectory,
       delete: shouldDelete,
       name,
       startPoint,
     }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         return branchCommand(repo, shouldDelete, name, startPoint);
       }),
-    add: async ({ workingDirectory, paths, all, update }) =>
+    add: async ({ cwd, workingDirectory, paths, all, update }) =>
       guard(async () => {
         if (all && update) throw new Error("-A and -u are mutually exclusive");
         const changed = await stage(
-          await repository(workingDirectory ?? []),
+          await repository(workingDirectory ?? [], cwd),
           paths,
           all,
           update,
@@ -531,21 +547,21 @@ const definition = toolDefinition("git", { requiresFilesystem: true })
           paths: changed,
         };
       }),
-    commit: async ({ workingDirectory, message, author, allowEmpty }) =>
+    commit: async ({ cwd, workingDirectory, message, author, allowEmpty }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const oid = await createCommit(repo, message, author, allowEmpty);
         return { oid, summary: message[0] ?? "" };
       }),
-    checkout: async ({ workingDirectory, newBranch, detach, ref, paths }) =>
+    checkout: async ({ cwd, workingDirectory, newBranch, detach, ref, paths }) =>
       guard(async () => {
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         return checkoutCommand(repo, newBranch, detach, ref, paths);
       }),
-    config: async ({ workingDirectory, local, key, value }) =>
+    config: async ({ cwd, workingDirectory, local, key, value }) =>
       guard(async () => {
         if (!local) throw new Error("only --local configuration is supported");
-        const repo = await repository(workingDirectory ?? []);
+        const repo = await repository(workingDirectory ?? [], cwd);
         const configured = await localConfig(repo, key, value);
         return { key, value: configured, updated: value !== undefined };
       }),

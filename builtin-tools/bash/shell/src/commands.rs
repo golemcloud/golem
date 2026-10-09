@@ -23,11 +23,15 @@ pub struct CommandDescriptor {
 }
 
 /// Parse arguments and resolve help before any input is consumed.
+///
+/// `variables` is what the shell lets a bound command read: its exported variables, and `PWD`
+/// as the directory the shell is in.
 pub trait CommandInvoker: Send + Sync {
     fn prepare(
         &self,
         name: &str,
         argv: &[String],
+        variables: &HashMap<String, String>,
     ) -> Result<Box<dyn PreparedCommand>, CommandOutput>;
 }
 
@@ -85,6 +89,21 @@ pub(crate) fn forward(
     execute(context, args)
 }
 
+/// What a bound command can read from the shell: the exported variables, and `PWD` as the
+/// directory the shell is in, whatever a script assigned to that variable.
+fn bound_command_variables(context: &ExecutionContext<'_>) -> HashMap<String, String> {
+    let mut variables: HashMap<String, String> = crate::tools::coreutils::exported_env(context)
+        .into_iter()
+        // An exported function is not a variable.
+        .filter(|(name, _)| !name.ends_with("%%"))
+        .collect();
+    variables.insert(
+        "PWD".into(),
+        context.shell.working_dir().to_string_lossy().into_owned(),
+    );
+    variables
+}
+
 fn execute(
     context: ExecutionContext<'_>,
     args: Vec<CommandArg>,
@@ -99,7 +118,13 @@ fn execute(
         let prepared = runtime
             .as_ref()
             .and_then(|runtime| runtime.entries.get(&context.command_name))
-            .map(|(_, invoker)| invoker.prepare(&context.command_name, &argv));
+            .map(|(_, invoker)| {
+                invoker.prepare(
+                    &context.command_name,
+                    &argv,
+                    &bound_command_variables(&context),
+                )
+            });
         let outcome = match prepared {
             Some(Ok(prepared)) => {
                 let stdin = if prepared.takes_stdin() {

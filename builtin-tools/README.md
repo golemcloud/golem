@@ -190,6 +190,12 @@ the shared tool command model requires canonical long names, short-only Git opti
 descriptive long forms such as `--working-directory` and `--new-branch`; inherited `-C` is accepted
 after a subcommand as well as before it.
 
+Git starts in the directory given by `--cwd`, and the first `-C` resolves from there. A shell
+supplies it: in a Bash script or a `golem ssh` session, `cd workspace` followed by
+`git status --short` works without `-C`, because the option declares the `PWD` variable. Any other
+caller starts at `/` unless it passes `--cwd`, and a caller that builds the input record directly
+sets its `cwd` field.
+
 The `web-fetch` release is selected and bound in the same way, but requires no filesystem grant:
 
 ```yaml
