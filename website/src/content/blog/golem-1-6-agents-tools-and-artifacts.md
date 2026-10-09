@@ -7,6 +7,8 @@ slug: "golem-1-6-agents-tools-and-artifacts"
 draft: false
 ---
 
+![Golem 1.6: agents, tools, and artifacts on one durable runtime](/blog-images/golem-1-6-agents-tools-and-artifacts.png)
+
 On Monday, October 19th, we will release Golem 1.6, alongside a live launch event from 13:00 to 15:00 EDT.
 
 In June, I argued in [The Rise of the Agent Runtime](/blog/the-rise-of-the-agent-runtime) that the dominant use of AI in 2026 is a coding agent — even for people who never see a line of code. An agent asked for a customer summary writes a small program, installs the packages it needs, runs it, inspects the output, and tries again. That makes a coding agent the most demanding agent there is. It needs a shell, a filesystem, tools, streaming output, long-lived state, sub-agents, and limits it cannot argue its way around — all at once.
