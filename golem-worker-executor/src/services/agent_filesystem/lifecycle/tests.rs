@@ -8789,6 +8789,42 @@ async fn dropped_attribute_and_flush_observers_need_no_billing_close_coupling() 
 }
 
 #[test]
+fn a_host_storage_permission_failure_invalidates_the_generation() {
+    for kind in [
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    ] {
+        let error = sandbox_error("open host storage", kind);
+        assert!(error.is_terminal_failure());
+        let cause = classify_failure(&error, FailureFacts::default());
+        assert_eq!(cause, FailureCause::TerminalInfrastructure);
+        assert_eq!(
+            decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+            EffectDecision::Invalidate
+        );
+    }
+}
+
+#[test]
+fn a_capability_escape_refusal_is_a_guest_error_without_effect() {
+    let root = tempfile::tempdir().unwrap();
+    let directory =
+        cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+    let refusal = directory.open("../outside").unwrap_err();
+    assert_eq!(refusal.kind(), std::io::ErrorKind::PermissionDenied);
+    let error = FilesystemStorageError::io("open sandbox path", root.path(), refusal);
+    assert!(!error.is_terminal_failure());
+    let cause = classify_failure(&error, FailureFacts::default());
+    assert_eq!(cause, FailureCause::Guest);
+    assert!(error_proves_no_effect(&error));
+    assert_eq!(
+        decide_effect(cause, EffectEvidence::NoEffect, RetryBudget::new(2)),
+        EffectDecision::ReturnFailure(FailureCause::Guest)
+    );
+    assert!(matches!(classified_error(cause, error), Error::Sandbox(_)));
+}
+
+#[test]
 fn cause_effect_decision_keeps_quota_pressure_and_postconditions_distinct() {
     let storage_full = sandbox_error("write", std::io::ErrorKind::StorageFull);
     assert_eq!(

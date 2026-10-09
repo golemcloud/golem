@@ -3194,6 +3194,26 @@ mod tests {
     }
 
     #[test]
+    fn p2_p3_sandbox_escape_errors_are_access_denied() {
+        use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;
+
+        let root = tempfile::tempdir().unwrap();
+        let directory =
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap();
+        let refusal = || {
+            AgentFilesystemError::Sandbox(FilesystemStorageError::io(
+                "open sandbox path",
+                root.path(),
+                directory.open("../outside").unwrap_err(),
+            ))
+        };
+        let p2: P2ErrorCode = p2_agent_error(refusal()).downcast().unwrap();
+        let p3 = p3_agent_error(refusal()).downcast().unwrap();
+        assert_eq!(p2, P2ErrorCode::Access);
+        assert!(matches!(p3, types::ErrorCode::Access));
+    }
+
+    #[test]
     fn p2_p3_read_only_attribute_error_mapping_is_identical() {
         use wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode as P2ErrorCode;
 
