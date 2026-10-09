@@ -73,7 +73,7 @@ func run(ctx context.Context) error {
     }
 
     // The id struct holds the constructor arguments that identify an instance.
-    c, err := counter.GetCounterAgent(counter.CounterAgentId{Name: "my-counter"})
+    c, err := counter.GetCounterAgent(counter.CounterAgentID{Name: "my-counter"})
     if err != nil {
         return err
     }

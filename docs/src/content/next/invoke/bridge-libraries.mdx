@@ -127,7 +127,7 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	c1, err := client.GetCounterAgent(client.CounterAgentId{Name: "c1"})
+	c1, err := client.GetCounterAgent(client.CounterAgentID{Name: "c1"})
 	if err != nil {
 		return err
 	}
@@ -316,7 +316,7 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	agent, err := client.GetMediaAgent(client.MediaAgentId{Name: "studio-a"})
+	agent, err := client.GetMediaAgent(client.MediaAgentID{Name: "studio-a"})
 	if err != nil {
 		return err
 	}

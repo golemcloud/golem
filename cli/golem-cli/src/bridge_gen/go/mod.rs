@@ -52,7 +52,7 @@ pub use type_name::GoTypeName;
 
 use crate::bridge_gen::go::go::{
     go_string, lower_first, one_field_struct, to_exported_ident, to_field_ident, to_param_ident,
-    unique_idents, unique_idents_with_reserved,
+    to_unexported_ident, unique_idents, unique_idents_with_reserved,
 };
 use crate::bridge_gen::go::go_writer::GoWriter;
 use crate::bridge_gen::go::type_ref::{VALUES, VALUES_PKG};
@@ -142,11 +142,11 @@ impl AgentNames {
                 .collect(),
             // Methods on the client struct that a schema method must not
             // shadow.
-            &["Id"],
+            &["ID"],
         );
         let inputs = methods.iter().map(|m| format!("{agent}{m}Input")).collect();
         Self {
-            id: format!("{agent}Id"),
+            id: format!("{agent}ID"),
             client: format!("{agent}Client"),
             get: format!("Get{agent}"),
             new_phantom: format!("NewPhantom{agent}"),
@@ -683,7 +683,7 @@ impl GoBridgeGenerator {
         writer.import(GOLEM_PKG);
         let n = &self.names;
         let agent_name = self.agent_type.type_name.as_str();
-        let remote = format!("{}Remote", lower_first(&n.agent));
+        let remote = format!("{}Remote", to_unexported_ident(&n.agent));
 
         // The id: the constructor's arguments, which identify an instance.
         self.write_input_struct(
@@ -1103,7 +1103,7 @@ pub(crate) fn case_idents<'a>(
 
 /// The unexported variable a method's descriptor is bound to.
 fn descriptor_var(agent: &str, method: &str) -> String {
-    format!("{}{method}Method", lower_first(agent))
+    format!("{}{method}Method", to_unexported_ident(agent))
 }
 
 /// The guest SDK constructor for a union discriminator.
@@ -1140,6 +1140,9 @@ mod tests {
         assert_eq!(names.call, ["Poll", "MustPoll"]);
         assert_eq!(names.must_call, ["MustPoll2", "MustMustPoll"]);
         assert_eq!(names.call_async, ["PollAsync", "MustPollAsync"]);
-        assert_eq!(names.must_trigger, ["MustTriggerPoll", "MustTriggerMustPoll"]);
+        assert_eq!(
+            names.must_trigger,
+            ["MustTriggerPoll", "MustTriggerMustPoll"]
+        );
     }
 }

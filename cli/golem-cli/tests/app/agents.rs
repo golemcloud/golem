@@ -1168,7 +1168,7 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             	}}); err != nil {{
             		log.Fatal(err)
             	}}
-            	agent := must(target.GetStreamingRpcTarget(target.StreamingRpcTargetId{{Name: "go-generated-e2e"}}))
+            	agent := must(target.GetStreamingRPCTarget(target.StreamingRPCTargetID{{Name: "go-generated-e2e"}}))
 
             	expect("consume", must(agent.Consume(ctx, bridge.StreamOf[uint32](1, 2, 3))), []uint32{{1, 2, 3}})
             	expect("produce", must(must(agent.Produce(ctx, []uint32{{4, 5}})).Collect(ctx)), []uint32{{4, 5}})
@@ -1212,9 +1212,9 @@ async fn test_go_generated_streaming_bridge_end_to_end() {
             		log.Fatal(err)
             	}}
 
-            	described := must(must(configured.GetConfiguredRpcTarget(
-            		configured.ConfiguredRpcTargetId{{Name: "go-configured"}},
-            		configured.WithConfiguredRpcTargetConfig(configured.ConfiguredRpcTargetConfig{{
+            	described := must(must(configured.GetConfiguredRPCTarget(
+            		configured.ConfiguredRPCTargetID{{Name: "go-configured"}},
+            		configured.WithConfiguredRPCTargetConfig(configured.ConfiguredRPCTargetConfig{{
             			Count: values.Some[uint32](7),
             			Label: values.Some("go-label"),
             		}}),
@@ -2514,7 +2514,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	counter, err := client.GetCounterAgent(client.CounterAgentId{{Name: "go-e2e-counter"}})
+            	counter, err := client.GetCounterAgent(client.CounterAgentID{{Name: "go-e2e-counter"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2527,7 +2527,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}})
+            	echoes, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}})
             	if err != nil {{
             		log.Fatal(err)
             	}}
@@ -2539,7 +2539,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}},
+            	marked, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
             		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{Mark: values.Some("!")}}))
             	if err != nil {{
             		log.Fatal(err)
@@ -2548,7 +2548,7 @@ async fn test_go_bridge_e2e() {
             	if err != nil {{
             		log.Fatal(err)
             	}}
-            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentId{{Prefix: "go:"}},
+            	doubled, err := echo.NewPhantomEchoAgent(echo.EchoAgentID{{Prefix: "go:"}},
             		echo.WithEchoAgentConfig(echo.EchoAgentConfig{{StyleRepeat: values.Some[uint8](2)}}))
             	if err != nil {{
             		log.Fatal(err)
@@ -4594,8 +4594,8 @@ async fn test_go_agent_guest_bridge_e2e() {
 
             func init() {{
             	agent.Handle(consumer.IncrementProvider, func(_ *golem.Context[state], in consumer.IncrementProviderIn) string {{
-            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName}}))
-            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentId{{Name: in.ProviderName + "-stepped"}},
+            		counter := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName}}))
+            		stepped := golem.Must(provider.GetCounterAgent(provider.CounterAgentID{{Name: in.ProviderName + "-stepped"}},
             			provider.WithCounterAgentConfig(provider.CounterAgentConfig{{Step: golem.Some[uint32](5)}})))
             		return fmt.Sprintf("ok:%d:%d", golem.Must(counter.Increment()), golem.Must(stepped.Increment()))
             	}})

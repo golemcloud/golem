@@ -399,7 +399,7 @@ The caller can then use the typed client without depending on the provider's def
 ```go
 import weather "golem.local/bridge/weather-agent-guest-client"
 
-london, err := weather.GetWeatherAgent(weather.WeatherAgentId{Location: "London"})
+london, err := weather.GetWeatherAgent(weather.WeatherAgentID{Location: "London"})
 if err != nil {
 	return err // the weather component is not deployed
 }

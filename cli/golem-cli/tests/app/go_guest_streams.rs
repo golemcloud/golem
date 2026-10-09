@@ -170,7 +170,7 @@ async fn test_go_generated_guest_streams_e2e() {
 
             func init() {{
             	agent.Handle(consumer.Run, func(ctx *golem.Context[state], _ golem.Unit) string {{
-            		remote := golem.Must(provider.GetStreamProvider(provider.StreamProviderId{{Name: ctx.State.name}}))
+            		remote := golem.Must(provider.GetStreamProvider(provider.StreamProviderID{{Name: ctx.State.name}}))
 
             		total := golem.Must(remote.Consume(golem.StreamOf[int8](1, 2, 3)))
             		check(total == 6, "consume returned %d", total)

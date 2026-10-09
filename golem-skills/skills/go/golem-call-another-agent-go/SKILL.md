@@ -141,7 +141,7 @@ Import it and call through the typed client:
 ```go
 import weather "golem.local/bridge/weather-agent-guest-client"
 
-client, err := weather.GetWeatherAgent(weather.WeatherAgentId{City: "London"})
+client, err := weather.GetWeatherAgent(weather.WeatherAgentID{City: "London"})
 if err != nil {
 	return err.Error() // the weather component is not deployed
 }
@@ -159,7 +159,7 @@ pending := client.ForecastAsync(3)                    // *golem.Future[Out]
 - `Get<Agent>` and `NewPhantom<Agent>` take `golem.ClientOpt`s. When the callee declares local configuration, the client also has a `<Agent>Config` struct, with one `values.Option` field per config path (`["limits", "max-items"]` → `LimitsMaxItems`), and a `With<Agent>Config` option. Only the fields you set are sent; the rest keep their provisioned values:
 
 ```go
-counter, err := counters.GetCounterAgent(counters.CounterAgentId{Name: "fast"},
+counter, err := counters.GetCounterAgent(counters.CounterAgentID{Name: "fast"},
 	counters.WithCounterAgentConfig(counters.CounterAgentConfig{Step: golem.Some[uint32](5)}))
 ```
 

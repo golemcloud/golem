@@ -25,7 +25,7 @@
 //! Wire encoding is positional — record field order, variant and enum case
 //! index, union tag — so renaming a generated member never changes what travels.
 
-use heck::{ToLowerCamelCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 
 /// The 25 Go keywords. A keyword cannot be used as an identifier at all.
 const KEYWORDS: &[&str] = &[
@@ -184,12 +184,56 @@ fn is_ident_char(ch: char) -> bool {
     ch == '_' || ch.is_ascii_alphanumeric()
 }
 
-fn upper_camel(name: &str) -> String {
-    name.to_upper_camel_case()
+/// The initialisms Go spells in one case (golint's list): `user-id` is
+/// `UserID`, not `UserId`.
+const INITIALISMS: &[&str] = &[
+    "ACL", "API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GUID", "HTML", "HTTP", "HTTPS", "ID", "IP",
+    "JSON", "LHS", "QPS", "RAM", "RHS", "RPC", "SLA", "SMTP", "SQL", "SSH", "TCP", "TLS", "TTL",
+    "UDP", "UI", "UID", "UUID", "URI", "URL", "UTF8", "VM", "XML", "XMPP", "XSRF", "XSS",
+];
+
+/// The words of an UpperCamelCase name, each starting at an upper-case letter.
+fn camel_words(camel: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start = 0;
+    for (i, ch) in camel.char_indices().skip(1) {
+        if ch.is_ascii_uppercase() {
+            words.push(&camel[start..i]);
+            start = i;
+        }
+    }
+    if start < camel.len() {
+        words.push(&camel[start..]);
+    }
+    words
 }
 
+fn initialism(word: &str) -> Option<String> {
+    let upper = word.to_ascii_uppercase();
+    INITIALISMS.contains(&upper.as_str()).then_some(upper)
+}
+
+fn upper_camel(name: &str) -> String {
+    camel_words(&name.to_upper_camel_case())
+        .into_iter()
+        .map(|word| initialism(word).unwrap_or_else(|| word.to_string()))
+        .collect()
+}
+
+/// lowerCamelCase as Go spells it: a leading initialism is lower-cased whole
+/// (`id`, `apiKey`), later ones upper-cased whole (`userID`).
 fn lower_camel(name: &str) -> String {
-    name.to_lower_camel_case()
+    let upper = name.to_upper_camel_case();
+    let words = camel_words(&upper);
+    let mut out = String::with_capacity(upper.len());
+    for (i, word) in words.into_iter().enumerate() {
+        if i == 0 {
+            out.push_str(&word.to_ascii_lowercase());
+        } else {
+            out.push_str(&initialism(word).unwrap_or_else(|| word.to_string()));
+        }
+    }
+    out
 }
 
 /// Disambiguates already-escaped identifiers so each is unique within the list,
@@ -275,6 +319,24 @@ pub fn go_string(value: &str) -> String {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn initialisms_are_spelled_in_one_case() {
+        for (name, exported, unexported) in [
+            ("id", "ID", "id"),
+            ("user-id", "UserID", "userID"),
+            ("userId", "UserID", "userID"),
+            ("api_key", "APIKey", "apiKey"),
+            ("APIKey", "APIKey", "apiKey"),
+            ("http-url", "HTTPURL", "httpURL"),
+            ("utf8-text", "UTF8Text", "utf8Text"),
+            ("identity", "Identity", "identity"),
+            ("order-line", "OrderLine", "orderLine"),
+        ] {
+            assert_eq!(to_exported_ident(name), exported, "{name}");
+            assert_eq!(to_unexported_ident(name), unexported, "{name}");
+        }
+    }
 
     #[test]
     fn schema_names_become_go_casing() {

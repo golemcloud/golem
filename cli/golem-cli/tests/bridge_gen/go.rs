@@ -375,12 +375,12 @@ fn go_guest_counter_is_gofmt_clean_and_vets(
 fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generated: &GeneratedGo) {
     let client = generated.read("client.go");
     assert!(
-        client.contains("type CounterAgentId struct {\n\tName string\n}"),
+        client.contains("type CounterAgentID struct {\n\tName string\n}"),
         "{client}"
     );
     assert!(
         client.contains(
-            "golem.DefineFullAgentClient[CounterAgentId](\"CounterAgent\", golem.AgentClientSpec{})"
+            "golem.DefineFullAgentClient[CounterAgentID](\"CounterAgent\", golem.AgentClientSpec{})"
         ),
         "{client}"
     );
@@ -411,8 +411,8 @@ fn go_guest_counter_has_a_typed_client(#[tagged_as("go_guest_counter")] generate
         "func (c CounterAgentClient) MustTriggerAdd(by uint32) golem.InvocationID {",
         "func (c CounterAgentClient) ScheduleAdd(at time.Time, by uint32) (*golem.ScheduledInvocation, error) {",
         "func (c CounterAgentClient) MustScheduleAdd(at time.Time, by uint32) *golem.ScheduledInvocation {",
-        "func MustGetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
-        "func MustNewPhantomCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) CounterAgentClient {",
+        "func MustGetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
+        "func MustNewPhantomCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) CounterAgentClient {",
     ] {
         assert!(
             client.contains(expected),
@@ -477,7 +477,7 @@ func roundTrip[T any](t *testing.T, name string, in T) {{
 func TestGeneratedTypesRoundTrip(t *testing.T) {{
 	at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	roundTrip(t, "record", ShopOrder{{
-		OrderId: "o1", PlacedAt: at, Tags: map[string]uint32{{"a": 1}},
+		OrderID: "o1", PlacedAt: at, Tags: map[string]uint32{{"a": 1}},
 		Lines: []int64{{1, 2}}, Digest: [4]uint8{{1, 2, 3, 4}},
 	}})
 	roundTrip(t, "enum", ShopStatusInTransit)
@@ -506,10 +506,10 @@ fn go_guest_reserves_the_agent_level_names(env: &GoEnv) {
     let colliding = agent(
         "CounterAgent",
         "rust",
-        vec![field("id", ref_to("CounterAgentId"))],
-        vec![method("get", vec![], Some(ref_to("CounterAgentId")))],
+        vec![field("id", ref_to("CounterAgentID"))],
+        vec![method("get", vec![], Some(ref_to("CounterAgentID")))],
         vec![def(
-            "CounterAgentId",
+            "CounterAgentID",
             SchemaType::record(vec![named_field("value", SchemaType::string())]),
         )],
         AgentMode::Durable,
@@ -616,7 +616,7 @@ func roundTrip[T any](t *testing.T, name string, in T, enc func(T) schema.Schema
 func TestGeneratedConversionsRoundTrip(t *testing.T) {{
 	at := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	roundTrip(t, "record", ShopOrder{{
-		OrderId: "o1", PlacedAt: at, Tags: map[string]uint32{{"a": 1, "b": 2}},
+		OrderID: "o1", PlacedAt: at, Tags: map[string]uint32{{"a": 1, "b": 2}},
 		Lines: []int64{{1, -2}}, Digest: [4]uint8{{1, 2, 3, 4}},
 	}}, encodeShopOrder, decodeShopOrder)
 	roundTrip(t, "enum", ShopStatusInTransit, encodeShopStatus, decodeShopStatus)
@@ -691,7 +691,7 @@ func TestTheClientInvokesTriggersAndSchedules(t *testing.T) {{
 	}}))
 	defer server.Close()
 
-	client, err := GetCounterAgent(CounterAgentId{{Name: "c1"}}, bridge.WithConfiguration(bridge.Configuration{{
+	client, err := GetCounterAgent(CounterAgentID{{Name: "c1"}}, bridge.WithConfiguration(bridge.Configuration{{
 		Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
 	}}))
 	if err != nil {{
@@ -1347,7 +1347,7 @@ fn go_guest_client_overrides_typed_configuration(env: &GoEnv) {
         "LimitsMaxItems values.Option[uint16]",
         "func WithCounterAgentConfig(cfg CounterAgentConfig) golem.ClientOpt {",
         "golem.ConfigEntryOf([]string{\"limits\", \"max-items\"}, v)",
-        "func GetCounterAgent(id CounterAgentId, opts ...golem.ClientOpt) (CounterAgentClient, error) {",
+        "func GetCounterAgent(id CounterAgentID, opts ...golem.ClientOpt) (CounterAgentClient, error) {",
     ] {
         assert!(
             client.contains(expected),
@@ -1403,7 +1403,7 @@ func TestSetConfigurationFieldsTravelAsCanonicalJSON(t *testing.T) {{
 	}}))
 	defer server.Close()
 
-	client, err := GetCounterAgent(CounterAgentId{{Name: "c1"}},
+	client, err := GetCounterAgent(CounterAgentID{{Name: "c1"}},
 		bridge.WithConfiguration(bridge.Configuration{{
 			Server: bridge.Custom(server.URL, "token"), AppName: "app", EnvName: "env",
 		}}),

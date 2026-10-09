@@ -402,7 +402,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("type Order struct {\n\tOrderId   string\n\tItemCount uint32\n}"),
+            rendered.contains("type Order struct {\n\tOrderID   string\n\tItemCount uint32\n}"),
             "{rendered}"
         );
     }
