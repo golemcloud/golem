@@ -839,6 +839,14 @@ durably enqueued acceptance prefix. Read-only hits/followers persist no invocati
 Test: `tests/api.rs::invoking_with_same_idempotency_key_is_idempotent_after_restart` — after an
 executor restart, an old key returns the recorded result without re-running the guest.
 
+P3 HTTP send arms a Store-owned request leak guard before Start admission, not just before
+replay resolution. Guest cancellation can drop the send while its claim waits at the cursor gate.
+The guard fences owned cursor operations, deletes and drains the request, and closes its installed
+durable scope if one exists. This releases the guest's body/trailer writes without re-issuing the
+request. A shared slot receives the scope index when admission returns the handle; before that,
+no scope is installed in the durable context. Both replay consumption and live execution disarm
+the guard when they take request ownership (`durable_host/p3/http/{send,replay}.rs`).
+
 ## Durable RPC exactly-once
 
 `RpcTargetAdmission::{Recorded, LiveOnly}` keeps admission separate from call resolution.
