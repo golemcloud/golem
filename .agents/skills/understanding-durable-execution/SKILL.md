@@ -88,8 +88,8 @@ something from the right column to survive a restart is wrong. Sockets and other
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
 must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
 coordination gate so concurrent calls cannot reconnect one handle twice (see
-"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
-wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
+wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
@@ -617,7 +617,11 @@ entries are consumed as a replay-inert subtree). Incomplete: the block goes live
 original root `Start` and the **whole body re-runs**, re-recording nested calls as new physical
 `Start`s. This is the one ordinary durable path where a completed nested effect legitimately
 repeats; the block author owns its idempotency (`reference/timelines.md` §15,
-`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`).
+`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`). A root
+custom invocation of an entity body records the entity invocation `Start` as its
+`parent_start_index` (and claims with it), like every other durable call of that body, so replay
+can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
+initiation) keeps using the custom parent.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
@@ -646,7 +650,8 @@ speculatively, `commit_consumed_entry` commits, `move_replay_idx` advances and e
 scheduling order that replay does not reproduce, so `claim_start_matching` claims the *first
 unclaimed matching* `Start` between cursor and target. That is the only justified use of
 scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
-to make different calls; when no matching `Start` exists, replay fails with a divergence error.
+to make different calls; when no matching `Start` exists, replay fails with a divergence error
+(after any active entity body that owns the cursor head has consumed it; see below).
 
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
@@ -688,6 +693,27 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
+- A `Start` claim that finds no match decides the missing `Start` only when no active entity
+  body encloses the entry at the cursor head. A tool call claims its entity `Start` inline, but
+  the cursor drains the body's first entries only when the spawned supervisor is first polled. A
+  clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
+  `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
+  `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
+  any other entry. `nearest_active_body` (a pure function) resolves the nearest active body that
+  encloses the head, and the one that encloses the claim's parent: it walks parents and stops at
+  the first active body, so a scope of a nested entity resolves to that entity even after the
+  outer body settled. The parents come from state the cursor already holds: each resolver
+  awaiter records the `parent_start_index` of its claimed `Start` at registration, and retained
+  `Start`s keep their entries. The missing-claim path reads no oplog entry; a custom invocation
+  claim takes the head from its own exact-id scan. The pure rule
+  `missing_start_waits_for` then decides: the claim waits for the head's body, unless that body
+  issued the claim or the claim's parent was appended live. A call of an entity nested inside
+  the head's body still waits, because that entity is another Store.
+  A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
+  change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
+  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
+  at the head, and a claim issued by the body that encloses the head stay strict divergence at
+  once. The path where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
@@ -782,6 +808,17 @@ result and waits for the commit receipt before waiters are notified. Durable age
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+
+The live loop hydrates an ordinary invocation from its committed Pending entry into an
+executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
+cached serialized bytes, instead of serializing and uploading the payload again. Lowering uses
+a separate invocation clone and cannot replace the retained original payload. This does not
+reuse the Pending context or wallet pins: the start hook checks current authority, records the
+executing context and current wallet pin, and commits Started with `CommitLevel::Always` before
+guest execution. `ManualUpdate` takes its separate snapshot path and does not pass its Pending
+payload to this hook. Fork rehomes both references into the target owner; archive and revert do
+not individually delete a referenced payload blob.
+
 During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still
@@ -828,8 +865,25 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    never random.
 
 ### Pending RPC waits and proactive suspension
-Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
-this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+`OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
+participants (`worker/instance.rs`, `worker/suspension.rs`). A current runtime blocked witness
+is necessary but insufficient: every admitted participant must be accounted for, with no active
+outer poll or unclassified non-root work. Unknown work, preparation and borrowed synchronous
+RPC waits veto automatic suspension; raw sync RPC does not automatically suspend.
+Owned async RPC activities become eligible after their grace period; the owner rechecks while
+other work vetoes. Owned timers (including the narrow P2 timer-only poll/block dispatcher) and
+promises provide deadline/activation evidence. This is not general P2 readiness adaptation.
+Durable source reads bind to their exact runtime transfer activity and retain the read future.
+Only an established source wait can be passive: locally registered external inline input and
+its descendants veto suspension; agent-hosted input, invocation output and attached downstream
+waits can qualify with a durable timed recheck. Active journaling, publication and settlement
+are not passive waits. Root/result return alone is not idle.
+`RuntimeStore::drive` persists the earliest timed wake, then revalidates the same activity revision
+and eligibility before committing timestamped suspension. Activity changes invalidate stale
+evidence. Existing interrupt/retirement precedence and discard/replay reconstruction remain
+unchanged; there is no new cleanup or lifecycle protocol. Borrowed waits in
+`durable_host/suspendable_wait.rs` observe only readiness and interruption.
+See `reference/rpc-suspension.md` for timing and admission details.
 Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
 `tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
@@ -1182,8 +1236,20 @@ the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
 
 ## Concurrency and guest completion delivery
 
-p3 `Accessor` host calls run concurrently inside one `Store`; p2 `&mut self` calls are serialized
-(`concurrent/mod.rs`). Concurrent completions may finish in any host order, but the guest observes
+`Accessor` host calls run concurrently inside one `Store`; direct `&mut self` calls retain
+the Store while awaiting (`concurrent/mod.rs`). P2 wall-clock reads and monotonic `now` remain
+exclusive because concurrent bindings cannot run during synchronous core initialization.
+Fresh clock/random value reads in the primary Store skip live wallet synchronization: their
+results require no permissions, and waiting for an accessor holding `card_event_boundary_lock`
+would retain the Store that accessor needs. The explicit allowlist is in `call_coordinator.rs`;
+`ReadLocal` alone does not imply permission independence. Snapshotting, retained recorded Starts,
+entity Stores and replay still use the ordinary boundary. An automatic-update latch prevents
+the exemption until update success is committed, including after the pending description is taken.
+Clock-only execution does not guarantee pending card-transfer progress. Permission-sensitive calls
+still synchronize. Replay-transition/cleanup lock contention is not eliminated by this exemption.
+WebSocket connect/send/close use accessor bindings so their asynchronous work releases the Store.
+WebSocket drop only removes local state and does not await boundary work.
+Concurrent completions may finish in any host order, but the guest observes
 them in exactly one order per run, and that order is recorded by the `CompletionDelivered` markers.
 `ReplayDeliveryBarrier` transfers the cursor gate so replay releases each completion at its
 recorded boundary. `supersede_prior_completion_delivery` hard-errors if an observer is still armed:
@@ -1206,8 +1272,8 @@ Cursor operations and recorded-marker waits stay active; durable `Start`/`End` w
 A replayed websocket handle is reconstructed per handle while concurrent accessor calls race to
 use it. `connect` on replay installs `WebSocketConnectionEntry::Replay(Arc<Mutex<()>>)` — the
 per-handle reconnect gate — and every `send`/`receive`/`receive-with-timeout`/`close` on that
-handle goes through `ensure_websocket_connection_live` (direct) or
-`ensure_websocket_connection_live_access` (accessor), both in `durable_host/websocket/client.rs`.
+handle goes through `ensure_websocket_connection_live_access` in
+`durable_host/websocket/client.rs`.
 The helper takes the gate (racing the wait against the interrupt signal via `wait_or_interrupt`),
 re-reads the entry *while still holding it* (`classify_reconnect_entry`), and only a call that
 still sees its own gate in the entry proceeds to take one pool permit, run the handshake, and
@@ -1262,7 +1328,15 @@ A streaming RPC is an ordinary durable RPC whose method carries input or output 
 
 Forks copy ordinary oplog entries and append a `ForkCut`. That marker clips retained stream history,
 resets live controls, and stores the creation receipt; it does not carry handle aliases or authorship
-mappings. Export forks also append `ExportForkInitialized`, which binds their new public session ID,
+mappings. Entity-invocation requests do not record the internal calling principal: live execution
+and replay derive it from the current owner, including every middleware and leaf invocation.
+Request matching still checks entity, operation, call mode, input and descendant plan position.
+The separate execution `principal`, authority snapshot, guest inputs, recorded environment and
+external effects remain unchanged. Inline request bytes are preserved; external payloads are copied
+from authoritative contents under the target without decoding or re-encoding them. Cached external
+values are not a substitute for copying durable bytes. Repeated forks derive the new owner without
+rewriting historical guest observations or logical RPC origins.
+Export forks also append `ExportForkInitialized`, which binds their new public session ID,
 fresh invocation key and expiry policy. Revert raises the generation/epoch fence before reconstruction,
 so handles issued by the discarded generation cannot control the rebuilt streams. Export targets
 are built in hidden staged oplogs and published atomically; matching retries trust the immutable

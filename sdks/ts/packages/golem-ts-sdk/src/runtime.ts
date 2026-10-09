@@ -53,7 +53,7 @@ import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/da
 import type { SavedAgentSnapshot } from './internal/resolvedAgent';
 import { encodeMultipart, MultipartPart } from './internal/multipart';
 import { compileSchema } from './schema/adapter';
-import { SchemaCodec } from './schema/codec';
+import { SchemaCodec, SchemaValueWriter, invocationSchemaValueReader } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   AgentImplementation,
@@ -250,8 +250,15 @@ export function registerAgentType(
           {
             hasInput: mc.inputCodecs.length !== 0,
             read: compileNamedInputReader(mc.inputCodecs),
-            write: async (value: unknown) =>
-              output.tag === 'unit' ? undefined : encode(output.codec.toValue(value)),
+            write: async (value: unknown) => {
+              if (output.tag === 'unit') return undefined;
+              if (output.codec.invocationDirect) {
+                const writer = new SchemaValueWriter();
+                const root = output.codec.invocationDirect.write(value, writer)!;
+                return { valueNodes: writer.valueNodes, root };
+              }
+              return encode(output.codec.toValue(value));
+            },
           },
         ];
       }),
@@ -264,7 +271,37 @@ function compileNamedInputReader(
   codecs: NamedCodec[],
 ): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
   const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
+  const direct = codecs.every(
+    (c) => c.codec.autoInjected === 'principal' || c.codec.invocationDirect,
+  );
   return (input, principal) => {
+    // Unexpected resources retain the ordinary lifting and cleanup boundary.
+    if (
+      direct &&
+      !input.valueNodes.some(
+        (node) =>
+          node?.tag === 'secret-value' ||
+          node?.tag === 'quota-token-handle' ||
+          node?.tag === 'permission-card-handle' ||
+          node?.tag === 'stream-value',
+      )
+    ) {
+      const reader = invocationSchemaValueReader(input);
+      return reader.node(input.root, 'record-value', (node) => {
+        const fields = (node as Extract<typeof node, { tag: 'record-value' }>).val;
+        if (fields.length !== expected)
+          throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+        let index = 0;
+        return Object.fromEntries(
+          codecs.map(({ name, codec }) => [
+            name,
+            codec.autoInjected === 'principal'
+              ? sdkPrincipalFromHost(principal)
+              : codec.invocationDirect!.read(reader, fields[index++]),
+          ]),
+        );
+      });
+    }
     const value = schemaValueFromWit(input);
     if (value.tag !== 'record' || value.fields.length !== expected)
       throw new TypeError(`expected a record with ${expected} user-supplied fields`);
@@ -359,6 +396,45 @@ function validateHttpConsistency(
   const mountVars = httpMount ? pathVariableNames(httpMount.pathPrefix) : new Set<string>();
 
   if (httpMount) {
+    const selector = httpMount.phantomIdBinding;
+    if (selector) {
+      const { name: selectorName } = selector.val;
+      if (!selectorName) {
+        throw new Error('Phantom selector must have a nonempty name');
+      }
+      if (typeof selector.val.optional !== 'boolean') {
+        throw new Error('Phantom selector optionality must be a boolean');
+      }
+      if (selector.tag === 'path') {
+        if (
+          idNames.has(selectorName) ||
+          httpMount.pathPrefix.filter(
+            (s) => s.tag === 'path-variable' && s.val.variableName === selectorName,
+          ).length !== 1
+        ) {
+          throw new Error(
+            'Phantom path selector must name exactly one mount capture, not an id field',
+          );
+        }
+        mountVars.delete(selectorName);
+      }
+      for (const mc of methodCodecs.values()) {
+        for (const ep of mc.httpEndpoints) {
+          if (
+            (selector.tag === 'query' &&
+              ep.queryVars.some((q) => q.queryParamName === selectorName)) ||
+            (selector.tag === 'path' && pathVariableNames(ep.pathSuffix).has(selectorName)) ||
+            (ep.durableStreams &&
+              selector.tag === 'query' &&
+              ['offset', 'cursor', 'live'].includes(selectorName))
+          ) {
+            throw new Error(
+              'Phantom selector conflicts with an endpoint binding or durable-stream control',
+            );
+          }
+        }
+      }
+    }
     for (const v of mountVars) {
       if (!idNames.has(v)) {
         throw new Error(
@@ -450,6 +526,12 @@ function assembleAgentType(
   const router = metadata.router ? compileRouterMount(metadata.router) : undefined;
   const httpMount: HttpMountDetails | undefined =
     router?.mount ?? (metadata.http ? compileHttpMount(name, metadata.http) : undefined);
+  if (
+    httpMount?.phantomIdBinding &&
+    (metadata.mode === 'ephemeral' || router || httpMount.filesystemBindings.length)
+  ) {
+    throw new Error('Phantom selectors require a regular durable mount without file exposure');
+  }
   if (router) {
     if (
       idCodecs.length ||

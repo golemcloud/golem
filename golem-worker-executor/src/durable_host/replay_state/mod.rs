@@ -139,9 +139,37 @@ pub(crate) enum ScopeStartClaimOutcome {
 /// payload loading and decoding failures remain errors and must not enter missing-claim recovery.
 enum StartClaimAttempt {
     Claimed(ReplayCallHandle, Box<OplogEntry>),
-    Blocked,
+    Blocked(BlockedOn),
     Missing,
     MissingSettling { replay_target: OplogIndex },
+}
+
+/// Why a claim cannot be decided in its current cursor transaction, and therefore what it waits
+/// for before it runs again.
+enum BlockedOn {
+    /// The cursor must move first: a reserved `CompletionDelivered` marker bounds the claim, or
+    /// the guest must consume a retained atomic Begin before a host subtask continues live.
+    CursorProgress,
+    /// No matching `Start` was found, but the entry at the cursor head belongs to an entity body
+    /// that is still active. The body, or the supervisor that drains its recorded terminal, can
+    /// still consume that entry, so the missing `Start` is decided only after the cursor moves or
+    /// the set of active bodies changes. The receiver was subscribed before the body was found
+    /// active, so a body that settles afterwards always wakes the claim.
+    ActiveBody(tokio::sync::watch::Receiver<HashSet<OplogIndex>>),
+}
+
+impl BlockedOn {
+    async fn wait(self, progress: std::pin::Pin<&mut tokio::sync::futures::Notified<'_>>) {
+        match self {
+            Self::CursorProgress => progress.await,
+            Self::ActiveBody(mut bodies) => {
+                tokio::select! {
+                    _ = progress => {}
+                    _ = bodies.changed() => {}
+                }
+            }
+        }
+    }
 }
 
 mod abandoned;
@@ -283,6 +311,10 @@ struct ReplayCursor {
     /// re-drive the cursor. Resolver delivery is the primary wakeup; this covers the "another
     /// consumer advanced the cursor past my blocker" case that a oneshot alone cannot.
     progress: Notify,
+    /// Counts the times a `Start` claim began to wait because an active entity body owns the
+    /// cursor head. Tests use it to observe that a claim is parked in that state.
+    #[cfg(feature = "test-utils")]
+    active_body_waits: tokio::sync::watch::Sender<u64>,
     #[cfg(test)]
     primary_publication_gate:
         std::sync::Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,

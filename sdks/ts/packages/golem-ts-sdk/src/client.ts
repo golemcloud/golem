@@ -25,13 +25,19 @@ import type {
   InvocationMetadata,
   CancelableScheduledInvocationReceipt,
 } from 'golem:agent/host@2.0.0';
-import { encodeChild, v, withIsolatedCapabilityAdoptionTransaction } from './internal/schema-model';
+import {
+  encodeChild,
+  v,
+  withIsolatedCapabilityAdoptionTransaction,
+  schemaValueFromWit,
+} from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
 import { compileConfig, ConfigDeclaration } from './config';
 import { Uuid } from './uuid';
 import { ParsedAgentId, bindAgentClient } from './agentId';
 import { compileSchema } from './schema/adapter';
-import { SchemaCodec } from './schema/codec';
+import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/codec';
+import type { SchemaValueTree } from 'golem:core/types@2.0.0';
 import { SchemaRef } from './schema/ref';
 import type { MarkerKindOf } from './schema/markers';
 import { StandardSchemaV1 } from './schema/standardSchema';
@@ -48,6 +54,7 @@ import { MethodSpec } from './method';
 import {
   resolveRemoteAgent,
   resolveRemoteAgentFallibly,
+  wireRemoteAgent,
   RemoteOutputError,
   type AgentConfigEntry,
 } from './bridge/agent';
@@ -421,6 +428,7 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
   mode: Mode,
   remote: ReturnType<typeof resolveRemoteAgentFallibly>,
 ): RemoteClient<Methods, Mode> {
+  const wire = wireRemoteAgent(remote);
   const decodeOutput = (method: CompiledRemoteMethod, value: unknown): unknown => {
     if (method.output.tag === 'unit') {
       if (value !== undefined) {
@@ -449,7 +457,55 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
 
   const client: Record<string, unknown> = {};
   for (const method of methodCodecs) {
+    const direct =
+      wire &&
+      method.inputCodecs.every((entry) => entry.codec.invocationDirect) &&
+      method.output.tag === 'single' &&
+      method.output.codec.invocationDirect;
+    const encodeWire = (input: Record<string, unknown>) => {
+      const writer = new SchemaValueWriter();
+      const fields = method.inputCodecs.map(
+        (entry) => entry.codec.invocationDirect!.write(input[entry.name], writer)!,
+      );
+      const root = writer.add({ tag: 'record-value', val: fields });
+      return { valueNodes: writer.valueNodes, root };
+    };
+    const decodeWire = (value: SchemaValueTree | undefined) => {
+      if (method.output.tag === 'unit' || value === undefined) return decodeOutput(method, value);
+      const codec = method.output.codec;
+      if (
+        value.valueNodes[value.root]?.tag !== `${codec.graph.root.body.tag}-value` ||
+        value.valueNodes.some(
+          (node) =>
+            node?.tag === 'secret-value' ||
+            node?.tag === 'quota-token-handle' ||
+            node?.tag === 'permission-card-handle' ||
+            node?.tag === 'stream-value',
+        )
+      )
+        return decodeOutput(method, schemaValueFromWit(value));
+      try {
+        return codec.invocationDirect!.read(
+          new SchemaValueReader(value.valueNodes, true),
+          value.root,
+        );
+      } catch (error) {
+        throw new RemoteOutputError(
+          `Remote agent ${remote.agentId}.${method.name} returned an invalid output: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+    };
     const invoke = async (input: Record<string, unknown> = {}, signal?: AbortSignal) => {
+      if (direct) {
+        const invocation = await wire!.invokeAndAwaitWithMetadata(
+          method.name,
+          encodeWire(input),
+          signal,
+        );
+        const value = decodeWire(invocation.value);
+        return mode === 'ephemeral' ? { metadata: invocation.metadata, value } : value;
+      }
       const invocation = await remote.invokeAndAwaitWithMetadata(
         method.name,
         encodeRecord(method.inputCodecs, input),
@@ -465,18 +521,19 @@ function createRemoteClient<Methods extends MethodsRecord, Mode extends 'durable
             invoke(input, options?.signal);
     client[method.name] = Object.assign(methodFn, {
       trigger: (input: Record<string, unknown> = {}) => {
-        const metadata = remote.invokeWithMetadata(
-          method.name,
-          encodeRecord(method.inputCodecs, input),
-        );
+        const metadata = direct
+          ? wire!.invokeWithMetadata(method.name, encodeWire(input))
+          : remote.invokeWithMetadata(method.name, encodeRecord(method.inputCodecs, input));
         return mode === 'ephemeral' ? metadata : undefined;
       },
       schedule: (at: Datetime, input: Record<string, unknown> = {}) => {
-        const receipt = remote.scheduleCancelableWithMetadata(
-          at,
-          method.name,
-          encodeRecord(method.inputCodecs, input),
-        );
+        const receipt = direct
+          ? wire!.scheduleCancelableWithMetadata(at, method.name, encodeWire(input))
+          : remote.scheduleCancelableWithMetadata(
+              at,
+              method.name,
+              encodeRecord(method.inputCodecs, input),
+            );
         return mode === 'ephemeral' ? receipt : receipt.cancellationToken;
       },
     });

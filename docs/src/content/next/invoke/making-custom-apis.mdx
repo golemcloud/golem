@@ -529,7 +529,7 @@ When authentication is enabled, agent constructors and methods can optionally re
 
 ## Phantom Agents
 
-Endpoints can be served by **phantom agents** — ephemeral, stateless agents that are created for each request and discarded afterward. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel.
+Endpoints can be served by **phantom agents** — separate instances with the same constructor parameters and an additional UUID. Without an explicit selector, `phantomAgent: true` creates a fresh phantom for each ordinary HTTP request. This is useful for gateway-like agents that dispatch to internal agents, allowing requests to be processed completely in parallel. Phantom identity is distinct from the agent's durable or ephemeral execution mode; a durable phantom can retain state and be addressed again by its UUID.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
 <Tabs.Tab>
@@ -584,6 +584,68 @@ pub(all) struct Gateway {
 ```
 </Tabs.Tab>
 </Tabs>
+
+### Selecting a known phantom UUID
+
+A mount can declare a path or query selector to address an exact phantom instead of choosing a fresh one. For example, `/decisions/d7/state?instance=dc7f9909-2975-42b3-9635-2f5ba7c73782` addresses that phantom of `DecisionAgent("d7")`. The UUID is scoped to the component and constructor parameters: using the same UUID with `d8` selects a different agent.
+
+Selection is **not cloning**. If the selected UUID has not been used, Golem follows normal agent creation. To copy existing state, fork through the SDK or [Durable Streams fork operation](/next/develop/durable-stream-forks), then select the resulting phantom UUID. Subsequent requests with the same constructor parameters and UUID reconnect to that instance.
+
+The following mount fragments declare an optional query selector. Omit the optional flag to make it required:
+
+<Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit"]} storageKey="nextra-tabs-language-sdk">
+<Tabs.Tab>
+```typescript
+http: http.mount('/decisions/{decision}', {
+  phantomId: http.phantomId.query('instance', { optional: true }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```typescript
+http: Http.mount('/decisions/{decision}', {
+  phantomId: Http.phantomId.query('instance', { optional: true }),
+})
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```rust
+#[agent_definition(
+    mount = "/decisions/{decision}",
+    phantom_id(query = "instance", optional = true)
+)]
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```scala
+@agentDefinition(
+  mount = "/decisions/{decision}",
+  phantomIdQuery = "instance",
+  phantomIdOptional = true
+)
+```
+</Tabs.Tab>
+<Tabs.Tab>
+```moonbit
+#derive.mount("/decisions/{decision}")
+#derive.mount_phantom_id(query = "instance", optional = true)
+```
+</Tabs.Tab>
+</Tabs>
+
+For path selection, use `/decisions/{decision}/{instance}` and change `query` to `path` in TypeScript, Effect, Rust and MoonBit; in Scala, use `phantomIdPath` instead of `phantomIdQuery`. Only `decision` is a constructor parameter. The declared `instance` capture belongs to phantom selection, not to the constructor or endpoint inputs. An optional path selector generates both `/decisions/{decision}/{instance}` and `/decisions/{decision}` before endpoint suffixes are appended; the whole selector segment disappears when omitted.
+
+| Request | Result |
+| --- | --- |
+| Valid UUID supplied | Select that exact phantom. |
+| Optional selector omitted | Select the original agent, **even with `phantomAgent: true`**. |
+| Required query selector omitted | `400 Bad Request`. |
+| Required path selector omitted | No matching route (`404`). |
+| Empty, malformed, or repeated query selector (even repeated identical UUIDs) | `400 Bad Request`. |
+
+Uppercase UUIDs are accepted and returned links use canonical lowercase spelling. A selector must belong to the mount; it cannot collide with endpoint inputs or protocol controls. Optional path expansion must not introduce ambiguous routes. Explicit selectors are supported only on durable, non-router mounts without filesystem exposure (including static bindings).
+
+Authentication and authorization run before selection; a UUID is an address, not a credential. Requests, conditional-response caches, streams and callbacks remain scoped to the selected identity. Without a declared selector, all existing original, fresh-phantom, ephemeral and Durable Streams session-selection policies remain unchanged.
 
 ## Customizing Durable Stream Routes
 

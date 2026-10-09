@@ -229,7 +229,7 @@ message RouteBehaviour {
     uint64 component_revision = 2;
     string agent_type = 3;
     repeated ConstructorParameter constructor_parameters = 4;
-    bool phantom = 5;
+    PhantomSelection phantom_selection = 5;
     string method_name = 6;
     repeated MethodParameter method_parameters = 7;
     CompiledOutputSchema expected_agent_response = 8;
@@ -242,6 +242,20 @@ message RouteBehaviour {
     uint32 base_path_variables = 15;
     RequestBodySchema body = 16;
     optional DurableStreamRoutePolicy durable_streams = 17;
+  }
+
+  message PhantomSelection {
+    oneof selection {
+      bool policy = 1;
+      golem.common.Empty original = 2;
+      uint32 path_index = 3;
+      PhantomQuery query = 4;
+    }
+  }
+
+  message PhantomQuery {
+    string name = 1;
+    bool optional = 2;
   }
 
   message DurableStreamRoutePolicy {

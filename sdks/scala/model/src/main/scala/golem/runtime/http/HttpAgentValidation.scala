@@ -21,6 +21,8 @@ object HttpAgentValidation {
           !FileMappingParser.validateCompiled(m.filesystemBindings)
       )
     ) return Left("invalid-file-mapping")
+    val phantomError = agent.httpMount.flatMap(mount => validatePhantom(agent, mount).left.toOption)
+    if (phantomError.nonEmpty) return Left(phantomError.get)
     if (agent.kind == AgentTypeKind.HttpRouter) validateRouter(agent)
     else if (agent.methods.exists(_.httpEndpoints.exists(_.httpMethod == HttpMethod.Any)))
       Left("router-method-on-regular-agent")
@@ -37,6 +39,32 @@ object HttpAgentValidation {
     validate(agent).fold(error => throw new IllegalArgumentException(s"${agent.name}: $error"), identity)
     agent
   }
+
+  private def validatePhantom(agent: AgentMetadata, mount: HttpMountDetails): Either[String, Unit] =
+    mount.phantomIdBinding match {
+      case None => Right(())
+      case Some(_)
+          if agent.kind != AgentTypeKind.Regular || agent.mode.contains(
+            "ephemeral"
+          ) || mount.filesystemBindings.nonEmpty =>
+        Left("Phantom selectors require a regular durable mount without filesystem exposure")
+      case Some(binding) =>
+        val conflict = agent.methods.flatMap(_.httpEndpoints).exists { endpoint =>
+          binding match {
+            case PhantomIdBinding.Path(name, _) =>
+              endpoint.pathSuffix.exists {
+                case PathSegment.PathVariable(n)          => n == name
+                case PathSegment.RemainingPathVariable(n) => n == name
+                case _                                    => false
+              }
+            case PhantomIdBinding.Query(name, _) =>
+              endpoint.queryVars.exists(_.queryParamName == name) ||
+              (endpoint.durableStreams.nonEmpty && Set("offset", "cursor", "live").contains(name))
+          }
+        }
+        if (conflict) Left("Phantom selector conflicts with an endpoint binding or durable-stream control")
+        else HttpValidation.validateHttpMount(agent.name, mount, agent.constructor.input.parameters.map(_.name).toSet)
+    }
 
   private def validateRouter(agent: AgentMetadata): Either[String, Unit] = {
     if (!agent.mode.contains("ephemeral")) return Left("router-mode")

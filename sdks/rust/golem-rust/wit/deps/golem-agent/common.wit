@@ -106,6 +106,7 @@ interface common {
     path-prefix:    list<path-segment>,
     auth-details:   option<auth-details>,
     phantom-agent:  bool,
+    phantom-id-binding: option<phantom-id-binding>,
     cors-options:   cors-options,
     webhook-suffix: list<path-segment>,
     static-bindings: list<file-mapping>,
@@ -114,6 +115,16 @@ interface common {
     file-response-headers: list<file-response-header>,
     /// The name of a parameterless router method that returns the OpenAPI document as a string.
     openapi-provider-method: option<string>,
+  }
+
+  variant phantom-id-binding {
+    path(phantom-id-binding-details),
+    query(phantom-id-binding-details),
+  }
+
+  record phantom-id-binding-details {
+    name: string,
+    optional: bool,
   }
 
   record file-response-header {

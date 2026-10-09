@@ -35,3 +35,5 @@ export type { SchemaCodec } from '../schema/codec';
 export { withNativeStreamScope, ownSchemaValueStreams } from '../internal/schema-model/streamScope';
 export { throwIfAborted } from '../internal/pollableUtils';
 export { withCapabilityAdoptionTransaction } from '../internal/schema-model/capabilityTransaction';
+export { SchemaValueWriter } from '../schema/codec';
+export type { SchemaValueTree } from 'golem:core/types@2.0.0';
