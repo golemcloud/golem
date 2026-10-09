@@ -226,11 +226,30 @@
         }
       }
     },
+    "nodeHttpRouters": {
+      "description": "Build-time Node HTTP listen port mappings. A later component layer replaces the complete table. Ports select logical routers, not sockets.",
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "mount"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "mount": { "type": "string" },
+          "auth": { "type": "boolean" },
+          "cors": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
     "componentTemplate": {
       "description": "Component template definition",
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "nodeHttpRouters": { "$ref": "#/definitions/nodeHttpRouters" },
         "guestLanguage": {
           "description": "The guest language of the components built with this template. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. Components get it from their applied templates, and applied templates must not declare different languages.",
           "type": "string",
@@ -344,6 +363,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "nodeHttpRouters": { "$ref": "#/definitions/nodeHttpRouters" },
         "toolsMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
         },
@@ -566,6 +586,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "nodeHttpRouters": { "$ref": "#/definitions/nodeHttpRouters" },
         "configSchema": {
           "$ref": "#/definitions/componentConfigSchema"
         },

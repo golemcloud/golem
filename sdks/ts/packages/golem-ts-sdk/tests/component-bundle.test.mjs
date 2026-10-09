@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { rollup } from 'rollup';
 import nodeResolve from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import ts from 'typescript';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { z } from 'zod';
 import { compileSchema } from '../src/schema/adapter';
 import { typedSchemaValueToWit, schemaValueFromWit } from '../src/internal/schema-model';
@@ -12,6 +14,7 @@ import { ToolType } from '../src/toolReflection';
 import '../src/schema/zod';
 import { componentPlugin, discoverCapabilities } from '../scripts/component.mjs';
 
+const nativeRequire = createRequire(import.meta.url);
 const fixtures = path.resolve('tests/components');
 const richToolContract = JSON.parse(
   fs.readFileSync(path.resolve('../../../../test-data/gol-40/rich-tool-conformance-v1.json')),
@@ -41,7 +44,7 @@ function configuration(main) {
   };
 }
 
-async function build(name) {
+async function build(name, pluginOptions = {}, format = 'cjs') {
   const main = path.join(fixtures, `${name}.ts`);
   const config = configuration(main);
   if (expected[name]) expect(discoverCapabilities(config)).toEqual(expected[name]);
@@ -59,8 +62,9 @@ async function build(name) {
           unminified = code;
         },
       },
-      componentPlugin(config, main),
+      componentPlugin(config, main, pluginOptions),
       nodeResolve({ extensions: ['.ts', '.mjs', '.js'] }),
+      commonjs(),
       {
         name: 'fixture-typescript',
         transform(_code, id) {
@@ -78,7 +82,7 @@ async function build(name) {
     ],
   });
   try {
-    const { output } = await bundle.generate({ format: 'cjs', inlineDynamicImports: true });
+    const { output } = await bundle.generate({ format, inlineDynamicImports: true });
     return { ...output[0], unminified };
   } finally {
     await bundle.close();
@@ -90,7 +94,15 @@ function wireValue(schema, value) {
   const codec = compileSchema(schema);
   return typedSchemaValueToWit({ graph: codec.graph, value: codec.toValue(value) });
 }
-function instantiate(code, overrides = {}) {
+function instantiate(code, overrides = {}, format = 'cjs') {
+  if (format === 'es')
+    code = ts.transpileModule(code, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.CommonJS,
+        esModuleInterop: true,
+      },
+    }).outputText;
   const module = { exports: {} };
   const host = {
     DatabaseSync: class {},
@@ -102,11 +114,257 @@ function instantiate(code, overrides = {}) {
     ],
     ...overrides,
   };
-  new Function('require', 'module', 'exports', code)(() => host, module, module.exports);
-  return module.exports;
+  new Function('require', 'module', 'exports', code)(
+    (id) =>
+      ['node:http', 'node:events', 'node:stream', 'node:buffer'].includes(id)
+        ? nativeRequire(id)
+        : host,
+    module,
+    module.exports,
+  );
+  return module.exports.default ?? module.exports;
 }
 
+describe('Node HTTP automatic registration', () => {
+  const mapping = {
+    3000: { name: 'AutoWeb', mount: '/auto', auth: true, cors: ['https://example.test'] },
+  };
+  afterEach(() => {
+    for (const key of Object.keys(globalThis))
+      if (key.startsWith('__golemAuto')) delete globalThis[key];
+  });
+
+  it('discovers a listen-only component and reports logical registration, not a socket', async () => {
+    const main = path.join(fixtures, 'node-http-auto.ts');
+    expect(discoverCapabilities(configuration(main)).agents).toBe(false);
+    const output = await build('node-http-auto', { nodeHttpRouters: mapping }, 'es');
+    const exports = await instantiate(output.code, {}, 'es');
+    const [agent] = exports.guest.discoverAgentTypes();
+    expect(agent.typeName).toBe('AutoWeb');
+    expect(agent.httpMount.pathPrefix).toEqual([{ tag: 'literal', val: 'auto' }]);
+    expect(agent.httpMount.authDetails.required).toBe(true);
+    expect(agent.httpMount.corsOptions.allowedPatterns).toEqual(['https://example.test']);
+    expect(globalThis.__golemAutoServer.listening).toBe(true);
+    expect(globalThis.__golemAutoServer.address()).toBeNull();
+    expect(globalThis.__golemAutoEvents).toBe(1);
+    expect(globalThis.__golemAutoCallback).toBe(true);
+    expect(() => globalThis.__golemAutoServer.close()).toThrow(/deployment/);
+    expect(() => globalThis.__golemAutoCreateServer().listen(3000)).toThrow(/initialization/);
+  }, 30000);
+
+  it('brackets static/CJS dependency initialization and a controllable top-level await', async () => {
+    let release;
+    globalThis.__golemAutoWait = new Promise((resolve) => {
+      release = resolve;
+    });
+    const output = await build(
+      'node-http-auto-modules',
+      {
+        nodeHttpRouters: {
+          ...mapping,
+          3001: { name: 'Dependency', mount: '/dependency' },
+        },
+      },
+      'es',
+    );
+    let settled = false;
+    const initialized = instantiate(output.code, {}, 'es').finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(globalThis.__golemAutoEvaluated).toBe(true);
+    expect(settled).toBe(false);
+    expect(globalThis.__golemAutoServer.listening).toBe(false);
+    release();
+    const exports = await initialized;
+    expect(
+      exports.guest
+        .discoverAgentTypes()
+        .map((agent) => agent.typeName)
+        .sort(),
+    ).toEqual(['AutoWeb', 'Dependency']);
+    expect(() => globalThis.__golemAutoCreateServer().listen(3001)).toThrow(/initialization/);
+  }, 30000);
+
+  it.each(['sync', 'async'])(
+    'closes registration and preserves a %s application failure',
+    async (kind) => {
+      globalThis.__golemAutoFail = kind;
+      globalThis.__golemAutoError = new Error('application initialization failed');
+      const output = await build('node-http-auto', { nodeHttpRouters: mapping }, 'es');
+      await expect(instantiate(output.code, {}, 'es')).rejects.toBe(globalThis.__golemAutoError);
+      expect(() => globalThis.__golemAutoCreateServer().listen(3000)).toThrow(/initialization/);
+    },
+    30000,
+  );
+
+  it('rejects invalid and unused configuration before any application side effect', async () => {
+    for (const table of [
+      null,
+      [],
+      { '03000': mapping[3000] },
+      { 65536: mapping[3000] },
+      { 3000: { name: '2Invalid', mount: '/' } },
+      { 3000: { name: 'Unused', mount: 'relative' } },
+      { 3000: { name: 'Unused', mount: '/', auth: 'false' } },
+      { 3000: { name: 'Unused', mount: '/', cors: [1] } },
+      { 3000: { name: 'Unused', mount: '/', unexpected: true } },
+      { ...mapping, 3001: mapping[3000] },
+    ]) {
+      const output = await build('node-http-auto', { nodeHttpRouters: table }, 'es');
+      await expect(instantiate(output.code, {}, 'es')).rejects.toBeInstanceOf(Error);
+      expect(globalThis.__golemAutoEvaluated).toBeUndefined();
+    }
+  }, 120000);
+
+  it('rejects duplicate/mixed registration, missing mappings and unsupported overloads', async () => {
+    const output = await build('node-http-auto-registrations', { nodeHttpRouters: mapping }, 'es');
+    for (const action of [
+      ({ createServer }) => {
+        const server = createServer();
+        server.listen(3000);
+        server.listen(3000);
+      },
+      ({ createServer }) => {
+        createServer().listen(3000);
+        createServer().listen(3000);
+      },
+      ({ createServer, nodeHttpHandler }) => {
+        const server = createServer();
+        nodeHttpHandler(server);
+        server.listen(3000);
+      },
+      ({ createServer, nodeHttpHandler }) => {
+        const server = createServer().listen(3000);
+        nodeHttpHandler(server);
+      },
+      ({ createServer, nodeHttpHandler, defineHttpRouter }) => {
+        defineHttpRouter('AutoWeb')
+          .mount('/explicit')
+          .implementRaw(nodeHttpHandler(createServer()));
+        createServer().listen(3000);
+      },
+      ({ createServer }) => createServer().listen(3001),
+      ...[
+        [],
+        [0],
+        [65536],
+        [1.5],
+        ['3000'],
+        [{ port: 3000 }],
+        [3000, 'localhost'],
+        [3000, () => {}, 1],
+      ].map(
+        (args) =>
+          ({ createServer }) =>
+            createServer().listen(...args),
+      ),
+    ]) {
+      globalThis.__golemAutoAction = action;
+      await expect(instantiate(output.code, {}, 'es')).rejects.toBeInstanceOf(Error);
+    }
+    globalThis.__golemAutoAction = ({ createServer, nodeHttpHandler, defineHttpRouter }) => {
+      const server = createServer().listen(3000);
+      defineHttpRouter('AutoWeb').mount('/explicit').implementRaw(nodeHttpHandler(createServer()));
+      expect(server.listening).toBe(true);
+    };
+    const conflicted = await instantiate(output.code, {}, 'es');
+    expect(() => conflicted.guest.discoverAgentTypes()).toThrow();
+    globalThis.__golemAutoAction = ({ createServer, nodeHttpHandler, defineHttpRouter }) => {
+      const explicit = createServer();
+      const handler = nodeHttpHandler(explicit);
+      expect(() => nodeHttpHandler(explicit)).not.toThrow();
+      defineHttpRouter('Explicit').mount('/explicit').implementRaw(handler);
+      createServer().listen(3000);
+    };
+    const both = await instantiate(output.code, {}, 'es');
+    expect(
+      both.guest
+        .discoverAgentTypes()
+        .map((agent) => agent.typeName)
+        .sort(),
+    ).toEqual(['AutoWeb', 'Explicit']);
+  }, 30000);
+});
+
 describe('component exports', () => {
+  it('shares the HTTP facade across import forms and preserves outgoing HTTP', async () => {
+    const output = await build('node-http-imports');
+    await instantiate(output.code);
+    const imports = globalThis.__golemNodeHttpImports;
+    delete globalThis.__golemNodeHttpImports;
+    const native = nativeRequire('node:http');
+    expect(nativeRequire('http')).toBe(native);
+    expect(imports.createServer).not.toBe(native.createServer);
+    for (const module of [
+      imports.http,
+      imports.nodeHttp,
+      imports.bundled.http,
+      imports.bundled.nodeHttp,
+    ]) {
+      expect(module.createServer).toBe(imports.createServer);
+      for (const name of ['request', 'get', 'IncomingMessage', 'Agent'])
+        expect(module[name]).toBe(native[name]);
+    }
+    for (const name of ['request', 'get', 'IncomingMessage', 'Agent'])
+      expect(imports[name]).toBe(native[name]);
+    const server = native.createServer((_request, response) => response.end('outgoing preserved'));
+    try {
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const body = await new Promise((resolve, reject) => {
+        imports
+          .get(`http://127.0.0.1:${server.address().port}/`, (response) => {
+            expect(response).toBeInstanceOf(imports.IncomingMessage);
+            const chunks = [];
+            response.on('data', (chunk) => chunks.push(chunk));
+            response.on('end', () => resolve(Buffer.concat(chunks).toString()));
+            response.on('error', reject);
+          })
+          .on('error', reject);
+      });
+      expect(body).toBe('outgoing preserved');
+    } finally {
+      await new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  }, 30000);
+
+  it('discovers and serves the exact router-only node:http example', async () => {
+    const main = path.join(fixtures, 'node-http.ts');
+    expect(discoverCapabilities(configuration(main))).toEqual({
+      agents: true,
+      tools: false,
+      middleware: false,
+      schemas: false,
+    });
+    const output = await build('node-http');
+    const exports = await instantiate(output.code);
+    expect(exports.guest.discoverAgentTypes().map((agent) => agent.typeName)).toEqual(['Web']);
+    const handler = globalThis.__golemNodeHttpHandler;
+    delete globalThis.__golemNodeHttpHandler;
+    const { AgentStream } = await import('../src/schema/agentStream');
+    const response = await handler(
+      {
+        method: 'GET',
+        scheme: 'https',
+        authority: 'example.test',
+        path: '/',
+        query: undefined,
+        headers: [],
+        body: AgentStream.from([]),
+      },
+      { config: {} },
+    );
+    expect(response.status).toBe(200);
+    expect(
+      response.headers.map(({ name, value }) => [name, Buffer.from(value).toString()]),
+    ).toEqual([['content-type', 'text/plain']]);
+    const chunks = [];
+    for await (const chunk of response.body) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).toString()).toBe('Hello from Golem');
+  }, 30000);
+
   it('retains schema adapters for symbolic durable and storage forSchema APIs', async () => {
     const output = await build('symbolic-schema-apis');
     await instantiate(output.code);

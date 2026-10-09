@@ -142,9 +142,110 @@ to a target ending in `/$1`. Public segments are decoded once; filesystem target
 decoded. Identical compiled pairs are rejected, while the same route with distinct targets is
 allowed. The host applies static/live-file selection and path-security rules.
 
-### Host-free helpers for framework adapters
+### Public HTTP router entry
 
-Import `@golemcloud/golem-ts-sdk/http-router` without loading the agent registry or runtime:
+Import `defineHttpRouter`, `nodeHttpHandler`, and the following contract helpers from
+`@golemcloud/golem-ts-sdk/http-router`. This is a component-runtime entry, not a host-free
+Node module. Build applications with the SDK component plugin so router registration and
+the HTTP facade share the component's module graph. `nodeHttpHandler` accepts only servers
+constructed by the component facade, not native socket-backed Node servers. The facade
+does not change the HTTP module used by host-side build tooling.
+
+### Socket-free Node HTTP servers
+
+Use the familiar request listener API, then register it explicitly as a router:
+
+```ts
+import { createServer } from 'node:http';
+import { defineHttpRouter, nodeHttpHandler } from '@golemcloud/golem-ts-sdk/http-router';
+
+const server = createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('Hello from Golem');
+});
+
+export const router = defineHttpRouter('Web')
+  .mount('/')
+  .implementRaw(nodeHttpHandler(server));
+```
+
+List `Web` in the HTTP API deployment's `agents` map in `golem.yaml`, just as for other
+routers. The name identifies the deployed router; the mount defines its public prefix.
+Use `.mount('/web', { auth: true, cors: ['https://example.com'] })` to apply the normal
+host authentication and CORS policies. No `listen()` call or component port is needed.
+
+Alternatively, opt into initialization-time `listen()` registration with a component
+`nodeHttpRouters` mapping in `golem.yaml`:
+
+```yaml
+components:
+  my-app:main:
+    templates: ts
+    nodeHttpRouters:
+      "3000":
+        name: Web
+        mount: /web
+        auth: true
+        cors: [https://example.com]
+```
+
+Then call `server.listen(3000, callback)` while the application module initializes.
+The build injects this configuration before application and bundled dependency evaluation,
+in both discovery and execution instances. Still list `Web` in the HTTP API deployment.
+Ports are lookup keys, not sockets. `listening` and the asynchronous `listening` event/callback
+report successful local router registration, not deployment readiness. `address()` returns
+`null`; `close()` throws because it cannot undeploy a route. Invocation-time registration,
+duplicate ports or names, and mixing explicit and automatic registration of one server are
+rejected. Only a numeric port from 1 through 65535 and an optional callback are accepted.
+Templates and presets can also provide the mapping; each supplied table replaces the
+inherited table, and `{}` clears it. Explicit registration remains independently usable.
+
+Component builds resolve named and default imports from both `http` and `node:http` to
+one facade, including statically bundled CommonJS dependency imports. Runtime-computed
+module loading is not supported. Outgoing `request()`, `get()`, client `IncomingMessage`,
+and the other original client exports remain the runtime's HTTP implementation.
+
+The server supports `createServer()` or `createServer(listener)` and later
+`server.on('request', listener)` registration. Constructor options, custom message classes,
+connection management and upgrades are not supported. It is a
+local EventEmitter listener container, not a persistent process-wide server: each public
+request runs in an ephemeral router instance. Closing a local stream cannot undeploy a route.
+This subset does not imply compatibility with every Node web framework.
+
+Request objects inherit the original `IncomingMessage` and support readable-stream operations
+such as `on('data')`, async iteration, `pipe()`, `pause()`, `resume()`, and `destroy()`.
+Response objects use the runtime's `Writable` with `statusCode`, `setHeader()`, `getHeader()`,
+`getHeaders()`, `getHeaderNames()`, `hasHeader()`, `removeHeader()`, `writeHead()` (header object
+or raw name/value pairs), `headersSent`, `flushHeaders()`, `write()`, `end()`, and `destroy()`.
+Use writable `finish`, `drain`, `error`, and `close` events for local stream lifecycle;
+`finish` is not confirmation that the remote caller received all bytes.
+
+Incoming Node requests preserve the method, mount prefix, and original query, including
+absent versus empty queries. Body reads are demand-driven and produce `Buffer` values.
+Header values use Latin-1 byte strings. `headers` uses lowercase names, keeps the first
+singleton header, joins cookies with `; ` and other duplicates with `, `, and retains
+`set-cookie` as an array. `headersDistinct` retains all occurrences. `rawHeaders` contains
+the occurrences in Golem's canonical envelope plus `host` from its authority; it does not
+recover original wire casing or order. The request has no HTTP version, remote address,
+or operational socket.
+
+Responses commit their status and headers at `writeHead()`, `flushHeaders()`, the first
+`write()`, or `end()`. The handler returns at commitment while the body remains live.
+Writable callbacks and `drain` provide cooperative backpressure; callers must pause when
+`write()` returns `false`. Ignoring that result can grow the writable queue without bound.
+The host, not the adapter, supplies HTTP framing. Repeated `set-cookie` values remain
+separate occurrences. Custom reason phrases, trailers, informational responses, upgrades,
+and listening sockets are unsupported.
+
+Adapter-observed errors, destruction, and output disposal release both sides of the
+exchange. Normal HEAD/204/205/304 and Content-Length-zero suppression discards body writes
+without waiting for `end()` or a first body read. Other early disposal cancels local writes.
+Request listeners follow EventEmitter semantics: return values are ignored, and rejected
+promises from async listeners are not automatically caught. Handle them explicitly.
+Remote disconnects use Golem's existing host cancellation and interruption. There is no
+handler-context signal that guarantees graceful JavaScript `aborted`/`close` events.
+Adapter-created input sources must cooperate with disposal; an arbitrary pending source
+promise is not forcibly interrupted.
 
 - `HttpRequest<Body>` / `HttpResponse<Body>` impose no constraint on `Body`. `HttpHeader.value`
   is `Uint8Array`; header arrays are readonly ordered occurrences. Request `query` is
@@ -165,7 +266,7 @@ The TypeScript and Effect SDKs build these primitives from the private `sdks/htt
 source package independently. Both bundle its code and declarations; npm consumers need no
 private package or sibling SDK checkout. After building the SDK and its template, run
 `pnpm --filter @golemcloud/golem-ts-sdk run check:package` from `sdks/ts` to verify a packed
-installation, host-free HTTP imports, and consumer declarations.
+installation, component HTTP imports, and consumer declarations.
 
 The SDK tests execute shared corpus metadata/mapping cases and targeted stream/codec cases;
 corpus integrity alone does not prove runtime conformance. The CLI deployed fixture

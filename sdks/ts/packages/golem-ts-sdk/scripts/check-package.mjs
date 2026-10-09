@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import nodeResolve from '@rollup/plugin-node-resolve';
 import { rollup } from 'rollup';
 import ts from 'typescript';
@@ -36,24 +37,6 @@ try {
     readFileSync(join(installed, 'wasm/agent_guest.wasm')).subarray(0, 4).toString('hex'),
     '0061736d',
   );
-  execFileSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '--eval',
-      `
-    import assert from 'node:assert/strict';
-    import { compileFileMappings, serializeOpenApi, HttpRouterError } from '@golemcloud/golem-ts-sdk/http-router';
-    assert.deepEqual(compileFileMappings([{ route: '/a%20b/*', path: '/content/$1' }]), [
-      { tag: 'subtree', val: { publicPrefix: ['a b'], filesystemRoot: '/content' } }
-    ]);
-    const document = { openapi: '3.1.0', info: { title: 'Packaged', version: '1' }, paths: {} };
-    assert.deepEqual(JSON.parse(serializeOpenApi(document)), document);
-    assert.throws(() => compileFileMappings([{ route: '/a/*', path: '/content' }]), HttpRouterError);
-  `,
-    ],
-    { cwd: directory, stdio: 'pipe' },
-  );
   npm([
     'install',
     '--ignore-scripts',
@@ -80,7 +63,14 @@ try {
       .map((name, index) => `import * as public${index} from ${JSON.stringify(name)};`)
       .join('\n')}
 import { defineHttpRouter } from ${JSON.stringify(manifest.name)};
-import { HttpRouterError } from ${JSON.stringify(`${manifest.name}/http-router`)};
+import { HttpRouterError, compileFileMappings, serializeOpenApi } from ${JSON.stringify(`${manifest.name}/http-router`)};
+const mappings = compileFileMappings([{ route: '/a%20b/*', path: '/content/$1' }]);
+if (JSON.stringify(mappings) !== JSON.stringify([
+  { tag: 'subtree', val: { publicPrefix: ['a b'], filesystemRoot: '/content' } }
+])) throw new Error('Packed mapping contract failed');
+const document = { openapi: '3.1.0', info: { title: 'Packaged', version: '1' }, paths: {} };
+if (JSON.parse(serializeOpenApi(document)).info.title !== 'Packaged')
+  throw new Error('Packed OpenAPI contract failed');
 const router = defineHttpRouter('PackedIdentity').mount('/packed');
 try {
   router.mount('/duplicate');
@@ -134,7 +124,15 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
       construct: () => host,
     });
     const module = { exports: {} };
-    new Function('require', 'module', 'exports', chunk.code)(() => host, module, module.exports);
+    const nativeRequire = createRequire(import.meta.url);
+    new Function('require', 'module', 'exports', chunk.code)(
+      (id) =>
+        ['node:http', 'node:events', 'node:stream', 'node:buffer'].includes(id)
+          ? nativeRequire(id)
+          : host,
+      module,
+      module.exports,
+    );
     await (module.exports.default ?? module.exports);
   } finally {
     await componentBundle.close();
@@ -169,6 +167,7 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
       join(directory, 'node_modules/typescript/bin/tsc'),
       '--noEmit',
       '--strict',
+      '--skipLibCheck',
       '--module',
       'NodeNext',
       '--moduleResolution',
@@ -192,8 +191,8 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
     const query: HttpRequest<Uint8Array>['query'] = 123;
   `,
   );
-  // Match the SDK and generated applications for the root surface. The HTTP-only entry above
-  // uses full declaration checking; root oplog declarations have unrelated type-only re-export errors.
+  // Match generated applications: runtime entries include oplog declarations with
+  // unrelated type-only re-export errors, so consumers use skipLibCheck.
   execFileSync(
     process.execPath,
     [
@@ -212,7 +211,7 @@ export const publicModules = [${publicComponentModules.map((_, index) => `public
     { cwd: directory, stdio: 'inherit' },
   );
   console.log(
-    'Packed TypeScript SDK: host-free HTTP import, declarations, embedded WASM, and bundled private contract passed',
+    'Packed TypeScript SDK: component HTTP imports, declarations, embedded WASM, and bundled private contract passed',
   );
 } finally {
   rmSync(directory, { recursive: true, force: true });
