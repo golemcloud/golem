@@ -508,6 +508,8 @@ impl<K: WireSchema, V: WireSchema> WireSchema for BTreeMap<K, V> {
 macro_rules! wire_map {
     ($map:ident, $($key_bound:tt)+) => {
         impl<K: IntoWire, V: IntoWire> IntoWire for $map<K, V> {
+            const NEEDS_PREPARATION: bool = K::NEEDS_PREPARATION || V::NEEDS_PREPARATION;
+
             fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
                 for (key, value) in self {
                     key.preflight(resources)?;
@@ -647,6 +649,11 @@ pub trait FromWire: Sized {
 /// fail except when a resource was concurrently transferred through an alias.
 #[allow(async_fn_in_trait)]
 pub trait IntoWire {
+    /// False only when `prepare_wire` is a no-op for every value of this type.
+    /// Resource preflight still runs regardless of this flag. Custom and derived
+    /// implementations prepare by default, including those with no stream schema.
+    const NEEDS_PREPARATION: bool = true;
+
     fn preflight(&self, _resources: &mut WirePreflight) -> Result<(), WireError> {
         Ok(())
     }
@@ -1009,7 +1016,9 @@ pub async fn encode_async<T: IntoWire + ?Sized>(
 ) -> Result<wire::SchemaValueTree, WireError> {
     let mut preflight = WirePreflight::asynchronous();
     value.preflight(&mut preflight)?;
-    value.prepare_wire().await?;
+    if T::NEEDS_PREPARATION {
+        value.prepare_wire().await?;
+    }
     write(value)
 }
 
@@ -1031,6 +1040,8 @@ macro_rules! scalar {
         }
 
         impl IntoWire for $ty {
+            const NEEDS_PREPARATION: bool = false;
+
             fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
                 Ok(writer.push(wire::SchemaValueNode::$variant(self.clone())))
             }
@@ -1056,6 +1067,8 @@ impl FromWire for String {
 }
 
 impl IntoWire for String {
+    const NEEDS_PREPARATION: bool = false;
+
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         self.as_str().write_wire(writer)
     }
@@ -1067,6 +1080,8 @@ impl WireSchema for usize {
     }
 }
 impl IntoWire for usize {
+    const NEEDS_PREPARATION: bool = false;
+
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         (*self as u64).write_wire(writer)
     }
@@ -1078,12 +1093,16 @@ impl FromWire for usize {
 }
 
 impl IntoWire for str {
+    const NEEDS_PREPARATION: bool = false;
+
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         Ok(writer.push(wire::SchemaValueNode::StringValue(self.to_string())))
     }
 }
 
 impl<T: IntoWire + ?Sized> IntoWire for Box<T> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         (**self).preflight(resources)
     }
@@ -1093,7 +1112,10 @@ impl<T: IntoWire + ?Sized> IntoWire for Box<T> {
     }
 
     async fn prepare_wire(&self) -> Result<(), WireError> {
-        Box::pin((**self).prepare_wire()).await
+        if T::NEEDS_PREPARATION {
+            Box::pin((**self).prepare_wire()).await?;
+        }
+        Ok(())
     }
 
     fn write_result_payload(
@@ -1118,6 +1140,8 @@ impl<T: FromWire> FromWire for Box<T> {
 }
 
 impl<T: IntoWire> IntoWire for Vec<T> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         for value in self {
             value.preflight(resources)?;
@@ -1126,8 +1150,10 @@ impl<T: IntoWire> IntoWire for Vec<T> {
     }
 
     async fn prepare_wire(&self) -> Result<(), WireError> {
-        for value in self {
-            Box::pin(value.prepare_wire()).await?;
+        if T::NEEDS_PREPARATION {
+            for value in self {
+                Box::pin(value.prepare_wire()).await?;
+            }
         }
         Ok(())
     }
@@ -1154,6 +1180,8 @@ impl<T: FromWire> FromWire for Vec<T> {
 }
 
 impl<T: IntoWire> IntoWire for Option<T> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         if let Some(value) = self {
             value.preflight(resources)?;
@@ -1189,6 +1217,8 @@ impl<T: FromWire> FromWire for Option<T> {
 }
 
 impl<T: IntoWire, E: IntoWire> IntoWire for Result<T, E> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION || E::NEEDS_PREPARATION;
+
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         match self {
             Ok(value) => value.preflight(resources),
@@ -1227,6 +1257,8 @@ impl<T: FromWire, E: FromWire> FromWire for Result<T, E> {
 }
 
 impl<T: IntoWire> IntoWire for std::ops::Bound<T> {
+    const NEEDS_PREPARATION: bool = T::NEEDS_PREPARATION;
+
     fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
         match self {
             std::ops::Bound::Included(value) | std::ops::Bound::Excluded(value) => {
@@ -1272,6 +1304,8 @@ impl<T: FromWire> FromWire for std::ops::Bound<T> {
 }
 
 impl IntoWire for () {
+    const NEEDS_PREPARATION: bool = false;
+
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         Ok(writer.push(wire::SchemaValueNode::TupleValue(Vec::new())))
     }
@@ -1306,6 +1340,8 @@ impl FromWire for () {
 macro_rules! tuple {
     ($($index:tt : $ty:ident),+) => {
         impl<$($ty: IntoWire),+> IntoWire for ($($ty,)+) {
+            const NEEDS_PREPARATION: bool = false $(|| $ty::NEEDS_PREPARATION)+;
+
             fn preflight(&self, resources: &mut WirePreflight) -> Result<(), WireError> {
                 $(self.$index.preflight(resources)?;)+
                 Ok(())

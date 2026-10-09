@@ -527,6 +527,12 @@ impl ToolCommand {
         value: SchemaValue,
         stdin: Option<InputStream>,
     ) -> Result<Option<SchemaValue>, ToolReflectionError> {
+        self.check_invocation_streams(stdin.is_some())?;
+        let input = self.checked_input(value)?;
+        self.invoke_checked_input(input, stdin).await
+    }
+
+    fn check_invocation_streams(&self, has_stdin: bool) -> Result<(), ToolReflectionError> {
         if self
             .body()
             .stdout
@@ -551,12 +557,19 @@ impl ToolCommand {
                 ),
             ));
         }
-        if self.body().stdin.as_ref().is_some_and(|spec| spec.required) && stdin.is_none() {
+        if self.body().stdin.as_ref().is_some_and(|spec| spec.required) && !has_stdin {
             return Err(ToolReflectionError::InvalidInput(
                 GolemReflectError::InvalidInput("command requires stdin".to_string()),
             ));
         }
-        let input = self.checked_input(value)?;
+        Ok(())
+    }
+
+    async fn invoke_checked_input(
+        &self,
+        input: TypedSchemaValue,
+        stdin: Option<InputStream>,
+    ) -> Result<Option<SchemaValue>, ToolReflectionError> {
         let rpc = ToolRpc::create(self.tool.lookup_name()).map_err(|error| {
             ToolReflectionError::Tool(tool_client::map_rpc_error(error, &|_, _| {
                 Ok::<Option<ReflectedToolCustomError>, String>(None)
@@ -582,12 +595,14 @@ impl ToolCommand {
         input: &serde_json::Value,
     ) -> Result<Option<serde_json::Value>, ToolReflectionError> {
         let value = self.pack_json(input)?;
-        let result = self.invoke_value(value).await?;
+        self.check_invocation_streams(false)?;
+        let input = TypedSchemaValue::new(self.wire_input.clone(), value);
+        let result = self.invoke_checked_input(input, None).await?;
         result
             .map(|value| {
                 self.output_schema()
                     .expect("declared result")
-                    .unpack_json(&value)
+                    .unpack_checked_json(&value)
                     .map_err(|error| {
                         ToolReflectionError::Tool(ToolError::MalformedRemoteOutput(
                             error.to_string(),
@@ -1300,6 +1315,22 @@ mod tests {
                 command.trigger_value(input, None).unwrap_err().to_string(),
                 format!("invalid tool input: invalid input: {expected}")
             );
+            assert_eq!(
+                command
+                    .invoke_json(&serde_json::json!({ "message": "hello" }))
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid tool input: invalid input: {expected}")
+            );
+            assert!(matches!(
+                command
+                    .invoke_json(&serde_json::json!({ "message": 42 }))
+                    .await,
+                Err(ToolReflectionError::InvalidInput(
+                    GolemReflectError::SchemaRender(_)
+                ))
+            ));
         }
     }
 
@@ -1566,7 +1597,7 @@ mod tests {
     }
 
     #[test]
-    fn constraints_use_declared_flag_default_and_nested_value_is() {
+    async fn constraints_use_declared_flag_default_and_nested_value_is() {
         let mut tool = sample();
         let definition = Arc::make_mut(&mut tool.definition);
         let body = definition.commands.nodes[1].body.as_mut().unwrap();
@@ -1634,6 +1665,18 @@ mod tests {
                         "enabled": true,
                     }))
                     .is_err()
+            );
+            let error = command
+                .invoke_json(&serde_json::json!({
+                    "message": "hello",
+                    "mode": "fast",
+                    "enabled": true,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "invalid tool input: invalid input: command constraint 0 failed"
             );
         }
     }

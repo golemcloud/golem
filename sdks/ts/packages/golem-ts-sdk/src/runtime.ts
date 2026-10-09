@@ -53,7 +53,7 @@ import { isSqliteResource, restoreDatabases, takeDatabases } from './internal/da
 import type { SavedAgentSnapshot } from './internal/resolvedAgent';
 import { encodeMultipart, MultipartPart } from './internal/multipart';
 import { compileSchema } from './schema/adapter';
-import { SchemaCodec } from './schema/codec';
+import { SchemaCodec, SchemaValueWriter, invocationSchemaValueReader } from './schema/codec';
 import { StandardSchemaV1 } from './schema/standardSchema';
 import type {
   AgentImplementation,
@@ -250,8 +250,15 @@ export function registerAgentType(
           {
             hasInput: mc.inputCodecs.length !== 0,
             read: compileNamedInputReader(mc.inputCodecs),
-            write: async (value: unknown) =>
-              output.tag === 'unit' ? undefined : encode(output.codec.toValue(value)),
+            write: async (value: unknown) => {
+              if (output.tag === 'unit') return undefined;
+              if (output.codec.invocationDirect) {
+                const writer = new SchemaValueWriter();
+                const root = output.codec.invocationDirect.write(value, writer)!;
+                return { valueNodes: writer.valueNodes, root };
+              }
+              return encode(output.codec.toValue(value));
+            },
           },
         ];
       }),
@@ -264,7 +271,37 @@ function compileNamedInputReader(
   codecs: NamedCodec[],
 ): (input: SchemaValueTree, principal: HostPrincipal) => Record<string, unknown> {
   const expected = codecs.filter((c) => c.codec.autoInjected !== 'principal').length;
+  const direct = codecs.every(
+    (c) => c.codec.autoInjected === 'principal' || c.codec.invocationDirect,
+  );
   return (input, principal) => {
+    // Unexpected resources retain the ordinary lifting and cleanup boundary.
+    if (
+      direct &&
+      !input.valueNodes.some(
+        (node) =>
+          node?.tag === 'secret-value' ||
+          node?.tag === 'quota-token-handle' ||
+          node?.tag === 'permission-card-handle' ||
+          node?.tag === 'stream-value',
+      )
+    ) {
+      const reader = invocationSchemaValueReader(input);
+      return reader.node(input.root, 'record-value', (node) => {
+        const fields = (node as Extract<typeof node, { tag: 'record-value' }>).val;
+        if (fields.length !== expected)
+          throw new TypeError(`expected a record with ${expected} user-supplied fields`);
+        let index = 0;
+        return Object.fromEntries(
+          codecs.map(({ name, codec }) => [
+            name,
+            codec.autoInjected === 'principal'
+              ? sdkPrincipalFromHost(principal)
+              : codec.invocationDirect!.read(reader, fields[index++]),
+          ]),
+        );
+      });
+    }
     const value = schemaValueFromWit(input);
     if (value.tag !== 'record' || value.fields.length !== expected)
       throw new TypeError(`expected a record with ${expected} user-supplied fields`);

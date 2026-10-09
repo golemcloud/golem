@@ -127,6 +127,34 @@ fn validate_input_value(graph: &SchemaGraph, value: &SchemaValue) -> Result<(), 
     })
 }
 
+/// Validate caller-supplied fields without constructing a projected schema graph.
+/// Auto-injected fields are excluded; references resolve in the owning graph.
+pub fn validate_input_schema_value(
+    graph: &SchemaGraph,
+    input_schema: &InputSchema,
+    value: &SchemaValue,
+) -> Result<(), String> {
+    let validation = match value {
+        SchemaValue::Record { fields } => validate_record_fields(
+            graph,
+            input_schema
+                .fields()
+                .iter()
+                .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                .map(|field| (field.name.as_str(), &field.schema)),
+            fields,
+        ),
+        _ => validate_value(graph, &SchemaType::record(Vec::new()), value),
+    };
+    validation.map_err(|errors| {
+        errors
+            .into_iter()
+            .map(|err| err.to_string())
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
 pub use crate::schema::graph::reachable_defs;
 
 /// Projects the value schema stored for an agent secret from the agent's config
@@ -443,8 +471,7 @@ impl AgentMethodSchema {
     /// Validates the caller-supplied parameter record against this method's
     /// input schema and the owning agent's graph.
     pub fn validate_input(&self, graph: &SchemaGraph, input: &SchemaValue) -> Result<(), String> {
-        let input_graph = projected_input_graph(graph, &self.input_schema);
-        validate_input_value(&input_graph, input)
+        validate_input_schema_value(graph, &self.input_schema, input)
     }
 
     /// Returns whether a caller-supplied input or the output of this method can

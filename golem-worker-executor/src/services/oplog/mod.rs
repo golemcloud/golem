@@ -45,7 +45,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     AgentId, AgentInvocation, AgentInvocationResult, AgentMetadata, AgentStatusRecord,
-    DurableStreamSessionStatus, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
+    DurableStreamSessionStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardEpoch, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -1591,8 +1591,39 @@ pub trait OplogOps: Oplog {
     ) -> Result<OplogEntry, String> {
         let (idempotency_key, invocation_payload, _) = invocation.into_parts();
         let payload = self.upload_payload_owned(invocation_payload).await?;
+        Ok(self.agent_invocation_started_entry_from_payload(
+            idempotency_key,
+            payload,
+            ctx,
+            wallet_pin,
+        ))
+    }
+
+    async fn add_agent_invocation_started_from_pending(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        ctx: InvocationContextStack,
+        wallet_pin: InvocationWalletPin,
+    ) -> Result<OplogIndex, OplogError> {
+        let entry = self.agent_invocation_started_entry_from_payload(
+            idempotency_key,
+            payload,
+            ctx,
+            wallet_pin,
+        );
+        self.add(entry).await
+    }
+
+    fn agent_invocation_started_entry_from_payload(
+        &self,
+        idempotency_key: IdempotencyKey,
+        payload: OplogPayload<golem_common::model::AgentInvocationPayload>,
+        ctx: InvocationContextStack,
+        wallet_pin: InvocationWalletPin,
+    ) -> OplogEntry {
         let invocation_context = ctx.to_oplog_data();
-        Ok(OplogEntry::AgentInvocationStarted {
+        OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             idempotency_key,
             payload,
@@ -1600,7 +1631,7 @@ pub trait OplogOps: Oplog {
             trace_states: ctx.trace_states,
             invocation_context,
             wallet_pin: Box::new(wallet_pin),
-        })
+        }
     }
 
     async fn add_agent_invocation_finished(
