@@ -695,18 +695,19 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
   `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
   `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
-  any other entry. The pure rule `missing_start_waits_for` decides over the head's parent chain,
-  the claim's parent chain and the active-body set: the claim waits for the nearest active body
-  that encloses the head (also through a scope of that body), unless that body issued the claim
-  or the claim's chain contains a live append. The issuing body is the nearest active body in
-  the claim's chain, so a call of an entity nested inside the head's body still waits. `CursorTx::active_body_owning_head` only
-  reads those chains, down to the earliest active body, and subscribes to the active-body set.
+  any other entry. The cursor resolves the nearest active body that encloses the head, and the
+  one that encloses the claim's parent, from state it already holds (`nearest_active_body`): the
+  active-body set, the retained `Start`s and `CursorState::body_members`, which maps each
+  `Start` claimed inside a body (its scopes, calls and nested entities) to that body and drops
+  it when the terminal drains. The missing-claim path reads no oplog entry. The pure rule
+  `missing_start_waits_for` then decides: the claim waits for the head's body, unless that body
+  issued the claim or the claim's parent was appended live. A call of an entity nested inside
+  the head's body still waits, because that entity is another Store.
   A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
   change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
   invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
   at the head, and a claim issued by the body that encloses the head stay strict divergence at
-  once. The path
-  where a claim finds its `Start` does not change.
+  once. The path where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
