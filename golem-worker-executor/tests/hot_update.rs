@@ -4101,6 +4101,15 @@ pub(crate) struct Outage {
     revision: std::sync::Mutex<Option<ComponentRevision>>,
     down: std::sync::atomic::AtomicBool,
     refused: std::sync::atomic::AtomicUsize,
+    get_failure: std::sync::Mutex<Option<(ComponentRevision, WorkerExecutorError)>>,
+    target_gets: std::sync::atomic::AtomicUsize,
+    gets: std::sync::Mutex<HashMap<ComponentRevision, usize>>,
+    shared_metadata: std::sync::Mutex<
+        Vec<(
+            ComponentRevision,
+            Vec<golem_common::model::component_metadata::LinearMemory>,
+        )>,
+    >,
     metadata_lost: std::sync::Mutex<Option<ComponentRevision>>,
     metadata_unavailable: std::sync::Mutex<Option<ComponentRevision>>,
     fetched: std::sync::atomic::AtomicBool,
@@ -4203,6 +4212,31 @@ impl ComponentService for FlakyComponentService {
         ),
         WorkerExecutorError,
     > {
+        *self
+            .outage
+            .gets
+            .lock()
+            .unwrap()
+            .entry(component_revision)
+            .or_default() += 1;
+        if *self.outage.revision.lock().unwrap() == Some(component_revision) {
+            self.outage
+                .target_gets
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        {
+            let mut failure = self.outage.get_failure.lock().unwrap();
+            if failure
+                .as_ref()
+                .is_some_and(|(revision, _)| *revision == component_revision)
+            {
+                let (_, error) = failure.take().unwrap();
+                self.outage
+                    .refused
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(error);
+            }
+        }
         self.outage.check(component_id, Some(component_revision))?;
         let result = self
             .inner
@@ -4218,7 +4252,34 @@ impl ComponentService for FlakyComponentService {
         forced_revision: Option<ComponentRevision>,
     ) -> Result<golem_service_base::model::component::Component, WorkerExecutorError> {
         self.outage.check_metadata(component_id, forced_revision)?;
-        self.inner.get_metadata(component_id, forced_revision).await
+        let mut component = self
+            .inner
+            .get_metadata(component_id, forced_revision)
+            .await?;
+        if let Some((_, memories)) = self
+            .outage
+            .shared_metadata
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(revision, _)| component.revision == *revision)
+        {
+            let metadata = &component.metadata;
+            component.metadata =
+                golem_common::model::component_metadata::ComponentMetadata::from_parts(
+                    metadata.known_exports().clone(),
+                    memories.clone(),
+                    metadata.root_package_name().clone(),
+                    metadata.root_package_version().clone(),
+                    metadata.agent_types().to_vec(),
+                    metadata.agent_type_provision_configs().clone(),
+                )
+                .with_component_config(
+                    metadata.config_schema().clone(),
+                    metadata.component_provision_config().clone(),
+                );
+        }
+        Ok(component)
     }
 
     async fn resolve_component(
@@ -4267,6 +4328,261 @@ impl ComponentService for FlakyComponentService {
     async fn invalidate_all(&self) {
         self.inner.invalidate_all().await;
     }
+}
+
+async fn target_get_regression(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_update_v1: &PrecompiledComponent,
+    failure: Option<WorkerExecutorError>,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(1024 * 1024 * 1024);
+            })),
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    *outage.revision.lock().unwrap() = Some(target.revision);
+    let shared = failure.is_none();
+    if let Some(error) = failure {
+        *outage.get_failure.lock().unwrap() = Some((target.revision, error));
+    } else {
+        // The binary is small, but its initial memory is larger than the executor's budget.
+        let wasm = wat::parse_str("(component (core module (memory 65536 65536 shared)))")?;
+        let metadata =
+            golem_common::model::component_metadata::ComponentMetadata::analyse_component(
+                &wasm,
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )?;
+        assert!(metadata.has_shared_linear_memory());
+        assert_eq!(
+            metadata.initial_linear_memory_bytes(),
+            4 * 1024 * 1024 * 1024
+        );
+        *outage.shared_metadata.lock().unwrap() =
+            vec![(target.revision, metadata.memories().to_vec())];
+    }
+    executor
+        .auto_update_worker(&worker_id, target.revision, false)
+        .await?;
+    // Observe settlement before invoking again: a fresh invocation must not drive recovery.
+    let expected_counts = if shared { (0, 0, 1) } else { (0, 1, 0) };
+    let metadata = wait_for_update_counts(&executor, &worker_id, expected_counts).await?;
+    assert_eq!(metadata.retry_count, 0);
+    assert_eq!(
+        metadata.component_revision,
+        if shared {
+            component.revision
+        } else {
+            target.revision
+        }
+    );
+    assert_eq!(
+        outage.target_gets.load(std::sync::atomic::Ordering::SeqCst),
+        if shared { 0 } else { 2 }
+    );
+    assert_eq!(outage.refused(), if shared { 0 } else { 1 });
+    if shared {
+        let details = metadata.updates.iter().find_map(|record| match record {
+            UpdateRecord::FailedUpdate(update) => update.details.as_deref(),
+            _ => None,
+        });
+        assert_eq!(
+            details,
+            Some(
+                "UPDATE_TARGET_REFUSED: The target revision uses WebAssembly threads, which Golem does not support"
+            )
+        );
+    }
+    let value = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(value.into_typed::<u32>()?, 10);
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    let value = executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    assert_eq!(value.into_typed::<u32>()?, 20);
+    let metadata = executor.get_worker_metadata(&worker_id).await?;
+    assert_eq!(update_counts(&metadata), expected_counts);
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::Error(params) if params.kind == OplogErrorKind::Invocation)));
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn runtime_target_get_retries_update_without_resume(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    target_get_regression(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        Some(WorkerExecutorError::Runtime {
+            details: "one-shot target fetch failure".to_string(),
+        }),
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn restart_target_get_retries_update_without_resume(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    target_get_regression(
+        last_unique_id,
+        deps,
+        agent_update_v1,
+        Some(WorkerExecutorError::Interrupted {
+            kind: golem_service_base::error::worker_executor::InterruptKind::Restart,
+        }),
+    )
+    .await
+}
+
+#[test]
+#[timeout("120s")]
+async fn oversized_shared_memory_update_refused_before_target_get(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    target_get_regression(last_unique_id, deps, agent_update_v1, None).await
+}
+
+#[test]
+#[timeout("120s")]
+async fn refused_shared_target_readmits_the_next_queued_target(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let outage = Arc::new(Outage::default());
+    let wrapper_outage = outage.clone();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.memory.system_memory_override = Some(1024 * 1024 * 1024);
+            })),
+            wrap_component_service: Some(Arc::new(move |inner| {
+                Arc::new(FlakyComponentService {
+                    inner,
+                    outage: wrapper_outage.clone(),
+                })
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_id!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "stable_value", data_value!())
+        .await?;
+    executor.interrupt(&worker_id).await?;
+    let shared = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let supported = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut memories = Vec::new();
+    for (revision, memory) in [
+        (shared.revision, "(memory 65536 65536 shared)"),
+        (supported.revision, "(memory 65536 65536)"),
+    ] {
+        let wasm = wat::parse_str(format!("(component (core module {memory}))"))?;
+        let metadata =
+            golem_common::model::component_metadata::ComponentMetadata::analyse_component(
+                &wasm,
+                Vec::new(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+            )?;
+        memories.push((revision, metadata.memories().to_vec()));
+    }
+    *outage.shared_metadata.lock().unwrap() = memories;
+    executor
+        .auto_update_worker(&worker_id, shared.revision, true)
+        .await?;
+    executor
+        .auto_update_worker(&worker_id, supported.revision, true)
+        .await?;
+    assert_eq!(
+        update_counts(&executor.get_worker_metadata(&worker_id).await?),
+        (2, 0, 0)
+    );
+    let resume_executor = executor.clone();
+    let resume_id = worker_id.clone();
+    let resume = spawn(async move { resume_executor.resume(&resume_id, true).await });
+    let metadata = wait_for_update_counts(&executor, &worker_id, (1, 0, 1)).await?;
+    assert_eq!(metadata.component_revision, component.revision);
+    // The supported target also requires 4 GiB. It cannot fit the 1 GiB budget, so its
+    // component must never be loaded using the source's smaller reservation.
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    let gets = outage.gets.lock().unwrap().clone();
+    assert_eq!(gets.get(&shared.revision).copied().unwrap_or(0), 0);
+    assert_eq!(gets.get(&supported.revision).copied().unwrap_or(0), 0);
+    assert_eq!(
+        update_counts(&executor.get_worker_metadata(&worker_id).await?),
+        (1, 0, 1)
+    );
+    executor.interrupt(&worker_id).await?;
+    let _ = resume.await?;
+    Ok(())
 }
 
 /// While the component service cannot give the target of an update, the start of the agent fails

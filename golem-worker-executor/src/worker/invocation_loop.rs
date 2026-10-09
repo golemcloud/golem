@@ -159,6 +159,8 @@ enum CreateInstanceResult<Ctx: WorkerCtx> {
     /// Reconstruction reached a live continuation whose recovery data was temporarily
     /// unavailable. The incomplete runtime and filesystem have already been discarded.
     RecoveryRequired(WorkerExecutorError),
+    /// The update head changed before a runtime was created; memory admission must run again.
+    ReacquireMemory,
     /// Instance creation failed; the worker was already stopped with the startup failure.
     Failed,
 }
@@ -455,6 +457,31 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     window,
                     recovery_decision,
                 } => (*agent, window, recovery_decision),
+                CreateInstanceResult::ReacquireMemory => {
+                    if let Some(interrupt) = self.pending_interrupt().await {
+                        match self
+                            .interrupted_before_instance(interrupt.kind, Some(interrupt))
+                            .await
+                        {
+                            StartupStep::Stop => break,
+                            StartupStep::Retry => {}
+                        }
+                    }
+                    let pending_startup_attempt = self.parent.pending_startup_attempt();
+                    if let Err(error) = Worker::restart_with_memory_admission(
+                        self.parent.clone(),
+                        true,
+                        None,
+                        self.oom_retry_count,
+                        pending_startup_attempt,
+                        UnloadReason::Restart,
+                    )
+                    .await
+                    {
+                        warn!("Failed to restart worker after changing update admission: {error}");
+                    }
+                    break;
+                }
                 CreateInstanceResult::Interrupted(kind) => {
                     self.release_concurrent_agent_permit();
                     let pending_interrupt = self.pending_interrupt().await;
@@ -1057,12 +1084,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         "Invocation queue loop dropping memory permits and triggering restart"
                     );
                     let pending_startup_attempt = self.parent.pending_startup_attempt();
-                    if let Err(error) = Worker::restart_on_oom(
+                    if let Err(error) = Worker::restart_with_memory_admission(
                         self.parent.clone(),
                         true,
                         delay,
                         self.oom_retry_count + 1,
                         pending_startup_attempt,
+                        UnloadReason::OutOfMemory,
                     )
                     .await
                     {
@@ -1536,14 +1564,17 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                 // Instance creation was interrupted by a recoverable condition. The worker exists
                 // and its metadata and `Create` oplog entry are already persisted, so the caller
                 // parks or restarts the worker without exposing an unprepared runtime.
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::ReacquireMemory) => {
+                    CreateInstanceResult::ReacquireMemory
+                }
+                Err(CreateWorkerInstanceError::Failed {
                     error: WorkerExecutorError::Interrupted { kind },
                     filesystem_cleanup_failure: None,
                 }) => {
                     debug!("Worker instantiation interrupted: {kind:?}");
                     CreateInstanceResult::Interrupted(kind)
                 }
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::Failed {
                     error: err,
                     filesystem_cleanup_failure: None,
                 }) if self.parent.agent_mode() == AgentMode::Durable
@@ -1552,7 +1583,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     self.parent.record_recovery_failure(&err).await;
                     CreateInstanceResult::RecoveryRequired(err)
                 }
-                Err(CreateWorkerInstanceError {
+                Err(CreateWorkerInstanceError::Failed {
                     error: err,
                     filesystem_cleanup_failure,
                 }) => {
@@ -4236,7 +4267,7 @@ mod tests {
     use crate::services::resource_usage_metering::close_window;
     use crate::worker::invocation::InvokeResult;
     use crate::worker::{
-        EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
+        CreateWorkerInstanceError, EvictionClass, FilesystemPressureEligibility, FinalWorkerState,
         PendingLiveInvocationDisposition, RetryDecision, RunningAgent, StoppingWorker,
         UnloadReason, WorkerCommand, WorkerInstance, complete_stopping_worker,
     };
@@ -5156,16 +5187,18 @@ mod tests {
                 close_error.clone(),
             )
             .await;
-            assert!(failure.error.to_string().contains("instantiation failure"));
-            assert!(
-                failure
-                    .error
-                    .to_string()
-                    .contains("startup cleanup failure")
-            );
+            let CreateWorkerInstanceError::Failed {
+                error,
+                filesystem_cleanup_failure,
+            } = failure
+            else {
+                panic!("cleanup must return a startup failure");
+            };
+            assert!(error.to_string().contains("instantiation failure"));
+            assert!(error.to_string().contains("startup cleanup failure"));
             let (cleanup, sender) = super::UnloadCleanup::new();
             sender
-                .send(Err(failure.filesystem_cleanup_failure.unwrap()))
+                .send(Err(filesystem_cleanup_failure.unwrap()))
                 .unwrap();
             control.push_delete_and_verify(Ok(()));
             let retry = cleanup.retry();

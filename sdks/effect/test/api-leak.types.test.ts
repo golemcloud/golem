@@ -155,16 +155,8 @@ type AssertEqual<X, Y> =
 // Durability
 // ---------------------------------------------------------------------------
 {
-  // checkpoint adds AgentHostClient | OplogClient | DurabilityModeClient
-  // (DurabilityModeClient appears via Durability.atomically; AgentHostClient via revertAgent)
-  const probe = Effect.succeed(42)
-  const _cp = Durability.checkpoint(probe)
-  // Type assignability: the resulting R MUST include exactly these tags.
-  const _expected: Effect.Effect<
-    Durability.CheckpointResult<number, never>,
-    Oplog.OplogHostError | Agents.AgentsHostError,
-    OplogClient | AgentHostClient
-  > = _cp
+  const _cp = Durability.checkpoint
+  const _expected: Effect.Effect<Durability.Checkpoint, Oplog.OplogHostError, OplogClient> = _cp
   void _expected
 }
 

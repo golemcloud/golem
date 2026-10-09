@@ -441,7 +441,8 @@ export const forkAgent = (input: {
   })
 
 /**
- * Revert an agent to a previous state.
+ * Revert another agent to a previous state. Targeting the running agent itself
+ * is unsupported. Use `Durability.checkpoint` for invocation-local rollback.
  *
  * @since 1.5.0
  * @category operations

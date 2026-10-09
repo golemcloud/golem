@@ -1,136 +1,229 @@
-import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest"
-import { Cause, Effect, Fiber, Layer } from "effect"
-import * as Agents from "../src/Agents.js"
+import { describe, expect, it } from "@effect/vitest"
+import { Cause, Effect } from "effect"
 import * as Durability from "../src/Durability.js"
-import { AgentHostLive } from "../src/host/AgentHostClient.js"
-import { DurabilityModeLive } from "../src/host/DurabilityModeClient.js"
-import { OplogLive } from "../src/host/OplogClient.js"
+import { OplogClient, OplogLive } from "../src/host/OplogClient.js"
+import { OplogHostError } from "../src/Oplog.js"
 import * as ApiHostMock from "./mocks/golem-api-host.js"
 
-const self: Agents.AgentId = {
-  componentId: { uuid: { highBits: 0n, lowBits: 1n } },
-  agentId: 'Counter("x")',
+const setup = (get = () => 100n, set: (index: bigint) => void = () => {}) => {
+  const calls: Array<bigint> = []
+  const provide = <A, E>(effect: Effect.Effect<A, E, OplogClient>) =>
+    Effect.gen(function* () {
+      const live = yield* OplogClient
+      return yield* Effect.provideService(effect, OplogClient, {
+        ...live,
+        getOplogIndex: get,
+        setOplogIndex: (index) => {
+          calls.push(index)
+          set(index)
+        },
+      })
+    }).pipe(Effect.provide(OplogLive))
+  return { calls, provide }
 }
 
-const hostLayer = Layer.mergeAll(OplogLive, DurabilityModeLive, AgentHostLive)
-
-const provideSelf = <A, E, R>(eff: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
-  Effect.provide(eff, hostLayer) as Effect.Effect<A, E, never>
-
-beforeEach(() => {
-  ApiHostMock.__resetAll()
-  ApiHostMock.__setSelfMetadata({ ...ApiHostMock.getSelfMetadata(), agentId: self })
-})
-afterEach(() => {
-  ApiHostMock.__resetAll()
-})
-
-describe("Durability.checkpoint", () => {
-  it.effect("returns ok on success without reverting", () =>
+describe("invocation-local checkpoints", () => {
+  it.effect("captures lazily and returns the body's success without management services", () =>
     Effect.gen(function* () {
-      const program = Durability.checkpoint(Effect.succeed(42))
-      const out = yield* provideSelf(program)
-      expect(out._tag).toBe("ok")
-      if (out._tag === "ok") expect(out.value).toBe(42)
-      expect(ApiHostMock.__getRevertCalls()).toEqual([])
+      let index = 12n
+      const { calls, provide } = setup(() => index)
+      const capture = Durability.checkpoint
+      index = 99n
+      const cp = yield* provide(capture)
+      expect(yield* provide(cp.runOrRevert(Effect.succeed(42)))).toBe(42)
+      yield* provide(cp.assertOrRevert(true))
+      expect(calls).toEqual([])
+      yield* Effect.exit(provide(cp.revert))
+      expect(calls).toEqual([99n])
+      yield* Effect.exit(provide(cp.assertOrRevert(false)))
+      expect(calls).toEqual([99n, 99n])
     }),
   )
 
-  it.effect("issues a self-revert with the captured oplog index on failure", () =>
+  it.effect(
+    "rewinds once and defects if the host returns, without continuing or reverting management state",
+    () =>
+      Effect.gen(function* () {
+        ApiHostMock.__resetAll()
+        const { calls, provide } = setup()
+        let continued = false
+        const exit = yield* Effect.exit(
+          provide(
+            Durability.unwrapOrRevert(Effect.fail("boom")).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  continued = true
+                }),
+              ),
+            ),
+          ),
+        )
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(
+            exit.cause.reasons.some(
+              (r) =>
+                Cause.isDieReason(r) &&
+                r.defect instanceof Error &&
+                r.defect.message === "Unreachable: reverted to checkpoint",
+            ),
+          ).toBe(true)
+        }
+        expect(calls).toEqual([100n])
+        expect(continued).toBe(false)
+        expect(ApiHostMock.__getRevertCalls()).toEqual([])
+      }),
+  )
+
+  it.effect("propagates get/set host errors as typed oplog errors", () =>
     Effect.gen(function* () {
-      // Bump the oplog index to something distinct before checkpoint runs.
-      ApiHostMock.__setOplogIndex(99n)
-      const program = Durability.checkpoint(Effect.fail("boom" as const))
-      const out = yield* provideSelf(program)
-      expect(out._tag).toBe("reverted")
-      if (out._tag === "reverted") {
-        const fail = out.cause.reasons.find(Cause.isFailReason)
-        expect(fail?.error).toBe("boom")
+      const error = new Error("host rejected index")
+      for (const env of [
+        setup(() => {
+          throw error
+        }),
+        setup(undefined, () => {
+          throw error
+        }),
+      ]) {
+        const result = yield* Effect.result(
+          env.provide(Durability.unwrapOrRevert(Effect.fail("body"))),
+        )
+        expect(result._tag).toBe("Failure")
+        if (result._tag === "Failure") {
+          expect(result.failure).toBeInstanceOf(OplogHostError)
+          expect(result.failure.cause).toBe(error)
+        }
       }
-      const calls = ApiHostMock.__getRevertCalls()
-      expect(calls.length).toBe(1)
-      expect(calls[0]!.agentId).toEqual(self)
-      expect(calls[0]!.target.tag).toBe("revert-to-oplog-index")
-      if (calls[0]!.target.tag === "revert-to-oplog-index") {
-        // currentIndex bumps the counter, so the captured index is 100n.
-        expect(calls[0]!.target.val).toBe(100n)
+    }),
+  )
+
+  it.effect("propagates defects and cancellation without rollback", () =>
+    Effect.gen(function* () {
+      for (const body of [Effect.die("bug"), Effect.interrupt]) {
+        const { calls, provide } = setup()
+        const exit = yield* Effect.exit(provide(Durability.unwrapOrRevert(body)))
+        expect(exit._tag).toBe("Failure")
+        expect(calls).toEqual([])
       }
     }),
   )
-})
 
-describe("Durability.unwrapOrRevert", () => {
-  it.effect("returns the value on success", () =>
+  it.effect("preserves mixed failures and finalizer defects without rollback", () =>
     Effect.gen(function* () {
-      const program = Durability.unwrapOrRevert(Effect.succeed("ok"))
-      const out = yield* provideSelf(program)
-      expect(out).toBe("ok")
-      expect(ApiHostMock.__getRevertCalls()).toEqual([])
+      const defect = new Error("finalizer defect")
+      const mixed = Effect.fail("typed failure").pipe(Effect.ensuring(Effect.die(defect)))
+      for (const program of [
+        Durability.unwrapOrRevert(mixed),
+        Durability.compensable({
+          acquire: Effect.succeed(1),
+          body: () => mixed,
+          compensate: () => Effect.die("must not compensate"),
+        }),
+        Durability.compensable({
+          acquire: Effect.succeed(1),
+          body: () => Effect.fail("body"),
+          compensate: () => mixed,
+        }),
+      ]) {
+        const { calls, provide } = setup()
+        const exit = yield* Effect.exit(provide(program))
+        expect(exit._tag).toBe("Failure")
+        if (exit._tag === "Failure") {
+          expect(exit.cause.reasons.some(Cause.isFailReason)).toBe(true)
+          expect(
+            exit.cause.reasons.some(
+              (reason) => Cause.isDieReason(reason) && reason.defect === defect,
+            ),
+          ).toBe(true)
+        }
+        expect(calls).toEqual([])
+      }
     }),
   )
 
-  it.effect("issues a revert and never returns on body failure", () =>
+  it.effect("compensates before rewind even if compensation fails with a typed error", () =>
     Effect.gen(function* () {
-      // Body fails; unwrapOrRevert calls revertAgent then Effect.never.
-      // We run the program in a fiber so we can inspect the host state
-      // without waiting for it to terminate.
-      const program = Durability.unwrapOrRevert(Effect.fail("boom" as const))
-      const fiber = Effect.runFork(provideSelf(program) as Effect.Effect<never, never, never>)
-      // Yield once to let the body run + revertAgent fire.
-      yield* Effect.promise(() => new Promise<void>((r) => setTimeout(r, 5)))
-      expect(ApiHostMock.__getRevertCalls().length).toBe(1)
-      // Tear the fiber down so vitest doesn't hang.
-      yield* Fiber.interrupt(fiber)
-    }),
-  )
-})
-
-describe("Durability.checkpoint — defects bypass revert", () => {
-  it.effect("propagates defects without reverting", () =>
-    Effect.gen(function* () {
-      const program = Durability.checkpoint(Effect.die("kaboom" as const))
-      const exit = yield* Effect.exit(provideSelf(program))
-      expect(exit._tag).toBe("Failure")
-      expect(ApiHostMock.__getRevertCalls()).toEqual([])
-    }),
-  )
-})
-
-describe("Durability.compensable", () => {
-  it.effect("returns the body's value on success and skips compensate", () =>
-    Effect.gen(function* () {
-      let compensated = false
-      const program = Durability.compensable({
-        acquire: Effect.succeed("token"),
-        body: (a) => Effect.succeed(a.length),
-        compensate: () =>
-          Effect.sync(() => {
-            compensated = true
-          }),
+      const events: Array<string> = []
+      const { calls, provide } = setup(undefined, () => {
+        events.push("rewind")
       })
-      const out = yield* provideSelf(program)
-      expect(out).toBe(5)
+      yield* Effect.exit(
+        provide(
+          Durability.compensable({
+            acquire: Effect.succeed("token"),
+            body: () => Effect.fail("body"),
+            compensate: (token) =>
+              Effect.sync(() => {
+                events.push(token)
+              }).pipe(Effect.andThen(Effect.fail("compensation"))),
+          }),
+        ),
+      )
+      expect(events).toEqual(["token", "rewind"])
+      expect(calls).toEqual([100n])
+    }),
+  )
+
+  it.effect("does not compensate or rewind on acquisition failure or successful body", () =>
+    Effect.gen(function* () {
+      const { calls, provide } = setup()
+      let compensated = false
+      const compensate = () =>
+        Effect.sync(() => {
+          compensated = true
+        })
+      expect(
+        yield* provide(
+          Durability.compensable({ acquire: Effect.succeed(1), body: Effect.succeed, compensate }),
+        ),
+      ).toBe(1)
+      yield* Effect.result(
+        provide(
+          Durability.compensable({
+            acquire: Effect.fail("acquire"),
+            body: Effect.succeed,
+            compensate,
+          }),
+        ),
+      )
       expect(compensated).toBe(false)
-      expect(ApiHostMock.__getRevertCalls()).toEqual([])
+      expect(calls).toEqual([])
     }),
   )
 
-  it.effect("runs compensate and revertAgent on body failure", () =>
+  it.effect("compensable preserves body cancellation and defects, and compensation defects", () =>
     Effect.gen(function* () {
-      let compensated = false
-      const program = Durability.compensable({
-        acquire: Effect.succeed("token"),
-        body: () => Effect.fail("boom" as const),
-        compensate: () =>
-          Effect.sync(() => {
-            compensated = true
+      for (const body of [Effect.die("bug"), Effect.interrupt]) {
+        const { calls, provide } = setup()
+        let compensated = false
+        yield* Effect.exit(
+          provide(
+            Durability.compensable({
+              acquire: Effect.succeed(1),
+              body: () => body,
+              compensate: () =>
+                Effect.sync(() => {
+                  compensated = true
+                }),
+            }),
+          ),
+        )
+        expect(compensated).toBe(false)
+        expect(calls).toEqual([])
+      }
+      const { calls, provide } = setup()
+      const exit = yield* Effect.exit(
+        provide(
+          Durability.compensable({
+            acquire: Effect.succeed(1),
+            body: () => Effect.fail("body"),
+            compensate: () => Effect.die("compensation defect"),
           }),
-      })
-      const fiber = Effect.runFork(provideSelf(program) as Effect.Effect<never, never, never>)
-      yield* Effect.promise(() => new Promise<void>((r) => setTimeout(r, 5)))
-      expect(compensated).toBe(true)
-      expect(ApiHostMock.__getRevertCalls().length).toBe(1)
-      yield* Fiber.interrupt(fiber)
+        ),
+      )
+      expect(exit._tag).toBe("Failure")
+      expect(calls).toEqual([])
     }),
   )
 })
