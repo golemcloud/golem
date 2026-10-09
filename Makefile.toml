@@ -196,7 +196,7 @@ run_task = [{ name = ["build-bins-all"] }]
 
 [tasks.build-cli-test-bins]
 dependencies = ["wit"]
-description = "Builds the golem and golem-cli binaries used by CLI integration tests"
+description = "Builds the golem binary used by CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 profile = get_env GOLEM_CLI_TEST_BIN_PROFILE
@@ -211,18 +211,14 @@ dev_release_profile = eq ${profile} dev-release
 dev_release_ci_profile = eq ${profile} dev-release-ci
 
 if ${debug_profile}
-    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build -p golem --bin golem
 elseif ${dev_ci_profile}
-    exec --fail-on-error cargo build --profile dev-ci -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-ci -p golem --bin golem
 elseif ${dev_release_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-release -p golem --bin golem
 elseif ${dev_release_ci_profile}
     set_env GOLEM_BUILD_SKIP_SHADOW 1
-    exec --fail-on-error cargo build --profile dev-release-ci -p golem-cli --bin golem-cli
     exec --fail-on-error cargo build --profile dev-release-ci -p golem --bin golem
 else
     echo "Unsupported GOLEM_CLI_TEST_BIN_PROFILE=${profile}. Expected 'debug', 'dev-ci', 'dev-release', or 'dev-release-ci'."
@@ -612,10 +608,12 @@ description = "Runs the dev-tools workspace unit tests"
 command = "cargo"
 args = ["test", "--manifest-path", "dev-tools/Cargo.toml", "--lib"]
 
+# Worker-executor test tasks use production's 32 MiB native stacks to avoid
+# allocating a temporary invocation stack on every poll.
 [tasks.worker-executor-tests]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only"
-env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
+env = { "RUST_MIN_STACK" = "33554432", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
 command = "cargo"
 args = [
     "test",
@@ -630,7 +628,7 @@ args = [
 [tasks.worker-executor-tests-misc]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs untagged, sequential storage, oplog blob archive, and service-specific worker-executor tests"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
@@ -645,7 +643,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-ignite-service]
 dependencies = ["wit"]
 description = "Runs ignite service worker-executor-tests (requires GOLEM_IGNITE_URL=ignite://host:10800 and a running Apache Ignite 2.x node)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
 cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
@@ -653,7 +651,7 @@ cargo-test-r run --package golem-worker-executor --test integration :tag:ignite_
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 1/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group1" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -662,7 +660,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group2]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 2/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -673,7 +671,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group3]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 3/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -682,7 +680,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-group4]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs worker executor tests only (group 4/4)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
@@ -691,7 +689,7 @@ exec --fail-on-error cargo-test-r run --package golem-worker-executor --test int
 [tasks.worker-executor-tests-tool-streaming]
 dependencies = ["wit", "fetch-builtin-artifacts"]
 description = "Runs tool streaming worker executor tests with bounded concurrency"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-worker-executor --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
@@ -858,7 +856,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration -- 
 '''
 
 [tasks.cli-integration-tests-dev-release]
-description = "Runs all CLI integration tests with dev-release golem and golem-cli binaries"
+description = "Runs all CLI integration tests with the dev-release golem binary"
 env = { "GOLEM_CLI_TEST_BIN_PROFILE" = "dev-release" }
 run_task = "cli-integration-tests"
 
@@ -876,11 +874,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-agents-guest-bridge]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'agents_guest_bridge' shard (app::agents::*_guest_bridge_e2e)"
+description = "Runs the it-cli 'agents_guest_bridge' shard (Rust and TypeScript agent bridges)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge" -- --skip ":tag:agents_guest_bridge_sources" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-agents-guest-bridge-sources]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'agents_guest_bridge_sources' shard (MCP, Effect, Scala, and MoonBit)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:agents_guest_bridge_sources" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-streaming]
@@ -912,11 +919,20 @@ exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":t
 
 [tasks.cli-integration-tests-deploy]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
-description = "Runs the it-cli 'deploy' shard (deploy-tagged app modules without prebuilt test components)"
+description = "Runs the it-cli 'deploy' shard (component and conformance tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy" -- --skip ":tag:deploy_runtime" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-deploy-runtime]
+dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect", "fetch-builtin-artifacts"]
+description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, bash, and templates)"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]
@@ -2061,7 +2077,7 @@ elif equals ${component} javascript-tools
     build_task = set build-javascript-tools
     wasm = set builtin-tools/javascript-tools.wasm
     artifact_id = set javascript_tools
-    exports_json = set "{\"tools\":[\"node@0.1.2\",\"npm@10.9.9+golem.2\",\"npx@10.9.9+golem.2\"]}"
+    exports_json = set "{\"tools\":[\"node@0.1.4\",\"npm@10.9.9+golem.4\",\"npx@10.9.9+golem.4\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/npm
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/npm/sbom.spdx.json
@@ -2069,7 +2085,7 @@ elif equals ${component} typescript-tools
     build_task = set build-typescript-tools
     wasm = set builtin-tools/typescript-tools.wasm
     artifact_id = set typescript_tools
-    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.2\"]}"
+    exports_json = set "{\"tools\":[\"tsc@5.9.2+golem.4\"]}"
     licenses = set builtin-tools/js-ts-tools/licenses/typescript
     source_notice = set builtin-tools/js-ts-tools/licenses/SOURCE.md
     sbom = set builtin-tools/js-ts-tools/licenses/typescript/sbom.spdx.json
@@ -2315,7 +2331,7 @@ rm -rf build-out
 
 [tasks.build-benchmark-components]
 description = "Rebuilds and verifies the test WASM components required by the CI benchmark suite"
-dependencies = ["wit", "build-sdk-ts"]
+dependencies = ["wit", "build-sdk-ts", "build-sdk-effect"]
 script_runner = "@duckscript"
 script = '''
 golem_cli = get_env GOLEM_CLI

@@ -80,6 +80,7 @@ const configuration = () => ({
   plugins: [
     nodeResolve({
       extensions: [".mjs", ".js", ".node", ".ts"],
+      modulePaths: [path.join(appRootDir, "node_modules")],
     }),
     commonjs({
       include: [`${appRootDir}/node_modules/**`],

@@ -57,7 +57,17 @@ object SchemaWireInterop {
 
   def valueTreeToJs(v: WitSchemaValueTree): JsSchemaValueTree = {
     preflightValueTree(v)
-    JsSchemaValueTree(v.valueNodes.map(valueNodeToJs).toJSArray, v.root)
+    lowerValueTree(v)
+  }
+
+  private def lowerValueTree(v: WitSchemaValueTree): JsSchemaValueTree = {
+    val nodes = new js.Array[JsSchemaValueNode](v.valueNodes.length)
+    var index = 0
+    while (index < v.valueNodes.length) {
+      nodes(index) = valueNodeToJs(v.valueNodes(index))
+      index += 1
+    }
+    JsSchemaValueTree(nodes, v.root)
   }
 
   def valueTreeFromJs(j: JsSchemaValueTree): WitSchemaValueTree = {
@@ -102,7 +112,10 @@ object SchemaWireInterop {
   }
 
   private def prepareValueTreeToJsAsync(v: WitSchemaValueTree): Future[PreparedValueTree] = {
-    preflightValueTree(v)
+    val hasResources = preflightValueTree(v)
+    if (!hasResources)
+      return Future.successful(new PreparedValueTree(lowerValueTree(v), Nil))
+
     val transferred = mutable.ListBuffer.empty[PreparedStream]
     val prepared    = Array.fill[Option[JsSchemaValueNode]](v.valueNodes.length)(None)
 
@@ -619,10 +632,11 @@ object SchemaWireInterop {
    * holders wrapping the same raw `quota-token` are rejected too, not only the
    * same holder used twice.
    */
-  private def preflightValueTree(v: WitSchemaValueTree, includeStreams: Boolean = true): Unit = {
+  private def preflightValueTree(v: WitSchemaValueTree, includeStreams: Boolean = true): Boolean = {
     import WitSchemaValueNode._
     val seenRaw       = mutable.Set.empty[Any]
     val seenRawStream = mutable.Set.empty[Any]
+    var hasResources  = false
 
     def checkRange(name: String, value: Long, min: Long, max: Long): Unit =
       if (value < min || value > max)
@@ -644,6 +658,7 @@ object SchemaWireInterop {
             s"invalid datetime value: nanoseconds must be in [0, 1_000_000_000), got ${dt.nanoseconds}"
           )
       case SecretValue(h) =>
+        hasResources = true
         val raw = h
           .withHandle(identity)
           .getOrElse(
@@ -652,6 +667,7 @@ object SchemaWireInterop {
         if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same secret handle appeared more than once in one value tree")
       case QuotaTokenHandle(h) =>
+        hasResources = true
         // Peek the underlying owned resource without consuming it so two distinct
         // holders wrapping the same raw handle are also rejected.
         val raw = h
@@ -664,11 +680,13 @@ object SchemaWireInterop {
         if (!seenRaw.add(raw))
           throw SchemaEncodeError("the same quota-token handle appeared more than once in one value tree")
       case StreamValue(h) if includeStreams =>
+        hasResources = true
         val ownershipKey = h.ownershipKey
           .getOrElse(throw SchemaEncodeError("schema value stream was already transferred"))
         if (!seenRawStream.add(ownershipKey))
           throw SchemaEncodeError("the same schema value stream appeared more than once in one value tree")
       case PermissionCardHandle(h) =>
+        hasResources = true
         val raw = h
           .withHandle(identity)
           .getOrElse(
@@ -680,6 +698,7 @@ object SchemaWireInterop {
           throw SchemaEncodeError("the same permission-card handle appeared more than once in one value tree")
       case _ => ()
     }
+    hasResources
   }
 
   private def valueNodeToJs(n: WitSchemaValueNode): JsSchemaValueNode = {

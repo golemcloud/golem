@@ -233,7 +233,7 @@ The focused commands are:
 
 ```shell
 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib -- apfs_ --test-threads 1 --report-time
-cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup --exact --test-threads 1 --report-time
+RUST_MIN_STACK=33554432 cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --test integration -- filesystem_snapshots::apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay filesystem_snapshots::managed_snapshots_on_storage_without_copy_on_write_fail_at_startup --exact --test-threads 1 --report-time
 ```
 
 The library filter covers the clone test in `sandbox_filesystem::apfs::tests`, the startup probe,

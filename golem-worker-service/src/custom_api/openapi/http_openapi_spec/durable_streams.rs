@@ -5,7 +5,9 @@
 use super::super::route_schema::StreamSlotSchema;
 use super::super::schema_mapping::render_output_schema;
 use super::*;
-use golem_service_base::custom_api::{DurableStreamRepresentation, MethodParameter};
+use golem_service_base::custom_api::{
+    DurableStreamRepresentation, MethodParameter, PhantomSelection,
+};
 
 const OFFSET: &str = "GolemDSOffset";
 const READ_OFFSET: &str = "GolemDSReadOffset";
@@ -58,6 +60,16 @@ pub(super) fn emit(
         components,
         &mut creation_parameters,
     )?;
+    let identity_parameter = match &behaviour.phantom_selection {
+        PhantomSelection::Query { name, .. } => {
+            let index = creation_parameters
+                .iter()
+                .position(|p| p["in"] == "query" && p["name"] == name.as_str())
+                .expect("Lowered phantom query selector is missing");
+            Some(creation_parameters.remove(index))
+        }
+        _ => None,
+    };
     let path_parameters: Vec<_> = creation_parameters
         .iter()
         .filter(|p| p["in"] == "path")
@@ -68,11 +80,14 @@ pub(super) fn emit(
     let mut operation = |path: &str,
                          method: &str,
                          label: &str,
-                         parameters: Vec<Value>,
+                         mut parameters: Vec<Value>,
                          body: Option<Value>,
                          responses: Value,
                          slot: Option<&StreamSlotSchema>|
      -> Result<(), String> {
+        if let Some(selector) = &identity_parameter {
+            parameters.push(selector.clone());
+        }
         let mut op = json!({
             "operationId": format!("{}-{}-{}-{}", behaviour.agent_type.0, behaviour.method_name, method, hex_path(path)),
             "summary": label,
@@ -171,7 +186,7 @@ pub(super) fn emit(
             )],
             false,
         );
-        r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        r["200"]["headers"] = json!({"Stream-Closed": header("Present as true only when all slots are closed or deleted; otherwise omitted", json!({"type":"string","enum":["true"]})), "Cache-Control": header("Session metadata is not cached", string_schema())});
         if method == "head" {
             add_expiry_response_headers(&mut r["200"]["headers"]);
         }
@@ -222,7 +237,7 @@ pub(super) fn emit(
     fork_parameters.push(path_parameter(&fork_name, reference(SESSION)));
     for method in ["get", "head"] {
         let mut r = responses(&[("200", "Fork manifest and immutable fork point")], false);
-        r["200"]["headers"] = json!({"Stream-Closed": header("All slots closed or deleted", json!({"type":"boolean"})), "Cache-Control": header("Session metadata is not cached", string_schema())});
+        r["200"]["headers"] = json!({"Stream-Closed": header("Present as true only when all slots are closed or deleted; otherwise omitted", json!({"type":"string","enum":["true"]})), "Cache-Control": header("Session metadata is not cached", string_schema())});
         if method == "head" {
             add_expiry_response_headers(&mut r["200"]["headers"]);
         }
@@ -443,8 +458,8 @@ pub(super) fn emit(
                         reference(OFFSET),
                     );
                     headers["Stream-Closed"] = header(
-                        "Closure on success or closed-stream conflict",
-                        json!({"type":"boolean"}),
+                        "Present as true on closed success or closed-stream conflict; otherwise omitted",
+                        json!({"type":"string","enum":["true"]}),
                     );
                 }
                 let producer_headers: &[&str] = match code {
@@ -544,7 +559,7 @@ fn header(description: &str, schema: Value) -> Value {
 fn metadata_headers(read: bool, expiry: bool) -> Value {
     let mut headers = json!({
         "Stream-Next-Offset": header("Next read cursor", reference(OFFSET)),
-        "Stream-Closed": header("Terminal state; on reads true only at EOF", json!({"type":"boolean"})),
+        "Stream-Closed": header("Present as true only when closed (on reads only at EOF); otherwise omitted", json!({"type":"string","enum":["true"]})),
         "Stream-Cancelled": header("Cancellation terminal", json!({"type":"boolean"})),
         "Stream-Up-To-Date": header("Read reached current head", json!({"type":"boolean"})),
         "Cache-Control": header("Caching policy", string_schema()),

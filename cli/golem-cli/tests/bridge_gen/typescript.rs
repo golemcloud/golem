@@ -1394,7 +1394,9 @@ fn external_streaming_generation_compiles_recursive_streams() {
             .next()
             .unwrap();
         assert_eq!(
-            method_source.matches(".application(").count(),
+            method_source
+                .matches("const configValue = base.publicValueCodec(")
+                .count(),
             1,
             "{method_name} must project each supplied config value exactly once"
         );
@@ -1710,6 +1712,7 @@ fn http_router_bridge_rejection_uses_kind_not_name() {
             path_prefix: vec![],
             auth_details: None,
             phantom_agent: false,
+            phantom_id_binding: None,
             cors_options: CorsOptions {
                 allowed_patterns: vec![],
             },

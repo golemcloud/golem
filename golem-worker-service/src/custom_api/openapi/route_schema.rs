@@ -38,7 +38,7 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::unstructured::{binary_body_restrictions, text_body_restrictions};
 use golem_service_base::custom_api::{
     AgentRouteMode, CallAgentBehaviour, CompiledOutputSchema, DurableStreamRepresentation,
-    PathSegment, QueryOrHeaderType, RequestBodySchema,
+    PathSegment, PhantomSelection, QueryOrHeaderType, RequestBodySchema,
 };
 
 /// Schema-model view of an entire set of compiled routes, ready for the
@@ -225,6 +225,7 @@ fn lower_call_agent(
         path,
         &inner.constructor_parameters,
         &inner.method_parameters,
+        &inner.phantom_selection,
     )
     .into_iter()
     .map(|(name, is_catchall, pst)| {
@@ -236,10 +237,17 @@ fn lower_call_agent(
     })
     .collect::<Result<Vec<_>, String>>()?;
 
-    let query_params = call_agent::get_query_variable_and_types(&inner.method_parameters)
+    let mut query_params = call_agent::get_query_variable_and_types(&inner.method_parameters)
         .into_iter()
         .map(|(name, qoht)| lower_named_param(name, qoht))
         .collect::<Result<Vec<_>, String>>()?;
+    if let PhantomSelection::Query { name, optional } = &inner.phantom_selection {
+        query_params.push(NamedParamSchema {
+            name: name.clone(),
+            schema: SchemaType::uuid(),
+            required: !optional,
+        });
+    }
 
     let header_params = call_agent::get_header_variable_and_types(&inner.method_parameters)
         .into_iter()

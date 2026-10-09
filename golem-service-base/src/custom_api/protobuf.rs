@@ -22,9 +22,9 @@ use crate::custom_api::{
     CompiledOutputSchema, CompiledSchema, ConstructorParameter, CorsPreflightBehaviour,
     CorsPreflightMethodPolicy, DurableStreamRepresentation, DurableStreamRouteLoadPolicy,
     DurableStreamRoutePolicy, DurableStreamSlot, DurableStreamSlotDirection, HttpRouterBehaviour,
-    MethodParameter, OriginPattern, QueryOrHeaderType, RouteMatch, RouterFileIndexEntry,
-    RouterMethod, SecuritySchemeRouteSecurity, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    MethodParameter, OriginPattern, PhantomSelection, QueryOrHeaderType, RouteMatch,
+    RouterFileIndexEntry, RouterMethod, SecuritySchemeRouteSecurity,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_api_grpc::proto;
 use golem_common::model::account::AccountEmail;
@@ -262,7 +262,10 @@ impl TryFrom<proto::golem::customapi::RouteBehaviour> for RouteBehaviour {
                     .into_iter()
                     .map(TryInto::try_into)
                     .collect::<Result<_, _>>()?,
-                phantom: call_agent.phantom,
+                phantom_selection: call_agent
+                    .phantom_selection
+                    .ok_or("Missing phantom_selection")?
+                    .try_into()?,
                 method_name: call_agent.method_name,
                 method_input: call_agent
                     .method_input
@@ -452,6 +455,55 @@ fn decode_file_index(
         .collect()
 }
 
+impl TryFrom<proto::golem::customapi::route_behaviour::PhantomSelection> for PhantomSelection {
+    type Error = String;
+
+    fn try_from(
+        value: proto::golem::customapi::route_behaviour::PhantomSelection,
+    ) -> Result<Self, Self::Error> {
+        use proto::golem::customapi::route_behaviour::phantom_selection::Selection;
+        Ok(
+            match value
+                .selection
+                .ok_or("Missing PhantomSelection.selection")?
+            {
+                Selection::Policy(phantom) => Self::Policy { phantom },
+                Selection::Original(_) => Self::Original,
+                Selection::PathIndex(index) => Self::Path {
+                    index: index.into(),
+                },
+                Selection::Query(query) => {
+                    if query.name.is_empty() {
+                        return Err("Phantom query selector name cannot be empty".into());
+                    }
+                    Self::Query {
+                        name: query.name,
+                        optional: query.optional,
+                    }
+                }
+            },
+        )
+    }
+}
+
+impl From<PhantomSelection> for proto::golem::customapi::route_behaviour::PhantomSelection {
+    fn from(value: PhantomSelection) -> Self {
+        use proto::golem::customapi::route_behaviour::{
+            PhantomQuery, phantom_selection::Selection,
+        };
+        Self {
+            selection: Some(match value {
+                PhantomSelection::Policy { phantom } => Selection::Policy(phantom),
+                PhantomSelection::Original => Selection::Original(Default::default()),
+                PhantomSelection::Path { index } => Selection::PathIndex(index.into()),
+                PhantomSelection::Query { name, optional } => {
+                    Selection::Query(PhantomQuery { name, optional })
+                }
+            }),
+        }
+    }
+}
+
 impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
     fn from(value: RouteBehaviour) -> Self {
         use proto::golem::customapi::route_behaviour::Kind;
@@ -467,7 +519,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                 agent_mode,
                 constructor_input,
                 constructor_parameters,
-                phantom,
+                phantom_selection,
                 method_name,
                 method_input,
                 body,
@@ -493,7 +545,7 @@ impl From<RouteBehaviour> for proto::golem::customapi::RouteBehaviour {
                             .into_iter()
                             .map(Into::into)
                             .collect(),
-                        phantom,
+                        phantom_selection: Some(phantom_selection.into()),
                         method_name,
                         method_input: Some(method_input.into()),
                         body: Some(body.into()),
@@ -1241,6 +1293,43 @@ mod tests {
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::schema::{InputSchema, OutputSchema, SchemaGraph, SchemaType};
     use test_r::test;
+
+    #[test]
+    fn phantom_selection_roundtrips_and_rejects_missing_wire_selection() {
+        for selection in [
+            PhantomSelection::Policy { phantom: false },
+            PhantomSelection::Policy { phantom: true },
+            PhantomSelection::Original,
+            PhantomSelection::Path { index: 3.into() },
+            PhantomSelection::Query {
+                name: "instance".into(),
+                optional: false,
+            },
+            PhantomSelection::Query {
+                name: "other-instance".into(),
+                optional: true,
+            },
+        ] {
+            let bytes = desert_rust::serialize_to_byte_vec(&selection).unwrap();
+            let decoded: PhantomSelection = desert_rust::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, selection);
+            let proto: proto::golem::customapi::route_behaviour::PhantomSelection =
+                selection.clone().into();
+            assert_eq!(PhantomSelection::try_from(proto).unwrap(), selection);
+        }
+        assert!(
+            PhantomSelection::try_from(
+                proto::golem::customapi::route_behaviour::PhantomSelection { selection: None }
+            )
+            .is_err()
+        );
+        let empty_query = PhantomSelection::Query {
+            name: "".into(),
+            optional: false,
+        };
+        let proto: proto::golem::customapi::route_behaviour::PhantomSelection = empty_query.into();
+        assert!(PhantomSelection::try_from(proto).is_err());
+    }
 
     #[test]
     fn openapi_scheme_roundtrips_codecs_and_rejects_missing_or_unknown_wire_values() {

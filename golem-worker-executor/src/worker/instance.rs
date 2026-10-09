@@ -115,6 +115,7 @@ impl<Ctx: crate::workerctx::FuelManagement + 'static> Drop for StoreFuelGuard<Ct
 /// [`ReplayState`] shares its cursor; it does not create another cursor over the same oplog.
 pub struct OwnerExecution {
     owner_id: OwnedAgentId,
+    suspension: Mutex<Arc<super::suspension::OwnerSuspension>>,
     oplog: Arc<dyn Oplog>,
     replay: tokio::sync::RwLock<Option<ReplayState>>,
     commit: Arc<OwnerCommitController>,
@@ -183,6 +184,7 @@ impl OwnerExecution {
         let primary_tail_work = crate::durable_host::tail_work::TailWorkTracker::new();
         Self {
             owner_id,
+            suspension: Mutex::new(super::suspension::OwnerSuspension::new()),
             oplog,
             replay: tokio::sync::RwLock::new(None),
             commit,
@@ -204,6 +206,10 @@ impl OwnerExecution {
 
     pub fn owner_id(&self) -> &OwnedAgentId {
         &self.owner_id
+    }
+
+    pub(crate) fn suspension(&self) -> Arc<super::suspension::OwnerSuspension> {
+        self.suspension.lock().unwrap().clone()
     }
 
     pub fn oplog(&self) -> Arc<dyn Oplog> {
@@ -277,6 +283,9 @@ impl OwnerExecution {
         )
         .await?;
         *self.replay.write().await = Some(replay.clone());
+        // Observation state follows the existing replay generation. Old Store callbacks retain
+        // the old coordinator and cannot alter eligibility of the reconstructed generation.
+        *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
         Ok(())
     }
 
@@ -329,6 +338,18 @@ impl OwnerExecution {
     #[doc(hidden)]
     pub async fn test_replay_is_live(&self) -> Result<bool, WorkerExecutorError> {
         Ok(self.replay().await?.is_live_published())
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[doc(hidden)]
+    pub async fn test_wait_for_replay_claim_blocked_on_active_body(
+        &self,
+    ) -> Result<(), WorkerExecutorError> {
+        self.replay()
+            .await?
+            .test_wait_for_claims_blocked_on_active_body(1)
+            .await;
+        Ok(())
     }
 
     #[cfg(feature = "test-utils")]
@@ -640,6 +661,12 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let owner = self.owner()?;
         let engine = owner.engine();
         let mut store = Store::new(&engine, context);
+        let runtime = super::suspension::RuntimeStore::new(self.owner_execution.suspension());
+        store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
+        store
+            .as_context_mut()
+            .set_runtime_observer(runtime)
+            .map_err(anyhow::Error::from)?;
         store.set_epoch_deadline(0);
         store.epoch_deadline_callback(move |mut store| {
             let current_level = store.get_fuel().unwrap_or(0);

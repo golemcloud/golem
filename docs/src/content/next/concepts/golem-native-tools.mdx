@@ -5,7 +5,7 @@ import { Callout } from "nextra/components"
 Golem-native tools are typed, separately deployable operations that agents can call through Golem's runtime. Use them when an agent must act on the world under **operator-controlled permissions** and inside an **enforceable capability sandbox**. Unlike an in-process function or framework hook, the runtime can authorize every call, constrain what the implementation can reach, and apply middleware the caller cannot bypass.
 
 <Callout type="info">
-  Here, **Golem-native** describes the tool model. A **native tool** more narrowly means a privileged implementation compiled into the Golem host. Most tools are ordinary WebAssembly components. Golem currently ships no production inventory of built-in or host-native tools.
+  Here, **Golem-native** describes the tool model. A **native tool** more narrowly means a privileged implementation compiled into the Golem host. Most tools are ordinary WebAssembly components. Golem ships a set of component-implemented [built-in tools](/next/app-manifest#system-provided-tools), but currently no production host-native tools.
 </Callout>
 
 ## Why use a tool?

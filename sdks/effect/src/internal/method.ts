@@ -8,10 +8,11 @@ import type { HostServices } from "../host/HostLive.js"
 import type { EndpointDef } from "../Http.js"
 import { isMultimodal, type Multimodal } from "../Multimodal.js"
 import { Principal, type PrincipalInputSchema } from "../Principal.js"
-import { SelfAgentId } from "../SelfAgentId.js"
 import { isElementSpec, tryGetter, type ElementSpec } from "../Unstructured.js"
 import {
   makeWireDecoder,
+  makeWireEncoder,
+  prepareWireRecordCodec,
   toWitCodec,
   type UnsupportedSchemaError,
   type WitCodec,
@@ -37,7 +38,7 @@ import {
   type SchemaType,
   type SchemaValue,
 } from "./schema-model/model.js"
-import { GraphEncoder, schemaValueToWit, schemaValueToWitAsync } from "./schema-model/wit.js"
+import { GraphEncoder } from "./schema-model/wit.js"
 
 /** @since 1.6.0 @category models */
 export type MethodParam = Schema.Top | ElementSpec<any> | Multimodal<any>
@@ -104,9 +105,9 @@ type HandlerServices<S extends MethodSpec<any, any, any>, CfgTag> =
   S extends MethodSpec<any, any, any, any, infer ReadOnly>
     ? ReadOnly extends true | ReadOnlyOption
       ? HasPrincipalInput<S["input"]> extends true
-        ? Principal | SelfAgentId | HostServices | CfgTag
-        : SelfAgentId | HostServices | CfgTag
-      : Principal | SelfAgentId | HostServices | CfgTag
+        ? Principal | HostServices | CfgTag
+        : HostServices | CfgTag
+      : Principal | HostServices | CfgTag
     : never
 
 type UnsupportedBinding<N extends string, A extends string, S extends string> = string extends N
@@ -353,17 +354,17 @@ export const compileParamBindings = <Input extends MethodParams>(
     const codec = valueToRecord.pipe(
       Schema.decodeTo(EncodedRecord),
     ) as unknown as CompiledInputCodec<Input>["codec"]
-    const encodeValue = Schema.encodeEffect(codec)
+    prepareWireRecordCodec(
+      codec,
+      entries.map((entry) => ({ name: entry.name, codec: entry.codec.codec })),
+    )
     return {
       graph,
       schemaGraph,
       inputSchema,
       codec,
-      encode: (value) => Effect.map(encodeValue(value), schemaValueToWit),
-      encodeAsync: (value) =>
-        Effect.flatMap(encodeValue(value), (sv) =>
-          Effect.promise((signal) => schemaValueToWitAsync(sv, signal)),
-        ),
+      encode: makeWireEncoder(codec, false),
+      encodeAsync: makeWireEncoder(codec),
       decode: makeWireDecoder(codec),
     }
   })
@@ -471,7 +472,7 @@ export const compileMethodSpec = <
       ...inputCodec.inputSchema,
       val: inputCodec.inputSchema.val.map((f, i) => ({ ...f, schema: inputRoots[i]! })),
     }
-    const encodeOutput = outputCodec && Schema.encodeEffect(outputCodec.codec)
+    const encodeOutput = outputCodec && makeWireEncoder(outputCodec.codec)
     return {
       name,
       spec,
@@ -487,13 +488,7 @@ export const compileMethodSpec = <
         outputCodec && outputType
           ? { ...outputCodec, graph: { defs: graph.defs, root: outputType } }
           : undefined,
-      encodeOutput:
-        encodeOutput === undefined
-          ? undefined
-          : (value) =>
-              Effect.flatMap(encodeOutput(value), (encoded) =>
-                Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
-              ),
+      encodeOutput: encodeOutput === undefined ? undefined : encodeOutput,
       inputSchema,
       outputSchema: outputRoot === undefined ? { tag: "unit" } : { tag: "single", val: outputRoot },
       errorWrapped,
@@ -533,12 +528,7 @@ export const invokeSchemaValue = <
 ): Effect.Effect<CoreTypes.SchemaValueTree | undefined, Schema.SchemaError | E["Type"], R> =>
   invokeWireValue(
     inputCodec,
-    outputCodec === undefined
-      ? undefined
-      : (value) =>
-          Effect.flatMap(Schema.encodeEffect(outputCodec.codec)(value), (encoded) =>
-            Effect.promise((signal) => schemaValueToWitAsync(encoded, signal)),
-          ),
+    outputCodec === undefined ? undefined : makeWireEncoder(outputCodec.codec),
     options,
     handler,
     input,

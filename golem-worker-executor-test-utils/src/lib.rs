@@ -64,9 +64,9 @@ use golem_common::model::retry_policy::NamedRetryPolicy;
 use golem_common::model::tool::ToolName;
 use golem_common::model::worker::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::{
-    AgentFilter, AgentFingerprint, AgentId, AgentInvocation, AgentInvocationOutput,
-    AgentStatusRecord, IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig,
-    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
+    AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatusRecord,
+    IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
+    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -169,6 +169,7 @@ use golem_worker_executor::services::{
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
+use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::worker::{RetryDecision, Worker, WorkerDeletionHook};
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
@@ -861,6 +862,12 @@ impl TestWorkerExecutor {
     pub fn native_test_helper_effect_count(&self) -> usize {
         self.additional_test_deps
             .native_test_helper_effects
+            .load(Ordering::SeqCst)
+    }
+
+    pub fn native_test_effect_count(&self) -> usize {
+        self.additional_test_deps
+            .native_test_effects
             .load(Ordering::SeqCst)
     }
 
@@ -1761,6 +1768,16 @@ impl TestWorkerExecutor {
             .diverge_next_completed_entity_reconstruction(agent_id.clone());
     }
 
+    /// Pauses the spawned supervisor of the next completed historical entity reconstruction
+    /// before it polls its body or its recorded terminal.
+    pub fn gate_next_completed_reconstruction_supervisor(
+        &self,
+        agent_id: &AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        self.additional_test_deps
+            .gate_next_completed_reconstruction_supervisor(agent_id.clone())
+    }
+
     /// Pauses the next historical entity reconstruction immediately after its resolver-owned
     /// reconstruction claim becomes visible.
     pub fn gate_next_entity_reconstruction_claim(
@@ -1863,6 +1880,23 @@ impl TestWorkerExecutor {
             .await
             .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
         Ok(worker.owner_execution().test_replay_is_live().await?)
+    }
+
+    /// Waits until a `Start` claim of the owner's current replay waits for an active entity body
+    /// that owns the cursor head.
+    pub async fn wait_for_replay_claim_blocked_on_active_body(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<()> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow!("worker {owned_agent_id} is not currently in ActiveAgents"))?;
+        Ok(worker
+            .owner_execution()
+            .test_wait_for_replay_claim_blocked_on_active_body()
+            .await?)
     }
 
     /// Whether the owner has clamped replay and is waiting to settle completed reconstructions.
@@ -2218,6 +2252,9 @@ type WrapKeyValueServiceFn =
 type WrapKeyValueStorageFn = dyn Fn(Arc<dyn KeyValueStorage + Send + Sync>) -> Arc<dyn KeyValueStorage + Send + Sync>
     + Send
     + Sync;
+type WrapSchedulerStorageFn = dyn Fn(Arc<dyn SchedulerStorage + Send + Sync>) -> Arc<dyn SchedulerStorage + Send + Sync>
+    + Send
+    + Sync;
 type WrapBlobStorageFn = dyn Fn(Arc<dyn BlobStorage>) -> Arc<dyn BlobStorage> + Send + Sync;
 type WrapBlobStoreServiceFn =
     dyn Fn(Arc<dyn BlobStoreService>) -> Arc<dyn BlobStoreService> + Send + Sync;
@@ -2239,6 +2276,8 @@ pub struct TestExecutorOverrides {
     /// decorator, so injected failures reach the services as an outage that outlived the retry
     /// budget would.
     pub wrap_key_value_storage: Option<Arc<WrapKeyValueStorageFn>>,
+    /// Wraps the configured scheduler backend, allowing tests to gate the real persistence call.
+    pub wrap_scheduler_storage: Option<Arc<WrapSchedulerStorageFn>>,
     /// Wraps the blob storage every executor service is built on, so injected failures reach
     /// the services as an outage that outlived the retry budget of the backend would.
     pub wrap_blob_storage: Option<Arc<WrapBlobStorageFn>>,
@@ -2982,7 +3021,7 @@ impl StatusManagement for TestWorkerCtx {
 impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
-        invocation: AgentInvocation,
+        invocation: golem_worker_executor::worker::HydratedInvocation,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
             .on_agent_invocation_started(invocation)
@@ -3784,6 +3823,17 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
             wrap(key_value_storage)
         } else {
             key_value_storage
+        }
+    }
+
+    fn wrap_scheduler_storage(
+        &self,
+        scheduler_storage: Arc<dyn SchedulerStorage + Send + Sync>,
+    ) -> Arc<dyn SchedulerStorage + Send + Sync> {
+        if let Some(wrap) = &self.overrides.wrap_scheduler_storage {
+            wrap(scheduler_storage)
+        } else {
+            scheduler_storage
         }
     }
 
@@ -5980,8 +6030,8 @@ pub struct AdditionalTestDeps {
     entity_store_disposal_probes:
         Arc<std::sync::Mutex<HashMap<AgentId, tokio::sync::mpsc::UnboundedSender<OplogIndex>>>>,
     divergent_entity_reconstructions: Arc<std::sync::Mutex<HashSet<AgentId>>>,
-    entity_reconstruction_claim_gates:
-        Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    entity_reconstruction_claim_gates: EntityReconstructionClaimGates,
+    completed_supervisor_gates: EntityReconstructionClaimGates,
     /// One-shot gates pausing an agent's next replayed accessor-call admission
     /// for a matching function at a given stage, and one-shot signals fired when
     /// a direct (Store-holding) durable call starts waiting for its replayed
@@ -6049,6 +6099,7 @@ impl AdditionalTestDeps {
             entity_store_disposal_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             divergent_entity_reconstructions: Arc::new(std::sync::Mutex::new(HashSet::new())),
             entity_reconstruction_claim_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            completed_supervisor_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             replay_admission_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -6201,20 +6252,18 @@ impl AdditionalTestDeps {
         })
     }
 
+    fn gate_next_completed_reconstruction_supervisor(
+        &self,
+        agent_id: AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        EntityReconstructionClaimGate::install(&self.completed_supervisor_gates, agent_id)
+    }
+
     fn gate_next_entity_reconstruction_claim(
         &self,
         agent_id: AgentId,
     ) -> EntityReconstructionClaimGateHandle {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let gate = Arc::new(EntityReconstructionClaimGate {
-            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
-            release: tokio::sync::Semaphore::new(0),
-        });
-        self.entity_reconstruction_claim_gates
-            .lock()
-            .unwrap()
-            .insert(agent_id, gate.clone());
-        EntityReconstructionClaimGateHandle { entered_rx, gate }
+        EntityReconstructionClaimGate::install(&self.entity_reconstruction_claim_gates, agent_id)
     }
 
     fn entity_reconstruction_claim_hook(
@@ -6224,6 +6273,7 @@ impl AdditionalTestDeps {
         Some(Arc::new(TestEntityReconstructionClaimHook {
             agent_id,
             gates: self.entity_reconstruction_claim_gates.clone(),
+            supervisor_gates: self.completed_supervisor_gates.clone(),
         })
             as Arc<
                 dyn golem_worker_executor::workerctx::EntityReconstructionClaimHook,
@@ -6822,6 +6872,45 @@ struct EntityReconstructionClaimGate {
     release: tokio::sync::Semaphore,
 }
 
+/// One-shot entity reconstruction gates, keyed by the agent whose next reconstruction they hold.
+type EntityReconstructionClaimGates =
+    Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>;
+
+impl EntityReconstructionClaimGate {
+    fn install(
+        gates: &EntityReconstructionClaimGates,
+        agent_id: AgentId,
+    ) -> EntityReconstructionClaimGateHandle {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(Self {
+            entered_tx: std::sync::Mutex::new(Some(entered_tx)),
+            release: tokio::sync::Semaphore::new(0),
+        });
+        gates.lock().unwrap().insert(agent_id, gate.clone());
+        EntityReconstructionClaimGateHandle { entered_rx, gate }
+    }
+
+    /// Takes the agent's gate, if one is installed, reports `start_index` to its handle and waits
+    /// until the handle releases it.
+    async fn enter_and_wait(
+        gates: &EntityReconstructionClaimGates,
+        agent_id: &AgentId,
+        start_index: OplogIndex,
+    ) {
+        let gate = gates.lock().unwrap().remove(agent_id);
+        if let Some(gate) = gate {
+            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
+                let _ = entered_tx.send(start_index);
+            }
+            gate.release
+                .acquire()
+                .await
+                .expect("entity reconstruction gate was closed")
+                .forget();
+        }
+    }
+}
+
 pub struct AgentInvocationSuccessGateHandle {
     entered_rx: tokio::sync::oneshot::Receiver<()>,
     gate: Arc<AgentInvocationSuccessGate>,
@@ -7074,7 +7163,8 @@ mod replay_admission_gate_tests {
 
 struct TestEntityReconstructionClaimHook {
     agent_id: AgentId,
-    gates: Arc<std::sync::Mutex<HashMap<AgentId, Arc<EntityReconstructionClaimGate>>>>,
+    gates: EntityReconstructionClaimGates,
+    supervisor_gates: EntityReconstructionClaimGates,
 }
 
 #[async_trait]
@@ -7082,17 +7172,17 @@ impl golem_worker_executor::workerctx::EntityReconstructionClaimHook
     for TestEntityReconstructionClaimHook
 {
     async fn after_claim(&self, start_index: OplogIndex) {
-        let gate = self.gates.lock().unwrap().remove(&self.agent_id);
-        if let Some(gate) = gate {
-            if let Some(entered_tx) = gate.entered_tx.lock().unwrap().take() {
-                let _ = entered_tx.send(start_index);
-            }
-            gate.release
-                .acquire()
-                .await
-                .expect("entity reconstruction claim gate was closed")
-                .forget();
-        }
+        EntityReconstructionClaimGate::enter_and_wait(&self.gates, &self.agent_id, start_index)
+            .await;
+    }
+
+    async fn before_completed_supervisor(&self, start_index: OplogIndex) {
+        EntityReconstructionClaimGate::enter_and_wait(
+            &self.supervisor_gates,
+            &self.agent_id,
+            start_index,
+        )
+        .await;
     }
 }
 

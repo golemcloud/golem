@@ -88,8 +88,8 @@ something from the right column to survive a restart is wrong. Sockets and other
 recreated, not preserved (`durable_host/sockets`, `durable_host/http`); the application protocol
 must tolerate reconnect. Replayed websocket handles are reconstructed under a per-handle
 coordination gate so concurrent calls cannot reconnect one handle twice (see
-"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed wait schedules its
-wakeup as a persisted scheduler action first (`durable_host/suspendable_wait.rs`,
+"Concurrency and guest completion delivery"). Durable liveness also needs *rediscovery*: a timed
+wake is persisted as a scheduler action before automatic suspension (`worker/suspension.rs::RuntimeStore::drive`,
 `WakeupScheduler::sleep_until`), and the shard-keyed `RunningWorkers` index is updated
 synchronously so a crash/reshard can enumerate workers with pending work
 (`worker/status_flusher.rs`). The status blob cache is an asynchronously flushed baseline only.
@@ -617,7 +617,11 @@ entries are consumed as a replay-inert subtree). Incomplete: the block goes live
 original root `Start` and the **whole body re-runs**, re-recording nested calls as new physical
 `Start`s. This is the one ordinary durable path where a completed nested effect legitimately
 repeats; the block author owns its idempotency (`reference/timelines.md` §15,
-`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`).
+`tests/durability.rs::custom_durability_crash_mid_live_invocation_reexecutes_whole_body`). A root
+custom invocation of an entity body records the entity invocation `Start` as its
+`parent_start_index` (and claims with it), like every other durable call of that body, so replay
+can tell it from a top-level call of the primary; the custom tree itself (invocation ids, child
+initiation) keeps using the custom parent.
 
 `Incomplete` (`prepare_incomplete_live_repair`): the handle switches to live completion of the
 *existing* `Start` — no second `Start` is appended — if `can_reexecute_on_incomplete_replay`
@@ -646,7 +650,8 @@ speculatively, `commit_consumed_entry` commits, `move_replay_idx` advances and e
 scheduling order that replay does not reproduce, so `claim_start_matching` claims the *first
 unclaimed matching* `Start` between cursor and target. That is the only justified use of
 scan-ahead: it routes concurrent completions to the right awaiter. It does not license the guest
-to make different calls; when no matching `Start` exists, replay fails with a divergence error.
+to make different calls; when no matching `Start` exists, replay fails with a divergence error
+(after any active entity body that owns the cursor head has consumed it; see below).
 
 **Entry ownership.** A reader that drives the cursor without owning the entry at its head — a
 positional marker read, a direct call awaiting its own `End`, a sibling's terminal drain — is
@@ -688,6 +693,27 @@ entitled to nothing it did not record. Kind and owner are validated before consu
   primary while the cursor replays; an entity body whose `Start` is claimed, retained, or
   scan-ahead claimed). Otherwise `check_parked_positional_read` reports the head as divergence
   instead of hanging replay; the invocation-boundary reader never parks on another Store.
+- A `Start` claim that finds no match decides the missing `Start` only when no active entity
+  body encloses the entry at the cursor head. A tool call claims its entity `Start` inline, but
+  the cursor drains the body's first entries only when the spawned supervisor is first polled. A
+  clock call of the guest that claims in that gap stops at the body's unclaimed `Start`.
+  `head_owner` (`cursor.rs`) names the owner of the head entry and is shared with
+  `check_parked_positional_read`: the parent of a nested `Start`, or the entity attribution of
+  any other entry. `nearest_active_body` (a pure function) resolves the nearest active body that
+  encloses the head, and the one that encloses the claim's parent: it walks parents and stops at
+  the first active body, so a scope of a nested entity resolves to that entity even after the
+  outer body settled. The parents come from state the cursor already holds: each resolver
+  awaiter records the `parent_start_index` of its claimed `Start` at registration, and retained
+  `Start`s keep their entries. The missing-claim path reads no oplog entry; a custom invocation
+  claim takes the head from its own exact-id scan. The pure rule
+  `missing_start_waits_for` then decides: the claim waits for the head's body, unless that body
+  issued the claim or the claim's parent was appended live. A call of an entity nested inside
+  the head's body still waits, because that entity is another Store.
+  A waiting claim is `Blocked(BlockedOn::ActiveBody)` and runs again on cursor progress or a
+  change of the active-body set. The rule applies to ordinary, request-matching, scope and custom
+  invocation claims. A body that settles without consuming the head, a top-level sibling `Start`
+  at the head, and a claim issued by the body that encloses the head stay strict divergence at
+  once. The path where a claim finds its `Start` does not change.
 - Retained `Start`s that survive to the invocation boundary fold into the abandoned-record
   tolerance (`AbandonedStarts`); only `can_drain` kinds are retained at all. When a live primary
   invocation finishes, retained `Start`s that are closed by a recorded `End`/`Cancelled` are
@@ -782,6 +808,17 @@ result and waits for the commit receipt before waiters are notified. Durable age
 `CommitLevel::Always` (storage first); ephemeral agents use `CommitLevel::Deferred` (ordered writer
 handoff, without waiting for storage). Completion does not await the status fold; freshness-sensitive
 reads queued on the same state actor wait behind it. Failures go through `on_invocation_failure`.
+
+The live loop hydrates an ordinary invocation from its committed Pending entry into an
+executor-local `HydratedInvocation`. Started reuses that exact payload reference, including its
+cached serialized bytes, instead of serializing and uploading the payload again. Lowering uses
+a separate invocation clone and cannot replace the retained original payload. This does not
+reuse the Pending context or wallet pins: the start hook checks current authority, records the
+executing context and current wallet pin, and commits Started with `CommitLevel::Always` before
+guest execution. `ManualUpdate` takes its separate snapshot path and does not pass its Pending
+payload to this hook. Fork rehomes both references into the target owner; archive and revert do
+not individually delete a referenced payload blob.
+
 During replay the recorded result is compared with the recomputed one
 (`replay_equivalent`); a mismatch is an `unexpected_oplog_entry` determinism error. Tail work
 (`durable_host/tail_work.rs`) keeps the store loop running until no spawned task is still
@@ -828,8 +865,25 @@ one. Recorded calls, including incomplete repairs, retain admission without re-a
    never random.
 
 ### Pending RPC waits and proactive suspension
-Pending durable RPCs proactively suspend after a grace period, then reconstruct with the same key;
-this never gates recovery. See `reference/rpc-suspension.md` for timing and admission details.
+`OwnerExecution` shares one `OwnerSuspension` authority across the primary, entity and native
+participants (`worker/instance.rs`, `worker/suspension.rs`). A current runtime blocked witness
+is necessary but insufficient: every admitted participant must be accounted for, with no active
+outer poll or unclassified non-root work. Unknown work, preparation and borrowed synchronous
+RPC waits veto automatic suspension; raw sync RPC does not automatically suspend.
+Owned async RPC activities become eligible after their grace period; the owner rechecks while
+other work vetoes. Owned timers (including the narrow P2 timer-only poll/block dispatcher) and
+promises provide deadline/activation evidence. This is not general P2 readiness adaptation.
+Durable source reads bind to their exact runtime transfer activity and retain the read future.
+Only an established source wait can be passive: locally registered external inline input and
+its descendants veto suspension; agent-hosted input, invocation output and attached downstream
+waits can qualify with a durable timed recheck. Active journaling, publication and settlement
+are not passive waits. Root/result return alone is not idle.
+`RuntimeStore::drive` persists the earliest timed wake, then revalidates the same activity revision
+and eligibility before committing timestamped suspension. Activity changes invalidate stale
+evidence. Existing interrupt/retirement precedence and discard/replay reconstruction remain
+unchanged; there is no new cleanup or lifecycle protocol. Borrowed waits in
+`durable_host/suspendable_wait.rs` observe only readiness and interruption.
+See `reference/rpc-suspension.md` for timing and admission details.
 Exactly-once describes the *target's logical execution and effect*, not attempts or packets. Tests:
 `tests/rpc.rs::counter_resource_test_2_with_restart`, `failed_ephemeral_invocation_retry_does_not_reexecute`,
 `ephemeral_rpc_invocations_get_distinct_final_identities`,
@@ -939,6 +993,24 @@ update. The codes are `pub(crate) const` items of `start_outcome`:
   revision, or refused it (`ComponentServiceRefused { kind }`). `ComponentServiceUnavailable`
   writes no failed update: the recovery path retries the start.
 
+Before loading a pending target, Worker validates its cached metadata with
+`services/component.rs::component_support_error`. Admission uses the same support policy.
+An unsupported target fails through `RawStartError::TargetUnsupported(reason)` with
+`UPDATE_TARGET_REFUSED`, preserving the reason, attempt index and assisted details without a
+snapshot fault or rejection. The current policy rejects WebAssembly threads (shared linear
+memory). Admission charges the source revision for an unsupported target, so an oversized
+target cannot park the agent before the refusal. After committing the refusal, startup releases
+the old memory admission and re-admits the next queued target, or reconstructs the source if no
+update remains. This restart does not consume the out-of-memory retry budget.
+
+Component compilation runs in a blocking task. A cancelled join becomes `Interrupted(Restart)`;
+a panicked join becomes `Runtime`. `RawStartError::TargetLoad` passes these executor failures
+through for every pending update, unlike metadata-fetch failures. Worker converts a passed
+target-load `Runtime` to `RecoveryRequired`, so the invocation loop retries with infrastructure
+backoff without consuming the invocation retry budget. Interruption keeps its exact kind, and
+retirement or a pending terminal interrupt still stops reconstruction. Ordinary parse errors
+remain target failures; generic metadata and instantiation errors keep their existing outcomes.
+
 `worker/filesystem_snapshots.rs::UPDATE_NEEDS_FILESYSTEM_SNAPSHOTS` is the code of a manual update
 that cannot take its snapshot on an executor without filesystem snapshots, because the files of the
 agent differ from its initial files.
@@ -947,7 +1019,7 @@ Transient causes write no failed update, and the start retries: for every pendin
 `RestoreClass::Transient`, a reconstruction error, a full quota, an interrupted instantiation and
 the load's `Retry`; for an assisted head also `RecoveryRequired` and `Interrupted`, so a frozen
 assisted head retries with the same `S`; for a plain automatic head also `RecoveryRequired` (a
-store failure of the baseline payload). An `Interrupted` error that reaches `decide` fails a plain
+store failure of the baseline payload). A replay `Interrupted` error that reaches `decide` fails a plain
 automatic update with `UPDATE_REPLAY_FAILED`, and `RecoveryRequired` or `Interrupted` fail a
 pending manual update. A plain automatic head whose authoritative baseline does not restore
 (`Disabled`, `Restore(Lost | Fixed | DiskFull)`) takes the cell of that baseline: the start fails
@@ -1212,6 +1284,17 @@ or of the stat of an object classified as immutable, traps the invocation so a r
 a different oplog shape. The host-call observation counter is still incremented on the successful
 fast path. The check lives in `services/agent_filesystem/lifecycle/mod.rs::is_immutable_initial_file`;
 the P2/P3 adapters live in `wasi_filesystem/{p2/types.rs,p3/mod.rs}`.
+
+Filesystem permission failures carry their cause. `FilesystemStorageError::io` tags the synthetic
+capability escape refusal as `SandboxEscape`; P2/P3 return `access`, or EACCES, and keep the
+filesystem generation valid. Other `PermissionDenied` failures are terminal. The lifecycle can
+return `not-permitted` without invalidation when a failed writable open rechecks a read-only regular
+file, or a failed hard link rechecks a directory at the source without following the final symlink.
+A failed cleanup prevents either policy recheck from replacing the storage failure. A failed recheck
+or an object that does not establish that guest-policy refusal leaves the original permission failure
+terminal. These rechecks use the current object and do not identify the object
+that caused the native denial. See `services/agent_filesystem/lifecycle/mod.rs` and the permission
+failure table in the executor walkthrough.
 
 ## Concurrency and guest completion delivery
 

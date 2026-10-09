@@ -44,8 +44,11 @@ use golem_common::model::{
 use golem_common::model::{AgentInvocationPayload, RetryConfig};
 use golem_common::redis::RedisPool;
 use golem_common::schema::{BinaryValuePayload, FromSchema, IntoTypedSchemaValue, SchemaValue};
+use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::{
     BlobMetadata, BlobStorage, BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob,
     NormalizedBlobPath, PutIfAbsent, agent_path_segment,
@@ -1213,8 +1216,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 
 /// `BlobStorage` decorator counting read-type operations and optionally failing a raw write.
 #[derive(Debug)]
-pub(crate) struct ReadCountingBlobStorage {
-    inner: InMemoryBlobStorage,
+pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
+    inner: B,
     reads: AtomicUsize,
     puts: AtomicUsize,
     fail_put: Option<usize>,
@@ -1237,25 +1240,25 @@ pub(crate) struct ReadCountingBlobStorage {
 
 impl ReadCountingBlobStorage {
     pub(crate) fn new() -> Self {
-        Self {
-            inner: InMemoryBlobStorage::new(),
-            reads: AtomicUsize::new(0),
-            puts: AtomicUsize::new(0),
-            fail_put: None,
-            fail_delete_after: AtomicUsize::new(0),
-            fail_delete_after_commit: AtomicUsize::new(0),
-            fail_delete_dir_once: AtomicBool::new(false),
-            pause_put: std::sync::Mutex::new(None),
-            pause_read: std::sync::Mutex::new(None),
-        }
+        Self::wrapping(InMemoryBlobStorage::new())
     }
 
     fn failing_on_put(fail_put: usize) -> Self {
         Self {
-            inner: InMemoryBlobStorage::new(),
+            fail_put: Some(fail_put),
+            ..Self::new()
+        }
+    }
+}
+
+impl<B> ReadCountingBlobStorage<B> {
+    /// Counts the reads of `inner`, and fails nothing.
+    fn wrapping(inner: B) -> Self {
+        Self {
+            inner,
             reads: AtomicUsize::new(0),
             puts: AtomicUsize::new(0),
-            fail_put: Some(fail_put),
+            fail_put: None,
             fail_delete_after: AtomicUsize::new(0),
             fail_delete_after_commit: AtomicUsize::new(0),
             fail_delete_dir_once: AtomicBool::new(false),
@@ -1315,7 +1318,7 @@ impl ReadCountingBlobStorage {
 }
 
 #[async_trait]
-impl BlobStorageBackend for ReadCountingBlobStorage {
+impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
     async fn copy_between_at(
         &self,
         target_label: &'static str,
@@ -5275,6 +5278,151 @@ async fn owned_invocation_payload_upload_failure_writes_no_entry(_tracing: &Trac
 }
 
 #[test]
+async fn pending_and_started_share_payload_across_cold_reads(_tracing: &Tracing) {
+    for inline_limit in [1, 1_000_000] {
+        let blob_storage = Arc::new(ReadCountingBlobStorage::new());
+        let indexed_storage = Arc::new(ReadCountingIndexedStorage::new());
+        let service = PrimaryOplogService::new(
+            indexed_storage.clone(),
+            blob_storage.clone(),
+            100,
+            1,
+            inline_limit,
+            RetryConfig::default(),
+        )
+        .await;
+        let account_id = AccountId::new();
+        let environment_id = EnvironmentId::new();
+        let agent_id = AgentId {
+            component_id: ComponentId::new(),
+            agent_id: format!("shared-{inline_limit}"),
+        };
+        let owned = OwnedAgentId::new(environment_id, &agent_id);
+        let metadata = make_agent_metadata(agent_id, account_id, environment_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&owned.agent_id).await,
+                &owned,
+                AgentMode::Durable,
+                None,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await;
+        let key = IdempotencyKey::new("shared-payload".to_string());
+        let input = SchemaValue::Record {
+            fields: vec![SchemaValue::List {
+                elements: (0..10_000)
+                    .map(|i| SchemaValue::U8((i % 251) as u8))
+                    .collect(),
+            }],
+        };
+        let payload_value = AgentInvocationPayload::AgentMethod {
+            method_name: "large-input".to_string(),
+            input,
+            principal: Principal::anonymous(),
+            scope_card: None,
+        };
+        let payload = oplog
+            .upload_payload_owned(payload_value.clone())
+            .await
+            .unwrap();
+        let uploads = blob_storage.puts.load(Ordering::Relaxed);
+        assert_eq!(uploads, usize::from(inline_limit == 1));
+        let pending_context = InvocationContextStack::fresh_rounded();
+        let pending_spans = pending_context.to_oplog_data();
+        let pending = oplog
+            .add(OplogEntry::pending_agent_invocation(
+                key.clone(),
+                payload,
+                pending_context.trace_id,
+                pending_context.trace_states,
+                pending_spans,
+            ))
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        // Read persisted entries, not the resident oplog buffer or typed payload cache.
+        let OplogEntry::PendingAgentInvocation { payload, .. } = service
+            .read_exact(&owned, AgentMode::Durable, pending, 1)
+            .await
+            .remove(&pending)
+            .unwrap()
+        else {
+            panic!("missing committed Pending")
+        };
+        assert_eq!(
+            oplog.download_payload(payload.clone()).await.unwrap(),
+            payload_value
+        );
+        let executing_context = InvocationContextStack::fresh_rounded();
+        let pin = invocation_wallet_pin();
+        let started = oplog
+            .add_agent_invocation_started_from_pending(
+                key.clone(),
+                payload.clone(),
+                executing_context.clone(),
+                pin.clone(),
+            )
+            .await
+            .unwrap();
+        indexed_storage
+            .inject_append_many_failures([InjectedAppendFailure::CommitThenIndeterminate]);
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
+
+        let OplogEntry::AgentInvocationStarted {
+            idempotency_key,
+            payload: recorded,
+            trace_id,
+            wallet_pin,
+            ..
+        } = service
+            .read_exact(&owned, AgentMode::Durable, started, 1)
+            .await
+            .remove(&started)
+            .unwrap()
+        else {
+            panic!("missing committed Started")
+        };
+        assert_eq!(recorded, payload);
+        assert_eq!(idempotency_key, key);
+        assert_eq!(trace_id, executing_context.trace_id);
+        assert_eq!(*wallet_pin, pin);
+        assert_eq!(
+            oplog.download_payload(recorded.clone()).await.unwrap(),
+            payload_value
+        );
+        oplog
+            .add_agent_invocation_started_from_pending(
+                key,
+                recorded.clone(),
+                executing_context,
+                invocation_wallet_pin(),
+            )
+            .await
+            .unwrap();
+        indexed_storage.inject_append_many_failures([InjectedAppendFailure::Fenced]);
+        assert!(matches!(
+            oplog.commit(CommitLevel::Always).await,
+            Err(OplogError::Fenced(_))
+        ));
+        assert_eq!(
+            service.get_last_index(&owned, AgentMode::Durable).await,
+            started
+        );
+        assert_eq!(blob_storage.puts.load(Ordering::Relaxed), uploads);
+        assert_eq!(
+            oplog.download_payload(recorded).await.unwrap(),
+            payload_value
+        );
+    }
+}
+
+#[test]
 async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -7648,9 +7796,13 @@ async fn multilayer_partial_delete_stays_retryable(_tracing: &Tracing) {
     );
 }
 
-#[test]
-async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
-    let storage = Arc::new(ReadCountingBlobStorage::new());
+/// The archive finds its chunks through the manifest in the indexed storage and never lists a
+/// directory, so an object in the segment of the agent that the manifest does not name is never
+/// read, on any backend.
+async fn check_that_an_unlisted_blob_object_is_never_read<B: BlobStorageBackend + 'static>(
+    inner: B,
+) {
+    let storage = Arc::new(ReadCountingBlobStorage::wrapping(inner));
     let environment_id = EnvironmentId::new();
     let agent_id = AgentId {
         component_id: ComponentId::new(),
@@ -7675,7 +7827,7 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
         .await
         .unwrap();
 
-    let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage, 1);
+    let service = blob_archive(Arc::new(InMemoryIndexedStorage::new()), storage.clone(), 1);
     assert!(
         !service
             .try_exists(&owned_agent_id, AgentMode::Durable)
@@ -7693,6 +7845,7 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
             .unwrap()
             .is_empty()
     );
+    assert_eq!(storage.reads(), 0);
 
     let entries = transfer_test_entries();
     archive
@@ -7708,6 +7861,41 @@ async fn an_unlisted_blob_object_is_never_read(_tracing: &Tracing) {
             .unwrap(),
         entries
     );
+    // The chunk that the manifest names is read through the same storage, so the count of zero
+    // above is a count of the reads of the archive.
+    assert!(storage.reads() > 0);
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_in_memory_backend(_tracing: &Tracing) {
+    check_that_an_unlisted_blob_object_is_never_read(InMemoryBlobStorage::new()).await;
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_filesystem_backend(_tracing: &Tracing) {
+    let root = tempfile::TempDir::new().unwrap();
+    check_that_an_unlisted_blob_object_is_never_read(
+        FileSystemBlobStorage::new(root.path()).await.unwrap(),
+    )
+    .await;
+}
+
+#[test]
+async fn an_unlisted_blob_object_is_never_read_on_the_sqlite_backend(_tracing: &Tracing) {
+    let root = tempfile::TempDir::new().unwrap();
+    let pool = SqlitePool::configured(&golem_common::config::DbSqliteConfig {
+        database: root
+            .path()
+            .join("blob_storage.db")
+            .to_string_lossy()
+            .into_owned(),
+        max_connections: 4,
+        foreign_keys: false,
+    })
+    .await
+    .unwrap();
+    check_that_an_unlisted_blob_object_is_never_read(SqliteBlobStorage::new(pool).await.unwrap())
+        .await;
 }
 
 #[test]

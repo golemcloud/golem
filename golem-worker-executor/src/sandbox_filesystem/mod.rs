@@ -47,6 +47,7 @@ static FILESYSTEM_LEASES: OnceLock<std::sync::Mutex<HashMap<PathBuf, Weak<AsyncM
 enum FilesystemStorageErrorKind {
     General,
     AllocationUnsupported,
+    SandboxEscape,
 }
 
 pub struct FilesystemStorageError {
@@ -66,6 +67,16 @@ struct FilesystemStorageErrorInner {
 
 impl FilesystemStorageError {
     pub(crate) fn io(operation: &'static str, path: &Path, source: std::io::Error) -> Self {
+        // cap-primitives exposes its escape refusal as a private string payload. OS permission
+        // failures retain their errno and must not be classified as sandbox refusals.
+        let kind = if source.kind() == std::io::ErrorKind::PermissionDenied
+            && source.raw_os_error().is_none()
+            && source.to_string() == "a path led outside of the filesystem"
+        {
+            FilesystemStorageErrorKind::SandboxEscape
+        } else {
+            FilesystemStorageErrorKind::General
+        };
         Self {
             inner: Box::new(FilesystemStorageErrorInner {
                 operation,
@@ -73,7 +84,7 @@ impl FilesystemStorageError {
                 source: Some(source),
                 cleanup_failed: false,
                 task_failed: false,
-                kind: FilesystemStorageErrorKind::General,
+                kind,
             }),
         }
     }
@@ -165,14 +176,19 @@ impl FilesystemStorageError {
 
     pub(crate) fn is_terminal_failure(&self) -> bool {
         self.inner.task_failed
-            || self.inner.source.as_ref().is_some_and(|source| {
-                matches!(
-                    source.kind(),
-                    std::io::ErrorKind::InvalidData
-                        | std::io::ErrorKind::PermissionDenied
-                        | std::io::ErrorKind::ReadOnlyFilesystem
-                ) || is_terminal_storage_errno(source)
-            })
+            || (!self.is_sandbox_escape()
+                && self.inner.source.as_ref().is_some_and(|source| {
+                    matches!(
+                        source.kind(),
+                        std::io::ErrorKind::InvalidData
+                            | std::io::ErrorKind::PermissionDenied
+                            | std::io::ErrorKind::ReadOnlyFilesystem
+                    ) || is_terminal_storage_errno(source)
+                }))
+    }
+
+    pub(crate) fn is_sandbox_escape(&self) -> bool {
+        self.inner.kind == FilesystemStorageErrorKind::SandboxEscape
     }
 
     pub(crate) fn io_kind(&self) -> Option<std::io::ErrorKind> {

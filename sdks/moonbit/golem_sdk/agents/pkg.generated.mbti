@@ -7,12 +7,15 @@ import {
   "golemcloud/golem_sdk/schema",
   "golemcloud/golem_sdk/schema_model",
   "moonbitlang/core/debug",
+  "moonbitlang/core/json",
 }
 
 // Values
 pub async fn construct_and_set_instance(String, @types.SchemaValueTree, @common.Principal) -> Result[Unit, @common.AgentError]
 
 pub async fn decode_invocation_input(@types.SchemaValueTree, Int, String) -> Array[@schema_model.SchemaValue] raise @common.AgentError
+
+pub fn decode_multipart_snapshot(Bytes, String) -> Result[(@common.Principal, MultipartSnapshot), String]
 
 pub async fn[T : @schema.FromSchema] decode_output(@types.SchemaValueTree, String) -> T raise @common.AgentError
 
@@ -36,6 +39,8 @@ pub fn encode_invocation_input(Array[@schema_model.SchemaValue]) -> @types.Schem
 
 pub async fn encode_invocation_input_async(Array[@schema_model.SchemaValue]) -> @types.SchemaValueTree
 
+pub fn encode_multipart_snapshot(MultipartSnapshot, @common.Principal) -> Result[(Bytes, String), String]
+
 pub async fn[T : @schema.IntoSchema] encode_output(T) -> @types.SchemaValueTree
 
 pub fn encode_wire_input(Array[&@schema.IntoWire]) -> @types.SchemaValueTree raise @common.AgentError
@@ -58,7 +63,7 @@ pub fn principal_to_json(@common.Principal) -> Json
 
 pub fn register_agent(RegisteredAgent) -> Unit
 
-pub async fn restore_and_set_instance(String, Bytes, SnapshotRestoreContext) -> Result[Unit, String]
+pub async fn restore_and_set_instance(String, SnapshotData, SnapshotRestoreContext) -> Result[Unit, String]
 
 pub fn set_agent_instance(AgentInstance) -> Unit
 
@@ -92,6 +97,7 @@ pub(all) struct AgentInstance {
   interface : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 pub(all) struct AgentMethodDef {
@@ -123,6 +129,7 @@ pub(all) struct ConstructedAgent {
   raw : &RawAgent
   snapshottable : &Snapshottable?
   snapshot_format : SnapshotFormat?
+  multipart_snapshottable : &MultipartSnapshottable?
 }
 
 pub(all) struct InputParam {
@@ -135,12 +142,26 @@ pub(all) enum InputParamSource {
   AutoInjected(@common.AutoInjectedKind)
 }
 
+pub(all) struct MultipartSnapshot {
+  state : Json
+  parts : Map[String, SnapshotPart]
+} derive(Eq, @debug.Debug)
+pub fn[S : @json.FromJson] MultipartSnapshot::decode_state(Self) -> Result[S, String]
+pub fn[S : ToJson] MultipartSnapshot::from_state(S, Map[String, SnapshotPart]) -> Self
+pub fn MultipartSnapshot::require_part(Self, String, String) -> Result[Bytes, String]
+
 pub(all) struct RegisteredAgent {
   name : String
   agent_type : @common.AgentType
   construct : async (@types.SchemaValueTree, @common.Principal) -> Result[ConstructedAgent, @common.AgentError]
-  load_snapshot : (async (Bytes, SnapshotRestoreContext) -> Result[ConstructedAgent, String])?
+  load_snapshot : (async (SnapshotData, SnapshotRestoreContext) -> Result[ConstructedAgent, String])?
 }
+
+pub(all) enum SnapshotData {
+  Json(Bytes)
+  Binary(Bytes)
+  Multipart(MultipartSnapshot)
+} derive(Eq, @debug.Debug)
 
 pub(all) enum SnapshotFormat {
   Json
@@ -151,6 +172,11 @@ pub struct SnapshotIdentity {
   reader : @schema.WireReader
   fields : Array[Int]
 }
+
+pub(all) struct SnapshotPart {
+  bytes : Bytes
+  content_type : String
+} derive(Eq, @debug.Debug)
 
 pub(all) struct SnapshotRestoreContext {
   agent_id : String
@@ -171,6 +197,10 @@ pub fn WireInput::finish(Self) -> Unit raise @common.AgentError
 // Type aliases
 
 // Traits
+pub(open) trait MultipartSnapshottable {
+  async fn save_snapshot_parts(Self) -> Result[MultipartSnapshot, String]
+}
+
 pub(open) trait RawAgent {
   async fn invoke(Self, String, @types.SchemaValueTree, @common.Principal) -> Result[@types.SchemaValueTree?, @common.AgentError]
 }

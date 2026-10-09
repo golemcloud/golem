@@ -64,15 +64,37 @@ object Json {
       case path if path.startsWith(value.path) => path.drop(value.path.length)
     }
 
-  private def renderAt(value: ZJson, path: Vector[String], negativeZeros: Set[Vector[String]]): String =
-    if (negativeZeros.contains(path)) "-0"
-    else value match {
-      case ZJson.Object(fields) =>
-        fields.toVector.map { case (name, child) => s"${ZJson.String(name).print}:${renderAt(child, path :+ s"f:$name", negativeZeros)}" }.mkString("{", ",", "}")
-      case ZJson.Array(items) =>
-        items.toVector.zipWithIndex.map { case (child, index) => renderAt(child, path :+ s"i:$index", negativeZeros) }.mkString("[", ",", "]")
-      case other => other.print
+  private def renderAt(value: ZJson, path: Vector[String], negativeZeros: Set[Vector[String]]): String = {
+    val output = new java.lang.StringBuilder
+    def append(value: ZJson, path: Vector[String]): Unit = {
+      if (negativeZeros.contains(path)) output.append("-0")
+      else value match {
+        case ZJson.Object(fields) =>
+          output.append('{')
+          var first = true
+          fields.foreach { case (name, child) =>
+            if (!first) output.append(',')
+            first = false
+            output.append(ZJson.String(name).print).append(':')
+            append(child, if (negativeZeros.isEmpty) path else path :+ s"f:$name")
+          }
+          output.append('}')
+        case ZJson.Array(items) =>
+          output.append('[')
+          var index = 0
+          items.foreach { child =>
+            if (index != 0) output.append(',')
+            append(child, if (negativeZeros.isEmpty) path else path :+ s"i:$index")
+            index += 1
+          }
+          output.append(']')
+        case other => output.append(other.print)
+      }
+      ()
     }
+    append(value, path)
+    output.toString
+  }
 
   // --- Constructors --------------------------------------------------------
 

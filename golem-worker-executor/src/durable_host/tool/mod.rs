@@ -50,7 +50,9 @@ use crate::durable_host::entity::{
     record_tool_rejection_access,
 };
 use crate::durable_host::secrets::secret_hold_targets_for_value;
-use crate::durable_host::stream_transport::{LiveStreamEndpoint, byte_output_stream_pair};
+use crate::durable_host::stream_transport::{
+    LiveStreamEndpoint, accounted_byte_output_stream_pair,
+};
 use crate::durable_host::tool::attachment::{
     AttachmentConsumer, AttachmentController, AttachmentMemory, AttachmentObserver,
     AttachmentProducer, AttachmentStreamProducer, attachment_pair, discard_producer,
@@ -646,6 +648,7 @@ fn capable_result_await_cohort(
 struct ToolExecutionState {
     result: Option<ToolInvokeResponse>,
     failure: Option<String>,
+    producer: Option<wasmtime::component::RuntimeActivityId>,
 }
 
 struct ToolExecution {
@@ -677,6 +680,7 @@ impl ToolExecution {
             state: Mutex::new(ToolExecutionState {
                 result: None,
                 failure: None,
+                producer: None,
             }),
             changed: Notify::new(),
             get_active: AtomicBool::new(false),
@@ -775,6 +779,8 @@ impl<Ctx: WorkerCtx, U: Send + 'static> AccessorTask<U, HasSelf<DurableWorkerCtx
         self,
         accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     ) -> impl Future<Output = wasmtime::Result<()>> + Send {
+        self.execution.state.lock().unwrap().producer = accessor.runtime_activity();
+        self.execution.changed.notify_waiters();
         let execution: Pin<Box<dyn Future<Output = wasmtime::Result<()>> + Send + '_>> =
             Box::pin(async move {
                 let result = execute_accepted_tool_call(
@@ -3371,7 +3377,12 @@ where
                 }
                 failed_resources.parent_end_attempted = true;
             }
-            failed_resources.resources.release_for_owner_failure();
+            if let Err(disposal_error) =
+                failed_resources.resources.release_for_owner_failure().await
+                && owner_operations.selected_owner_failure().is_none()
+            {
+                *error = disposal_error.into();
+            }
         }
         if matches!(
             cleanup_operation.winner_if_active(),
@@ -4684,14 +4695,38 @@ where
             None
         };
 
+    let runtime = accessor.with(|mut access| access.get().runtime_suspension.clone());
+    let executions = plans
+        .iter()
+        .filter_map(|plan| match plan {
+            FutureToolInvokeGet::Active(execution) => Some(execution.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let responses = futures::future::join_all(plans.into_iter().map(|plan| async move {
         match plan {
             FutureToolInvokeGet::Ready(response) => Ok(response),
             FutureToolInvokeGet::Failed(error) => Err(anyhow!(error)),
             FutureToolInvokeGet::Active(execution) => execution.result().await.map(Box::new),
         }
-    }))
+    }));
+    tokio::pin!(responses);
+    let mut neutral = None;
+    let responses = futures::future::poll_fn(|cx| {
+        neutral = runtime.as_ref().and_then(|runtime| {
+            let dependencies = executions
+                .iter()
+                .filter_map(|execution| {
+                    let state = execution.state.lock().unwrap();
+                    (state.result.is_none() && state.failure.is_none()).then_some(state.producer)
+                })
+                .collect::<Option<Vec<_>>>()?;
+            runtime.neutral_runtime(accessor.runtime_activity()?, &dependencies)
+        });
+        responses.as_mut().poll(cx)
+    })
     .await;
+    drop(neutral);
     if let Some(lane_wait) = lane_wait {
         lane_wait.wait().await;
     }
@@ -4847,8 +4882,14 @@ impl<Ctx: WorkerCtx> AccessorTask<Ctx, HasSelf<DurableWorkerCtx<Ctx>>> for Nativ
             let endpoint = accessor.with(|mut access| -> wasmtime::Result<_> {
                 let capacity = access.get().live_stream_event_capacity();
                 let runtime_teardown = access.get().stream_runtime_teardown_probe();
-                let (sink, stream) = byte_output_stream_pair(capacity, runtime_teardown)
-                    .map_err(wasmtime::Error::msg)?;
+                let runtime_source = access
+                    .get()
+                    .runtime_suspension
+                    .as_ref()
+                    .map(|runtime| runtime.source());
+                let (sink, stream) =
+                    accounted_byte_output_stream_pair(capacity, runtime_teardown, runtime_source)
+                        .map_err(wasmtime::Error::msg)?;
                 let reader = StreamReader::new(&mut access, consumer.into_raw_stream_producer())?;
                 reader.pipe(&mut access, sink)?;
                 stream

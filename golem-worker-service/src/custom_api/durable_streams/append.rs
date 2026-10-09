@@ -119,6 +119,7 @@ impl DurableStreamsHandler {
                         .rsplit_once("/streams/")
                         .map(|(session_path, _)| session_path)
                         .unwrap_or_default();
+                    let path = super::resource_url(request, route, behaviour, path)?;
                     return Ok(problem(
                         StatusCode::NOT_FOUND,
                         "$",
@@ -374,18 +375,12 @@ fn append_response(
         HeaderName::from_static("stream-next-offset"),
         offset_text(&offset)?.parse().map_err(anyhow::Error::from)?,
     );
-    result.headers.insert(
-        HeaderName::from_static("stream-closed"),
-        HeaderValue::from_static(
-            if stream_closed
-                .ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))?
-            {
-                "true"
-            } else {
-                "false"
-            },
-        ),
-    );
+    if stream_closed.ok_or_else(|| anyhow::anyhow!("append outcome has no stream metadata"))? {
+        result.headers.insert(
+            HeaderName::from_static("stream-closed"),
+            HeaderValue::from_static("true"),
+        );
+    }
     if let (Some(producer), Some(sequence)) = (producer, sequence) {
         result.headers.insert(
             HeaderName::from_static("producer-epoch"),
@@ -542,10 +537,7 @@ mod tests {
             result.headers[&HeaderName::from_static("producer-epoch")],
             HeaderValue::from_static("4")
         );
-        assert_eq!(
-            result.headers[&HeaderName::from_static("stream-closed")],
-            HeaderValue::from_static("false")
-        );
+        assert!(!result.headers.contains_key("stream-closed"));
     }
 
     #[test]

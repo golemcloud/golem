@@ -1069,7 +1069,19 @@ impl EntityInvocationDurability {
             };
             let supervisor_body_resources = body_resources.clone();
             let monitor_reconstruction = historical_reconstruction.clone();
+            let runtime =
+                store.with(|mut access| get_ctx(access.data_mut()).runtime_suspension.clone());
+            let supervisor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
+            #[cfg(feature = "test-utils")]
+            let supervisor_hook = store
+                .with(|mut access| get_ctx(access.data_mut()).entity_reconstruction_claim_hook())
+                .map(|hook| (hook, invocation.start_index()));
             let completed_supervisor = executor_tasks.spawn_entity(async move {
+                let _activity = supervisor_activity;
+                #[cfg(feature = "test-utils")]
+                if let Some((hook, start_index)) = supervisor_hook {
+                    hook.before_completed_supervisor(start_index).await;
+                }
                 let mut historical_reconstruction = historical_reconstruction;
                 let reconstruction = std::panic::AssertUnwindSafe(async {
                     let reconstruction = coordinate_entity_reconstruction_inner(
@@ -1115,7 +1127,9 @@ impl EntityInvocationDurability {
             });
             let (completed_tx, completed_rx) = oneshot::channel();
             let monitor_body_resources = body_resources.clone();
+            let monitor_activity = runtime.as_ref().map(|runtime| runtime.external_activity());
             let _monitor = executor_tasks.spawn_entity(async move {
+                let _activity = monitor_activity;
                 let completed = match completed_supervisor.await {
                     Ok(Some(completed)) => completed,
                     Ok(None) => return,
@@ -1185,6 +1199,14 @@ impl EntityInvocationDurability {
 
         tokio::pin!(body);
         if handle.is_live() {
+            let neutral = store.with(|mut access| {
+                get_ctx(access.data_mut())
+                    .runtime_suspension
+                    .as_ref()
+                    .and_then(|runtime| {
+                        runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                    })
+            });
             let body_result = match cancellation {
                 Some(cancellation) => {
                     tokio::select! {
@@ -1195,6 +1217,7 @@ impl EntityInvocationDurability {
                 }
                 None => Some(body.as_mut().await),
             };
+            drop(neutral);
             let Some(body_result) = body_result else {
                 on_completed_cancelled();
                 let _ = body.as_mut().await;
@@ -1245,6 +1268,7 @@ impl EntityInvocationDurability {
             ));
         }
 
+        let mut neutral = None;
         let replay = async {
             Ok(
                 match Box::pin(handle.replay_reconstruction_access(store, get_ctx)).await? {
@@ -1255,6 +1279,14 @@ impl EntityInvocationDurability {
                         EntityReconstructionResolution::Cancelled(recorded)
                     }
                     ReconstructionReplayOutcome::Incomplete(handle) => {
+                        neutral = store.with(|mut access| {
+                            get_ctx(access.data_mut())
+                                .runtime_suspension
+                                .as_ref()
+                                .and_then(|runtime| {
+                                    runtime.neutral_entity(store.runtime_activity()?, &invocation)
+                                })
+                        });
                         EntityReconstructionResolution::Incomplete(handle)
                     }
                     ReconstructionReplayOutcome::LiveAdmissionCancelled(handle) => {
@@ -1283,6 +1315,7 @@ impl EntityInvocationDurability {
             cancellation.as_ref(),
         )
         .await;
+        drop(neutral);
         let reconstruction = match reconstruction {
             Ok(reconstruction) => ensure_body_claimed_retained_descendants(
                 &replay_state,

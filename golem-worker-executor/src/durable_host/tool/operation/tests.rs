@@ -18,6 +18,8 @@ use golem_common::model::tool::{
     ToolProvisionConfig, ToolSource,
 };
 use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue};
+use std::future::Future;
+use std::pin::Pin;
 use test_r::{test, timeout};
 
 fn parent() -> OwnerInvocationId {
@@ -195,6 +197,7 @@ fn tool_execution(
         state: Mutex::new(ToolExecutionState {
             result: None,
             failure: None,
+            producer: None,
         }),
         changed: Notify::new(),
         get_active: AtomicBool::new(false),
@@ -2255,4 +2258,275 @@ fn parent_end_supersedes_an_unfinished_result_await_cohort() {
         Some(vec![first, second])
     );
     assert!(table.clear_closed_parent(&parent));
+}
+
+// The trailing receipt runs after the real Wasmtime Store destructor has returned, not merely
+// after its context starts dropping. Both destructors must still see the slot registration.
+struct EntityContextDropProbe(Arc<crate::worker::entity_slot::EntitySlot>);
+
+impl Drop for EntityContextDropProbe {
+    fn drop(&mut self) {
+        assert_eq!(self.0.active_invocation_count(), 1);
+    }
+}
+
+struct EntityStoreDropReceipt {
+    slot: Arc<crate::worker::entity_slot::EntitySlot>,
+    destroyed: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Drop for EntityStoreDropReceipt {
+    fn drop(&mut self) {
+        assert_eq!(self.slot.active_invocation_count(), 1);
+        let _ = self.destroyed.take().unwrap().send(());
+    }
+}
+
+struct ProbedRetainedStore {
+    _store: wasmtime::Store<EntityContextDropProbe>,
+    _receipt: EntityStoreDropReceipt,
+    entered: Option<tokio::sync::oneshot::Sender<()>>,
+    pending_preparation: bool,
+    pending_settlement: bool,
+}
+
+impl crate::worker::entity_invocation::RetainedEntityStore for ProbedRetainedStore {
+    fn prepare_parent_end(
+        &mut self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send + '_>> {
+        Box::pin(async move {
+            if self.pending_preparation {
+                let _ = self.entered.take().unwrap().send(());
+                std::future::pending().await
+            } else {
+                Ok(())
+            }
+        })
+    }
+
+    fn settle(
+        mut self: Box<Self>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), WorkerExecutorError>> + Send>> {
+        Box::pin(async move {
+            let result = if self.pending_settlement {
+                let _ = self.entered.take().unwrap().send(());
+                std::future::pending().await
+            } else {
+                Ok(())
+            };
+            drop(self);
+            result
+        })
+    }
+}
+
+fn probed_entity_invocation(
+    executor: &crate::services::active_agents::InvocationLoops,
+    pending_preparation: bool,
+    pending_settlement: bool,
+) -> (
+    crate::worker::entity_invocation::EntityInvocationHandle<()>,
+    Arc<crate::worker::entity_slot::EntitySlot>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    use crate::worker::entity_invocation::{RetainedEntityStore, start_native_entity_invocation};
+    use crate::worker::entity_slot::EntitySlot;
+    use golem_common::model::entity::{
+        EntityInvocationScope, InvocationExecutionMode, OwnedAgentEntityId,
+    };
+    let owner = golem_common::model::OwnedAgentId::new(
+        EnvironmentId::new(),
+        &AgentId {
+            component_id: ComponentId::new(),
+            agent_id: "owner".into(),
+        },
+    );
+    let context = context_for(
+        &owner,
+        FilesystemCapability::Incapable,
+        EntityCallMode::Asynchronous,
+    );
+    let entity_id = OwnedAgentEntityId {
+        owner: owner.clone(),
+        entity: context.activation.entity(),
+    };
+    let slot = Arc::new(EntitySlot::new(entity_id.clone()));
+    let scope = EntityInvocationScope::new(
+        EntityInvocationId::new(entity_id, OplogIndex::from_u64(2)).unwrap(),
+        OplogIndex::from_u64(1),
+        context.activation,
+        context.principal,
+        InvocationExecutionMode::Live,
+        golem_common::model::IdempotencyKey::fresh(),
+        false,
+        false,
+        golem_common::model::IdempotencyKey::fresh(),
+    )
+    .unwrap();
+    let (destroyed, receipt) = tokio::sync::oneshot::channel();
+    let (entered, entry) = tokio::sync::oneshot::channel();
+    // This isolated primitive neither loads components nor produces precompiled artifacts.
+    let engine = wasmtime::Engine::default();
+    let store = ProbedRetainedStore {
+        _store: wasmtime::Store::new(&engine, EntityContextDropProbe(slot.clone())),
+        _receipt: EntityStoreDropReceipt {
+            slot: slot.clone(),
+            destroyed: Some(destroyed),
+        },
+        entered: Some(entered),
+        pending_preparation,
+        pending_settlement,
+    };
+    let handle = start_native_entity_invocation(
+        slot.clone(),
+        OwnerLane::new(owner),
+        crate::worker::suspension::OwnerSuspension::new(),
+        executor.clone(),
+        None,
+        scope,
+        EntityCallMode::Asynchronous,
+        move |_, _, _| {
+            Box::pin(async move {
+                (
+                    Ok(()),
+                    Some(Box::new(store) as Box<dyn RetainedEntityStore>),
+                )
+            })
+        },
+        |result| async move { result },
+    )
+    .unwrap();
+    (handle, slot, receipt, entry)
+}
+
+#[test]
+#[timeout("30s")]
+async fn finished_unconsumed_entity_completion_is_destroyed_before_slot_drain() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    // Joining observes the existing finished-body handoff but leaves the resources unconsumed.
+    let completion = handle.join_completion().await.unwrap();
+    assert!(destroyed.try_recv().is_err());
+    assert_eq!(slot.active_invocation_count(), 1);
+    slot.fence();
+    slot.wait_drained().await;
+    destroyed
+        .try_recv()
+        .expect("full Store destruction precedes drainage");
+    assert_eq!(slot.active_invocation_count(), 0);
+    drop(completion);
+}
+
+#[test]
+#[timeout("30s")]
+async fn explicit_owner_failure_release_acknowledges_store_destruction() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, true);
+    let (_, mut resources) = handle.join_completion().await.unwrap().into_parts();
+    resources.prepare_parent_end().await.unwrap();
+    resources.release_for_owner_failure().await.unwrap();
+    destroyed
+        .try_recv()
+        .expect("failure release joins physical disposal");
+    assert_eq!(slot.active_invocation_count(), 0);
+    // Disposal must not attempt the deliberately pending normal settlement.
+    resources.settle_after_parent_end().await.unwrap();
+}
+
+#[test]
+#[timeout("30s")]
+async fn fence_cancels_pending_retained_callbacks_even_after_observer_loss() {
+    for preparation in [true, false] {
+        for drop_observer in [false, true] {
+            let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+            let (handle, slot, mut destroyed, entered) =
+                probed_entity_invocation(&executor, preparation, !preparation);
+            let (_, mut resources) = handle.join_completion().await.unwrap().into_parts();
+            let observer = tokio::spawn(async move {
+                if preparation {
+                    resources.prepare_parent_end().await
+                } else {
+                    resources.settle_after_parent_end().await
+                }
+            });
+            entered.await.unwrap();
+            if drop_observer {
+                observer.abort();
+                let _ = observer.await;
+                slot.fence();
+            } else {
+                slot.fence();
+                assert!(observer.await.unwrap().is_err());
+            }
+            slot.wait_drained().await;
+            destroyed
+                .try_recv()
+                .expect("pending callback cannot retain the Store past drainage");
+        }
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn owner_cleanup_notification_follows_retained_store_destruction() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    let completion = handle.join_completion().await.unwrap();
+    let owner = OwnerToolOperations::new();
+    let operation = accept_provisional(owner.create(context()), 2);
+    assert!(operation.select_trap(TrapType::Exit).await);
+    let token = operation.claim_owner_failure_cleanup().unwrap();
+    let (wake, notification) = tokio::sync::oneshot::channel();
+    drop(owner.start_owner_failure_cleanup(
+        token,
+        async move {
+            slot.fence();
+            slot.wait_drained().await;
+            operation.settle().await;
+            Ok(())
+        },
+        move || {
+            destroyed
+                .try_recv()
+                .expect("cleanup notification follows full destruction");
+            wake.send(()).unwrap();
+        },
+    ));
+    notification.await.unwrap();
+    owner.join_owner_failure_cleanup().await.unwrap();
+    assert!(matches!(
+        owner.interruptible_owner_failure(),
+        Some(OwnerFailureWinner::Trap(TrapType::Exit))
+    ));
+    drop(completion);
+}
+
+#[test]
+#[timeout("30s")]
+async fn shutdown_reclaims_unpolled_entity_completion_output() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, mut destroyed, _) = probed_entity_invocation(&executor, false, false);
+    // Direct polling of the production task handle establishes completion without taking output.
+    while !handle.abort_handle().is_finished() {
+        tokio::task::yield_now().await;
+    }
+    assert!(destroyed.try_recv().is_err());
+    executor.wait_for_exit().await.unwrap();
+    destroyed
+        .try_recv()
+        .expect("executor shutdown joins retained destruction");
+    assert_eq!(slot.active_invocation_count(), 0);
+    drop(handle);
+}
+
+#[test]
+#[timeout("30s")]
+async fn lost_entity_completion_delivery_reclaims_retained_store() {
+    let executor = crate::services::active_agents::InvocationLoops::new(Default::default());
+    let (handle, slot, destroyed, _) = probed_entity_invocation(&executor, false, false);
+    drop(handle);
+    destroyed.await.unwrap();
+    slot.wait_drained().await;
+    assert_eq!(slot.active_invocation_count(), 0);
 }

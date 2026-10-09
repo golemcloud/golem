@@ -820,7 +820,10 @@ pub(super) fn sync_after_reflink(
                 apfs::sync_directories(materialization_root)
             }
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-            unreachable!("copy-on-write storage is unavailable on this platform")
+            {
+                let _ = materialization_root;
+                unreachable!("copy-on-write storage is unavailable on this platform")
+            }
         }
     }
 }

@@ -434,6 +434,7 @@ impl Default for GolemConfig {
 
 impl GolemConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
+        self.blob_storage.validate()?;
         self.mcp_transport.validate().map_err(anyhow::Error::msg)?;
         self.durable_stream.validate()?;
         self.invocation_results.validate()?;
@@ -3296,6 +3297,50 @@ mod tests {
                 "reflink XFS at /var/lib/golem/agents",
             ]
         );
+    }
+
+    #[test]
+    fn config_accepts_separate_s3_snapshot_buckets() {
+        let config = GolemConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::default_s3(),
+            ..Default::default()
+        };
+
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn default_and_example_configs_are_valid() {
+        use golem_common::config::HasConfigExamples;
+
+        GolemConfig::default().validate().unwrap();
+        for (name, config) in GolemConfig::examples() {
+            config
+                .validate()
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+
+    #[test]
+    fn config_rejects_shared_s3_snapshot_bucket() {
+        let config = GolemConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    custom_data_bucket: "shared-bucket".to_string(),
+                    filesystem_snapshots_bucket: "shared-bucket".to_string(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.filesystem_snapshots,
+            FilesystemSnapshotsConfig::Disabled(_)
+        ));
+
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("filesystem_snapshots_bucket"), "{error}");
+        assert!(error.contains("custom_data_bucket"), "{error}");
     }
 
     #[test]
